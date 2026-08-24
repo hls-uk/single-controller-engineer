@@ -9565,6 +9565,8 @@ var EffectJournalEntrySchema = strictObject({
   unitId: nullableIdentifier(),
   idempotencyKey: idempotencyKey(),
   kind: EffectKindSchema,
+  intentRevision: revision(),
+  intentCommitment: hash(),
   paramsHash: hash(),
   status: EffectStatusSchema,
   observationHash: Type.Optional(hash()),
@@ -9656,6 +9658,9 @@ var PullRequestObservationSchema = strictObject({
 });
 var UnitSchema = strictObject({
   id: identifier(),
+  // Stable at planning time and never reassigned, even after a unit leaves
+  // the live map at closure. Session lineage records bind this ordinal.
+  ordinal: Type.Integer({ minimum: 0, maximum: 63 }),
   revision: revision(),
   state: UnitStateSchema,
   baseOid: oid(),
@@ -9704,37 +9709,87 @@ var UnitSchema = strictObject({
   repairCount: Type.Integer({ minimum: 0, maximum: 16 }),
   repairContext: Type.Optional(RepairContextSchema)
 });
-var ClosedUnitEvidenceFactSchema = strictObject({
+var ObservedJournalEntrySchema = strictObject({
+  effectId: effectIdentifier(),
+  unitId: nullableIdentifier(),
+  idempotencyKey: idempotencyKey(),
+  kind: EffectKindSchema,
+  intentRevision: revision(),
+  intentCommitment: hash(),
+  paramsHash: hash(),
+  status: Type.Literal("observed"),
+  observationHash: hash(),
+  schemaVersion: Type.Literal(SCHEMA_VERSION)
+});
+var ClosureReservationSchema = strictObject({
+  id: identifier(),
+  namespace: identifier(),
+  resource: identifier(),
+  acquire: ObservedJournalEntrySchema,
+  release: Type.Optional(
+    strictObject({
+      effectId: effectIdentifier(),
+      unitId: nullableIdentifier(),
+      idempotencyKey: idempotencyKey(),
+      kind: Type.Literal("reservation_release"),
+      intentRevision: revision(),
+      intentCommitment: hash(),
+      paramsHash: hash(),
+      status: EffectStatusSchema,
+      observationHash: Type.Optional(hash()),
+      schemaVersion: Type.Literal(SCHEMA_VERSION)
+    })
+  )
+});
+var ClosureWorkerSchema = strictObject({
+  sessionId: identifier(),
+  requestedModel: text(),
+  returnedModel: text(),
+  promptHash: hash()
+});
+var ClosureReviewerSchema = strictObject({
+  sessionId: identifier(),
+  requestedModel: text(),
+  returnedModel: text(),
+  promptHash: hash()
+});
+var ClosureCandidateSchema = strictObject({ headOid: oid(), treeOid: oid() });
+var ClosureVerificationSchema = strictObject({
+  baseOid: oid(),
+  headOid: oid(),
+  treeOid: oid(),
+  evidenceHash: hash(),
+  commands: Type.Array(text(), { minItems: 1, maxItems: 32 })
+});
+var ClosureReviewSchema = strictObject({
+  baseOid: oid(),
+  headOid: oid(),
+  treeOid: oid(),
+  responseHash: hash()
+});
+var ClosureBaseSchema = {
+  unitId: identifier(),
+  unitOrdinal: Type.Integer({ minimum: 0, maximum: 63 }),
+  baseOid: oid(),
+  // While the unit is live, its required field is authoritative. At closure
+  // the unit leaves the map and this record becomes the sole owner.
+  repairCount: Type.Optional(Type.Integer({ minimum: 0, maximum: 16 })),
   branchRef: Type.Optional(identifier()),
   worktreePath: Type.Optional(text()),
-  reservationIds: Type.Array(identifier(), {
+  worker: Type.Optional(ClosureWorkerSchema),
+  reviewer: Type.Optional(ClosureReviewerSchema),
+  reservations: Type.Array(ClosureReservationSchema, {
     maxItems: LIMITS.reservations,
     uniqueItems: true
   }),
-  candidateHead: Type.Optional(oid()),
-  candidateTree: Type.Optional(oid()),
-  publishedHeadOid: Type.Optional(oid()),
-  openPullRequest: Type.Optional(PullRequestObservationSchema),
-  workerSessionId: Type.Optional(identifier()),
-  workerRequestedModel: Type.Optional(text()),
-  workerReturnedModel: Type.Optional(text()),
-  workerPromptHash: Type.Optional(hash()),
-  reviewerSessionId: Type.Optional(identifier()),
-  reviewerRequestedModel: Type.Optional(text()),
-  reviewerReturnedModel: Type.Optional(text()),
-  reviewPromptHash: Type.Optional(hash()),
-  verificationBaseOid: Type.Optional(oid()),
-  verificationHeadOid: Type.Optional(oid()),
-  verificationTree: Type.Optional(oid()),
-  verificationEvidenceHash: Type.Optional(hash()),
-  verificationCommands: Type.Optional(
-    Type.Array(text(), { minItems: 1, maxItems: 32 })
-  ),
-  reviewBaseOid: Type.Optional(oid()),
-  reviewHeadOid: Type.Optional(oid()),
-  reviewTree: Type.Optional(oid()),
-  approvalResponseHash: Type.Optional(hash()),
-  landedOid: Type.Optional(oid()),
+  terminalEffect: ObservedJournalEntrySchema
+};
+var ClosureSuccessSchema = {
+  candidate: ClosureCandidateSchema,
+  verification: ClosureVerificationSchema,
+  review: ClosureReviewSchema
+};
+var ClosureNegativeSchema = {
   workerResult: Type.Optional(
     strictObject({
       status: Type.Union([
@@ -9747,9 +9802,50 @@ var ClosedUnitEvidenceFactSchema = strictObject({
       suggestedFollowUps: Type.Array(text(), { maxItems: 32 })
     })
   ),
-  repairCount: Type.Integer({ minimum: 0, maximum: 16 }),
-  repairContext: Type.Optional(RepairContextSchema)
-});
+  repairContext: Type.Optional(RepairContextSchema),
+  candidate: Type.Optional(ClosureCandidateSchema)
+};
+var ClosureEvidenceSchema = Type.Union([
+  strictObject({
+    ...ClosureBaseSchema,
+    ...ClosureSuccessSchema,
+    outcome: Type.Literal("landed"),
+    landedOid: oid()
+  }),
+  strictObject({
+    ...ClosureBaseSchema,
+    ...ClosureSuccessSchema,
+    outcome: Type.Literal("branch_handoff"),
+    publishedHeadOid: oid()
+  }),
+  strictObject({
+    ...ClosureBaseSchema,
+    ...ClosureSuccessSchema,
+    outcome: Type.Literal("pr_handoff"),
+    publishedHeadOid: oid(),
+    pullRequest: PullRequestObservationSchema
+  }),
+  strictObject({
+    ...ClosureBaseSchema,
+    ...ClosureNegativeSchema,
+    outcome: Type.Literal("failed")
+  }),
+  strictObject({
+    ...ClosureBaseSchema,
+    ...ClosureNegativeSchema,
+    outcome: Type.Literal("timed_out")
+  }),
+  strictObject({
+    ...ClosureBaseSchema,
+    ...ClosureNegativeSchema,
+    outcome: Type.Literal("parked")
+  }),
+  strictObject({
+    ...ClosureBaseSchema,
+    ...ClosureNegativeSchema,
+    outcome: Type.Literal("cancelled")
+  })
+]);
 var AggregateStateSchema = Type.Union([
   Type.Literal("initializing"),
   Type.Literal("active"),
@@ -9791,7 +9887,8 @@ var JournalCheckpointSchema = strictObject({
   revision: revision(),
   compactedEffects: Type.Integer({ minimum: 0 }),
   compactedEvents: Type.Integer({ minimum: 0 }),
-  compactedIdempotencyKeys: Type.Integer({ minimum: 0 })
+  compactedIdempotencyKeys: Type.Integer({ minimum: 0 }),
+  commitment: hash()
 });
 var ControllerOwnershipSchema = strictObject({
   runId: identifier(),
@@ -9855,17 +9952,19 @@ var RepositoryRunSchema = strictObject({
     maxItems: LIMITS.eventHistory,
     uniqueItems: true
   }),
-  // Concatenated, sorted, full SHA-256 session fingerprints. The count is a
-  // monotonic high-water cross-check for the exact ledger.
-  // It is never an independently meaningful membership structure.
+  // Canonical binary slots: an occupancy bitmap binds each full digest to a
+  // stable `(unit ordinal, worker|reviewer, generation)` position.
   usedSessionCount: Type.Integer({
     minimum: 0,
     maximum: LIMITS.sessionHistory
   }),
-  usedSessionFingerprints: Type.String({
-    maxLength: Math.ceil(LIMITS.sessionHistory * LIMITS.sessionFingerprintBytes / 3) * 4,
+  sessionLineage: Type.String({
+    maxLength: Math.ceil(
+      (LIMITS.sessionHistory * LIMITS.sessionFingerprintBytes + Math.ceil(LIMITS.sessionHistory / 8)) / 3
+    ) * 4,
     pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
   }),
+  sessionLineageRoot: hash(),
   // Canonical deflate-raw JSON ledger of exact facts for closed units. The
   // live unit object stays compact after cleanup while exact OIDs/hashes are
   // retained for audit and hydration validation.
@@ -9873,7 +9972,12 @@ var RepositoryRunSchema = strictObject({
     maxLength: LIMITS.envelopeBytes,
     pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
   }),
-  journalCheckpoint: JournalCheckpointSchema
+  // Commits the compact closed ledger itself. The ordered journal checkpoint
+  // commits transitions; this converse catches mutation of its exact retained
+  // audit copies after those transitions are compacted.
+  closedUnitEvidenceCommitment: hash(),
+  journalCheckpoint: JournalCheckpointSchema,
+  journalCommitment: hash()
 });
 var eventBase = {
   eventId: identifier(),
@@ -10558,6 +10662,53 @@ function deriveParamsHash(kind, params) {
     })
   );
 }
+function deriveIntentCommitment(entry) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.journal-intent.v1",
+      effectId: entry.effectId,
+      unitId: entry.unitId,
+      idempotencyKey: entry.idempotencyKey,
+      kind: entry.kind,
+      intentRevision: entry.intentRevision,
+      paramsHash: entry.paramsHash,
+      schemaVersion: entry.schemaVersion
+    })
+  );
+}
+function journalEntryCommitment(entry) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.journal-entry.v1",
+      intentCommitment: entry.intentCommitment,
+      status: entry.status,
+      ...entry.observationHash === void 0 ? {} : { observationHash: entry.observationHash }
+    })
+  );
+}
+function foldJournalCommitment(previous, entry) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.journal-chain.v1",
+      previous,
+      entry: journalEntryCommitment(entry)
+    })
+  );
+}
+function deriveJournalCommitment(checkpointCommitment, entries) {
+  return entries.reduce(
+    (commitment, entry) => foldJournalCommitment(commitment, entry),
+    checkpointCommitment
+  );
+}
+function deriveClosedUnitEvidenceCommitment(encoded) {
+  return encoded === "" ? "0".repeat(64) : sha256(
+    canonicalJson({
+      domain: "sce.protocol.closed-evidence.v1",
+      closedUnitEvidence: encoded
+    })
+  );
+}
 function completionConfigurationError(state) {
   switch (state.completionBoundary) {
     case "local-integration":
@@ -10577,52 +10728,80 @@ function controllerIdentityMatches(state, sessionId) {
     state.controller.holder
   ].includes(sessionId);
 }
-function hasUsedSession(state, sessionId) {
-  const fingerprints = decodeSessionFingerprints(state.usedSessionFingerprints);
-  if (fingerprints === void 0) return true;
-  return fingerprintIndex(fingerprints, sessionFingerprint(sessionId)).found;
-}
 function deriveSessionFingerprint(sessionId) {
   return sha256(
-    canonicalJson({ domain: "sce.protocol.session.v1", sessionId })
+    canonicalJson({ domain: "sce.protocol.session-lineage.v1", sessionId })
   );
 }
 function sessionFingerprint(sessionId) {
   return Buffer.from(deriveSessionFingerprint(sessionId), "hex");
 }
-function decodeSessionFingerprints(encoded) {
-  if (encoded === "") return Buffer.alloc(0);
-  let fingerprints;
+function sessionsPerRole() {
+  return 17;
+}
+function sessionRoleSlot(ordinal, role) {
+  return (ordinal * 2 + (role === "reviewer" ? 1 : 0)) * sessionsPerRole();
+}
+function sessionBitmapBytes(slotCount) {
+  return Math.ceil(slotCount / 8);
+}
+function sessionSlotsForRawLength(length) {
+  for (let bitmapBytes = 1; bitmapBytes <= sessionBitmapBytes(LIMITS.sessionHistory); bitmapBytes += 1) {
+    const slotCount = (length - bitmapBytes) / LIMITS.sessionFingerprintBytes;
+    if (Number.isInteger(slotCount) && slotCount > 0 && slotCount <= LIMITS.sessionHistory && sessionBitmapBytes(slotCount) === bitmapBytes)
+      return slotCount;
+  }
+  return void 0;
+}
+function decodeSessionLineage(encoded) {
+  if (encoded === "") return { slots: [], count: 0 };
+  let raw;
   try {
-    fingerprints = Buffer.from(encoded, "base64");
+    raw = Buffer.from(encoded, "base64");
   } catch {
     return void 0;
   }
-  if (fingerprints.toString("base64") !== encoded || fingerprints.length % LIMITS.sessionFingerprintBytes !== 0 || fingerprints.length > LIMITS.sessionHistory * LIMITS.sessionFingerprintBytes)
+  const slotCount = sessionSlotsForRawLength(raw.length);
+  if (raw.toString("base64") !== encoded || slotCount === void 0)
     return void 0;
-  for (let offset = LIMITS.sessionFingerprintBytes; offset < fingerprints.length; offset += LIMITS.sessionFingerprintBytes)
-    if (Buffer.compare(
-      fingerprints.subarray(offset - LIMITS.sessionFingerprintBytes, offset),
-      fingerprints.subarray(offset, offset + LIMITS.sessionFingerprintBytes)
-    ) >= 0)
-      return void 0;
-  return fingerprints;
-}
-function fingerprintIndex(fingerprints, fingerprint) {
-  let low = 0;
-  let high = fingerprints.length / LIMITS.sessionFingerprintBytes;
-  while (low < high) {
-    const middle = Math.floor((low + high) / 2);
-    const offset = middle * LIMITS.sessionFingerprintBytes;
-    const comparison = Buffer.compare(
-      fingerprints.subarray(offset, offset + LIMITS.sessionFingerprintBytes),
-      fingerprint
+  const bitmapBytes = sessionBitmapBytes(slotCount);
+  const slots = Array.from(
+    { length: slotCount },
+    () => void 0
+  );
+  const seen = /* @__PURE__ */ new Set();
+  let count = 0;
+  for (let index = 0; index < slotCount; index += 1) {
+    const occupied = (raw[Math.floor(index / 8)] & 1 << index % 8) !== 0;
+    const fingerprint = raw.subarray(
+      bitmapBytes + index * LIMITS.sessionFingerprintBytes,
+      bitmapBytes + (index + 1) * LIMITS.sessionFingerprintBytes
     );
-    if (comparison === 0) return { found: true, offset };
-    if (comparison < 0) low = middle + 1;
-    else high = middle;
+    if (!occupied) {
+      if (!fingerprint.every((byte) => byte === 0)) return void 0;
+      continue;
+    }
+    const key = fingerprint.toString("hex");
+    if (seen.has(key)) return void 0;
+    seen.add(key);
+    slots[index] = fingerprint;
+    count += 1;
   }
-  return { found: false, offset: low * LIMITS.sessionFingerprintBytes };
+  const unusedBitmapBits = slotCount % 8;
+  if (unusedBitmapBits !== 0 && (raw[bitmapBytes - 1] & ~((1 << unusedBitmapBits) - 1)) !== 0)
+    return void 0;
+  if (slots.at(-1) === void 0) return void 0;
+  return { slots, count };
+}
+function deriveSessionLineageRoot(sessionLineage, usedSessionCount) {
+  if (sessionLineage === "" && usedSessionCount === 0) return "0".repeat(64);
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.session-lineage-root.v1",
+      sessionLineage,
+      usedSessionCount
+    })
+  );
 }
 function intentStateForEffect(kind) {
   const states = {
@@ -10795,10 +10974,341 @@ function required(value, name, kind) {
   if (value === void 0) throw new Error(`${kind} lacks ${name}`);
   return value;
 }
+function denseJournal(entry) {
+  return [
+    entry.effectId,
+    entry.unitId,
+    entry.idempotencyKey,
+    entry.kind,
+    entry.intentRevision,
+    entry.intentCommitment,
+    entry.paramsHash,
+    entry.status,
+    entry.observationHash ?? null,
+    entry.schemaVersion
+  ];
+}
+function denseBinding(binding) {
+  return binding === void 0 ? null : [
+    binding.sessionId,
+    binding.requestedModel,
+    binding.returnedModel,
+    binding.promptHash
+  ];
+}
+function denseClosureRecord(closure) {
+  const common = [
+    closure.outcome,
+    closure.unitId,
+    closure.unitOrdinal,
+    closure.baseOid,
+    closure.repairCount ?? null,
+    closure.branchRef ?? null,
+    closure.worktreePath ?? null,
+    denseBinding(closure.worker),
+    denseBinding(closure.reviewer),
+    closure.reservations.map((reservation) => [
+      reservation.id,
+      reservation.namespace,
+      reservation.resource,
+      denseJournal(reservation.acquire),
+      reservation.release === void 0 ? null : denseJournal(reservation.release)
+    ]),
+    denseJournal(closure.terminalEffect)
+  ];
+  if (closure.outcome === "landed" || closure.outcome === "branch_handoff" || closure.outcome === "pr_handoff") {
+    const success2 = [
+      [closure.candidate.headOid, closure.candidate.treeOid],
+      [
+        closure.verification.baseOid,
+        closure.verification.headOid,
+        closure.verification.treeOid,
+        closure.verification.evidenceHash,
+        closure.verification.commands
+      ],
+      [
+        closure.review.baseOid,
+        closure.review.headOid,
+        closure.review.treeOid,
+        closure.review.responseHash
+      ]
+    ];
+    if (closure.outcome === "landed")
+      return [...common, [closure.landedOid, ...success2]];
+    if (closure.outcome === "branch_handoff")
+      return [...common, [closure.publishedHeadOid, ...success2]];
+    return [
+      ...common,
+      [
+        closure.publishedHeadOid,
+        [
+          closure.pullRequest.providerPrId,
+          closure.pullRequest.url ?? null,
+          closure.pullRequest.state,
+          closure.pullRequest.baseRef,
+          closure.pullRequest.baseOid,
+          closure.pullRequest.remoteHeadOid
+        ],
+        ...success2
+      ]
+    ];
+  }
+  return [
+    ...common,
+    [
+      closure.workerResult === void 0 ? null : [
+        closure.workerResult.status,
+        closure.workerResult.summary,
+        closure.workerResult.residualRisks,
+        closure.workerResult.suggestedFollowUps
+      ],
+      closure.repairContext === void 0 ? null : [
+        closure.repairContext.baseOid,
+        closure.repairContext.headOid ?? null,
+        closure.repairContext.treeOid ?? null,
+        closure.repairContext.responseHash,
+        closure.repairContext.rationale,
+        closure.repairContext.findings.map((finding) => [
+          finding.id,
+          finding.severity,
+          finding.detail
+        ])
+      ],
+      closure.candidate === void 0 ? null : [closure.candidate.headOid, closure.candidate.treeOid]
+    ]
+  ];
+}
+function denseClosureLedger(evidence) {
+  return {
+    v: 1,
+    u: Object.fromEntries(
+      Object.entries(evidence).map(([id, closure]) => [
+        id,
+        denseClosureRecord(closure)
+      ])
+    )
+  };
+}
+function tuple(value, length) {
+  return Array.isArray(value) && value.length === length ? value : void 0;
+}
+function denseJournalEntry(value) {
+  const values = tuple(value, 10);
+  if (values === void 0) return void 0;
+  const [
+    effectId,
+    unitId,
+    idempotencyKey2,
+    kind,
+    intentRevision,
+    intentCommitment,
+    paramsHash,
+    status,
+    observationHash,
+    schemaVersion
+  ] = values;
+  if (observationHash !== null && typeof observationHash !== "string")
+    return void 0;
+  return {
+    effectId,
+    unitId,
+    idempotencyKey: idempotencyKey2,
+    kind,
+    intentRevision,
+    intentCommitment,
+    paramsHash,
+    status,
+    ...observationHash === null ? {} : { observationHash },
+    schemaVersion
+  };
+}
+function denseBindingRecord(value) {
+  if (value === null) return void 0;
+  const values = tuple(value, 4);
+  if (values === void 0) return null;
+  const [sessionId, requestedModel, returnedModel, promptHash] = values;
+  return {
+    sessionId,
+    requestedModel,
+    returnedModel,
+    promptHash
+  };
+}
+function denseReservations(value) {
+  if (!Array.isArray(value)) return void 0;
+  const reservations = [];
+  for (const encoded of value) {
+    const values = tuple(encoded, 5);
+    if (values === void 0) return void 0;
+    const [id, namespace, resource, acquireEncoded, releaseEncoded] = values;
+    const acquire = denseJournalEntry(acquireEncoded);
+    const release = releaseEncoded === null ? void 0 : denseJournalEntry(releaseEncoded);
+    if (acquire === void 0 || releaseEncoded !== null && release === void 0)
+      return void 0;
+    reservations.push({
+      id,
+      namespace,
+      resource,
+      acquire,
+      ...release === void 0 ? {} : { release }
+    });
+  }
+  return reservations;
+}
+function denseSuccess(value) {
+  if (!Array.isArray(value) || value.length !== 4 && value.length !== 5)
+    return void 0;
+  const [publishedOrLandedOid, second, third, fourth, fifth] = value;
+  const hasPullRequest = value.length === 5;
+  return {
+    publishedOrLandedOid,
+    ...hasPullRequest ? { pullRequest: second } : {},
+    candidate: hasPullRequest ? third : second,
+    verification: hasPullRequest ? fourth : third,
+    review: hasPullRequest ? fifth : fourth
+  };
+}
+function expandDenseClosure(value) {
+  const values = tuple(value, 12);
+  if (values === void 0) return void 0;
+  const [
+    outcome,
+    unitId,
+    unitOrdinal,
+    baseOid,
+    repairCount,
+    branchRef,
+    worktreePath,
+    workerEncoded,
+    reviewerEncoded,
+    reservationsEncoded,
+    terminalEncoded,
+    payload
+  ] = values;
+  if (repairCount !== null && typeof repairCount !== "number" || branchRef !== null && typeof branchRef !== "string" || worktreePath !== null && typeof worktreePath !== "string")
+    return void 0;
+  const worker = denseBindingRecord(workerEncoded);
+  const reviewer = denseBindingRecord(reviewerEncoded);
+  const reservations = denseReservations(reservationsEncoded);
+  const terminalEffect = denseJournalEntry(terminalEncoded);
+  if (worker === null || reviewer === null || reservations === void 0 || terminalEffect === void 0)
+    return void 0;
+  const base = {
+    unitId,
+    unitOrdinal,
+    baseOid,
+    ...repairCount === null ? {} : { repairCount },
+    ...branchRef === null ? {} : { branchRef },
+    ...worktreePath === null ? {} : { worktreePath },
+    ...worker === void 0 ? {} : { worker },
+    ...reviewer === void 0 ? {} : { reviewer },
+    reservations,
+    terminalEffect
+  };
+  if (outcome === "landed" || outcome === "branch_handoff" || outcome === "pr_handoff") {
+    const success2 = denseSuccess(payload);
+    const candidate2 = success2 === void 0 ? void 0 : tuple(success2.candidate, 2);
+    const verification = success2 === void 0 ? void 0 : tuple(success2.verification, 5);
+    const review = success2 === void 0 ? void 0 : tuple(success2.review, 4);
+    if (success2 === void 0 || candidate2 === void 0 || verification === void 0 || review === void 0)
+      return void 0;
+    const successFacts = {
+      candidate: { headOid: candidate2[0], treeOid: candidate2[1] },
+      verification: {
+        baseOid: verification[0],
+        headOid: verification[1],
+        treeOid: verification[2],
+        evidenceHash: verification[3],
+        commands: verification[4]
+      },
+      review: {
+        baseOid: review[0],
+        headOid: review[1],
+        treeOid: review[2],
+        responseHash: review[3]
+      }
+    };
+    if (outcome === "landed")
+      return {
+        ...base,
+        ...successFacts,
+        outcome,
+        landedOid: success2.publishedOrLandedOid
+      };
+    if (outcome === "branch_handoff")
+      return {
+        ...base,
+        ...successFacts,
+        outcome,
+        publishedHeadOid: success2.publishedOrLandedOid
+      };
+    const pullRequest = tuple(success2.pullRequest, 6);
+    if (pullRequest === void 0 || pullRequest[1] !== null && typeof pullRequest[1] !== "string")
+      return void 0;
+    return {
+      ...base,
+      ...successFacts,
+      outcome,
+      publishedHeadOid: success2.publishedOrLandedOid,
+      pullRequest: {
+        providerPrId: pullRequest[0],
+        ...pullRequest[1] === null ? {} : { url: pullRequest[1] },
+        state: pullRequest[2],
+        baseRef: pullRequest[3],
+        baseOid: pullRequest[4],
+        remoteHeadOid: pullRequest[5]
+      }
+    };
+  }
+  if (outcome !== "failed" && outcome !== "timed_out" && outcome !== "parked" && outcome !== "cancelled")
+    return void 0;
+  const negative = tuple(payload, 3);
+  if (negative === void 0) return void 0;
+  const [workerResultEncoded, repairContextEncoded, candidateEncoded] = negative;
+  const workerResult = workerResultEncoded === null ? void 0 : tuple(workerResultEncoded, 4);
+  const repairContext = repairContextEncoded === null ? void 0 : tuple(repairContextEncoded, 6);
+  const candidate = candidateEncoded === null ? void 0 : tuple(candidateEncoded, 2);
+  if (workerResult === void 0 && workerResultEncoded !== null || repairContext === void 0 && repairContextEncoded !== null || candidate === void 0 && candidateEncoded !== null)
+    return void 0;
+  if (repairContext !== void 0 && (repairContext[1] !== null && typeof repairContext[1] !== "string" || repairContext[2] !== null && typeof repairContext[2] !== "string" || !Array.isArray(repairContext[5]) || !repairContext[5].every((finding) => tuple(finding, 3) !== void 0)))
+    return void 0;
+  return {
+    ...base,
+    outcome,
+    ...workerResult === void 0 ? {} : {
+      workerResult: {
+        status: workerResult[0],
+        summary: workerResult[1],
+        residualRisks: workerResult[2],
+        suggestedFollowUps: workerResult[3]
+      }
+    },
+    ...repairContext === void 0 ? {} : {
+      repairContext: {
+        baseOid: repairContext[0],
+        ...repairContext[1] === null ? {} : { headOid: repairContext[1] },
+        ...repairContext[2] === null ? {} : { treeOid: repairContext[2] },
+        responseHash: repairContext[3],
+        rationale: repairContext[4],
+        findings: repairContext[5].map(
+          (finding) => {
+            const [id, severity, detail] = tuple(finding, 3);
+            return { id, severity, detail };
+          }
+        )
+      }
+    },
+    ...candidate === void 0 ? {} : { candidate: { headOid: candidate[0], treeOid: candidate[1] } }
+  };
+}
 function encodeClosedUnitEvidence(evidence) {
-  return deflateRawSync(Buffer.from(canonicalJson(evidence), "utf8"), {
-    level: 9
-  }).toString("base64");
+  const dense = denseClosureLedger(evidence);
+  return deflateRawSync(
+    Buffer.from(canonicalJson(dense), "utf8"),
+    {
+      level: 9
+    }
+  ).toString("base64");
 }
 function decodeClosedUnitEvidence(encoded) {
   if (encoded === "") return {};
@@ -10824,11 +11334,16 @@ function decodeClosedUnitEvidence(encoded) {
   }
   if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object" || canonicalJson(parsed) !== text2)
     return void 0;
-  if (!Object.entries(parsed).every(
-    ([id, facts]) => /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u.test(id) && validate(ClosedUnitEvidenceFactSchema, facts).ok
-  ))
+  const dense = parsed;
+  if (Object.keys(dense).length !== 2 || dense.v !== 1 || dense.u === null || Array.isArray(dense.u) || typeof dense.u !== "object")
     return void 0;
-  const evidence = parsed;
+  const evidence = {};
+  for (const [id, compact] of Object.entries(dense.u)) {
+    const facts = expandDenseClosure(compact);
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u.test(id) || facts === void 0 || !validate(ClosureEvidenceSchema, facts).ok)
+      return void 0;
+    evidence[id] = facts;
+  }
   return encodeClosedUnitEvidence(evidence) === encoded ? evidence : void 0;
 }
 function runInvariantErrors(state) {
@@ -10901,50 +11416,141 @@ function runInvariantErrors(state) {
     if (unit.repairContext?.headOid === void 0 && unit.repairContext?.treeOid !== void 0)
       errors.push(`repair context ${unit.id} has a tree without a head`);
   }
-  const sessionFingerprints = decodeSessionFingerprints(
-    state.usedSessionFingerprints
-  );
-  if (sessionFingerprints === void 0)
-    errors.push("used session fingerprint ledger is invalid");
-  else if (sessionFingerprints.length / LIMITS.sessionFingerprintBytes !== state.usedSessionCount)
-    errors.push("used session fingerprint count does not match ledger");
+  const sessionLineage = decodeSessionLineage(state.sessionLineage);
+  const hasCurrentSessionLineage = (sessionId, ordinal, role) => {
+    if (sessionLineage === void 0) return false;
+    const fingerprint = sessionFingerprint(sessionId);
+    const start = sessionRoleSlot(ordinal, role);
+    return sessionLineage.slots.slice(start, start + sessionsPerRole()).some((entry) => entry?.equals(fingerprint));
+  };
+  if (sessionLineage === void 0)
+    errors.push("session lineage ledger is invalid");
+  else if (sessionLineage.count !== state.usedSessionCount)
+    errors.push("session lineage count does not match ledger");
+  else if (state.sessionLineageRoot !== deriveSessionLineageRoot(state.sessionLineage, state.usedSessionCount))
+    errors.push("session lineage root does not match ledger");
   const closedEvidence = decodeClosedUnitEvidence(state.closedUnitEvidence);
   if (closedEvidence === void 0)
     errors.push("closed unit evidence ledger is invalid");
-  const closedUnitIds = Object.values(state.units).filter((unit) => unit.state === "closed").map((unit) => unit.id).sort();
-  const evidenceUnitIds = Object.keys(closedEvidence ?? {}).sort();
-  if (closedUnitIds.join("\0") !== evidenceUnitIds.join("\0"))
-    errors.push("closed unit evidence membership is not exact");
+  else if (state.closedUnitEvidenceCommitment !== deriveClosedUnitEvidenceCommitment(state.closedUnitEvidence))
+    errors.push("closed unit evidence commitment does not match ledger");
+  const liveTerminalStates = /* @__PURE__ */ new Set([
+    "landed",
+    "handoff",
+    "failed",
+    "timed_out",
+    "parked",
+    "cancelled",
+    "reservation_release_intent"
+  ]);
+  const liveOrdinals = /* @__PURE__ */ new Set();
   for (const unit of Object.values(state.units)) {
-    if (unit.state !== "closed") continue;
-    const facts = closedEvidence?.[unit.id];
-    const preserved = facts === void 0 ? void 0 : { ...unit, ...facts };
-    if (facts === void 0 || preserved === void 0 || !validate(UnitSchema, preserved).ok)
-      errors.push(`closed unit ${unit.id} has invalid preserved evidence`);
-    else
-      for (const value of [
-        preserved.candidateHead,
-        preserved.candidateTree,
-        preserved.publishedHeadOid,
-        preserved.verificationBaseOid,
-        preserved.verificationHeadOid,
-        preserved.verificationTree,
-        preserved.reviewBaseOid,
-        preserved.reviewHeadOid,
-        preserved.reviewTree,
-        preserved.landedOid,
-        preserved.openPullRequest?.baseOid,
-        preserved.openPullRequest?.remoteHeadOid,
-        preserved.repairContext?.baseOid,
-        preserved.repairContext?.headOid,
-        preserved.repairContext?.treeOid
-      ])
-        checkOid(unit, value);
-    if (preserved !== void 0 && !preserved.reservationIds.every(
-      (reservationId) => state.reservations[reservationId]?.unitId === unit.id && state.reservations[reservationId]?.state === "released"
-    ))
-      errors.push(`closed unit ${unit.id} lacks released reservation lineage`);
+    if (liveOrdinals.has(unit.ordinal))
+      errors.push(`unit ${unit.id} duplicates a stable ordinal`);
+    liveOrdinals.add(unit.ordinal);
+    const closure = closedEvidence?.[unit.id];
+    const ambiguousRelease = state.effectJournal.some(
+      (effect) => effect.unitId === unit.id && effect.kind === "reservation_release" && effect.status === "ambiguous"
+    );
+    const blockedReleaseRecovery = unit.state === "blocked" && ambiguousRelease;
+    if (liveTerminalStates.has(unit.state) && closure === void 0)
+      errors.push(`terminal unit ${unit.id} lacks persisted closure evidence`);
+    if (closure !== void 0 && (closure.unitId !== unit.id || closure.unitOrdinal !== unit.ordinal || closure.baseOid !== unit.baseOid || closure.repairCount !== void 0))
+      errors.push(
+        `closure evidence ${unit.id} disagrees with live terminal unit`
+      );
+    if (!liveTerminalStates.has(unit.state) && !blockedReleaseRecovery && closure !== void 0)
+      errors.push(`non-terminal unit ${unit.id} has closure evidence`);
+    if (unit.state === "reservation_release_intent") {
+      if (closure === void 0 || !closure.reservations.every(
+        (reservation) => reservation.release?.status === "intended" && reservation.release.observationHash === void 0
+      ))
+        errors.push(
+          `release intent ${unit.id} lacks exact closure release lineage`
+        );
+    }
   }
+  const closureOrdinals = /* @__PURE__ */ new Set();
+  for (const [id, closure] of Object.entries(closedEvidence ?? {})) {
+    if (id !== closure.unitId)
+      errors.push(`closure evidence key ${id} does not match unit id`);
+    if (closureOrdinals.has(closure.unitOrdinal))
+      errors.push(`closure evidence ${id} duplicates a stable ordinal`);
+    closureOrdinals.add(closure.unitOrdinal);
+    if (liveOrdinals.has(closure.unitOrdinal) && state.units[id] === void 0)
+      errors.push(`closure evidence ${id} aliases a live unit ordinal`);
+    if (state.units[id] === void 0 && closure.repairCount === void 0)
+      errors.push(`closed evidence ${id} lacks authoritative repair count`);
+    if (state.units[id] !== void 0 && closure.repairCount !== void 0)
+      errors.push(`live terminal ${id} duplicates authoritative repair count`);
+    for (const value of [
+      closure.baseOid,
+      ..."candidate" in closure && closure.candidate !== void 0 ? [closure.candidate.headOid, closure.candidate.treeOid] : [],
+      ..."verification" in closure ? [
+        closure.verification.baseOid,
+        closure.verification.headOid,
+        closure.verification.treeOid
+      ] : [],
+      ..."review" in closure ? [
+        closure.review.baseOid,
+        closure.review.headOid,
+        closure.review.treeOid
+      ] : [],
+      ...closure.outcome === "landed" ? [closure.landedOid] : [],
+      ...closure.outcome === "branch_handoff" || closure.outcome === "pr_handoff" ? [closure.publishedHeadOid] : []
+    ])
+      if (value.length !== oidLength)
+        errors.push(`closure evidence ${id} has an incompatible OID`);
+    for (const reservation of closure.reservations) {
+      const unit = state.units[id];
+      const expectedReleaseStatus = unit === void 0 ? "observed" : unit.state === "reservation_release_intent" ? "intended" : unit.state === "blocked" && state.effectJournal.some(
+        (effect) => effect.unitId === id && effect.kind === "reservation_release" && effect.status === "ambiguous"
+      ) ? "ambiguous" : void 0;
+      if (reservation.acquire.intentCommitment !== deriveIntentCommitment(reservation.acquire))
+        errors.push(
+          `closure evidence ${id} has an invalid reservation acquire intent`
+        );
+      if (reservation.acquire.unitId !== id || reservation.acquire.kind !== "reservation_acquire" || reservation.acquire.status !== "observed")
+        errors.push(
+          `closure evidence ${id} lacks exact reservation acquisition lineage`
+        );
+      else if (expectedReleaseStatus !== void 0 && reservation.release === void 0 || reservation.release !== void 0 && (reservation.release.unitId !== id || reservation.release.kind !== "reservation_release" || reservation.release.intentCommitment !== deriveIntentCommitment(reservation.release) || expectedReleaseStatus !== void 0 && reservation.release.status !== expectedReleaseStatus))
+        errors.push(
+          `closure evidence ${id} has invalid reservation release lineage`
+        );
+    }
+    for (const [role, binding] of [
+      ["worker", closure.worker],
+      ["reviewer", closure.reviewer]
+    ])
+      if (binding !== void 0 && !hasCurrentSessionLineage(binding.sessionId, closure.unitOrdinal, role))
+        errors.push(`closure ${id} lacks ${role} session lineage`);
+    const failedWorker = "workerResult" in closure && closure.workerResult?.status === "failed";
+    const expectedTerminalKinds = {
+      landed: ["integrate"],
+      branch_handoff: ["publish"],
+      pr_handoff: ["publish"],
+      failed: failedWorker ? ["failure", "worker_collect"] : ["failure"],
+      timed_out: ["timeout"],
+      parked: ["park"],
+      cancelled: ["cancel"]
+    };
+    if (closure.terminalEffect.unitId !== id || closure.terminalEffect.status !== "observed" || !expectedTerminalKinds[closure.outcome].includes(
+      closure.terminalEffect.kind
+    ) || closure.terminalEffect.intentCommitment !== deriveIntentCommitment(closure.terminalEffect))
+      errors.push(`closure evidence ${id} has invalid terminal effect lineage`);
+    if (closure.outcome === "failed" && closure.terminalEffect.kind === "worker_collect" && closure.workerResult?.status !== "failed")
+      errors.push(`closure evidence ${id} lacks failed worker terminal facts`);
+    if (closure.outcome === "landed" || closure.outcome === "branch_handoff" || closure.outcome === "pr_handoff") {
+      if (closure.verification.baseOid !== closure.baseOid || closure.candidate.headOid !== closure.verification.headOid || closure.candidate.treeOid !== closure.verification.treeOid || closure.review.baseOid !== closure.baseOid || closure.review.headOid !== closure.candidate.headOid || closure.review.treeOid !== closure.candidate.treeOid)
+        errors.push(`closure evidence ${id} has mismatched successful facts`);
+    }
+  }
+  if (state.journalCommitment !== deriveJournalCommitment(
+    state.journalCheckpoint.commitment,
+    state.effectJournal
+  ))
+    errors.push("journal commitment does not match exact entries");
   const hasAmbiguousEffect = state.effectJournal.some(
     (effect) => effect.status === "ambiguous"
   );
@@ -10959,8 +11565,10 @@ function runInvariantErrors(state) {
     if (idempotency.has(effect.idempotencyKey))
       errors.push(`duplicate idempotency key ${effect.idempotencyKey}`);
     idempotency.add(effect.idempotencyKey);
-    if (effect.unitId !== null && state.units[effect.unitId] === void 0)
+    if (effect.unitId !== null && state.units[effect.unitId] === void 0 && (closedEvidence?.[effect.unitId] === void 0 || effect.status !== "observed"))
       errors.push(`effect ${effect.effectId} has unknown unit`);
+    if (effect.intentCommitment !== deriveIntentCommitment(effect))
+      errors.push(`effect ${effect.effectId} has an invalid intent commitment`);
     if (effect.status === "intended" && effect.observationHash !== void 0)
       errors.push(`intended effect ${effect.effectId} has an observation`);
     if (effect.status === "observed" && effect.observationHash === void 0)
@@ -11055,10 +11663,6 @@ function runInvariantErrors(state) {
       (reservationId) => state.reservations[reservationId]?.state === "release_intent"
     ))
       errors.push(`reservation cleanup ${id} lacks release intent`);
-    if (unit.state === "closed" && !unit.reservationIds.every(
-      (reservationId) => state.reservations[reservationId]?.state === "released"
-    ))
-      errors.push(`closed unit ${id} retains a non-released reservation`);
     if ([
       "branch_intent",
       "branch_observed",
@@ -11137,8 +11741,8 @@ function runInvariantErrors(state) {
       ["reviewer", unit.reviewerSessionId]
     ]) {
       if (session2 === void 0) continue;
-      if (!hasUsedSession(state, session2))
-        errors.push(`session ${session2} is not retained in durable history`);
+      if (!hasCurrentSessionLineage(session2, unit.ordinal, role))
+        errors.push(`session ${session2} lacks exact durable lineage`);
       if (controllerIdentityMatches(state, session2))
         errors.push(`session ${session2} aliases controller identity`);
       const prior = assignedSessions.get(session2);
