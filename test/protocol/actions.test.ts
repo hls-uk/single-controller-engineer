@@ -170,7 +170,16 @@ test("record actions are withheld until their exact intended effect is durable",
     unitId: "unit-1",
   });
   assert.equal(ambiguous.ok, true);
-  if (ambiguous.ok) assert.deepEqual(legalActions(ambiguous.nextState), []);
+  if (ambiguous.ok)
+    assert.deepEqual(legalActions(ambiguous.nextState), [
+      {
+        effectId: "event-1:reservation_acquire",
+        effectKind: "reservation_acquire",
+        mode: "record",
+        type: "reservation_observed",
+        unitId: "unit-1",
+      },
+    ]);
 });
 
 test("every normal lifecycle state exposes its reducer-legal progress descriptor", () => {

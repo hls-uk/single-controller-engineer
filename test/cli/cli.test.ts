@@ -12,8 +12,9 @@ import {
 } from "../../src/commands/index.js";
 import { canonicalJson, parseCliArguments, runCli } from "../../src/cli.js";
 import { legalActions } from "../../src/protocol/actions.js";
+import { reduce } from "../../src/protocol/reducer.js";
 
-import { run, unit } from "../protocol/fixtures.js";
+import { HASH, event, run, transition, unit } from "../protocol/fixtures.js";
 test("mutating and external commands report stable unavailability", async () => {
   for (const command of commandNames.filter(
     (item) => !["inspect", "status", "next"].includes(item),
@@ -194,6 +195,7 @@ test("default runner deterministically inspects valid repository state", async (
   const source = JSON.stringify({ run: state });
   const inspect = await runCli(["inspect", "--request", source]);
   assert.deepEqual(JSON.parse(inspect.stdout).result, {
+    ambiguities: [],
     integrationBranch: "main",
     repositoryIdentity: "repo-1",
     revision: 0,
@@ -203,6 +205,7 @@ test("default runner deterministically inspects valid repository state", async (
   const status = await runCli(["status", "--request", source]);
   assert.deepEqual(JSON.parse(status.stdout).result, {
     activeModifyingUnitIds: [],
+    ambiguities: [],
     effectCount: 0,
     revision: 0,
     state: "active",
@@ -215,6 +218,58 @@ test("default runner deterministically inspects valid repository state", async (
   assert.equal(inspect.exitCode, 0);
   assert.equal(status.exitCode, 0);
   assert.equal(next.exitCode, 0);
+});
+
+test("read commands expose the exact bounded ambiguity recovery", async () => {
+  let state = run();
+  state = transition(
+    state,
+    event(state, "reservation_intent", {
+      paramsHash: HASH,
+      reservations: [{ id: "res-1", namespace: "port", resource: "3001" }],
+    }),
+    reduce,
+  );
+  state = transition(
+    state,
+    event(state, "effect_ambiguous", {
+      effectId: "event-1:reservation_acquire",
+      effectKind: "reservation_acquire",
+    }),
+    reduce,
+  );
+  const expected = [
+    {
+      effectId: "event-1:reservation_acquire",
+      effectKind: "reservation_acquire",
+      observationType: "reservation_observed",
+      unitId: "unit-1",
+    },
+  ];
+  for (const command of ["inspect", "status"]) {
+    const execution = await runCli([
+      command,
+      "--request",
+      JSON.stringify({ run: state }),
+    ]);
+    assert.equal(execution.exitCode, 0);
+    assert.deepEqual(JSON.parse(execution.stdout).result.ambiguities, expected);
+  }
+  const next = await runCli([
+    "next",
+    "--request",
+    JSON.stringify({ run: state }),
+  ]);
+  assert.equal(next.exitCode, 0);
+  assert.deepEqual(JSON.parse(next.stdout).result.legalActions, [
+    {
+      effectId: "event-1:reservation_acquire",
+      effectKind: "reservation_acquire",
+      mode: "record",
+      type: "reservation_observed",
+      unitId: "unit-1",
+    },
+  ]);
 });
 test("malformed, oversize, and invalid state requests fail closed", async () => {
   const tooLarge = `{\"payload\":\"${"x".repeat(128 * 1024)}\"}`;

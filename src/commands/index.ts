@@ -6,7 +6,7 @@ import {
   validate,
   type RepositoryRun,
 } from "../protocol/schemas.js";
-import { legalActions } from "../protocol/actions.js";
+import { ambiguityRecoveryActions, legalActions } from "../protocol/actions.js";
 import { runInvariantErrors } from "../protocol/reducer.js";
 
 export const commandNames = [
@@ -245,12 +245,25 @@ export const stateOnlyCommandRunner: CommandRunner = (request) => {
     return invalidStateRequest();
   const run = parsedRun.value;
   if (runInvariantErrors(run).length > 0) return invalidStateRequest();
+  const ambiguities = ambiguityRecoveryActions(run).flatMap((action) =>
+    action.effectId === undefined || action.effectKind === undefined
+      ? []
+      : [
+          {
+            effectId: action.effectId,
+            effectKind: action.effectKind,
+            observationType: action.type,
+            unitId: action.unitId ?? null,
+          },
+        ],
+  );
   if (request.command === "inspect") {
     return {
       schema: "sce.command.result",
       version: 1,
       status: "ok",
       result: {
+        ambiguities,
         integrationBranch: run.integrationBranch,
         repositoryIdentity: run.repositoryIdentity,
         revision: run.revision,
@@ -266,6 +279,7 @@ export const stateOnlyCommandRunner: CommandRunner = (request) => {
       status: "ok",
       result: {
         activeModifyingUnitIds: [...run.activeModifyingUnitIds].sort(),
+        ambiguities,
         effectCount: run.effectJournal.length,
         revision: run.revision,
         state: run.state,

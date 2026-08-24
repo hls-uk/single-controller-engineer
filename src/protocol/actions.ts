@@ -13,6 +13,7 @@ export interface ActionDescriptor {
   readonly mode: "emit" | "record";
   readonly unitId?: string;
   readonly effectKind?: EffectKind;
+  readonly effectId?: string;
 }
 
 /**
@@ -32,8 +33,9 @@ export function legalActions(
 
   const controllerActions = actionsForController(state);
   if (controllerActions !== undefined) return sortActions(controllerActions);
-  if (state.state === "released" || state.state === "blocked") return [];
+  if (state.state === "released") return [];
   if (state.controller.state !== "acquired") return [];
+  if (state.state === "blocked") return ambiguityRecoveryActions(state);
 
   return sortActions(
     Object.values(state.units)
@@ -48,6 +50,46 @@ export function legalActions(
                 !hasUnresolvedUnitEffect(state, action.unitId)))) &&
           (action.mode !== "record" || pendingUnitEffect(state, action)),
       ),
+  );
+}
+
+const observationForEffect: Readonly<Record<EffectKind, string>> = {
+  controller_acquire: "controller_acquired",
+  reservation_acquire: "reservation_observed",
+  branch_create: "branch_observed",
+  worktree_create: "worktree_observed",
+  dispatch: "dispatch_observed",
+  worker_collect: "worker_collected",
+  candidate_collect: "candidate_observed",
+  verify: "verification_observed",
+  review_dispatch: "reviewer_observed",
+  review_collect: "review_collected",
+  publish: "publish_observed",
+  integrate: "integrate_observed",
+  reservation_release: "reservation_released",
+  repair: "repair_observed",
+  failure: "failure_observed",
+  timeout: "timeout_observed",
+  park: "park_observed",
+  cancel: "cancel_observed",
+  controller_release: "controller_released",
+};
+
+export function ambiguityRecoveryActions(
+  state: RepositoryRun,
+): readonly ActionDescriptor[] {
+  return sortActions(
+    state.effectJournal
+      .filter(
+        (effect) => effect.unitId !== null && effect.status === "ambiguous",
+      )
+      .map((effect) => ({
+        effectId: effect.effectId,
+        effectKind: effect.kind,
+        mode: "record" as const,
+        type: observationForEffect[effect.kind],
+        ...(effect.unitId === null ? {} : { unitId: effect.unitId }),
+      })),
   );
 }
 
@@ -387,12 +429,14 @@ function sortActions(
       left.unitId ?? "",
       left.mode,
       left.effectKind ?? "",
+      left.effectId ?? "",
     ].join("\u0000");
     const rightKey = [
       right.type,
       right.unitId ?? "",
       right.mode,
       right.effectKind ?? "",
+      right.effectId ?? "",
     ].join("\u0000");
     return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
   });
