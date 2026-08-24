@@ -17,6 +17,7 @@ export const HASH = "d".repeat(64);
 export function unit(id: string, state: Unit["state"] = "planned"): Unit {
   return {
     id,
+    ordinal: 0,
     revision: 0,
     state,
     baseOid: OID_A,
@@ -45,7 +46,9 @@ export function run(units: readonly Unit[] = [unit("unit-1")]): RepositoryRun {
       promptHash: HASH,
       state: "acquired",
     },
-    units: Object.fromEntries(units.map((item) => [item.id, item])),
+    units: Object.fromEntries(
+      units.map((item, ordinal) => [item.id, { ...item, ordinal }]),
+    ),
     reservations: {},
     activeModifyingUnitIds: [],
     wave: {
@@ -61,14 +64,18 @@ export function run(units: readonly Unit[] = [unit("unit-1")]): RepositoryRun {
     processedEventIds: [],
     processedIdempotencyKeys: [],
     usedSessionCount: 0,
-    usedSessionFingerprints: "",
+    sessionLineage: "",
+    sessionLineageRoot: "0".repeat(64),
     closedUnitEvidence: "",
+    closedUnitEvidenceCommitment: "0".repeat(64),
     journalCheckpoint: {
       revision: 0,
       compactedEffects: 0,
       compactedEvents: 0,
       compactedIdempotencyKeys: 0,
+      commitment: "0".repeat(64),
     },
+    journalCommitment: "0".repeat(64),
   };
 }
 export function event(

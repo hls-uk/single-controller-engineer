@@ -1,7 +1,7 @@
 import {
   LIMITS,
   SCHEMA_VERSION,
-  ClosedUnitEvidenceFactSchema,
+  ClosureEvidenceSchema,
   type EffectJournalEntry,
   type EffectKind,
   type ProtocolEvent,
@@ -10,7 +10,7 @@ import {
   RepositoryRunSchema,
   type RuntimeEffect,
   RuntimeEffectSchema,
-  type ClosedUnitEvidenceFact,
+  type ClosureEvidence,
   type Unit,
   UnitSchema,
   type UnitState,
@@ -274,7 +274,12 @@ function reduceInternal(
       );
       break;
     case "dispatch_observed":
-      const dispatchedSession = freshSessionUpdate(state, event.sessionId);
+      const dispatchedSession = freshSessionUpdate(
+        state,
+        event.sessionId,
+        unit,
+        "worker",
+      );
       if (
         unit.state !== "dispatch_intent" ||
         event.requestedModel !== unit.workerRequestedModel ||
@@ -360,6 +365,8 @@ function reduceInternal(
                   ),
                 },
               );
+      if (event.workerResult.status === "failed")
+        result = persistTerminalClosureEvidence(result, unit.id);
       break;
     case "candidate_intent":
       if (unit.state !== "collected") return illegal(unit, event.type);
@@ -453,7 +460,12 @@ function reduceInternal(
       );
       break;
     case "reviewer_observed":
-      const reviewerSessionUpdate = freshSessionUpdate(state, event.sessionId);
+      const reviewerSessionUpdate = freshSessionUpdate(
+        state,
+        event.sessionId,
+        unit,
+        "reviewer",
+      );
       if (
         unit.state !== "reviewer_dispatch_intent" ||
         state.currentReviewerUnitId !== unit.id ||
@@ -600,6 +612,8 @@ function reduceInternal(
         },
         isPublicationHandoff(state) ? clearUnitOwners(state, unit.id) : {},
       );
+      if (isPublicationHandoff(state))
+        result = persistTerminalClosureEvidence(result, unit.id);
       break;
     case "integrate_intent":
       if (
@@ -648,6 +662,7 @@ function reduceInternal(
           ),
         },
       );
+      result = persistTerminalClosureEvidence(result, unit.id);
       break;
     case "reservation_release_intent":
       if (
@@ -669,6 +684,16 @@ function reduceInternal(
         "reservation_release",
         { reservations: updateReservations(state, unit.id, "release_intent") },
       );
+      result = {
+        ...result,
+        state: {
+          ...result.state,
+          closedUnitEvidence: updateClosureReleaseEvidence(
+            result.state,
+            unit.id,
+          ),
+        },
+      };
       break;
     case "reservation_released":
       if (unit.state !== "reservation_release_intent")
@@ -688,10 +713,12 @@ function reduceInternal(
             "released",
             event.effectId,
           ),
-          closedUnitEvidence: recordClosedUnitEvidence(state, unit),
         },
-        compactClosedUnit(unit),
       );
+      result = {
+        ...result,
+        state: closeUnitAfterRelease(result.state, unit.id),
+      };
       break;
     case "repair_intent":
       if (
@@ -716,9 +743,18 @@ function reduceInternal(
         workerRequestedModel: event.requestedModel,
         workerPromptHash: event.promptHash,
       });
+      result = {
+        ...result,
+        state: removeClosureEvidence(result.state, unit.id),
+      };
       break;
     case "repair_observed":
-      const repairedSession = freshSessionUpdate(state, event.sessionId);
+      const repairedSession = freshSessionUpdate(
+        state,
+        event.sessionId,
+        unit,
+        "worker",
+      );
       if (
         unit.state !== "repair_intent" ||
         event.requestedModel !== unit.workerRequestedModel ||
@@ -758,6 +794,7 @@ function reduceInternal(
         failureRepairContext(unit, event.observationHash, "failure observed"),
         clearUnitOwners(state, unit.id),
       );
+      result = persistTerminalClosureEvidence(result, unit.id);
       break;
     case "timeout_intent":
       if (!canEnterTerminalIntent(unit.state)) return illegal(unit, event.type);
@@ -777,6 +814,7 @@ function reduceInternal(
         failureRepairContext(unit, event.observationHash, "timeout observed"),
         clearUnitOwners(state, unit.id),
       );
+      result = persistTerminalClosureEvidence(result, unit.id);
       break;
     case "park_intent":
       if (!canEnterTerminalIntent(unit.state)) return illegal(unit, event.type);
@@ -796,6 +834,7 @@ function reduceInternal(
         {},
         clearUnitOwners(state, unit.id),
       );
+      result = persistTerminalClosureEvidence(result, unit.id);
       break;
     case "cancel_intent":
       if (!canEnterTerminalIntent(unit.state)) return illegal(unit, event.type);
@@ -815,6 +854,7 @@ function reduceInternal(
         {},
         clearUnitOwners(state, unit.id),
       );
+      result = persistTerminalClosureEvidence(result, unit.id);
       break;
     default:
       return exhaustive(event);
@@ -897,6 +937,79 @@ export function deriveParamsHash(
       schemaVersion: SCHEMA_VERSION,
     }),
   );
+}
+
+export function deriveIntentCommitment(
+  entry: Pick<
+    EffectJournalEntry,
+    | "effectId"
+    | "unitId"
+    | "idempotencyKey"
+    | "kind"
+    | "intentRevision"
+    | "paramsHash"
+    | "schemaVersion"
+  >,
+): string {
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.journal-intent.v1",
+      effectId: entry.effectId,
+      unitId: entry.unitId,
+      idempotencyKey: entry.idempotencyKey,
+      kind: entry.kind,
+      intentRevision: entry.intentRevision,
+      paramsHash: entry.paramsHash,
+      schemaVersion: entry.schemaVersion,
+    }),
+  );
+}
+
+function journalEntryCommitment(entry: EffectJournalEntry): string {
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.journal-entry.v1",
+      intentCommitment: entry.intentCommitment,
+      status: entry.status,
+      ...(entry.observationHash === undefined
+        ? {}
+        : { observationHash: entry.observationHash }),
+    }),
+  );
+}
+
+function foldJournalCommitment(
+  previous: string,
+  entry: EffectJournalEntry,
+): string {
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.journal-chain.v1",
+      previous,
+      entry: journalEntryCommitment(entry),
+    }),
+  );
+}
+
+export function deriveJournalCommitment(
+  checkpointCommitment: string,
+  entries: readonly EffectJournalEntry[],
+): string {
+  return entries.reduce(
+    (commitment, entry) => foldJournalCommitment(commitment, entry),
+    checkpointCommitment,
+  );
+}
+
+export function deriveClosedUnitEvidenceCommitment(encoded: string): string {
+  return encoded === ""
+    ? "0".repeat(64)
+    : sha256(
+        canonicalJson({
+          domain: "sce.protocol.closed-evidence.v1",
+          closedUnitEvidence: encoded,
+        }),
+      );
 }
 
 export function deriveRepairContextHash(
@@ -995,8 +1108,13 @@ function publicationKind(
 function freshSessionUpdate(
   state: RepositoryRun,
   sessionId: string,
+  unit: Unit,
+  role: "worker" | "reviewer",
 ):
-  | Pick<RepositoryRun, "usedSessionFingerprints" | "usedSessionCount">
+  | Pick<
+      RepositoryRun,
+      "sessionLineage" | "sessionLineageRoot" | "usedSessionCount"
+    >
   | undefined {
   if (
     state.usedSessionCount >= LIMITS.sessionHistory ||
@@ -1008,18 +1126,26 @@ function freshSessionUpdate(
     )
   )
     return undefined;
-  const fingerprints = decodeSessionFingerprints(state.usedSessionFingerprints);
-  if (fingerprints === undefined) return undefined;
+  const lineage = decodeSessionLineage(state.sessionLineage);
+  if (lineage === undefined) return undefined;
   const fingerprint = sessionFingerprint(sessionId);
-  const index = fingerprintIndex(fingerprints, fingerprint);
-  if (index.found) return undefined;
-  const next = Buffer.concat([
-    fingerprints.subarray(0, index.offset),
-    fingerprint,
-    fingerprints.subarray(index.offset),
-  ]);
+  if (lineage.slots.some((entry) => entry?.equals(fingerprint)))
+    return undefined;
+  const start = sessionRoleSlot(unit.ordinal, role);
+  const slot = Array.from(
+    { length: sessionsPerRole() },
+    (_, offset) => start + offset,
+  ).find((index) => lineage.slots[index] === undefined);
+  if (slot === undefined) return undefined;
+  const next = [...lineage.slots];
+  next[slot] = fingerprint;
+  const sessionLineage = encodeSessionLineage(next);
   return {
-    usedSessionFingerprints: next.toString("base64"),
+    sessionLineage,
+    sessionLineageRoot: deriveSessionLineageRoot(
+      sessionLineage,
+      state.usedSessionCount + 1,
+    ),
     usedSessionCount: state.usedSessionCount + 1,
   };
 }
@@ -1036,26 +1162,40 @@ function controllerIdentityMatches(
 }
 
 export function hasUsedSession(
-  state: Pick<RepositoryRun, "usedSessionFingerprints">,
+  state: Pick<RepositoryRun, "sessionLineage">,
   sessionId: string,
 ): boolean {
-  const fingerprints = decodeSessionFingerprints(state.usedSessionFingerprints);
+  const lineage = decodeSessionLineage(state.sessionLineage);
   // A malformed persisted ledger must never create a false-negative reuse
   // path. Reducer hydration independently rejects it with an invariant error.
-  if (fingerprints === undefined) return true;
-  return fingerprintIndex(fingerprints, sessionFingerprint(sessionId)).found;
+  if (lineage === undefined) return true;
+  const fingerprint = sessionFingerprint(sessionId);
+  return lineage.slots.some((entry) => entry?.equals(fingerprint));
 }
 
-export function sessionFingerprintCount(encoded: string): number {
-  const fingerprints = decodeSessionFingerprints(encoded);
-  return fingerprints === undefined
-    ? Number.POSITIVE_INFINITY
-    : fingerprints.length / LIMITS.sessionFingerprintBytes;
+function hasSessionLineageBinding(
+  state: Pick<RepositoryRun, "sessionLineage">,
+  sessionId: string,
+  ordinal: number,
+  role: "worker" | "reviewer",
+): boolean {
+  const lineage = decodeSessionLineage(state.sessionLineage);
+  if (lineage === undefined) return false;
+  const fingerprint = sessionFingerprint(sessionId);
+  const start = sessionRoleSlot(ordinal, role);
+  return lineage.slots
+    .slice(start, start + sessionsPerRole())
+    .some((entry) => entry?.equals(fingerprint));
+}
+
+export function sessionLineageCount(encoded: string): number {
+  const lineage = decodeSessionLineage(encoded);
+  return lineage === undefined ? Number.POSITIVE_INFINITY : lineage.count;
 }
 
 export function deriveSessionFingerprint(sessionId: string): string {
   return sha256(
-    canonicalJson({ domain: "sce.protocol.session.v1", sessionId }),
+    canonicalJson({ domain: "sce.protocol.session-lineage.v1", sessionId }),
   );
 }
 
@@ -1063,53 +1203,128 @@ function sessionFingerprint(sessionId: string): Buffer {
   return Buffer.from(deriveSessionFingerprint(sessionId), "hex");
 }
 
-function decodeSessionFingerprints(encoded: string): Buffer | undefined {
-  if (encoded === "") return Buffer.alloc(0);
-  let fingerprints: Buffer;
+/**
+ * Session slots are laid out by immutable `(unit ordinal, role, generation)`.
+ * A compact occupancy bitmap carries the slot tag, while each populated slot
+ * retains the complete digest. This avoids spending one redundant tag byte on
+ * all 2,176 records and keeps the ledger canonical without losing membership.
+ */
+type SessionLineage = {
+  readonly slots: readonly (Buffer | undefined)[];
+  readonly count: number;
+};
+
+function sessionsPerRole(): number {
+  // One initial worker/reviewer assignment plus each bounded repair.
+  return 17;
+}
+
+function sessionRoleSlot(ordinal: number, role: "worker" | "reviewer"): number {
+  return (ordinal * 2 + (role === "reviewer" ? 1 : 0)) * sessionsPerRole();
+}
+
+function sessionBitmapBytes(slotCount: number): number {
+  return Math.ceil(slotCount / 8);
+}
+
+function sessionRawBytes(slotCount: number): number {
+  return (
+    sessionBitmapBytes(slotCount) + slotCount * LIMITS.sessionFingerprintBytes
+  );
+}
+
+function sessionSlotsForRawLength(length: number): number | undefined {
+  for (
+    let bitmapBytes = 1;
+    bitmapBytes <= sessionBitmapBytes(LIMITS.sessionHistory);
+    bitmapBytes += 1
+  ) {
+    const slotCount = (length - bitmapBytes) / LIMITS.sessionFingerprintBytes;
+    if (
+      Number.isInteger(slotCount) &&
+      slotCount > 0 &&
+      slotCount <= LIMITS.sessionHistory &&
+      sessionBitmapBytes(slotCount) === bitmapBytes
+    )
+      return slotCount;
+  }
+  return undefined;
+}
+
+function encodeSessionLineage(slots: readonly (Buffer | undefined)[]): string {
+  let last = slots.length - 1;
+  while (last >= 0 && slots[last] === undefined) last -= 1;
+  if (last < 0) return "";
+  const slotCount = last + 1;
+  const bitmapBytes = sessionBitmapBytes(slotCount);
+  const raw = Buffer.alloc(sessionRawBytes(slotCount));
+  for (let index = 0; index < slotCount; index += 1) {
+    const fingerprint = slots[index];
+    if (fingerprint === undefined) continue;
+    if (fingerprint.length !== LIMITS.sessionFingerprintBytes)
+      throw new Error("invalid session fingerprint length");
+    raw[Math.floor(index / 8)]! |= 1 << (index % 8);
+    fingerprint.copy(raw, bitmapBytes + index * LIMITS.sessionFingerprintBytes);
+  }
+  return raw.toString("base64");
+}
+
+function decodeSessionLineage(encoded: string): SessionLineage | undefined {
+  if (encoded === "") return { slots: [], count: 0 };
+  let raw: Buffer;
   try {
-    fingerprints = Buffer.from(encoded, "base64");
+    raw = Buffer.from(encoded, "base64");
   } catch {
     return undefined;
   }
+  const slotCount = sessionSlotsForRawLength(raw.length);
+  if (raw.toString("base64") !== encoded || slotCount === undefined)
+    return undefined;
+  const bitmapBytes = sessionBitmapBytes(slotCount);
+  const slots: (Buffer | undefined)[] = Array.from(
+    { length: slotCount },
+    () => undefined,
+  );
+  const seen = new Set<string>();
+  let count = 0;
+  for (let index = 0; index < slotCount; index += 1) {
+    const occupied = (raw[Math.floor(index / 8)]! & (1 << (index % 8))) !== 0;
+    const fingerprint = raw.subarray(
+      bitmapBytes + index * LIMITS.sessionFingerprintBytes,
+      bitmapBytes + (index + 1) * LIMITS.sessionFingerprintBytes,
+    );
+    if (!occupied) {
+      if (!fingerprint.every((byte) => byte === 0)) return undefined;
+      continue;
+    }
+    const key = fingerprint.toString("hex");
+    if (seen.has(key)) return undefined;
+    seen.add(key);
+    slots[index] = fingerprint;
+    count += 1;
+  }
+  const unusedBitmapBits = slotCount % 8;
   if (
-    fingerprints.toString("base64") !== encoded ||
-    fingerprints.length % LIMITS.sessionFingerprintBytes !== 0 ||
-    fingerprints.length > LIMITS.sessionHistory * LIMITS.sessionFingerprintBytes
+    unusedBitmapBits !== 0 &&
+    (raw[bitmapBytes - 1]! & ~((1 << unusedBitmapBits) - 1)) !== 0
   )
     return undefined;
-  for (
-    let offset = LIMITS.sessionFingerprintBytes;
-    offset < fingerprints.length;
-    offset += LIMITS.sessionFingerprintBytes
-  )
-    if (
-      Buffer.compare(
-        fingerprints.subarray(offset - LIMITS.sessionFingerprintBytes, offset),
-        fingerprints.subarray(offset, offset + LIMITS.sessionFingerprintBytes),
-      ) >= 0
-    )
-      return undefined;
-  return fingerprints;
+  if (slots.at(-1) === undefined) return undefined;
+  return { slots, count };
 }
 
-function fingerprintIndex(
-  fingerprints: Buffer,
-  fingerprint: Buffer,
-): { readonly found: boolean; readonly offset: number } {
-  let low = 0;
-  let high = fingerprints.length / LIMITS.sessionFingerprintBytes;
-  while (low < high) {
-    const middle = Math.floor((low + high) / 2);
-    const offset = middle * LIMITS.sessionFingerprintBytes;
-    const comparison = Buffer.compare(
-      fingerprints.subarray(offset, offset + LIMITS.sessionFingerprintBytes),
-      fingerprint,
-    );
-    if (comparison === 0) return { found: true, offset };
-    if (comparison < 0) low = middle + 1;
-    else high = middle;
-  }
-  return { found: false, offset: low * LIMITS.sessionFingerprintBytes };
+export function deriveSessionLineageRoot(
+  sessionLineage: string,
+  usedSessionCount: number,
+): string {
+  if (sessionLineage === "" && usedSessionCount === 0) return "0".repeat(64);
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.session-lineage-root.v1",
+      sessionLineage,
+      usedSessionCount,
+    }),
+  );
 }
 function hasUnresolvedUnitEffect(
   state: RepositoryRun,
@@ -1246,7 +1461,7 @@ function markEffectAmbiguous(
     if (unit === undefined || unit.state !== expectedUnitState)
       return undefined;
   }
-  return {
+  const blocked: RepositoryRun = {
     ...state,
     state: "blocked",
     effectJournal: state.effectJournal.map((candidate) =>
@@ -1268,6 +1483,12 @@ function markEffectAmbiguous(
             state: "blocked",
           }),
         }),
+  };
+  if (entry.unitId === null || entry.kind !== "reservation_release")
+    return blocked;
+  return {
+    ...blocked,
+    closedUnitEvidence: updateClosureReleaseEvidence(blocked, entry.unitId),
   };
 }
 
@@ -1455,10 +1676,13 @@ function appendIntent(
     unitId,
     idempotencyKey: event.idempotencyKey,
     kind,
+    intentRevision: state.revision,
+    intentCommitment: "0".repeat(64),
     paramsHash,
     status: "intended",
     schemaVersion: SCHEMA_VERSION,
   };
+  entry.intentCommitment = deriveIntentCommitment(entry);
   const validEffect = validate<RuntimeEffect>(RuntimeEffectSchema, effect);
   if (!validEffect.ok)
     throw new Error(
@@ -1632,50 +1856,703 @@ function required<T>(value: T | undefined, name: string, kind: EffectKind): T {
   return value;
 }
 
-/**
- * Closed units cannot execute another lifecycle transition. Keep their live
- * shape small, but retain every former optional fact in one canonical,
- * compressed aggregate ledger for audit and hydration checks.
- */
-function compactClosedUnit(unit: Unit): Unit {
-  return {
-    id: unit.id,
-    revision: unit.revision,
-    state: "closed",
-    baseOid: unit.baseOid,
-    reservationIds: [],
-    repairCount: unit.repairCount,
-  };
+function observedEffect(
+  state: RepositoryRun,
+  unitId: string,
+  kind: EffectKind,
+): Extract<EffectJournalEntry, { status: "observed" }> {
+  const entry = [...state.effectJournal]
+    .reverse()
+    .find(
+      (candidate) =>
+        candidate.unitId === unitId &&
+        candidate.kind === kind &&
+        candidate.status === "observed",
+    );
+  if (entry === undefined || entry.observationHash === undefined)
+    throw new Error(`missing observed ${kind} lineage for ${unitId}`);
+  return entry as Extract<EffectJournalEntry, { status: "observed" }>;
 }
 
-function recordClosedUnitEvidence(state: RepositoryRun, unit: Unit): string {
-  const evidence = decodeClosedUnitEvidence(state.closedUnitEvidence);
-  if (evidence === undefined)
-    throw new Error("closed unit evidence ledger is malformed");
-  const {
-    id: _id,
-    revision: _revision,
-    state: _state,
-    baseOid: _baseOid,
-    ...facts
-  } = unit;
-  return encodeClosedUnitEvidence({
-    ...evidence,
-    [unit.id]: facts as ClosedUnitEvidenceFact,
+function closureReservations(
+  state: RepositoryRun,
+  unit: Unit,
+): ClosureEvidence["reservations"] {
+  return unit.reservationIds.map((reservationId) => {
+    const reservation = state.reservations[reservationId];
+    if (reservation === undefined)
+      throw new Error(`missing reservation ${reservationId}`);
+    return {
+      id: reservation.id,
+      namespace: reservation.namespace,
+      resource: reservation.resource,
+      acquire: observedEffect(state, unit.id, "reservation_acquire"),
+    };
   });
 }
 
+function sessionClosureBindings(
+  unit: Unit,
+): Pick<ClosureEvidence, "worker" | "reviewer"> {
+  return {
+    ...(unit.workerSessionId === undefined
+      ? {}
+      : {
+          worker: {
+            sessionId: unit.workerSessionId,
+            requestedModel: required(
+              unit.workerRequestedModel,
+              "worker model",
+              "dispatch",
+            ),
+            returnedModel: required(
+              unit.workerReturnedModel,
+              "worker returned model",
+              "dispatch",
+            ),
+            promptHash: required(
+              unit.workerPromptHash,
+              "worker prompt",
+              "dispatch",
+            ),
+          },
+        }),
+    ...(unit.reviewerSessionId === undefined
+      ? {}
+      : {
+          reviewer: {
+            sessionId: unit.reviewerSessionId,
+            requestedModel: required(
+              unit.reviewerRequestedModel,
+              "reviewer model",
+              "review_dispatch",
+            ),
+            returnedModel: required(
+              unit.reviewerReturnedModel,
+              "reviewer returned model",
+              "review_dispatch",
+            ),
+            promptHash: required(
+              unit.reviewPromptHash,
+              "review prompt",
+              "review_dispatch",
+            ),
+          },
+        }),
+  };
+}
+
+function successfulClosureFacts(unit: Unit) {
+  return {
+    candidate: {
+      headOid: required(unit.candidateHead, "candidate head", "integrate"),
+      treeOid: required(unit.candidateTree, "candidate tree", "integrate"),
+    },
+    verification: {
+      baseOid: required(
+        unit.verificationBaseOid,
+        "verification base",
+        "integrate",
+      ),
+      headOid: required(
+        unit.verificationHeadOid,
+        "verification head",
+        "integrate",
+      ),
+      treeOid: required(
+        unit.verificationTree,
+        "verification tree",
+        "integrate",
+      ),
+      evidenceHash: required(
+        unit.verificationEvidenceHash,
+        "verification evidence",
+        "integrate",
+      ),
+      commands: required(
+        unit.verificationCommands,
+        "verification commands",
+        "integrate",
+      ),
+    },
+    review: {
+      baseOid: required(unit.reviewBaseOid, "review base", "integrate"),
+      headOid: required(unit.reviewHeadOid, "review head", "integrate"),
+      treeOid: required(unit.reviewTree, "review tree", "integrate"),
+      responseHash: required(
+        unit.approvalResponseHash,
+        "approval response",
+        "integrate",
+      ),
+    },
+  };
+}
+
+function closureEvidenceFor(state: RepositoryRun, unit: Unit): ClosureEvidence {
+  const base = {
+    unitId: unit.id,
+    unitOrdinal: unit.ordinal,
+    baseOid: unit.baseOid,
+    ...(unit.branchRef === undefined ? {} : { branchRef: unit.branchRef }),
+    ...(unit.worktreePath === undefined
+      ? {}
+      : { worktreePath: unit.worktreePath }),
+    ...sessionClosureBindings(unit),
+    reservations: closureReservations(state, unit),
+  };
+  switch (unit.state) {
+    case "landed":
+      return {
+        ...base,
+        ...successfulClosureFacts(unit),
+        outcome: "landed",
+        landedOid: required(unit.landedOid, "landed OID", "integrate"),
+        terminalEffect: observedEffect(state, unit.id, "integrate"),
+      };
+    case "handoff": {
+      const success = successfulClosureFacts(unit);
+      if (unit.openPullRequest !== undefined)
+        return {
+          ...base,
+          ...success,
+          outcome: "pr_handoff",
+          publishedHeadOid: required(
+            unit.publishedHeadOid,
+            "published head",
+            "publish",
+          ),
+          pullRequest: unit.openPullRequest,
+          terminalEffect: observedEffect(state, unit.id, "publish"),
+        };
+      return {
+        ...base,
+        ...success,
+        outcome: "branch_handoff",
+        publishedHeadOid: required(
+          unit.publishedHeadOid,
+          "published head",
+          "publish",
+        ),
+        terminalEffect: observedEffect(state, unit.id, "publish"),
+      };
+    }
+    case "failed":
+    case "timed_out":
+    case "parked":
+    case "cancelled": {
+      const terminalKind: Record<
+        Extract<Unit["state"], "failed" | "timed_out" | "parked" | "cancelled">,
+        Extract<EffectKind, "failure" | "timeout" | "park" | "cancel">
+      > = {
+        failed: "failure",
+        timed_out: "timeout",
+        parked: "park",
+        cancelled: "cancel",
+      };
+      return {
+        ...base,
+        outcome: unit.state,
+        terminalEffect:
+          unit.state === "failed" &&
+          !state.effectJournal.some(
+            (entry) =>
+              entry.unitId === unit.id &&
+              entry.kind === "failure" &&
+              entry.status === "observed",
+          )
+            ? observedEffect(state, unit.id, "worker_collect")
+            : observedEffect(state, unit.id, terminalKind[unit.state]),
+        ...(unit.workerResult === undefined
+          ? {}
+          : { workerResult: unit.workerResult }),
+        ...(unit.repairContext === undefined
+          ? {}
+          : { repairContext: unit.repairContext }),
+        ...(unit.candidateHead === undefined || unit.candidateTree === undefined
+          ? {}
+          : {
+              candidate: {
+                headOid: unit.candidateHead,
+                treeOid: unit.candidateTree,
+              },
+            }),
+      };
+    }
+    default:
+      throw new Error(
+        `cannot close non-terminal unit ${unit.id}/${unit.state}`,
+      );
+  }
+}
+
+function recordClosureEvidence(state: RepositoryRun, unit: Unit): string {
+  const evidence = decodeClosedUnitEvidence(state.closedUnitEvidence);
+  if (evidence === undefined)
+    throw new Error("closed unit evidence ledger is malformed");
+  return encodeClosedUnitEvidence({
+    ...evidence,
+    [unit.id]: closureEvidenceFor(state, unit),
+  });
+}
+
+function removeClosureEvidence(
+  state: RepositoryRun,
+  unitId: string,
+): RepositoryRun {
+  const evidence = decodeClosedUnitEvidence(state.closedUnitEvidence);
+  if (evidence === undefined)
+    throw new Error("closed unit evidence ledger is malformed");
+  const next = { ...evidence };
+  delete next[unitId];
+  return { ...state, closedUnitEvidence: encodeClosedUnitEvidence(next) };
+}
+
+/**
+ * Closed facts have to remain exact, but the 64x16 envelope cannot afford a
+ * second spelling of every journal field name.  This is a wire-only tuple
+ * form: it is expanded back into the strict public ClosureEvidence union
+ * before it is ever used.  The explicit version and fixed tuple arities make
+ * the compact form closed too (there is no permissive "facts" bag).
+ */
+type DenseClosureLedger = {
+  readonly v: 1;
+  readonly u: Record<string, unknown>;
+};
+
+function denseJournal(entry: EffectJournalEntry): readonly unknown[] {
+  return [
+    entry.effectId,
+    entry.unitId,
+    entry.idempotencyKey,
+    entry.kind,
+    entry.intentRevision,
+    entry.intentCommitment,
+    entry.paramsHash,
+    entry.status,
+    entry.observationHash ?? null,
+    entry.schemaVersion,
+  ];
+}
+
+function denseBinding(
+  binding: ClosureEvidence["worker"] | undefined,
+): readonly unknown[] | null {
+  return binding === undefined
+    ? null
+    : [
+        binding.sessionId,
+        binding.requestedModel,
+        binding.returnedModel,
+        binding.promptHash,
+      ];
+}
+
+function denseClosureRecord(closure: ClosureEvidence): readonly unknown[] {
+  const common: unknown[] = [
+    closure.outcome,
+    closure.unitId,
+    closure.unitOrdinal,
+    closure.baseOid,
+    closure.repairCount ?? null,
+    closure.branchRef ?? null,
+    closure.worktreePath ?? null,
+    denseBinding(closure.worker),
+    denseBinding(closure.reviewer),
+    closure.reservations.map((reservation) => [
+      reservation.id,
+      reservation.namespace,
+      reservation.resource,
+      denseJournal(reservation.acquire),
+      reservation.release === undefined
+        ? null
+        : denseJournal(reservation.release),
+    ]),
+    denseJournal(closure.terminalEffect),
+  ];
+  if (
+    closure.outcome === "landed" ||
+    closure.outcome === "branch_handoff" ||
+    closure.outcome === "pr_handoff"
+  ) {
+    const success = [
+      [closure.candidate.headOid, closure.candidate.treeOid],
+      [
+        closure.verification.baseOid,
+        closure.verification.headOid,
+        closure.verification.treeOid,
+        closure.verification.evidenceHash,
+        closure.verification.commands,
+      ],
+      [
+        closure.review.baseOid,
+        closure.review.headOid,
+        closure.review.treeOid,
+        closure.review.responseHash,
+      ],
+    ];
+    if (closure.outcome === "landed")
+      return [...common, [closure.landedOid, ...success]];
+    if (closure.outcome === "branch_handoff")
+      return [...common, [closure.publishedHeadOid, ...success]];
+    return [
+      ...common,
+      [
+        closure.publishedHeadOid,
+        [
+          closure.pullRequest.providerPrId,
+          closure.pullRequest.url ?? null,
+          closure.pullRequest.state,
+          closure.pullRequest.baseRef,
+          closure.pullRequest.baseOid,
+          closure.pullRequest.remoteHeadOid,
+        ],
+        ...success,
+      ],
+    ];
+  }
+  return [
+    ...common,
+    [
+      closure.workerResult === undefined
+        ? null
+        : [
+            closure.workerResult.status,
+            closure.workerResult.summary,
+            closure.workerResult.residualRisks,
+            closure.workerResult.suggestedFollowUps,
+          ],
+      closure.repairContext === undefined
+        ? null
+        : [
+            closure.repairContext.baseOid,
+            closure.repairContext.headOid ?? null,
+            closure.repairContext.treeOid ?? null,
+            closure.repairContext.responseHash,
+            closure.repairContext.rationale,
+            closure.repairContext.findings.map((finding) => [
+              finding.id,
+              finding.severity,
+              finding.detail,
+            ]),
+          ],
+      closure.candidate === undefined
+        ? null
+        : [closure.candidate.headOid, closure.candidate.treeOid],
+    ],
+  ];
+}
+
+function denseClosureLedger(
+  evidence: Readonly<Record<string, ClosureEvidence>>,
+): DenseClosureLedger {
+  return {
+    v: 1,
+    u: Object.fromEntries(
+      Object.entries(evidence).map(([id, closure]) => [
+        id,
+        denseClosureRecord(closure),
+      ]),
+    ),
+  };
+}
+
+function tuple(value: unknown, length: number): readonly unknown[] | undefined {
+  return Array.isArray(value) && value.length === length ? value : undefined;
+}
+
+function denseJournalEntry(value: unknown): EffectJournalEntry | undefined {
+  const values = tuple(value, 10);
+  if (values === undefined) return undefined;
+  const [
+    effectId,
+    unitId,
+    idempotencyKey,
+    kind,
+    intentRevision,
+    intentCommitment,
+    paramsHash,
+    status,
+    observationHash,
+    schemaVersion,
+  ] = values;
+  if (observationHash !== null && typeof observationHash !== "string")
+    return undefined;
+  return {
+    effectId,
+    unitId,
+    idempotencyKey,
+    kind,
+    intentRevision,
+    intentCommitment,
+    paramsHash,
+    status,
+    ...(observationHash === null ? {} : { observationHash }),
+    schemaVersion,
+  } as EffectJournalEntry;
+}
+
+function denseBindingRecord(
+  value: unknown,
+): ClosureEvidence["worker"] | undefined | null {
+  if (value === null) return undefined;
+  const values = tuple(value, 4);
+  if (values === undefined) return null;
+  const [sessionId, requestedModel, returnedModel, promptHash] = values;
+  return {
+    sessionId,
+    requestedModel,
+    returnedModel,
+    promptHash,
+  } as ClosureEvidence["worker"];
+}
+
+function denseReservations(
+  value: unknown,
+): ClosureEvidence["reservations"] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const reservations = [] as ClosureEvidence["reservations"];
+  for (const encoded of value) {
+    const values = tuple(encoded, 5);
+    if (values === undefined) return undefined;
+    const [id, namespace, resource, acquireEncoded, releaseEncoded] = values;
+    const acquire = denseJournalEntry(acquireEncoded);
+    const release =
+      releaseEncoded === null ? undefined : denseJournalEntry(releaseEncoded);
+    if (
+      acquire === undefined ||
+      (releaseEncoded !== null && release === undefined)
+    )
+      return undefined;
+    reservations.push({
+      id,
+      namespace,
+      resource,
+      acquire: acquire as Extract<EffectJournalEntry, { status: "observed" }>,
+      ...(release === undefined ? {} : { release }),
+    } as ClosureEvidence["reservations"][number]);
+  }
+  return reservations;
+}
+
+function denseSuccess(value: unknown):
+  | {
+      readonly publishedOrLandedOid: unknown;
+      readonly pullRequest?: unknown;
+      readonly candidate: unknown;
+      readonly verification: unknown;
+      readonly review: unknown;
+    }
+  | undefined {
+  if (!Array.isArray(value) || (value.length !== 4 && value.length !== 5))
+    return undefined;
+  const [publishedOrLandedOid, second, third, fourth, fifth] = value;
+  const hasPullRequest = value.length === 5;
+  return {
+    publishedOrLandedOid,
+    ...(hasPullRequest ? { pullRequest: second } : {}),
+    candidate: hasPullRequest ? third : second,
+    verification: hasPullRequest ? fourth : third,
+    review: hasPullRequest ? fifth : fourth,
+  };
+}
+
+function expandDenseClosure(value: unknown): ClosureEvidence | undefined {
+  const values = tuple(value, 12);
+  if (values === undefined) return undefined;
+  const [
+    outcome,
+    unitId,
+    unitOrdinal,
+    baseOid,
+    repairCount,
+    branchRef,
+    worktreePath,
+    workerEncoded,
+    reviewerEncoded,
+    reservationsEncoded,
+    terminalEncoded,
+    payload,
+  ] = values;
+  if (
+    (repairCount !== null && typeof repairCount !== "number") ||
+    (branchRef !== null && typeof branchRef !== "string") ||
+    (worktreePath !== null && typeof worktreePath !== "string")
+  )
+    return undefined;
+  const worker = denseBindingRecord(workerEncoded);
+  const reviewer = denseBindingRecord(reviewerEncoded);
+  const reservations = denseReservations(reservationsEncoded);
+  const terminalEffect = denseJournalEntry(terminalEncoded);
+  if (
+    worker === null ||
+    reviewer === null ||
+    reservations === undefined ||
+    terminalEffect === undefined
+  )
+    return undefined;
+  const base = {
+    unitId,
+    unitOrdinal,
+    baseOid,
+    ...(repairCount === null ? {} : { repairCount }),
+    ...(branchRef === null ? {} : { branchRef }),
+    ...(worktreePath === null ? {} : { worktreePath }),
+    ...(worker === undefined ? {} : { worker }),
+    ...(reviewer === undefined ? {} : { reviewer }),
+    reservations,
+    terminalEffect,
+  };
+  if (
+    outcome === "landed" ||
+    outcome === "branch_handoff" ||
+    outcome === "pr_handoff"
+  ) {
+    const success = denseSuccess(payload);
+    const candidate =
+      success === undefined ? undefined : tuple(success.candidate, 2);
+    const verification =
+      success === undefined ? undefined : tuple(success.verification, 5);
+    const review = success === undefined ? undefined : tuple(success.review, 4);
+    if (
+      success === undefined ||
+      candidate === undefined ||
+      verification === undefined ||
+      review === undefined
+    )
+      return undefined;
+    const successFacts = {
+      candidate: { headOid: candidate[0], treeOid: candidate[1] },
+      verification: {
+        baseOid: verification[0],
+        headOid: verification[1],
+        treeOid: verification[2],
+        evidenceHash: verification[3],
+        commands: verification[4],
+      },
+      review: {
+        baseOid: review[0],
+        headOid: review[1],
+        treeOid: review[2],
+        responseHash: review[3],
+      },
+    };
+    if (outcome === "landed")
+      return {
+        ...base,
+        ...successFacts,
+        outcome,
+        landedOid: success.publishedOrLandedOid,
+      } as ClosureEvidence;
+    if (outcome === "branch_handoff")
+      return {
+        ...base,
+        ...successFacts,
+        outcome,
+        publishedHeadOid: success.publishedOrLandedOid,
+      } as ClosureEvidence;
+    const pullRequest = tuple(success.pullRequest, 6);
+    if (
+      pullRequest === undefined ||
+      (pullRequest[1] !== null && typeof pullRequest[1] !== "string")
+    )
+      return undefined;
+    return {
+      ...base,
+      ...successFacts,
+      outcome,
+      publishedHeadOid: success.publishedOrLandedOid,
+      pullRequest: {
+        providerPrId: pullRequest[0],
+        ...(pullRequest[1] === null ? {} : { url: pullRequest[1] }),
+        state: pullRequest[2],
+        baseRef: pullRequest[3],
+        baseOid: pullRequest[4],
+        remoteHeadOid: pullRequest[5],
+      },
+    } as ClosureEvidence;
+  }
+  if (
+    outcome !== "failed" &&
+    outcome !== "timed_out" &&
+    outcome !== "parked" &&
+    outcome !== "cancelled"
+  )
+    return undefined;
+  const negative = tuple(payload, 3);
+  if (negative === undefined) return undefined;
+  const [workerResultEncoded, repairContextEncoded, candidateEncoded] =
+    negative;
+  const workerResult =
+    workerResultEncoded === null ? undefined : tuple(workerResultEncoded, 4);
+  const repairContext =
+    repairContextEncoded === null ? undefined : tuple(repairContextEncoded, 6);
+  const candidate =
+    candidateEncoded === null ? undefined : tuple(candidateEncoded, 2);
+  if (
+    (workerResult === undefined && workerResultEncoded !== null) ||
+    (repairContext === undefined && repairContextEncoded !== null) ||
+    (candidate === undefined && candidateEncoded !== null)
+  )
+    return undefined;
+  if (
+    repairContext !== undefined &&
+    ((repairContext[1] !== null && typeof repairContext[1] !== "string") ||
+      (repairContext[2] !== null && typeof repairContext[2] !== "string") ||
+      !Array.isArray(repairContext[5]) ||
+      !repairContext[5].every((finding) => tuple(finding, 3) !== undefined))
+  )
+    return undefined;
+  return {
+    ...base,
+    outcome,
+    ...(workerResult === undefined
+      ? {}
+      : {
+          workerResult: {
+            status: workerResult[0],
+            summary: workerResult[1],
+            residualRisks: workerResult[2],
+            suggestedFollowUps: workerResult[3],
+          },
+        }),
+    ...(repairContext === undefined
+      ? {}
+      : {
+          repairContext: {
+            baseOid: repairContext[0],
+            ...(repairContext[1] === null ? {} : { headOid: repairContext[1] }),
+            ...(repairContext[2] === null ? {} : { treeOid: repairContext[2] }),
+            responseHash: repairContext[3],
+            rationale: repairContext[4],
+            findings: (repairContext[5] as readonly unknown[]).map(
+              (finding) => {
+                const [id, severity, detail] = tuple(finding, 3)!;
+                return { id, severity, detail };
+              },
+            ),
+          },
+        }),
+    ...(candidate === undefined
+      ? {}
+      : { candidate: { headOid: candidate[0], treeOid: candidate[1] } }),
+  } as ClosureEvidence;
+}
+
 function encodeClosedUnitEvidence(
-  evidence: Readonly<Record<string, ClosedUnitEvidenceFact>>,
+  evidence: Readonly<Record<string, ClosureEvidence>>,
 ): string {
-  return deflateRawSync(Buffer.from(canonicalJson(evidence), "utf8"), {
-    level: 9,
-  }).toString("base64");
+  const dense = denseClosureLedger(evidence);
+  return deflateRawSync(
+    Buffer.from(canonicalJson(dense as unknown as JsonValue), "utf8"),
+    {
+      level: 9,
+    },
+  ).toString("base64");
 }
 
 function decodeClosedUnitEvidence(
   encoded: string,
-): Record<string, ClosedUnitEvidenceFact> | undefined {
+): Record<string, ClosureEvidence> | undefined {
   if (encoded === "") return {};
   let compressed: Buffer;
   let decoded: Buffer;
@@ -1704,17 +2581,103 @@ function decodeClosedUnitEvidence(
     canonicalJson(parsed as JsonValue) !== text
   )
     return undefined;
+  const dense = parsed as Partial<DenseClosureLedger>;
   if (
-    !Object.entries(parsed).every(
-      ([id, facts]) =>
-        /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u.test(id) &&
-        validate<ClosedUnitEvidenceFact>(ClosedUnitEvidenceFactSchema, facts)
-          .ok,
-    )
+    Object.keys(dense).length !== 2 ||
+    dense.v !== 1 ||
+    dense.u === null ||
+    Array.isArray(dense.u) ||
+    typeof dense.u !== "object"
   )
     return undefined;
-  const evidence = parsed as Record<string, ClosedUnitEvidenceFact>;
+  const evidence: Record<string, ClosureEvidence> = {};
+  for (const [id, compact] of Object.entries(dense.u)) {
+    const facts = expandDenseClosure(compact);
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u.test(id) ||
+      facts === undefined ||
+      !validate<ClosureEvidence>(ClosureEvidenceSchema, facts).ok
+    )
+      return undefined;
+    evidence[id] = facts;
+  }
   return encodeClosedUnitEvidence(evidence) === encoded ? evidence : undefined;
+}
+
+function updateClosureReleaseEvidence(
+  state: RepositoryRun,
+  unitId: string,
+): string {
+  const evidence = decodeClosedUnitEvidence(state.closedUnitEvidence);
+  const record = evidence?.[unitId];
+  const release = [...state.effectJournal]
+    .reverse()
+    .find(
+      (entry) =>
+        entry.unitId === unitId && entry.kind === "reservation_release",
+    );
+  if (evidence === undefined || record === undefined || release === undefined)
+    throw new Error(`missing closure release lineage for ${unitId}`);
+  return encodeClosedUnitEvidence({
+    ...evidence,
+    [unitId]: {
+      ...record,
+      reservations: record.reservations.map((reservation) => ({
+        ...reservation,
+        release,
+      })),
+    } as ClosureEvidence,
+  });
+}
+
+function closeUnitAfterRelease(
+  state: RepositoryRun,
+  unitId: string,
+): RepositoryRun {
+  const closedUnit = state.units[unitId];
+  if (closedUnit === undefined)
+    throw new Error(`missing released unit ${unitId}`);
+  const releasedEvidence = updateClosureReleaseEvidence(state, unitId);
+  const evidence = decodeClosedUnitEvidence(releasedEvidence);
+  const record = evidence?.[unitId];
+  if (evidence === undefined || record === undefined)
+    throw new Error(`missing final closure evidence for ${unitId}`);
+  const closedUnitEvidence = encodeClosedUnitEvidence({
+    ...evidence,
+    [unitId]: {
+      ...record,
+      repairCount: closedUnit.repairCount,
+    } as ClosureEvidence,
+  });
+  const units = { ...state.units };
+  delete units[unitId];
+  const reservations = Object.fromEntries(
+    Object.entries(state.reservations).filter(
+      ([, reservation]) => reservation.unitId !== unitId,
+    ),
+  );
+  return {
+    ...state,
+    units,
+    reservations,
+    wave: {
+      ...state.wave,
+      unitIds: state.wave.unitIds.filter((id) => id !== unitId),
+    },
+    closedUnitEvidence,
+  };
+}
+
+function persistTerminalClosureEvidence(step: Step, unitId: string): Step {
+  const unit = step.state.units[unitId];
+  if (unit === undefined) throw new Error(`missing terminal unit ${unitId}`);
+  return {
+    ...step,
+    state: {
+      ...step.state,
+      closedUnitEvidence: recordClosureEvidence(step.state, unit),
+    },
+  };
 }
 
 function compactJournal(state: RepositoryRun): RepositoryRun {
@@ -1733,6 +2696,9 @@ function compactJournal(state: RepositoryRun): RepositoryRun {
   const retained = state.effectJournal.filter(
     (entry) => entry.status !== "observed" || anchored.has(entry.effectId),
   );
+  const compactedEntries = state.effectJournal.filter(
+    (entry) => entry.status === "observed" && !anchored.has(entry.effectId),
+  );
   const compacted = state.effectJournal.length - retained.length;
   return compacted === 0
     ? state
@@ -1741,6 +2707,10 @@ function compactJournal(state: RepositoryRun): RepositoryRun {
         effectJournal: retained,
         journalCheckpoint: {
           revision: state.revision,
+          commitment: deriveJournalCommitment(
+            state.journalCheckpoint.commitment,
+            compactedEntries,
+          ),
           compactedEffects:
             state.journalCheckpoint.compactedEffects + compacted,
           compactedEvents: state.journalCheckpoint.compactedEvents,
@@ -2041,10 +3011,8 @@ function canReleaseController(state: RepositoryRun): boolean {
     state.qualificationOwnerUnitId === undefined &&
     state.integrationOwnerUnitId === undefined &&
     state.currentReviewerUnitId === undefined &&
-    Object.values(state.units).every((unit) => unit.state === "closed") &&
-    Object.values(state.reservations).every(
-      (reservation) => reservation.state === "released",
-    )
+    Object.keys(state.units).length === 0 &&
+    Object.keys(state.reservations).length === 0
   );
 }
 
@@ -2060,7 +3028,7 @@ function commit(
       : state.processedIdempotencyKeys;
   const compactedEvents = Math.max(0, eventIds.length - 256);
   const compactedIdempotencyKeys = Math.max(0, idempotencyKeys.length - 256);
-  const nextState = {
+  const uncommittedState = {
     ...state,
     revision: state.revision + 1,
     processedEventIds: eventIds.slice(-256),
@@ -2077,6 +3045,16 @@ function commit(
         state.journalCheckpoint.compactedIdempotencyKeys +
         compactedIdempotencyKeys,
     },
+  };
+  const nextState = {
+    ...uncommittedState,
+    closedUnitEvidenceCommitment: deriveClosedUnitEvidenceCommitment(
+      uncommittedState.closedUnitEvidence,
+    ),
+    journalCommitment: deriveJournalCommitment(
+      uncommittedState.journalCheckpoint.commitment,
+      uncommittedState.effectJournal,
+    ),
   };
   const schema = validate<RepositoryRun>(RepositoryRunSchema, nextState);
   if (!schema.ok) return reject("invariant", schema.errors.join("; "));
@@ -2167,66 +3145,238 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     )
       errors.push(`repair context ${unit.id} has a tree without a head`);
   }
-  const sessionFingerprints = decodeSessionFingerprints(
-    state.usedSessionFingerprints,
-  );
-  if (sessionFingerprints === undefined)
-    errors.push("used session fingerprint ledger is invalid");
+  const sessionLineage = decodeSessionLineage(state.sessionLineage);
+  const hasCurrentSessionLineage = (
+    sessionId: string,
+    ordinal: number,
+    role: "worker" | "reviewer",
+  ) => {
+    if (sessionLineage === undefined) return false;
+    const fingerprint = sessionFingerprint(sessionId);
+    const start = sessionRoleSlot(ordinal, role);
+    return sessionLineage.slots
+      .slice(start, start + sessionsPerRole())
+      .some((entry) => entry?.equals(fingerprint));
+  };
+  if (sessionLineage === undefined)
+    errors.push("session lineage ledger is invalid");
+  else if (sessionLineage.count !== state.usedSessionCount)
+    errors.push("session lineage count does not match ledger");
   else if (
-    sessionFingerprints.length / LIMITS.sessionFingerprintBytes !==
-    state.usedSessionCount
+    state.sessionLineageRoot !==
+    deriveSessionLineageRoot(state.sessionLineage, state.usedSessionCount)
   )
-    errors.push("used session fingerprint count does not match ledger");
+    errors.push("session lineage root does not match ledger");
   const closedEvidence = decodeClosedUnitEvidence(state.closedUnitEvidence);
   if (closedEvidence === undefined)
     errors.push("closed unit evidence ledger is invalid");
-  const closedUnitIds = Object.values(state.units)
-    .filter((unit) => unit.state === "closed")
-    .map((unit) => unit.id)
-    .sort();
-  const evidenceUnitIds = Object.keys(closedEvidence ?? {}).sort();
-  if (closedUnitIds.join("\u0000") !== evidenceUnitIds.join("\u0000"))
-    errors.push("closed unit evidence membership is not exact");
+  else if (
+    state.closedUnitEvidenceCommitment !==
+    deriveClosedUnitEvidenceCommitment(state.closedUnitEvidence)
+  )
+    errors.push("closed unit evidence commitment does not match ledger");
+  const liveTerminalStates = new Set<UnitState>([
+    "landed",
+    "handoff",
+    "failed",
+    "timed_out",
+    "parked",
+    "cancelled",
+    "reservation_release_intent",
+  ]);
+  const liveOrdinals = new Set<number>();
   for (const unit of Object.values(state.units)) {
-    if (unit.state !== "closed") continue;
-    const facts = closedEvidence?.[unit.id];
-    const preserved =
-      facts === undefined ? undefined : ({ ...unit, ...facts } as Unit);
+    if (liveOrdinals.has(unit.ordinal))
+      errors.push(`unit ${unit.id} duplicates a stable ordinal`);
+    liveOrdinals.add(unit.ordinal);
+    const closure = closedEvidence?.[unit.id];
+    const ambiguousRelease = state.effectJournal.some(
+      (effect) =>
+        effect.unitId === unit.id &&
+        effect.kind === "reservation_release" &&
+        effect.status === "ambiguous",
+    );
+    const blockedReleaseRecovery = unit.state === "blocked" && ambiguousRelease;
+    if (liveTerminalStates.has(unit.state) && closure === undefined)
+      errors.push(`terminal unit ${unit.id} lacks persisted closure evidence`);
     if (
-      facts === undefined ||
-      preserved === undefined ||
-      !validate<Unit>(UnitSchema, preserved).ok
+      closure !== undefined &&
+      (closure.unitId !== unit.id ||
+        closure.unitOrdinal !== unit.ordinal ||
+        closure.baseOid !== unit.baseOid ||
+        closure.repairCount !== undefined)
     )
-      errors.push(`closed unit ${unit.id} has invalid preserved evidence`);
-    else
-      for (const value of [
-        preserved.candidateHead,
-        preserved.candidateTree,
-        preserved.publishedHeadOid,
-        preserved.verificationBaseOid,
-        preserved.verificationHeadOid,
-        preserved.verificationTree,
-        preserved.reviewBaseOid,
-        preserved.reviewHeadOid,
-        preserved.reviewTree,
-        preserved.landedOid,
-        preserved.openPullRequest?.baseOid,
-        preserved.openPullRequest?.remoteHeadOid,
-        preserved.repairContext?.baseOid,
-        preserved.repairContext?.headOid,
-        preserved.repairContext?.treeOid,
-      ])
-        checkOid(unit, value);
+      errors.push(
+        `closure evidence ${unit.id} disagrees with live terminal unit`,
+      );
     if (
-      preserved !== undefined &&
-      !preserved.reservationIds.every(
-        (reservationId) =>
-          state.reservations[reservationId]?.unitId === unit.id &&
-          state.reservations[reservationId]?.state === "released",
+      !liveTerminalStates.has(unit.state) &&
+      !blockedReleaseRecovery &&
+      closure !== undefined
+    )
+      errors.push(`non-terminal unit ${unit.id} has closure evidence`);
+    if (unit.state === "reservation_release_intent") {
+      if (
+        closure === undefined ||
+        !closure.reservations.every(
+          (reservation) =>
+            reservation.release?.status === "intended" &&
+            reservation.release.observationHash === undefined,
+        )
       )
-    )
-      errors.push(`closed unit ${unit.id} lacks released reservation lineage`);
+        errors.push(
+          `release intent ${unit.id} lacks exact closure release lineage`,
+        );
+    }
   }
+  const closureOrdinals = new Set<number>();
+  for (const [id, closure] of Object.entries(closedEvidence ?? {})) {
+    if (id !== closure.unitId)
+      errors.push(`closure evidence key ${id} does not match unit id`);
+    if (closureOrdinals.has(closure.unitOrdinal))
+      errors.push(`closure evidence ${id} duplicates a stable ordinal`);
+    closureOrdinals.add(closure.unitOrdinal);
+    if (liveOrdinals.has(closure.unitOrdinal) && state.units[id] === undefined)
+      errors.push(`closure evidence ${id} aliases a live unit ordinal`);
+    if (state.units[id] === undefined && closure.repairCount === undefined)
+      errors.push(`closed evidence ${id} lacks authoritative repair count`);
+    if (state.units[id] !== undefined && closure.repairCount !== undefined)
+      errors.push(`live terminal ${id} duplicates authoritative repair count`);
+    for (const value of [
+      closure.baseOid,
+      ...("candidate" in closure && closure.candidate !== undefined
+        ? [closure.candidate.headOid, closure.candidate.treeOid]
+        : []),
+      ...("verification" in closure
+        ? [
+            closure.verification.baseOid,
+            closure.verification.headOid,
+            closure.verification.treeOid,
+          ]
+        : []),
+      ...("review" in closure
+        ? [
+            closure.review.baseOid,
+            closure.review.headOid,
+            closure.review.treeOid,
+          ]
+        : []),
+      ...(closure.outcome === "landed" ? [closure.landedOid] : []),
+      ...(closure.outcome === "branch_handoff" ||
+      closure.outcome === "pr_handoff"
+        ? [closure.publishedHeadOid]
+        : []),
+    ])
+      if (value.length !== oidLength)
+        errors.push(`closure evidence ${id} has an incompatible OID`);
+    for (const reservation of closure.reservations) {
+      const unit = state.units[id];
+      const expectedReleaseStatus =
+        unit === undefined
+          ? "observed"
+          : unit.state === "reservation_release_intent"
+            ? "intended"
+            : unit.state === "blocked" &&
+                state.effectJournal.some(
+                  (effect) =>
+                    effect.unitId === id &&
+                    effect.kind === "reservation_release" &&
+                    effect.status === "ambiguous",
+                )
+              ? "ambiguous"
+              : undefined;
+      if (
+        reservation.acquire.intentCommitment !==
+        deriveIntentCommitment(reservation.acquire)
+      )
+        errors.push(
+          `closure evidence ${id} has an invalid reservation acquire intent`,
+        );
+      if (
+        reservation.acquire.unitId !== id ||
+        reservation.acquire.kind !== "reservation_acquire" ||
+        reservation.acquire.status !== "observed"
+      )
+        errors.push(
+          `closure evidence ${id} lacks exact reservation acquisition lineage`,
+        );
+      else if (
+        (expectedReleaseStatus !== undefined &&
+          reservation.release === undefined) ||
+        (reservation.release !== undefined &&
+          (reservation.release.unitId !== id ||
+            reservation.release.kind !== "reservation_release" ||
+            reservation.release.intentCommitment !==
+              deriveIntentCommitment(reservation.release) ||
+            (expectedReleaseStatus !== undefined &&
+              reservation.release.status !== expectedReleaseStatus)))
+      )
+        errors.push(
+          `closure evidence ${id} has invalid reservation release lineage`,
+        );
+    }
+    for (const [role, binding] of [
+      ["worker", closure.worker],
+      ["reviewer", closure.reviewer],
+    ] as const)
+      if (
+        binding !== undefined &&
+        !hasCurrentSessionLineage(binding.sessionId, closure.unitOrdinal, role)
+      )
+        errors.push(`closure ${id} lacks ${role} session lineage`);
+    const failedWorker =
+      "workerResult" in closure && closure.workerResult?.status === "failed";
+    const expectedTerminalKinds: Readonly<
+      Record<ClosureEvidence["outcome"], readonly EffectKind[]>
+    > = {
+      landed: ["integrate"],
+      branch_handoff: ["publish"],
+      pr_handoff: ["publish"],
+      failed: failedWorker ? ["failure", "worker_collect"] : ["failure"],
+      timed_out: ["timeout"],
+      parked: ["park"],
+      cancelled: ["cancel"],
+    };
+    if (
+      closure.terminalEffect.unitId !== id ||
+      closure.terminalEffect.status !== "observed" ||
+      !expectedTerminalKinds[closure.outcome].includes(
+        closure.terminalEffect.kind,
+      ) ||
+      closure.terminalEffect.intentCommitment !==
+        deriveIntentCommitment(closure.terminalEffect)
+    )
+      errors.push(`closure evidence ${id} has invalid terminal effect lineage`);
+    if (
+      closure.outcome === "failed" &&
+      closure.terminalEffect.kind === "worker_collect" &&
+      closure.workerResult?.status !== "failed"
+    )
+      errors.push(`closure evidence ${id} lacks failed worker terminal facts`);
+    if (
+      closure.outcome === "landed" ||
+      closure.outcome === "branch_handoff" ||
+      closure.outcome === "pr_handoff"
+    ) {
+      if (
+        closure.verification.baseOid !== closure.baseOid ||
+        closure.candidate.headOid !== closure.verification.headOid ||
+        closure.candidate.treeOid !== closure.verification.treeOid ||
+        closure.review.baseOid !== closure.baseOid ||
+        closure.review.headOid !== closure.candidate.headOid ||
+        closure.review.treeOid !== closure.candidate.treeOid
+      )
+        errors.push(`closure evidence ${id} has mismatched successful facts`);
+    }
+  }
+  if (
+    state.journalCommitment !==
+    deriveJournalCommitment(
+      state.journalCheckpoint.commitment,
+      state.effectJournal,
+    )
+  )
+    errors.push("journal commitment does not match exact entries");
   const hasAmbiguousEffect = state.effectJournal.some(
     (effect) => effect.status === "ambiguous",
   );
@@ -2241,8 +3391,15 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     if (idempotency.has(effect.idempotencyKey))
       errors.push(`duplicate idempotency key ${effect.idempotencyKey}`);
     idempotency.add(effect.idempotencyKey);
-    if (effect.unitId !== null && state.units[effect.unitId] === undefined)
+    if (
+      effect.unitId !== null &&
+      state.units[effect.unitId] === undefined &&
+      (closedEvidence?.[effect.unitId] === undefined ||
+        effect.status !== "observed")
+    )
       errors.push(`effect ${effect.effectId} has unknown unit`);
+    if (effect.intentCommitment !== deriveIntentCommitment(effect))
+      errors.push(`effect ${effect.effectId} has an invalid intent commitment`);
     if (effect.status === "intended" && effect.observationHash !== undefined)
       errors.push(`intended effect ${effect.effectId} has an observation`);
     if (effect.status === "observed" && effect.observationHash === undefined)
@@ -2367,14 +3524,6 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
       )
     )
       errors.push(`reservation cleanup ${id} lacks release intent`);
-    if (
-      unit.state === "closed" &&
-      !unit.reservationIds.every(
-        (reservationId) =>
-          state.reservations[reservationId]?.state === "released",
-      )
-    )
-      errors.push(`closed unit ${id} retains a non-released reservation`);
     if (
       [
         "branch_intent",
@@ -2507,8 +3656,8 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
       ["reviewer", unit.reviewerSessionId],
     ] as const) {
       if (session === undefined) continue;
-      if (!hasUsedSession(state, session))
-        errors.push(`session ${session} is not retained in durable history`);
+      if (!hasCurrentSessionLineage(session, unit.ordinal, role))
+        errors.push(`session ${session} lacks exact durable lineage`);
       if (controllerIdentityMatches(state, session))
         errors.push(`session ${session} aliases controller identity`);
       const prior = assignedSessions.get(session);

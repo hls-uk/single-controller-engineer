@@ -101,6 +101,8 @@ export const EffectJournalEntrySchema = strictObject({
   unitId: nullableIdentifier(),
   idempotencyKey: idempotencyKey(),
   kind: EffectKindSchema,
+  intentRevision: revision(),
+  intentCommitment: hash(),
   paramsHash: hash(),
   status: EffectStatusSchema,
   observationHash: Type.Optional(hash()),
@@ -198,6 +200,9 @@ const PullRequestObservationSchema = strictObject({
 });
 export const UnitSchema = strictObject({
   id: identifier(),
+  // Stable at planning time and never reassigned, even after a unit leaves
+  // the live map at closure. Session lineage records bind this ordinal.
+  ordinal: Type.Integer({ minimum: 0, maximum: 63 }),
   revision: revision(),
   state: UnitStateSchema,
   baseOid: oid(),
@@ -253,37 +258,87 @@ export type Unit = Static<typeof UnitSchema>;
  * aggregate's canonical compressed closed-unit ledger; unknown fields are
  * rejected before hydration can use the record.
  */
-export const ClosedUnitEvidenceFactSchema = strictObject({
+const ObservedJournalEntrySchema = strictObject({
+  effectId: effectIdentifier(),
+  unitId: nullableIdentifier(),
+  idempotencyKey: idempotencyKey(),
+  kind: EffectKindSchema,
+  intentRevision: revision(),
+  intentCommitment: hash(),
+  paramsHash: hash(),
+  status: Type.Literal("observed"),
+  observationHash: hash(),
+  schemaVersion: Type.Literal(SCHEMA_VERSION),
+});
+const ClosureReservationSchema = strictObject({
+  id: identifier(),
+  namespace: identifier(),
+  resource: identifier(),
+  acquire: ObservedJournalEntrySchema,
+  release: Type.Optional(
+    strictObject({
+      effectId: effectIdentifier(),
+      unitId: nullableIdentifier(),
+      idempotencyKey: idempotencyKey(),
+      kind: Type.Literal("reservation_release"),
+      intentRevision: revision(),
+      intentCommitment: hash(),
+      paramsHash: hash(),
+      status: EffectStatusSchema,
+      observationHash: Type.Optional(hash()),
+      schemaVersion: Type.Literal(SCHEMA_VERSION),
+    }),
+  ),
+});
+const ClosureWorkerSchema = strictObject({
+  sessionId: identifier(),
+  requestedModel: text(),
+  returnedModel: text(),
+  promptHash: hash(),
+});
+const ClosureReviewerSchema = strictObject({
+  sessionId: identifier(),
+  requestedModel: text(),
+  returnedModel: text(),
+  promptHash: hash(),
+});
+const ClosureCandidateSchema = strictObject({ headOid: oid(), treeOid: oid() });
+const ClosureVerificationSchema = strictObject({
+  baseOid: oid(),
+  headOid: oid(),
+  treeOid: oid(),
+  evidenceHash: hash(),
+  commands: Type.Array(text(), { minItems: 1, maxItems: 32 }),
+});
+const ClosureReviewSchema = strictObject({
+  baseOid: oid(),
+  headOid: oid(),
+  treeOid: oid(),
+  responseHash: hash(),
+});
+const ClosureBaseSchema = {
+  unitId: identifier(),
+  unitOrdinal: Type.Integer({ minimum: 0, maximum: 63 }),
+  baseOid: oid(),
+  // While the unit is live, its required field is authoritative. At closure
+  // the unit leaves the map and this record becomes the sole owner.
+  repairCount: Type.Optional(Type.Integer({ minimum: 0, maximum: 16 })),
   branchRef: Type.Optional(identifier()),
   worktreePath: Type.Optional(text()),
-  reservationIds: Type.Array(identifier(), {
+  worker: Type.Optional(ClosureWorkerSchema),
+  reviewer: Type.Optional(ClosureReviewerSchema),
+  reservations: Type.Array(ClosureReservationSchema, {
     maxItems: LIMITS.reservations,
     uniqueItems: true,
   }),
-  candidateHead: Type.Optional(oid()),
-  candidateTree: Type.Optional(oid()),
-  publishedHeadOid: Type.Optional(oid()),
-  openPullRequest: Type.Optional(PullRequestObservationSchema),
-  workerSessionId: Type.Optional(identifier()),
-  workerRequestedModel: Type.Optional(text()),
-  workerReturnedModel: Type.Optional(text()),
-  workerPromptHash: Type.Optional(hash()),
-  reviewerSessionId: Type.Optional(identifier()),
-  reviewerRequestedModel: Type.Optional(text()),
-  reviewerReturnedModel: Type.Optional(text()),
-  reviewPromptHash: Type.Optional(hash()),
-  verificationBaseOid: Type.Optional(oid()),
-  verificationHeadOid: Type.Optional(oid()),
-  verificationTree: Type.Optional(oid()),
-  verificationEvidenceHash: Type.Optional(hash()),
-  verificationCommands: Type.Optional(
-    Type.Array(text(), { minItems: 1, maxItems: 32 }),
-  ),
-  reviewBaseOid: Type.Optional(oid()),
-  reviewHeadOid: Type.Optional(oid()),
-  reviewTree: Type.Optional(oid()),
-  approvalResponseHash: Type.Optional(hash()),
-  landedOid: Type.Optional(oid()),
+  terminalEffect: ObservedJournalEntrySchema,
+};
+const ClosureSuccessSchema = {
+  candidate: ClosureCandidateSchema,
+  verification: ClosureVerificationSchema,
+  review: ClosureReviewSchema,
+};
+const ClosureNegativeSchema = {
   workerResult: Type.Optional(
     strictObject({
       status: Type.Union([
@@ -296,12 +351,52 @@ export const ClosedUnitEvidenceFactSchema = strictObject({
       suggestedFollowUps: Type.Array(text(), { maxItems: 32 }),
     }),
   ),
-  repairCount: Type.Integer({ minimum: 0, maximum: 16 }),
   repairContext: Type.Optional(RepairContextSchema),
-});
-export type ClosedUnitEvidenceFact = Static<
-  typeof ClosedUnitEvidenceFactSchema
->;
+  candidate: Type.Optional(ClosureCandidateSchema),
+};
+/** Strict typed terminal records persisted before reservation release begins. */
+export const ClosureEvidenceSchema = Type.Union([
+  strictObject({
+    ...ClosureBaseSchema,
+    ...ClosureSuccessSchema,
+    outcome: Type.Literal("landed"),
+    landedOid: oid(),
+  }),
+  strictObject({
+    ...ClosureBaseSchema,
+    ...ClosureSuccessSchema,
+    outcome: Type.Literal("branch_handoff"),
+    publishedHeadOid: oid(),
+  }),
+  strictObject({
+    ...ClosureBaseSchema,
+    ...ClosureSuccessSchema,
+    outcome: Type.Literal("pr_handoff"),
+    publishedHeadOid: oid(),
+    pullRequest: PullRequestObservationSchema,
+  }),
+  strictObject({
+    ...ClosureBaseSchema,
+    ...ClosureNegativeSchema,
+    outcome: Type.Literal("failed"),
+  }),
+  strictObject({
+    ...ClosureBaseSchema,
+    ...ClosureNegativeSchema,
+    outcome: Type.Literal("timed_out"),
+  }),
+  strictObject({
+    ...ClosureBaseSchema,
+    ...ClosureNegativeSchema,
+    outcome: Type.Literal("parked"),
+  }),
+  strictObject({
+    ...ClosureBaseSchema,
+    ...ClosureNegativeSchema,
+    outcome: Type.Literal("cancelled"),
+  }),
+]);
+export type ClosureEvidence = Static<typeof ClosureEvidenceSchema>;
 
 export const AggregateStateSchema = Type.Union([
   Type.Literal("initializing"),
@@ -352,6 +447,7 @@ export const JournalCheckpointSchema = strictObject({
   compactedEffects: Type.Integer({ minimum: 0 }),
   compactedEvents: Type.Integer({ minimum: 0 }),
   compactedIdempotencyKeys: Type.Integer({ minimum: 0 }),
+  commitment: hash(),
 });
 export const ControllerOwnershipSchema = strictObject({
   runId: identifier(),
@@ -416,19 +512,22 @@ export const RepositoryRunSchema = strictObject({
     maxItems: LIMITS.eventHistory,
     uniqueItems: true,
   }),
-  // Concatenated, sorted, full SHA-256 session fingerprints. The count is a
-  // monotonic high-water cross-check for the exact ledger.
-  // It is never an independently meaningful membership structure.
+  // Canonical binary slots: an occupancy bitmap binds each full digest to a
+  // stable `(unit ordinal, worker|reviewer, generation)` position.
   usedSessionCount: Type.Integer({
     minimum: 0,
     maximum: LIMITS.sessionHistory,
   }),
-  usedSessionFingerprints: Type.String({
+  sessionLineage: Type.String({
     maxLength:
-      Math.ceil((LIMITS.sessionHistory * LIMITS.sessionFingerprintBytes) / 3) *
-      4,
+      Math.ceil(
+        (LIMITS.sessionHistory * LIMITS.sessionFingerprintBytes +
+          Math.ceil(LIMITS.sessionHistory / 8)) /
+          3,
+      ) * 4,
     pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
   }),
+  sessionLineageRoot: hash(),
   // Canonical deflate-raw JSON ledger of exact facts for closed units. The
   // live unit object stays compact after cleanup while exact OIDs/hashes are
   // retained for audit and hydration validation.
@@ -436,7 +535,12 @@ export const RepositoryRunSchema = strictObject({
     maxLength: LIMITS.envelopeBytes,
     pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
   }),
+  // Commits the compact closed ledger itself. The ordered journal checkpoint
+  // commits transitions; this converse catches mutation of its exact retained
+  // audit copies after those transitions are compacted.
+  closedUnitEvidenceCommitment: hash(),
   journalCheckpoint: JournalCheckpointSchema,
+  journalCommitment: hash(),
 });
 export type RepositoryRun = Static<typeof RepositoryRunSchema>;
 

@@ -4,16 +4,21 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
 import fc from "fast-check";
 import { legalActions } from "../../src/protocol/actions.js";
 import {
+  deriveClosedUnitEvidenceCommitment,
   deriveIdempotencyKey,
+  deriveIntentCommitment,
+  deriveJournalCommitment,
   deriveParamsHash,
   deriveSessionFingerprint,
+  deriveSessionLineageRoot,
   hasUsedSession,
   reduce,
   runInvariantErrors,
-  sessionFingerprintCount,
+  sessionLineageCount,
 } from "../../src/protocol/reducer.js";
 import { canEnterTerminalIntent } from "../../src/protocol/guards.js";
 import type {
+  EffectJournalEntry,
   ProtocolEvent,
   RepositoryRun,
   UnitState,
@@ -184,13 +189,73 @@ function approvedCandidate(
 }
 
 function sessionLedger(...sessionIds: readonly string[]): string {
-  return Buffer.concat(
-    sessionIds
-      .map((sessionId) =>
-        Buffer.from(deriveSessionFingerprint(sessionId), "hex"),
-      )
-      .sort(Buffer.compare),
+  if (sessionIds.length === 0) return "";
+  const bitmapBytes = Math.ceil(sessionIds.length / 8);
+  const raw = Buffer.alloc(bitmapBytes + sessionIds.length * 32);
+  for (const [index, sessionId] of sessionIds.entries()) {
+    raw[Math.floor(index / 8)]! |= 1 << (index % 8);
+    Buffer.from(deriveSessionFingerprint(sessionId), "hex").copy(
+      raw,
+      bitmapBytes + index * 32,
+    );
+  }
+  return raw.toString("base64");
+}
+
+function journalEntry(
+  entry: Omit<EffectJournalEntry, "intentRevision" | "intentCommitment">,
+  intentRevision = 0,
+): EffectJournalEntry {
+  const withRevision = {
+    ...entry,
+    intentRevision,
+    intentCommitment: "0".repeat(64),
+  };
+  return {
+    ...withRevision,
+    intentCommitment: deriveIntentCommitment(withRevision),
+  };
+}
+
+function withJournalCommitment(
+  state: RepositoryRun,
+  effectJournal: readonly EffectJournalEntry[],
+): RepositoryRun {
+  return {
+    ...state,
+    effectJournal: [...effectJournal],
+    journalCommitment: deriveJournalCommitment(
+      state.journalCheckpoint.commitment,
+      effectJournal,
+    ),
+  };
+}
+
+function mutateDenseClosedEvidence(
+  state: RepositoryRun,
+  mutate: (dense: { u: Record<string, unknown[]> }) => void,
+): RepositoryRun {
+  const dense = JSON.parse(
+    inflateRawSync(Buffer.from(state.closedUnitEvidence, "base64")).toString(
+      "utf8",
+    ),
+  ) as { u: Record<string, unknown[]> };
+  mutate(dense);
+  const closedUnitEvidence = deflateRawSync(
+    Buffer.from(
+      canonicalJson(
+        dense as unknown as import("../../src/protocol/canonical.js").JsonValue,
+      ),
+      "utf8",
+    ),
+    { level: 9 },
   ).toString("base64");
+  return {
+    ...state,
+    closedUnitEvidence,
+    closedUnitEvidenceCommitment:
+      deriveClosedUnitEvidenceCommitment(closedUnitEvidence),
+  };
 }
 
 test("crash-safe happy path journals each effect before observing exact facts", () => {
@@ -255,7 +320,7 @@ test("crash-safe happy path journals each effect before observing exact facts", 
     idempotencyKey: "release-reservation-1",
   });
   state = observe(state, "reservation_released", "reservation_release");
-  assert.equal(state.units["unit-1"]?.state, "closed");
+  assert.equal(state.units["unit-1"], undefined);
   assert.equal(
     state.effectJournal.every((entry) => entry.status === "observed"),
     true,
@@ -525,17 +590,20 @@ test("session capacity and persisted aggregate invariants cannot lie", () => {
             },
           ]),
         ),
-        effectJournal: units.map((item, index) => ({
-          effectId: `reserve-${index + 1}`,
-          unitId: item.id,
-          idempotencyKey: `reserve-key-${index + 1}`,
-          kind: "reservation_acquire" as const,
-          paramsHash: HASH,
-          status: "observed" as const,
-          observationHash: HASH,
-          schemaVersion: 1 as const,
-        })),
+        effectJournal: units.map((item, index) =>
+          journalEntry({
+            effectId: `reserve-${index + 1}`,
+            unitId: item.id,
+            idempotencyKey: `reserve-key-${index + 1}`,
+            kind: "reservation_acquire" as const,
+            paramsHash: HASH,
+            status: "observed" as const,
+            observationHash: HASH,
+            schemaVersion: 1 as const,
+          }),
+        ),
       };
+      state = withJournalCommitment(state, state.effectJournal);
       for (const current of units) {
         const result = reduce(
           state,
@@ -614,20 +682,23 @@ test("hydrated multi-unit ambiguity converges through exact observations", () =>
       state.effectJournal.at(-1)?.effectId ?? "missing-effect-id",
     );
   }
-  state = {
-    ...state,
-    state: "blocked",
-    units: {
-      ...state.units,
-      "unit-1": { ...state.units["unit-1"]!, state: "blocked" },
-      "unit-2": { ...state.units["unit-2"]!, state: "blocked" },
+  const hydratedJournal = state.effectJournal.map((entry) =>
+    entry.unitId === "unit-1" || entry.unitId === "unit-2"
+      ? { ...entry, status: "ambiguous" as const, observationHash: HASH }
+      : entry,
+  );
+  state = withJournalCommitment(
+    {
+      ...state,
+      state: "blocked",
+      units: {
+        ...state.units,
+        "unit-1": { ...state.units["unit-1"]!, state: "blocked" },
+        "unit-2": { ...state.units["unit-2"]!, state: "blocked" },
+      },
     },
-    effectJournal: state.effectJournal.map((entry) =>
-      entry.unitId === "unit-1" || entry.unitId === "unit-2"
-        ? { ...entry, status: "ambiguous" as const, observationHash: HASH }
-        : entry,
-    ),
-  };
+    hydratedJournal,
+  );
   assert.deepEqual(runInvariantErrors(state), []);
 
   const observeReservation = (unitId: (typeof unitIds)[number]) => {
@@ -715,6 +786,55 @@ test("an ambiguous active terminal effect blocks durably and only its exact obse
   assert.equal(state.state, "active");
   assert.equal(state.units["unit-1"]?.state, "failed");
   assert.deepEqual(state.activeModifyingUnitIds, []);
+});
+
+test("an ambiguous reservation release retains closure lineage and converges on its exact observation", () => {
+  let state = approvedCandidate("integrate", "remote-ff", "remote-integration");
+  state = step(state, "publish_intent", {});
+  state = observe(state, "publish_observed", "publish", {
+    publication: { kind: "push_branch", remoteHeadOid: OID_B },
+  });
+  state = step(state, "integrate_intent", {});
+  state = observe(state, "integrate_observed", "integrate", {
+    baseOid: OID_A,
+    headOid: OID_B,
+    treeOid: OID_C,
+    integrationOid: OID_C,
+    controllerFencingToken: "fence-1",
+  });
+  state = step(state, "reservation_release_intent", {});
+  const releaseEffectId = effectId(state, "reservation_release");
+  state = step(state, "effect_ambiguous", {
+    effectId: releaseEffectId,
+    effectKind: "reservation_release",
+    observationHash: HASH,
+  });
+  assert.equal(state.state, "blocked");
+  assert.equal(state.units["unit-1"]?.state, "blocked");
+  assert.deepEqual(runInvariantErrors(state), []);
+  assert.equal(
+    legalActions(state).some((action) => action.mode === "emit"),
+    false,
+  );
+  const dense = JSON.parse(
+    inflateRawSync(Buffer.from(state.closedUnitEvidence, "base64")).toString(
+      "utf8",
+    ),
+  ) as { u: Record<string, unknown[]> };
+  const release = ((
+    dense.u["unit-1"]?.[9] as unknown[][] | undefined
+  )?.[0]?.[4] ?? null) as unknown[] | null;
+  assert.equal(release?.[7], "ambiguous");
+
+  state = step(state, "reservation_released", {
+    effectId: releaseEffectId,
+    effectKind: "reservation_release",
+    observationHash: HASH,
+  });
+  assert.equal(state.state, "active");
+  assert.equal(state.units["unit-1"], undefined);
+  assert.equal(state.reservations["res-1"], undefined);
+  assert.deepEqual(runInvariantErrors(state), []);
 });
 
 test("reviewer terminal intents retain ownership until their exact result", () => {
@@ -814,7 +934,7 @@ test("authority profiles finish honestly at local integration or published hando
     );
     handoff = step(handoff, "reservation_release_intent", {});
     handoff = observe(handoff, "reservation_released", "reservation_release");
-    assert.equal(handoff.units["unit-1"]?.state, "closed");
+    assert.equal(handoff.units["unit-1"], undefined);
   }
 });
 
@@ -932,7 +1052,7 @@ test("completion boundaries are monotone under broader authority grants", () => 
   }
 });
 
-test("worker repair outcomes persist follow-ups and do not advance to candidate success", () => {
+test("real old-to-repair-current lineage rejects same-count substitution and old replay", () => {
   let state = run();
   state = step(state, "reservation_intent", {
     reservations: [{ id: "res-1", namespace: "port", resource: "3001" }],
@@ -1034,11 +1154,24 @@ test("worker repair outcomes persist follow-ups and do not advance to candidate 
   });
   assert.equal(state.units["unit-1"]?.workerSessionId, "worker-repair-current");
   assert.equal(state.usedSessionCount, 2);
+  const sameCountSubstitution = {
+    ...state,
+    // Same count, but old history is substituted for an unrelated digest
+    // while the independently anchored lineage root remains untouched.
+    sessionLineage: sessionLedger(
+      "worker-repair-current",
+      "unrelated-substitution",
+    ),
+  };
+  assert.equal(sameCountSubstitution.usedSessionCount, 2);
+  assert.equal(
+    sameCountSubstitution.sessionLineageRoot,
+    state.sessionLineageRoot,
+  );
   assert.ok(
-    runInvariantErrors({
-      ...state,
-      usedSessionFingerprints: sessionLedger("worker-repair-current"),
-    }).some((error) => error.includes("used session fingerprint count")),
+    runInvariantErrors(sameCountSubstitution).some((error) =>
+      error.includes("session lineage root"),
+    ),
   );
 
   state = step(state, "collect_intent", {});
@@ -1273,21 +1406,25 @@ test("repair disposition binds current context without reusing the initial promp
 });
 
 test("journal checkpoint compacts completed entries while retained idempotency evidence rejects replay", () => {
-  const completed = Array.from({ length: 256 }, (_, index) => ({
-    effectId: `effect-${index}`,
-    unitId: "unit-1",
-    idempotencyKey: `key-${index}`,
-    kind: "candidate_collect" as const,
-    paramsHash: HASH,
-    status: "observed" as const,
-    observationHash: HASH,
-    schemaVersion: 1 as const,
-  }));
-  const initial = {
-    ...run(),
-    effectJournal: completed,
-    processedIdempotencyKeys: completed.map((entry) => entry.idempotencyKey),
-  };
+  const completed = Array.from({ length: 256 }, (_, index) =>
+    journalEntry({
+      effectId: `effect-${index}`,
+      unitId: "unit-1",
+      idempotencyKey: `key-${index}`,
+      kind: "candidate_collect" as const,
+      paramsHash: HASH,
+      status: "observed" as const,
+      observationHash: HASH,
+      schemaVersion: 1 as const,
+    }),
+  );
+  const initial = withJournalCommitment(
+    {
+      ...run(),
+      processedIdempotencyKeys: completed.map((entry) => entry.idempotencyKey),
+    },
+    completed,
+  );
   const next = reduce(
     initial,
     event(initial, "reservation_intent", {
@@ -1307,6 +1444,53 @@ test("journal checkpoint compacts completed entries while retained idempotency e
       }),
     ).ok,
     false,
+  );
+});
+
+test("journal commitment rejects exact observed-field mutation before and after checkpointing", () => {
+  const state = completeCandidate();
+  const observedIndex = state.effectJournal.findIndex(
+    (entry) => entry.status === "observed",
+  );
+  assert.notEqual(observedIndex, -1);
+  const mutations: ReadonlyArray<
+    (entry: EffectJournalEntry) => EffectJournalEntry
+  > = [
+    (entry) => ({ ...entry, paramsHash: "1".repeat(64) }),
+    (entry) => ({ ...entry, idempotencyKey: "mutated-idempotency" }),
+    (entry) => ({ ...entry, kind: "verify" }),
+    ({ observationHash: _observationHash, ...entry }) => ({
+      ...entry,
+      status: "intended",
+    }),
+    (entry) => ({ ...entry, observationHash: "2".repeat(64) }),
+  ];
+  for (const [index, mutate] of mutations.entries()) {
+    const effectJournal = [...state.effectJournal];
+    const entry = effectJournal[observedIndex];
+    if (entry === undefined) throw new Error("missing observed journal entry");
+    effectJournal[observedIndex] = mutate(entry);
+    const errors = runInvariantErrors({ ...state, effectJournal });
+    assert.ok(
+      errors.some(
+        (error) =>
+          error.includes("journal commitment") ||
+          error.includes("invalid intent commitment"),
+      ),
+      `mutation ${index}: ${errors.join("; ")}`,
+    );
+  }
+
+  const checkpointed = step(state, "verification_intent", {});
+  assert.ok(checkpointed.journalCheckpoint.compactedEffects > 0);
+  assert.ok(
+    runInvariantErrors({
+      ...checkpointed,
+      journalCheckpoint: {
+        ...checkpointed.journalCheckpoint,
+        commitment: "3".repeat(64),
+      },
+    }).some((error) => error.includes("journal commitment")),
   );
 });
 
@@ -1382,7 +1566,9 @@ test("an evicted effect key cannot be replayed for another unit at the current r
       compactedEffects: 256,
       compactedEvents: 344,
       compactedIdempotencyKeys: 344,
+      commitment: "0".repeat(64),
     },
+    journalCommitment: "0".repeat(64),
   };
   assert.equal(
     reduce(replay, {
@@ -1471,7 +1657,7 @@ test("64 retained units complete 16 repairs in waves of at most three within the
       assert.equal(
         unitIds
           .slice(waveStart - 3, waveStart)
-          .every((unitId) => state.units[unitId]?.state === "closed"),
+          .every((unitId) => state.units[unitId] === undefined),
         true,
       );
       // Phase 1 deliberately has no wave-planning command. This is the
@@ -1632,22 +1818,16 @@ test("64 retained units complete 16 repairs in waves of at most three within the
   };
   assert.equal(validate(RepositoryRunEnvelopeSchema, envelope).ok, true);
   assert.deepEqual(runInvariantErrors(state), []);
-  assert.equal(
-    Object.values(state.units).every((item) => item.state === "closed"),
-    true,
-  );
+  assert.equal(Object.keys(state.units).length === 0, true);
   assert.ok(state.journalCheckpoint.compactedEffects > 0);
   assert.ok(state.journalCheckpoint.compactedEvents > 0);
   assert.ok(state.journalCheckpoint.compactedIdempotencyKeys > 0);
   assert.equal(
-    sessionFingerprintCount(state.usedSessionFingerprints),
+    sessionLineageCount(state.sessionLineage),
     LIMITS.units * 16 * 2,
   );
   assert.equal(state.usedSessionCount, LIMITS.units * 16 * 2);
-  assert.equal(
-    Buffer.from(state.usedSessionFingerprints, "base64").length,
-    LIMITS.units * 16 * 2 * LIMITS.sessionFingerprintBytes,
-  );
+  assert.equal(Buffer.from(state.sessionLineage, "base64").length, 69_872);
   for (const unitId of unitIds)
     for (let attempt = 1; attempt <= 16; attempt += 1) {
       assert.equal(hasUsedSession(state, `worker-${unitId}-${attempt}`), true);
@@ -1694,22 +1874,22 @@ test("hydration rejects fabricated reservation lineage and active parking remain
       error.includes("one exact unresolved effect"),
     ),
   );
-  const corruptSessionFingerprints = {
+  const corruptSessionLineage = {
     ...run(),
-    usedSessionFingerprints: "AA==",
+    sessionLineage: "AA==",
   };
   assert.ok(
-    runInvariantErrors(corruptSessionFingerprints).some((error) =>
-      error.includes("used session fingerprint ledger"),
+    runInvariantErrors(corruptSessionLineage).some((error) =>
+      error.includes("session lineage ledger"),
     ),
   );
-  const nonCanonicalSessionFingerprints = {
+  const nonCanonicalSessionLineage = {
     ...run(),
-    usedSessionFingerprints: "AAAA",
+    sessionLineage: "AAAA",
   };
   assert.ok(
-    runInvariantErrors(nonCanonicalSessionFingerprints).some((error) =>
-      error.includes("used session fingerprint ledger"),
+    runInvariantErrors(nonCanonicalSessionLineage).some((error) =>
+      error.includes("session lineage ledger"),
     ),
   );
 });
@@ -1719,13 +1899,14 @@ test("session fingerprint ledgers retain exact history and reject forged Bloom-e
   const state = {
     ...run(),
     usedSessionCount: sessions.length,
-    usedSessionFingerprints: sessionLedger(...sessions),
+    sessionLineage: sessionLedger(...sessions),
+    sessionLineageRoot: deriveSessionLineageRoot(
+      sessionLedger(...sessions),
+      sessions.length,
+    ),
   };
   assert.deepEqual(runInvariantErrors(state), []);
-  assert.equal(
-    sessionFingerprintCount(state.usedSessionFingerprints),
-    sessions.length,
-  );
+  assert.equal(sessionLineageCount(state.sessionLineage), sessions.length);
   for (const sessionId of sessions)
     assert.equal(hasUsedSession(state, sessionId), true);
   assert.equal(hasUsedSession(state, "fresh-session"), false);
@@ -1738,18 +1919,18 @@ test("session fingerprint ledgers retain exact history and reject forged Bloom-e
     runInvariantErrors({
       ...run(),
       usedSessionCount: 2,
-      usedSessionFingerprints: duplicated,
-    }).some((error) => error.includes("used session fingerprint ledger")),
+      sessionLineage: duplicated,
+    }).some((error) => error.includes("session lineage ledger")),
   );
   assert.ok(
     runInvariantErrors({
       ...run(),
       usedSessionCount: sessions.length,
-      usedSessionFingerprints: sessionLedger(...sessions)
+      sessionLineage: sessionLedger(...sessions)
         .split("")
         .reverse()
         .join(""),
-    }).some((error) => error.includes("used session fingerprint ledger")),
+    }).some((error) => error.includes("session lineage ledger")),
   );
 
   // The former independently forgeable count/filter/hash triplet is not part
@@ -1777,17 +1958,26 @@ test("closed evidence is canonical, bounded, and retains released reservation li
     integrationOid: OID_C,
     controllerFencingToken: "fence-1",
   });
+  assert.ok(state.closedUnitEvidence.length > 0);
+  assert.ok(
+    runInvariantErrors(
+      mutateDenseClosedEvidence(state, (dense) => {
+        // Slot 4 is deliberately absent until the live unit has released.
+        dense.u["unit-1"]![4] = 0;
+      }),
+    ).some((error) => error.includes("duplicates authoritative repair count")),
+  );
   state = step(state, "reservation_release_intent", {});
+  const releaseIntentDense = JSON.parse(
+    inflateRawSync(Buffer.from(state.closedUnitEvidence, "base64")).toString(
+      "utf8",
+    ),
+  ) as { u: Record<string, unknown[]> };
+  assert.equal(releaseIntentDense.u["unit-1"]?.[4], null);
   state = observe(state, "reservation_released", "reservation_release");
   assert.deepEqual(runInvariantErrors(state), []);
   assert.notEqual(state.closedUnitEvidence, "");
 
-  const missingReleasedReservation = { ...state, reservations: {} };
-  assert.ok(
-    runInvariantErrors(missingReleasedReservation).some((error) =>
-      error.includes("released reservation lineage"),
-    ),
-  );
   assert.ok(
     runInvariantErrors({
       ...state,
@@ -1798,6 +1988,38 @@ test("closed evidence is canonical, bounded, and retains released reservation li
   const decoded = inflateRawSync(
     Buffer.from(state.closedUnitEvidence, "base64"),
   ).toString("utf8");
+  const missingReleasedReservation = JSON.parse(decoded) as {
+    u: Record<string, unknown[]>;
+  };
+  const denseReservations = missingReleasedReservation.u["unit-1"]?.[9] as
+    unknown[][] | undefined;
+  if (denseReservations?.[0] === undefined)
+    throw new Error("missing dense reservation");
+  assert.ok(
+    runInvariantErrors(
+      mutateDenseClosedEvidence(state, (dense) => {
+        // Fixed-width compact reservation tuple: acquire is slot 3.
+        (dense.u["unit-1"]![9] as unknown[][])[0]![3] = null;
+      }),
+    ).some((error) => error.includes("closed unit evidence ledger")),
+  );
+  // Fixed-width compact reservation tuple: release is slot 4.
+  denseReservations[0][4] = null;
+  const missingReleasedReservationLedger = deflateRawSync(
+    Buffer.from(
+      canonicalJson(
+        missingReleasedReservation as unknown as import("../../src/protocol/canonical.js").JsonValue,
+      ),
+      "utf8",
+    ),
+    { level: 9 },
+  ).toString("base64");
+  assert.ok(
+    runInvariantErrors({
+      ...state,
+      closedUnitEvidence: missingReleasedReservationLedger,
+    }).some((error) => error.includes("reservation")),
+  );
   const nonCanonical = deflateRawSync(Buffer.from(decoded, "utf8"), {
     level: 0,
   }).toString("base64");
@@ -1816,11 +2038,10 @@ test("closed evidence is canonical, bounded, and retains released reservation li
       (error) => error.includes("closed unit evidence ledger"),
     ),
   );
-  const unknownFacts = JSON.parse(decoded) as Record<
-    string,
-    Record<string, unknown>
-  >;
-  unknownFacts["unit-1"] = { ...unknownFacts["unit-1"], secret: "nope" };
+  const unknownFacts = JSON.parse(decoded) as {
+    u: Record<string, unknown[]>;
+  };
+  unknownFacts.u["unit-1"]?.push("secret-shaped-accidental-payload");
   const unknownFactLedger = deflateRawSync(
     Buffer.from(
       canonicalJson(
@@ -1836,6 +2057,151 @@ test("closed evidence is canonical, bounded, and retains released reservation li
       closedUnitEvidence: unknownFactLedger,
     }).some((error) => error.includes("closed unit evidence ledger")),
   );
+});
+
+test("every closure outcome has exact discriminated facts and one final repair count", () => {
+  const release = (state: RepositoryRun) =>
+    observe(
+      step(state, "reservation_release_intent", {}),
+      "reservation_released",
+      "reservation_release",
+    );
+  const successful = (boundary: "landed" | "branch_handoff" | "pr_handoff") => {
+    if (boundary === "landed") {
+      let state = approvedCandidate(
+        "integrate",
+        "remote-ff",
+        "remote-integration",
+      );
+      state = step(state, "publish_intent", {});
+      state = observe(state, "publish_observed", "publish", {
+        publication: { kind: "push_branch", remoteHeadOid: OID_B },
+      });
+      state = step(state, "integrate_intent", {});
+      state = observe(state, "integrate_observed", "integrate", {
+        baseOid: OID_A,
+        headOid: OID_B,
+        treeOid: OID_C,
+        integrationOid: OID_C,
+        controllerFencingToken: "fence-1",
+      });
+      return release(state);
+    }
+    let state = approvedCandidate(
+      boundary === "pr_handoff" ? "open-pr" : "push-branch",
+      "none",
+      boundary === "pr_handoff" ? "pr-handoff" : "branch-handoff",
+    );
+    state = step(state, "publish_intent", {});
+    state = observe(state, "publish_observed", "publish", {
+      publication:
+        boundary === "pr_handoff"
+          ? {
+              kind: "open_pr",
+              pullRequest: {
+                providerPrId: "pr-closure",
+                state: "open",
+                baseRef: "main",
+                baseOid: OID_A,
+                remoteHeadOid: OID_B,
+              },
+            }
+          : { kind: "push_branch", remoteHeadOid: OID_B },
+    });
+    return release(state);
+  };
+  const negative = (
+    outcome: "failed" | "timed_out" | "parked" | "cancelled",
+  ) => {
+    const intent = {
+      failed: "failure_intent",
+      timed_out: "timeout_intent",
+      parked: "park_intent",
+      cancelled: "cancel_intent",
+    } as const;
+    const observed = {
+      failed: "failure_observed",
+      timed_out: "timeout_observed",
+      parked: "park_observed",
+      cancelled: "cancel_observed",
+    } as const;
+    const kind = {
+      failed: "failure",
+      timed_out: "timeout",
+      parked: "park",
+      cancelled: "cancel",
+    } as const;
+    let state = completeCandidate();
+    state = step(state, intent[outcome], {});
+    state = observe(state, observed[outcome], kind[outcome]);
+    return release(state);
+  };
+  const cases: ReadonlyArray<{
+    readonly outcome: string;
+    readonly state: RepositoryRun;
+  }> = [
+    ...(["landed", "branch_handoff", "pr_handoff"] as const).map((outcome) => ({
+      outcome,
+      state: successful(outcome),
+    })),
+    ...(["failed", "timed_out", "parked", "cancelled"] as const).map(
+      (outcome) => ({ outcome, state: negative(outcome) }),
+    ),
+  ];
+  for (const { outcome, state } of cases) {
+    assert.deepEqual(runInvariantErrors(state), []);
+    const dense = JSON.parse(
+      inflateRawSync(Buffer.from(state.closedUnitEvidence, "base64")).toString(
+        "utf8",
+      ),
+    ) as { u: Record<string, unknown[]> };
+    const record = dense.u["unit-1"];
+    if (record === undefined) throw new Error(`missing ${outcome} closure`);
+    assert.equal(record[0], outcome);
+    assert.equal(record[4], 0);
+
+    // The terminal effect is mandatory for all variants.
+    assert.ok(
+      runInvariantErrors(
+        mutateDenseClosedEvidence(state, (mutated) => {
+          mutated.u["unit-1"]![10] = null;
+        }),
+      ).some((error) => error.includes("closed unit evidence ledger")),
+    );
+    // Cross-variant payloads cannot be reinterpreted by changing a tag.
+    assert.ok(
+      runInvariantErrors(
+        mutateDenseClosedEvidence(state, (mutated) => {
+          mutated.u["unit-1"]![0] = outcome === "failed" ? "landed" : "failed";
+        }),
+      ).some(
+        (error) =>
+          error.includes("closed unit evidence ledger") ||
+          error.includes("terminal effect lineage"),
+      ),
+    );
+    // Successful variants have an outcome-specific required landing/handoff fact.
+    if (
+      outcome === "landed" ||
+      outcome === "branch_handoff" ||
+      outcome === "pr_handoff"
+    )
+      assert.ok(
+        runInvariantErrors(
+          mutateDenseClosedEvidence(state, (mutated) => {
+            const payload = mutated.u["unit-1"]![11] as unknown[];
+            payload[0] = null;
+          }),
+        ).some((error) => error.includes("closed unit evidence ledger")),
+      );
+    assert.ok(
+      runInvariantErrors(
+        mutateDenseClosedEvidence(state, (mutated) => {
+          mutated.u["unit-1"]![4] = null;
+        }),
+      ).some((error) => error.includes("authoritative repair count")),
+    );
+  }
 });
 
 test("hydration preserves owner converses and only keeps unresolved effects in the wave", () => {

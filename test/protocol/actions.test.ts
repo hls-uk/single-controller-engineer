@@ -424,33 +424,37 @@ test("terminal, repair, cap, ownership, and order guards are represented", () =>
     reservations: [{ id: "res-1", namespace: "port", resource: "3001" }],
   });
   assert.deepEqual(actionTypes(reserving), ["reservation_observed"]);
-  const failed: RepositoryRun = {
-    ...run(),
-    units: {
-      "unit-1": {
-        ...run().units["unit-1"]!,
-        branchRef: "sce/unit-1",
-        worktreePath: "/tmp/unit-1",
-        candidateHead: OID_B,
-        candidateTree: OID_C,
-        repairContext: {
-          baseOid: OID_A,
-          findings: [
-            {
-              detail: "repair required",
-              id: "finding-1",
-              severity: "blocking",
-            },
-          ],
-          headOid: OID_B,
-          rationale: "repair required",
-          responseHash: HASH,
-          treeOid: OID_C,
-        },
-        state: "failed",
-      },
-    },
-  };
+  let failed = run();
+  failed = step(failed, "reservation_intent", {
+    reservations: [{ id: "res-1", namespace: "port", resource: "3001" }],
+  });
+  failed = observe(failed, "reservation_observed", "reservation_acquire");
+  failed = step(failed, "branch_intent", { branchRef: "sce/unit-1" });
+  failed = observe(failed, "branch_observed", "branch_create", {
+    branchRef: "sce/unit-1",
+  });
+  failed = step(failed, "worktree_intent", { worktreePath: "/tmp/unit-1" });
+  failed = observe(failed, "worktree_observed", "worktree_create", {
+    worktreePath: "/tmp/unit-1",
+  });
+  failed = step(failed, "dispatch_intent", {});
+  failed = observe(failed, "dispatch_observed", "dispatch", {
+    sessionId: "worker-terminal",
+    requestedModel: "workhorse",
+    returnedModel: "workhorse-1",
+    promptHash: HASH,
+  });
+  failed = step(failed, "collect_intent", {});
+  failed = observe(failed, "worker_collected", "worker_collect", {
+    workerResult: { status: "completed", summary: "done", residualRisks: [] },
+  });
+  failed = step(failed, "candidate_intent", {});
+  failed = observe(failed, "candidate_observed", "candidate_collect", {
+    headOid: OID_B,
+    treeOid: OID_C,
+  });
+  failed = step(failed, "failure_intent", {});
+  failed = observe(failed, "failure_observed", "failure");
   assert.ok(actionTypes(failed).includes("repair_intent"));
   assert.ok(actionTypes(failed).includes("reservation_release_intent"));
   const unboundRepair = {
