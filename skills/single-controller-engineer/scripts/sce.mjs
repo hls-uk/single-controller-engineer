@@ -9493,8 +9493,7 @@ var LIMITS = {
   // 64 units can each retain an initial worker/reviewer pair plus all 16
   // bounded repair pairs without permitting historical session reuse.
   sessionHistory: 2176,
-  sessionFilterBytes: 8192,
-  sessionFilterHashes: 12,
+  sessionFingerprintBytes: 32,
   units: 64,
   reservations: 128,
   text: 8192,
@@ -9705,6 +9704,52 @@ var UnitSchema = strictObject({
   repairCount: Type.Integer({ minimum: 0, maximum: 16 }),
   repairContext: Type.Optional(RepairContextSchema)
 });
+var ClosedUnitEvidenceFactSchema = strictObject({
+  branchRef: Type.Optional(identifier()),
+  worktreePath: Type.Optional(text()),
+  reservationIds: Type.Array(identifier(), {
+    maxItems: LIMITS.reservations,
+    uniqueItems: true
+  }),
+  candidateHead: Type.Optional(oid()),
+  candidateTree: Type.Optional(oid()),
+  publishedHeadOid: Type.Optional(oid()),
+  openPullRequest: Type.Optional(PullRequestObservationSchema),
+  workerSessionId: Type.Optional(identifier()),
+  workerRequestedModel: Type.Optional(text()),
+  workerReturnedModel: Type.Optional(text()),
+  workerPromptHash: Type.Optional(hash()),
+  reviewerSessionId: Type.Optional(identifier()),
+  reviewerRequestedModel: Type.Optional(text()),
+  reviewerReturnedModel: Type.Optional(text()),
+  reviewPromptHash: Type.Optional(hash()),
+  verificationBaseOid: Type.Optional(oid()),
+  verificationHeadOid: Type.Optional(oid()),
+  verificationTree: Type.Optional(oid()),
+  verificationEvidenceHash: Type.Optional(hash()),
+  verificationCommands: Type.Optional(
+    Type.Array(text(), { minItems: 1, maxItems: 32 })
+  ),
+  reviewBaseOid: Type.Optional(oid()),
+  reviewHeadOid: Type.Optional(oid()),
+  reviewTree: Type.Optional(oid()),
+  approvalResponseHash: Type.Optional(hash()),
+  landedOid: Type.Optional(oid()),
+  workerResult: Type.Optional(
+    strictObject({
+      status: Type.Union([
+        Type.Literal("completed"),
+        Type.Literal("needs_repair"),
+        Type.Literal("failed")
+      ]),
+      summary: text(),
+      residualRisks: Type.Array(text(), { maxItems: 32 }),
+      suggestedFollowUps: Type.Array(text(), { maxItems: 32 })
+    })
+  ),
+  repairCount: Type.Integer({ minimum: 0, maximum: 16 }),
+  repairContext: Type.Optional(RepairContextSchema)
+});
 var AggregateStateSchema = Type.Union([
   Type.Literal("initializing"),
   Type.Literal("active"),
@@ -9718,6 +9763,12 @@ var AuthorityProfileSchema = Type.Union([
   Type.Literal("push-branch"),
   Type.Literal("open-pr"),
   Type.Literal("integrate")
+]);
+var CompletionBoundarySchema = Type.Union([
+  Type.Literal("local-integration"),
+  Type.Literal("branch-handoff"),
+  Type.Literal("pr-handoff"),
+  Type.Literal("remote-integration")
 ]);
 var IntegrationProfileSchema = Type.Union([
   Type.Literal("none"),
@@ -9764,6 +9815,7 @@ var RepositoryRunSchema = strictObject({
   repositoryIdentity: identifier(),
   integrationBranch: identifier(),
   authorityProfile: AuthorityProfileSchema,
+  completionBoundary: CompletionBoundarySchema,
   integrationProfile: IntegrationProfileSchema,
   gitObjectFormat: GitObjectFormatSchema,
   controllerFencingToken: identifier(),
@@ -9803,21 +9855,24 @@ var RepositoryRunSchema = strictObject({
     maxItems: LIMITS.eventHistory,
     uniqueItems: true
   }),
-  // A domain-separated deterministic Bloom filter has no false negatives:
-  // historical reuse is always rejected, while a rare false positive only
-  // fails safe by requiring another fresh harness identity. Raw identifiers
-  // are not retained in the aggregate.
-  usedSessionFilter: Type.String({
-    maxLength: Math.ceil(LIMITS.sessionFilterBytes / 3) * 4,
-    pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
-  }),
+  // Concatenated, sorted, full SHA-256 session fingerprints. The count is a
+  // monotonic high-water cross-check for the exact ledger.
+  // It is never an independently meaningful membership structure.
   usedSessionCount: Type.Integer({
     minimum: 0,
     maximum: LIMITS.sessionHistory
   }),
-  // Detects snapshot corruption of the bounded Bloom bitmap and its count.
-  // It is an integrity binding, not an attempt to reconstruct historical IDs.
-  usedSessionFilterHash: hash(),
+  usedSessionFingerprints: Type.String({
+    maxLength: Math.ceil(LIMITS.sessionHistory * LIMITS.sessionFingerprintBytes / 3) * 4,
+    pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+  }),
+  // Canonical deflate-raw JSON ledger of exact facts for closed units. The
+  // live unit object stays compact after cleanup while exact OIDs/hashes are
+  // retained for audit and hydration validation.
+  closedUnitEvidence: Type.String({
+    maxLength: LIMITS.envelopeBytes,
+    pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+  }),
   journalCheckpoint: JournalCheckpointSchema
 });
 var eventBase = {
@@ -10298,7 +10353,8 @@ var RuntimeEffectSchema = Type.Union([
     params: strictObject({
       branchRef: identifier(),
       candidate: CandidateBindingSchema,
-      authorityProfile: AuthorityProfileSchema
+      authorityProfile: AuthorityProfileSchema,
+      completionBoundary: CompletionBoundarySchema
     })
   }),
   strictObject({
@@ -10308,6 +10364,7 @@ var RuntimeEffectSchema = Type.Union([
     params: strictObject({
       integrationBranch: identifier(),
       integrationProfile: IntegrationProfileSchema,
+      completionBoundary: CompletionBoundarySchema,
       controllerFencingToken: identifier(),
       candidate: CandidateBindingSchema
     })
@@ -10389,6 +10446,9 @@ function validate(schema, input) {
 function formatError(error) {
   return `${error.instancePath || "/"} ${error.message ?? "is invalid"}`;
 }
+
+// src/protocol/reducer.ts
+import { deflateRawSync, inflateRawSync } from "node:zlib";
 
 // src/protocol/canonical.ts
 var preserveStrings = () => "exact";
@@ -10498,14 +10558,17 @@ function deriveParamsHash(kind, params) {
     })
   );
 }
-function deriveSessionFilterHash(usedSessionFilter, usedSessionCount) {
-  return sha256(
-    canonicalJson({
-      domain: "sce.protocol.session-filter.v1",
-      usedSessionCount,
-      usedSessionFilter
-    })
-  );
+function completionConfigurationError(state) {
+  switch (state.completionBoundary) {
+    case "local-integration":
+      return state.integrationProfile === "local-ff" ? void 0 : "local integration requires the local-ff integration profile";
+    case "branch-handoff":
+      return state.integrationProfile === "none" && state.authorityProfile !== "local-change-only" ? void 0 : "branch handoff requires push-capable authority and integration profile none";
+    case "pr-handoff":
+      return state.integrationProfile === "none" && ["open-pr", "integrate"].includes(state.authorityProfile) ? void 0 : "pr handoff requires open-pr-capable authority and integration profile none";
+    case "remote-integration":
+      return state.authorityProfile === "integrate" && ["remote-ff", "github-merge-group"].includes(state.integrationProfile) ? void 0 : "remote integration requires integrate authority and a remote integration profile";
+  }
 }
 function controllerIdentityMatches(state, sessionId) {
   return [
@@ -10515,26 +10578,51 @@ function controllerIdentityMatches(state, sessionId) {
   ].includes(sessionId);
 }
 function hasUsedSession(state, sessionId) {
-  if (state.usedSessionFilter.length === 0) return false;
-  const filter = sessionFilter(state.usedSessionFilter);
-  return sessionFilterIndexes(sessionId).every(
-    (index) => ((filter[index >>> 3] ?? 0) & 1 << (index & 7)) !== 0
-  );
+  const fingerprints = decodeSessionFingerprints(state.usedSessionFingerprints);
+  if (fingerprints === void 0) return true;
+  return fingerprintIndex(fingerprints, sessionFingerprint(sessionId)).found;
 }
-function sessionFilter(encoded) {
-  return encoded.length === 0 ? Buffer.alloc(LIMITS.sessionFilterBytes) : Buffer.from(encoded, "base64");
-}
-function sessionFilterIndexes(sessionId) {
-  const digest = sha256(
+function deriveSessionFingerprint(sessionId) {
+  return sha256(
     canonicalJson({ domain: "sce.protocol.session.v1", sessionId })
   );
-  const first = Number.parseInt(digest.slice(0, 8), 16);
-  const step = (Number.parseInt(digest.slice(8, 16), 16) | 1) >>> 0;
-  const bitCount = LIMITS.sessionFilterBytes * 8;
-  return Array.from(
-    { length: LIMITS.sessionFilterHashes },
-    (_, index) => (first + index * step) % bitCount
-  );
+}
+function sessionFingerprint(sessionId) {
+  return Buffer.from(deriveSessionFingerprint(sessionId), "hex");
+}
+function decodeSessionFingerprints(encoded) {
+  if (encoded === "") return Buffer.alloc(0);
+  let fingerprints;
+  try {
+    fingerprints = Buffer.from(encoded, "base64");
+  } catch {
+    return void 0;
+  }
+  if (fingerprints.toString("base64") !== encoded || fingerprints.length % LIMITS.sessionFingerprintBytes !== 0 || fingerprints.length > LIMITS.sessionHistory * LIMITS.sessionFingerprintBytes)
+    return void 0;
+  for (let offset = LIMITS.sessionFingerprintBytes; offset < fingerprints.length; offset += LIMITS.sessionFingerprintBytes)
+    if (Buffer.compare(
+      fingerprints.subarray(offset - LIMITS.sessionFingerprintBytes, offset),
+      fingerprints.subarray(offset, offset + LIMITS.sessionFingerprintBytes)
+    ) >= 0)
+      return void 0;
+  return fingerprints;
+}
+function fingerprintIndex(fingerprints, fingerprint) {
+  let low = 0;
+  let high = fingerprints.length / LIMITS.sessionFingerprintBytes;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const offset = middle * LIMITS.sessionFingerprintBytes;
+    const comparison = Buffer.compare(
+      fingerprints.subarray(offset, offset + LIMITS.sessionFingerprintBytes),
+      fingerprint
+    );
+    if (comparison === 0) return { found: true, offset };
+    if (comparison < 0) low = middle + 1;
+    else high = middle;
+  }
+  return { found: false, offset: low * LIMITS.sessionFingerprintBytes };
 }
 function intentStateForEffect(kind) {
   const states = {
@@ -10659,12 +10747,14 @@ function runtimeEffectParams(state, unitId, kind) {
       return {
         branchRef: required(unit.branchRef, "branch ref", kind),
         candidate: candidate(),
-        authorityProfile: state.authorityProfile
+        authorityProfile: state.authorityProfile,
+        completionBoundary: state.completionBoundary
       };
     case "integrate":
       return {
         integrationBranch: state.integrationBranch,
         integrationProfile: state.integrationProfile,
+        completionBoundary: state.completionBoundary,
         controllerFencingToken: state.controllerFencingToken,
         candidate: candidate()
       };
@@ -10705,6 +10795,42 @@ function required(value, name, kind) {
   if (value === void 0) throw new Error(`${kind} lacks ${name}`);
   return value;
 }
+function encodeClosedUnitEvidence(evidence) {
+  return deflateRawSync(Buffer.from(canonicalJson(evidence), "utf8"), {
+    level: 9
+  }).toString("base64");
+}
+function decodeClosedUnitEvidence(encoded) {
+  if (encoded === "") return {};
+  let compressed;
+  let decoded;
+  try {
+    compressed = Buffer.from(encoded, "base64");
+    if (compressed.toString("base64") !== encoded) return void 0;
+    decoded = inflateRawSync(compressed, {
+      maxOutputLength: LIMITS.envelopeBytes
+    });
+  } catch {
+    return void 0;
+  }
+  if (decoded.length > LIMITS.envelopeBytes) return void 0;
+  const text2 = decoded.toString("utf8");
+  if (!Buffer.from(text2, "utf8").equals(decoded)) return void 0;
+  let parsed;
+  try {
+    parsed = JSON.parse(text2);
+  } catch {
+    return void 0;
+  }
+  if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object" || canonicalJson(parsed) !== text2)
+    return void 0;
+  if (!Object.entries(parsed).every(
+    ([id, facts]) => /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u.test(id) && validate(ClosedUnitEvidenceFactSchema, facts).ok
+  ))
+    return void 0;
+  const evidence = parsed;
+  return encodeClosedUnitEvidence(evidence) === encoded ? evidence : void 0;
+}
 function runInvariantErrors(state) {
   const errors = [];
   const effectIds = /* @__PURE__ */ new Set();
@@ -10727,10 +10853,8 @@ function runInvariantErrors(state) {
     errors.push("repository run envelope exceeds byte limit");
   if (state.controller.holder !== `${state.controller.runId}/${state.controller.incarnationId}`)
     errors.push("controller holder does not bind immutable run incarnation");
-  if (state.authorityProfile !== "integrate" && ["remote-ff", "github-merge-group"].includes(state.integrationProfile))
-    errors.push(
-      "non-integrating authority cannot claim a remote integration profile"
-    );
+  const completionError = completionConfigurationError(state);
+  if (completionError !== void 0) errors.push(completionError);
   if (state.wave.unitIds.length > 3)
     errors.push("wave exceeds the three-unit implementation cap");
   for (const queue of [
@@ -10777,13 +10901,57 @@ function runInvariantErrors(state) {
     if (unit.repairContext?.headOid === void 0 && unit.repairContext?.treeOid !== void 0)
       errors.push(`repair context ${unit.id} has a tree without a head`);
   }
-  const packedSessions = Buffer.from(state.usedSessionFilter, "base64");
-  if (state.usedSessionCount === 0 && state.usedSessionFilter !== "" || state.usedSessionCount > 0 && (packedSessions.length !== LIMITS.sessionFilterBytes || packedSessions.toString("base64") !== state.usedSessionFilter))
-    errors.push("used session identity history is invalid");
-  if (state.usedSessionFilterHash !== deriveSessionFilterHash(state.usedSessionFilter, state.usedSessionCount))
-    errors.push("used session identity history integrity hash is invalid");
-  if (state.usedSessionCount > 0 && packedSessions.length === LIMITS.sessionFilterBytes && packedSessions.every((value) => value === 0))
-    errors.push("used session identity history has no set bits for its count");
+  const sessionFingerprints = decodeSessionFingerprints(
+    state.usedSessionFingerprints
+  );
+  if (sessionFingerprints === void 0)
+    errors.push("used session fingerprint ledger is invalid");
+  else if (sessionFingerprints.length / LIMITS.sessionFingerprintBytes !== state.usedSessionCount)
+    errors.push("used session fingerprint count does not match ledger");
+  const closedEvidence = decodeClosedUnitEvidence(state.closedUnitEvidence);
+  if (closedEvidence === void 0)
+    errors.push("closed unit evidence ledger is invalid");
+  const closedUnitIds = Object.values(state.units).filter((unit) => unit.state === "closed").map((unit) => unit.id).sort();
+  const evidenceUnitIds = Object.keys(closedEvidence ?? {}).sort();
+  if (closedUnitIds.join("\0") !== evidenceUnitIds.join("\0"))
+    errors.push("closed unit evidence membership is not exact");
+  for (const unit of Object.values(state.units)) {
+    if (unit.state !== "closed") continue;
+    const facts = closedEvidence?.[unit.id];
+    const preserved = facts === void 0 ? void 0 : { ...unit, ...facts };
+    if (facts === void 0 || preserved === void 0 || !validate(UnitSchema, preserved).ok)
+      errors.push(`closed unit ${unit.id} has invalid preserved evidence`);
+    else
+      for (const value of [
+        preserved.candidateHead,
+        preserved.candidateTree,
+        preserved.publishedHeadOid,
+        preserved.verificationBaseOid,
+        preserved.verificationHeadOid,
+        preserved.verificationTree,
+        preserved.reviewBaseOid,
+        preserved.reviewHeadOid,
+        preserved.reviewTree,
+        preserved.landedOid,
+        preserved.openPullRequest?.baseOid,
+        preserved.openPullRequest?.remoteHeadOid,
+        preserved.repairContext?.baseOid,
+        preserved.repairContext?.headOid,
+        preserved.repairContext?.treeOid
+      ])
+        checkOid(unit, value);
+    if (preserved !== void 0 && !preserved.reservationIds.every(
+      (reservationId) => state.reservations[reservationId]?.unitId === unit.id && state.reservations[reservationId]?.state === "released"
+    ))
+      errors.push(`closed unit ${unit.id} lacks released reservation lineage`);
+  }
+  const hasAmbiguousEffect = state.effectJournal.some(
+    (effect) => effect.status === "ambiguous"
+  );
+  if (hasAmbiguousEffect && state.state !== "blocked")
+    errors.push("ambiguous effects require a blocked aggregate");
+  if (!hasAmbiguousEffect && state.state === "blocked")
+    errors.push("blocked aggregate lacks an ambiguous effect");
   for (const effect of state.effectJournal) {
     if (effectIds.has(effect.effectId))
       errors.push(`duplicate effect id ${effect.effectId}`);
@@ -10950,11 +11118,11 @@ function runInvariantErrors(state) {
       errors.push(`approval lifecycle ${id} lacks exact verdict`);
     if (["published", "handoff"].includes(unit.state) && unit.publishedHeadOid === void 0)
       errors.push(`published unit ${id} lacks remote-head readback`);
-    if (state.authorityProfile === "open-pr" && unit.state === "handoff" && (unit.openPullRequest === void 0 || unit.openPullRequest.baseRef !== state.integrationBranch || unit.openPullRequest.baseOid !== unit.reviewBaseOid || unit.openPullRequest.remoteHeadOid !== unit.publishedHeadOid || unit.openPullRequest.remoteHeadOid !== unit.candidateHead))
+    if (state.completionBoundary === "pr-handoff" && unit.state === "handoff" && (unit.openPullRequest === void 0 || unit.openPullRequest.baseRef !== state.integrationBranch || unit.openPullRequest.baseOid !== unit.reviewBaseOid || unit.openPullRequest.remoteHeadOid !== unit.publishedHeadOid || unit.openPullRequest.remoteHeadOid !== unit.candidateHead))
       errors.push(
         `open-pr handoff ${id} lacks exact open pull-request evidence`
       );
-    if (unit.openPullRequest !== void 0 && state.authorityProfile !== "open-pr")
+    if (unit.openPullRequest !== void 0 && state.completionBoundary !== "pr-handoff")
       errors.push(
         `unit ${id} retains pull-request evidence outside open-pr authority`
       );
@@ -11122,11 +11290,11 @@ function legalActions(stateInput) {
   if (!parsed.ok || parsed.value === void 0) return [];
   const state = parsed.value;
   if (runInvariantErrors(state).length > 0) return [];
+  if (state.state === "released") return [];
+  if (state.state === "blocked") return ambiguityRecoveryActions(state);
   const controllerActions = actionsForController(state);
   if (controllerActions !== void 0) return sortActions(controllerActions);
-  if (state.state === "released") return [];
   if (state.controller.state !== "acquired") return [];
-  if (state.state === "blocked") return ambiguityRecoveryActions(state);
   return sortActions(
     Object.values(state.units).filter((unit) => state.wave.unitIds.includes(unit.id)).flatMap((unit) => actionsForUnit(state, unit)).filter(
       (action) => (action.mode !== "emit" || action.effectKind === void 0 || effectAllowed(state, action.effectKind) && (action.unitId === void 0 || !hasUnresolvedUnitEffect(state, action.unitId))) && (action.mode !== "record" || pendingUnitEffect(state, action))
@@ -11157,7 +11325,7 @@ var observationForEffect = {
 function ambiguityRecoveryActions(state) {
   return sortActions(
     state.effectJournal.filter(
-      (effect) => effect.unitId !== null && effect.status === "ambiguous"
+      (effect) => effect.status === "intended" || effect.status === "ambiguous"
     ).map((effect) => ({
       effectId: effect.effectId,
       effectKind: effect.kind,
@@ -11273,11 +11441,11 @@ function lifecycleActions(state, unit) {
     case "review_collect_intent":
       return state.currentReviewerUnitId === unit.id ? [unitAction(unit, "review_collected", "record", "review_collect")] : [];
     case "approved":
-      return isCurrentApproval(unit) && state.qualificationOwnerUnitId === unit.id ? state.authorityProfile === "local-change-only" && state.integrationProfile === "local-ff" ? [unitAction(unit, "integrate_intent", "emit", "integrate")] : [unitAction(unit, "publish_intent", "emit", "publish")] : [];
+      return isCurrentApproval(unit) && state.qualificationOwnerUnitId === unit.id ? state.completionBoundary === "local-integration" ? [unitAction(unit, "integrate_intent", "emit", "integrate")] : [unitAction(unit, "publish_intent", "emit", "publish")] : [];
     case "publish_intent":
       return [unitAction(unit, "publish_observed", "record", "publish")];
     case "published":
-      return hasCurrentApproval(unit) && state.qualificationOwnerUnitId === unit.id && (state.integrationOwnerUnitId === void 0 || state.integrationOwnerUnitId === unit.id) && state.integrationQueue[0] === unit.id ? [unitAction(unit, "integrate_intent", "emit", "integrate")] : [];
+      return hasCurrentApproval(unit) && state.completionBoundary === "remote-integration" && state.qualificationOwnerUnitId === unit.id && (state.integrationOwnerUnitId === void 0 || state.integrationOwnerUnitId === unit.id) && state.integrationQueue[0] === unit.id ? [unitAction(unit, "integrate_intent", "emit", "integrate")] : [];
     case "integrate_intent":
       return state.integrationOwnerUnitId === unit.id ? [unitAction(unit, "integrate_observed", "record", "integrate")] : [];
     case "landed":
@@ -11349,11 +11517,9 @@ function canReleaseController(state) {
 }
 function effectAllowed(state, kind) {
   if (kind === "publish")
-    return ["push-branch", "open-pr", "integrate"].includes(
-      state.authorityProfile
-    );
+    return state.completionBoundary === "branch-handoff" && state.authorityProfile !== "local-change-only" || state.completionBoundary === "pr-handoff" && ["open-pr", "integrate"].includes(state.authorityProfile) || state.completionBoundary === "remote-integration" && state.authorityProfile === "integrate";
   if (kind !== "integrate") return true;
-  return (state.authorityProfile === "integrate" || state.authorityProfile === "local-change-only" && state.integrationProfile === "local-ff") && state.integrationProfile !== "none";
+  return state.completionBoundary === "local-integration" || state.completionBoundary === "remote-integration" && state.authorityProfile === "integrate";
 }
 function pendingUnitEffect(state, action) {
   return action.unitId !== void 0 && action.effectKind !== void 0 && state.effectJournal.some(
