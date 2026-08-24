@@ -273,18 +273,20 @@ test("conditional command envelopes reject accidental fields and semantic state"
 
   const semanticInvalid = {
     ...state,
-    controller: { ...state.controller, holder: "not-the-run-holder" },
+    activeModifyingUnitIds: ["unit-1"],
   };
-  const execution = await runCli([
-    "next",
-    "--request",
-    JSON.stringify({ run: semanticInvalid }),
-  ]);
-  assert.equal(execution.exitCode, 64);
-  assert.equal(
-    JSON.parse(execution.stdout).error.code,
-    "SCE_INVALID_STATE_REQUEST",
-  );
+  for (const command of ["inspect", "next", "status"]) {
+    const execution = await runCli([
+      command,
+      "--request",
+      JSON.stringify({ run: semanticInvalid }),
+    ]);
+    assert.equal(execution.exitCode, 64);
+    assert.equal(
+      JSON.parse(execution.stdout).error.code,
+      "SCE_INVALID_STATE_REQUEST",
+    );
+  }
 });
 test("invalid runner results are rejected without leaking fields", async () => {
   const execution = await runCli(

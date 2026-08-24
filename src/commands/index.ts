@@ -237,10 +237,14 @@ export function validateCommandPayload(input: unknown): input is JsonObject {
 export const stateOnlyCommandRunner: CommandRunner = (request) => {
   if (!validateCommandRequest(request)) return invalidStateRequest();
   if (!isStateCommandRequest(request)) return unavailable();
-  const run = request.options.request.run;
-  const parsedRun = validate<RepositoryRun>(RepositoryRunSchema, run);
+  const parsedRun = validate<RepositoryRun>(
+    RepositoryRunSchema,
+    request.options.request.run,
+  );
   if (!parsedRun.ok || parsedRun.value === undefined)
     return invalidStateRequest();
+  const run = parsedRun.value;
+  if (runInvariantErrors(run).length > 0) return invalidStateRequest();
   if (request.command === "inspect") {
     return {
       schema: "sce.command.result",
@@ -268,7 +272,6 @@ export const stateOnlyCommandRunner: CommandRunner = (request) => {
       },
     };
   }
-  if (runInvariantErrors(run).length > 0) return invalidStateRequest();
   return {
     schema: "sce.command.result",
     version: 1,
