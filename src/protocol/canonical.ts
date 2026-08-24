@@ -71,10 +71,15 @@ function canonical(
   }
   if (typeof value === "string")
     return JSON.stringify(normalizeString(value, stringPolicy(path, "value")));
-  if (Array.isArray(value))
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      if (!Object.hasOwn(value, index))
+        throw new TypeError("canonical JSON rejects sparse arrays");
+    }
     return `[${value
       .map((item, index) => canonical(item, stringPolicy, [...path, index]))
       .join(",")}]`;
+  }
   if (typeof value !== "object")
     throw new TypeError("canonical JSON only permits JSON values");
 
