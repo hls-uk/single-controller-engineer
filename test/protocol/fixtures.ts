@@ -6,12 +6,19 @@ import type {
 
 export const OID_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 export const OID_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-export const HASH = "c".repeat(64);
+export const OID_C = "cccccccccccccccccccccccccccccccccccccccc";
+export const HASH = "d".repeat(64);
 
 export function unit(id: string, state: Unit["state"] = "planned"): Unit {
-  return { id, revision: 0, state, baseOid: OID_A };
+  return {
+    id,
+    revision: 0,
+    state,
+    baseOid: OID_A,
+    reservationIds: [],
+    repairCount: 0,
+  };
 }
-
 export function run(units: readonly Unit[] = [unit("unit-1")]): RepositoryRun {
   return {
     revision: 0,
@@ -20,37 +27,35 @@ export function run(units: readonly Unit[] = [unit("unit-1")]): RepositoryRun {
     repositoryIdentity: "repo-1",
     integrationBranch: "main",
     controllerFencingToken: "fence-1",
+    controller: { holder: "run-1", state: "acquired" },
     units: Object.fromEntries(units.map((item) => [item.id, item])),
+    reservations: {},
     activeModifyingUnitIds: [],
     effectJournal: [],
     processedEventIds: [],
   };
 }
-
-export function event<T extends ProtocolEvent["type"]>(
+export function event(
   state: RepositoryRun,
-  type: T,
-  fields: Omit<
-    Extract<ProtocolEvent, { type: T }>,
-    "eventId" | "expectedRevision" | "unitId" | "type"
-  > = {} as never,
-): Extract<ProtocolEvent, { type: T }> {
+  type: ProtocolEvent["type"],
+  fields: Record<string, unknown> = {},
+  unitId = "unit-1",
+): ProtocolEvent {
   return {
     eventId: `event-${state.revision + 1}`,
     expectedRevision: state.revision,
-    unitId: "unit-1",
+    unitId,
     type,
     ...fields,
-  } as Extract<ProtocolEvent, { type: T }>;
+  } as ProtocolEvent;
 }
-
 export function transition(
   state: RepositoryRun,
   input: ProtocolEvent,
   reduce: (
     current: RepositoryRun,
     next: ProtocolEvent,
-  ) => ReturnType<typeof import("../../src/protocol/reducer.js").reduce>,
+  ) => import("../../src/protocol/reducer.js").Reduction,
 ): RepositoryRun {
   const result = reduce(state, input);
   if (!result.ok) throw new Error(`${result.code}: ${result.reason}`);
