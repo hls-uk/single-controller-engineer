@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { realpathSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { closeSync, openSync, readSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 
 import {
@@ -23,10 +24,14 @@ import type { ProjectionPersistencePort } from "./pinned-bd-process.js";
 const MAX_OUTPUT_BYTES = 262_144;
 const TIMEOUT_MS = 15_000;
 const PINNED_DOLT_VERSION = "2.2.1";
+const EXECUTABLE_SAMPLE_BYTES = 65_536;
 type Executable = Readonly<{
+  ctimeMs: number;
   dev: number;
+  digest: string;
   ino: number;
   mtimeMs: number;
+  mode: number;
   path: string;
   size: number;
 }>;
@@ -36,12 +41,43 @@ function sameExecutable(
 ): boolean {
   return (
     left !== undefined &&
+    left.ctimeMs === right.ctimeMs &&
     left.dev === right.dev &&
+    left.digest === right.digest &&
     left.ino === right.ino &&
     left.mtimeMs === right.mtimeMs &&
+    left.mode === right.mode &&
     left.path === right.path &&
     left.size === right.size
   );
+}
+
+/** Bounded content proof catches same-inode replacements between probes. */
+function executableDigest(path: string, size: number): string | undefined {
+  if (!Number.isSafeInteger(size) || size < 0) return undefined;
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(path, "r");
+    const hash = createHash("sha256").update(`${size}:`);
+    const sample = Math.min(size, EXECUTABLE_SAMPLE_BYTES);
+    const first = Buffer.alloc(sample);
+    if (sample > 0)
+      hash.update(first.subarray(0, readSync(descriptor, first, 0, sample, 0)));
+    if (size > sample) {
+      const last = Buffer.alloc(sample);
+      hash.update(
+        last.subarray(
+          0,
+          readSync(descriptor, last, 0, sample, Math.max(0, size - sample)),
+        ),
+      );
+    }
+    return hash.digest("hex");
+  } catch {
+    return undefined;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
 }
 
 export interface DoltProjectionOptions {
@@ -101,6 +137,12 @@ function parseRows(
   }
 }
 
+function object(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 export class DoltProjectionPersistence implements ProjectionPersistencePort {
   private readonly directory: string;
   private readonly rootIssueId: string;
@@ -108,6 +150,7 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
   private readonly doltExecutable: string;
   private versionCheck: Promise<boolean> | undefined;
   private versionExecutable: Executable | undefined;
+  private rejectedExecutable: Executable | undefined;
 
   public constructor(options: DoltProjectionOptions) {
     try {
@@ -264,42 +307,7 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
         : statement.replace(" FROM issues", ` FROM issues AS OF '${ref}'`),
     );
     if (source === undefined) return undefined;
-    const records = parseRows(source);
-    if (records === undefined || records.length !== rows.length)
-      return undefined;
-    let root: RootProjection | undefined;
-    const children: ChildProjection[] = [];
-    for (const record of records) {
-      if (typeof record.id !== "string") return undefined;
-      const payload = record.sce;
-      const projection =
-        payload !== null &&
-        typeof payload === "object" &&
-        !Array.isArray(payload)
-          ? (payload as { projection?: unknown }).projection
-          : undefined;
-      if (record.id === this.rootIssueId) {
-        const candidate = validateRootProjection(projection);
-        if (!candidate.ok) return undefined;
-        root = candidate.value;
-        continue;
-      }
-      const candidate = validateChildProjection(projection);
-      if (
-        !candidate.ok ||
-        this.childIssueId(candidate.value.unitId) !== record.id
-      )
-        return undefined;
-      children.push(candidate.value);
-    }
-    return root === undefined || children.length !== batch.changedRows.length
-      ? undefined
-      : {
-          children: children.sort((a, b) =>
-            compareCodeUnits(a.unitId, b.unitId),
-          ),
-          root,
-        };
+    return this.projectionRows(source, batch);
   }
 
   private rows(batch: MutationBatch):
@@ -344,63 +352,128 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
     source: string,
     batch: MutationBatch,
   ): EmbeddedReadback | undefined {
-    const rows = parseRows(source);
-    if (rows === undefined || rows.length !== batch.changedRows.length + 1)
-      return undefined;
-    let root: RootProjection | undefined;
-    const children: ChildProjection[] = [];
-    for (const row of rows) {
-      const payload = row.sce;
-      if (
-        payload === null ||
-        typeof payload !== "object" ||
-        Array.isArray(payload)
-      )
-        return undefined;
-      const projection = (payload as { projection?: unknown }).projection;
-      const candidateRoot = validateRootProjection(projection);
-      if (candidateRoot.ok) {
-        root = candidateRoot.value;
-        continue;
-      }
-      const candidateChild = validateChildProjection(projection);
-      if (!candidateChild.ok) return undefined;
-      children.push(candidateChild.value);
-    }
-    return root === undefined ||
-      !same(root, batch.next.root) ||
+    const actual = this.projectionRows(source, batch);
+    return actual === undefined ||
+      !same(actual.root, batch.next.root) ||
       !same(
-        children.sort((a, b) => compareCodeUnits(a.unitId, b.unitId)),
+        actual.children,
         [...batch.next.children].sort((a, b) =>
           compareCodeUnits(a.unitId, b.unitId),
         ),
       )
       ? undefined
-      : { children, root };
+      : actual;
+  }
+
+  /**
+   * A projection read is a fixed root/affected-child set, not a loose JSON
+   * blob. Parse it once for local and AS OF reads so swapped/extra rows cannot
+   * become recovery authority through a different call path.
+   */
+  private projectionRows(
+    source: string,
+    batch: MutationBatch,
+  ): EmbeddedReadback | undefined {
+    const expected = this.rows(batch);
+    const records = parseRows(source);
+    if (
+      expected === undefined ||
+      records === undefined ||
+      records.length !== expected.length
+    )
+      return undefined;
+    const expectedIds = new Set(expected.map((row) => row.issueId));
+    if (expectedIds.size !== expected.length) return undefined;
+    const seen = new Set<string>();
+    let root: RootProjection | undefined;
+    const children: ChildProjection[] = [];
+    for (const record of records) {
+      if (
+        Object.keys(record).length !== 2 ||
+        !Object.prototype.hasOwnProperty.call(record, "id") ||
+        !Object.prototype.hasOwnProperty.call(record, "sce") ||
+        typeof record.id !== "string" ||
+        !expectedIds.has(record.id) ||
+        seen.has(record.id)
+      )
+        return undefined;
+      seen.add(record.id);
+      const envelope = object(record.sce);
+      if (
+        envelope === undefined ||
+        Object.keys(envelope).length !== 2 ||
+        !Object.prototype.hasOwnProperty.call(envelope, "commitment") ||
+        !Object.prototype.hasOwnProperty.call(envelope, "projection") ||
+        typeof envelope.commitment !== "string"
+      )
+        return undefined;
+      if (record.id === this.rootIssueId) {
+        const candidate = validateRootProjection(envelope.projection);
+        if (
+          !candidate.ok ||
+          candidate.value.aggregateCommitment !== envelope.commitment
+        )
+          return undefined;
+        root = candidate.value;
+        continue;
+      }
+      const candidate = validateChildProjection(envelope.projection);
+      if (
+        !candidate.ok ||
+        candidate.value.commitment !== envelope.commitment ||
+        this.childIssueId(candidate.value.unitId) !== record.id
+      )
+        return undefined;
+      children.push(candidate.value);
+    }
+    return root === undefined ||
+      seen.size !== expectedIds.size ||
+      children.length !== batch.changedRows.length
+      ? undefined
+      : {
+          children: children.sort((a, b) =>
+            compareCodeUnits(a.unitId, b.unitId),
+          ),
+          root,
+        };
   }
 
   private async sql(query: string): Promise<string | undefined> {
     const executable = this.executable();
-    if (executable === undefined || !(await this.pinnedVersion(executable)))
+    if (
+      executable === undefined ||
+      sameExecutable(this.rejectedExecutable, executable)
+    )
       return undefined;
+    this.rejectedExecutable = undefined;
+    if (!(await this.pinnedVersion(executable))) return undefined;
+    const operational = this.executable();
+    if (operational === undefined || !sameExecutable(executable, operational)) {
+      this.rejectedExecutable = operational ?? executable;
+      return undefined;
+    }
     return new Promise((resolve) => {
       let output = "";
       let bytes = 0;
       let settled = false;
-      const child = spawn(executable.path, ["sql", "-r", "json", "-q", query], {
-        cwd: this.directory,
-        env: {
-          LANG: "C",
-          LC_ALL: "C",
-          PATH: `${dirname(this.doltExecutable)}:/usr/bin:/bin`,
-          TMPDIR: process.env.TMPDIR ?? "/private/tmp",
-          DARWIN_USER_TEMP_DIR:
-            process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
-          TZ: "UTC",
+      const child = spawn(
+        operational.path,
+        ["sql", "-r", "json", "-q", query],
+        {
+          cwd: this.directory,
+          env: {
+            LANG: "C",
+            LC_ALL: "C",
+            PATH: `${dirname(this.doltExecutable)}:/usr/bin:/bin`,
+            TMPDIR: process.env.TMPDIR ?? "/private/tmp",
+            DARWIN_USER_TEMP_DIR:
+              process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
+            TZ: "UTC",
+          },
+          shell: false,
+          stdio: ["ignore", "pipe", "ignore"],
         },
-        shell: false,
-        stdio: ["ignore", "pipe", "ignore"],
-      });
+      );
       const timer = setTimeout(() => child.kill("SIGKILL"), TIMEOUT_MS);
       child.stdout.on("data", (chunk: Buffer) => {
         bytes += chunk.byteLength;
@@ -441,12 +514,17 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
     try {
       const path = realpathSync.native(this.doltExecutable);
       const stat = statSync(path, { throwIfNoEntry: false });
-      return stat === undefined || !stat.isFile()
+      const digest =
+        stat === undefined ? undefined : executableDigest(path, stat.size);
+      return stat === undefined || !stat.isFile() || digest === undefined
         ? undefined
         : {
+            ctimeMs: stat.ctimeMs,
             dev: stat.dev,
+            digest,
             ino: stat.ino,
             mtimeMs: stat.mtimeMs,
+            mode: stat.mode,
             path,
             size: stat.size,
           };

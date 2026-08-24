@@ -5,6 +5,7 @@ import {
   type MutationBatch,
   type RunStorePort,
   type RunStoreResult,
+  type SlotContinuationEvidence,
   decideControllerSlot,
   validateMergeSlotObservation,
   validateMutationBatch,
@@ -50,6 +51,12 @@ export type WorkerTrackerBaseline = Readonly<{
   workingSet: "clean";
 }>;
 
+/** Controller-journal authority for a resume or same-run continuation. */
+export type EmbeddedAcquisitionAuthority = Readonly<{
+  continuation?: SlotContinuationEvidence;
+  knownHolder: string;
+}>;
+
 export interface EmbeddedAdapterOptions {
   readonly holder: string;
   readonly mode: EmbeddedMode;
@@ -69,6 +76,23 @@ function result(code: EmbeddedResult["code"]): EmbeddedResult {
 
 function same(left: unknown, right: unknown): boolean {
   return canonicalJson(left as JsonValue) === canonicalJson(right as JsonValue);
+}
+
+function object(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function head(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-z]{20,64}$/u.test(value);
+}
+
+function holder(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(value)
+  );
 }
 
 function checkedPreflight(
@@ -130,8 +154,11 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
   }
 
   /** Acquires only the pre-existing built-in merge slot, with exact readback. */
-  public async acquire(): Promise<EmbeddedResult> {
-    if (!this.usable) return result("quarantined");
+  public async acquire(
+    authority?: EmbeddedAcquisitionAuthority,
+  ): Promise<EmbeddedResult> {
+    if (!this.usable || !this.validAcquisitionAuthority(authority))
+      return result("quarantined");
     const prepared = await this.prepareSharedState();
     if (prepared.code !== "applied") return prepared;
     const check = await this.slot("check");
@@ -140,15 +167,14 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       this.prefix,
       this.scope,
       this.holder,
-      undefined,
+      authority?.knownHolder,
       check,
+      authority?.continuation,
     );
     if (decision.kind === "blocked") return result("blocked");
     if (decision.kind === "quarantined") return result("quarantined");
     if (decision.kind === "resume") return result("applied");
-    // `continue` needs separately persisted continuation evidence and is never
-    // approximated as a normal acquisition by this topology adapter.
-    if (decision.kind === "continue") return result("blocked");
+    if (decision.kind === "continue") return result("applied");
     const acquired = await this.slot("acquire");
     if (acquired === undefined) return result("quarantined");
     if (
@@ -184,7 +210,12 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
 
   /** One validated aggregate/child mutation batch, followed by exact readback. */
   public async compareAndSet(batch: MutationBatch): Promise<RunStoreResult> {
-    if (!this.usable || !validateMutationBatch(batch).ok)
+    if (
+      !this.usable ||
+      !validateMutationBatch(batch).ok ||
+      !same(batch.scope, this.scope) ||
+      batch.holder !== this.holder
+    )
       return { status: "quarantined" };
     const recovery = await this.state();
     if (recovery === undefined || !recovery.reachable)
@@ -199,8 +230,8 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       if (
         slot === undefined ||
         slot.status !== "acquired" ||
-        slot.actor !== batch.expectedHolder ||
-        slot.holder !== batch.expectedHolder
+        slot.actor !== this.holder ||
+        slot.holder !== this.holder
       )
         return { status: "holder_mismatch" };
       const durable = await this.durableCheckpoint(batch);
@@ -225,8 +256,8 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     if (
       slot === undefined ||
       slot.status !== "acquired" ||
-      slot.actor !== batch.expectedHolder ||
-      slot.holder !== batch.expectedHolder
+      slot.actor !== this.holder ||
+      slot.holder !== this.holder
     )
       return { status: "holder_mismatch" };
     const mutation = await this.call({ kind: "mutation", batch });
@@ -262,6 +293,7 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
 
   /** Records a clean baseline before a cooperative worker/reviewer session. */
   public async workerBaseline(): Promise<WorkerTrackerBaseline | undefined> {
+    if (!this.usable) return undefined;
     const state = await this.state();
     if (
       state === undefined ||
@@ -273,7 +305,13 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     )
       return undefined;
     const slot = await this.slot("check");
-    if (slot === undefined) return undefined;
+    if (
+      slot === undefined ||
+      slot.status !== "acquired" ||
+      slot.actor !== this.holder ||
+      slot.holder !== this.holder
+    )
+      return undefined;
     return {
       ...(state.head === undefined ? {} : { head: state.head }),
       ...(this.mode === "git-sync" ? { remoteHead: state.remoteHead } : {}),
@@ -286,12 +324,17 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
   public async verifyWorkerBaseline(
     baseline: WorkerTrackerBaseline,
   ): Promise<EmbeddedResult> {
+    if (!this.usable) return result("quarantined");
+    if (!this.validWorkerBaseline(baseline)) return result("quarantined");
     const state = await this.state();
     const slot = await this.slot("check");
     if (state === undefined || slot === undefined) return result("ambiguous");
     return state.workingSet === "clean" &&
       state.head === baseline.head &&
       state.remoteHead === baseline.remoteHead &&
+      slot.status === "acquired" &&
+      slot.actor === this.holder &&
+      slot.holder === this.holder &&
       same(slot, baseline.slot)
       ? result("applied")
       : result("worker_mutation");
@@ -401,6 +444,88 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
   private async state(): Promise<EmbeddedState | undefined> {
     const response = await this.call({ kind: "state" });
     return response?.kind === "state" ? response.value : undefined;
+  }
+
+  private validWorkerBaseline(input: unknown): input is WorkerTrackerBaseline {
+    const baseline = object(input);
+    if (
+      baseline === undefined ||
+      Object.keys(baseline).some(
+        (key) => !["head", "remoteHead", "slot", "workingSet"].includes(key),
+      ) ||
+      baseline.workingSet !== "clean" ||
+      (baseline.head !== undefined && !head(baseline.head)) ||
+      (baseline.remoteHead !== undefined && !head(baseline.remoteHead))
+    )
+      return false;
+    const slot = validateMergeSlotObservation(
+      baseline.slot,
+      this.prefix,
+      this.scope,
+    );
+    if (
+      !slot.ok ||
+      slot.value.status !== "acquired" ||
+      slot.value.actor !== this.holder ||
+      slot.value.holder !== this.holder
+    )
+      return false;
+    return this.mode === "git-sync"
+      ? baseline.head !== undefined &&
+          baseline.remoteHead !== undefined &&
+          baseline.head === baseline.remoteHead
+      : baseline.remoteHead === undefined;
+  }
+
+  private validAcquisitionAuthority(
+    authority: unknown,
+  ): authority is EmbeddedAcquisitionAuthority | undefined {
+    if (authority === undefined) return true;
+    const input = object(authority);
+    if (
+      input === undefined ||
+      Object.keys(input).some(
+        (key) => key !== "knownHolder" && key !== "continuation",
+      ) ||
+      !holder(input.knownHolder)
+    )
+      return false;
+    if (input.continuation === undefined) return true;
+    const continuation = object(input.continuation);
+    if (
+      continuation === undefined ||
+      Object.keys(continuation).some(
+        (key) =>
+          key !== "after" &&
+          key !== "before" &&
+          key !== "nextHolder" &&
+          key !== "previousHolder",
+      ) ||
+      !holder(continuation.nextHolder) ||
+      !holder(continuation.previousHolder) ||
+      input.knownHolder !== continuation.previousHolder
+    )
+      return false;
+    const before = validateMergeSlotObservation(
+      continuation.before,
+      this.prefix,
+      this.scope,
+    );
+    const after = validateMergeSlotObservation(
+      continuation.after,
+      this.prefix,
+      this.scope,
+    );
+    return (
+      before.ok &&
+      after.ok &&
+      before.value.status === "acquired" &&
+      before.value.holder === continuation.previousHolder &&
+      before.value.actor === continuation.previousHolder &&
+      after.value.status === "acquired" &&
+      after.value.holder === continuation.nextHolder &&
+      after.value.actor === continuation.nextHolder
+    );
   }
 
   private async slot(

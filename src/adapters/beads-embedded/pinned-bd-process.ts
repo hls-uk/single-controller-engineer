@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { realpathSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { closeSync, openSync, readSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute } from "node:path";
 
 import {
@@ -28,6 +29,7 @@ const MAX_OUTPUT_BYTES = 65_536;
 const PINNED_BD_VERSION = "1.1.0";
 const PINNED_DOLT_VERSION = "2.2.1";
 const PROCESS_TIMEOUT_MS = 15_000;
+const EXECUTABLE_SAMPLE_BYTES = 65_536;
 
 export interface ProjectionPersistencePort {
   mutate(batch: MutationBatch): Promise<EmbeddedResponse>;
@@ -66,9 +68,12 @@ type Capture = Readonly<{
 }>;
 
 type Executable = Readonly<{
+  ctimeMs: number;
   dev: number;
+  digest: string;
   ino: number;
   mtimeMs: number;
+  mode: number;
   path: string;
   size: number;
 }>;
@@ -79,12 +84,43 @@ function sameExecutable(
 ): boolean {
   return (
     left !== undefined &&
+    left.ctimeMs === right.ctimeMs &&
     left.dev === right.dev &&
+    left.digest === right.digest &&
     left.ino === right.ino &&
     left.mtimeMs === right.mtimeMs &&
+    left.mode === right.mode &&
     left.path === right.path &&
     left.size === right.size
   );
+}
+
+/** Bounded content proof catches same-inode replacements between probes. */
+function executableDigest(path: string, size: number): string | undefined {
+  if (!Number.isSafeInteger(size) || size < 0) return undefined;
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(path, "r");
+    const hash = createHash("sha256").update(`${size}:`);
+    const sample = Math.min(size, EXECUTABLE_SAMPLE_BYTES);
+    const first = Buffer.alloc(sample);
+    if (sample > 0)
+      hash.update(first.subarray(0, readSync(descriptor, first, 0, sample, 0)));
+    if (size > sample) {
+      const last = Buffer.alloc(sample);
+      hash.update(
+        last.subarray(
+          0,
+          readSync(descriptor, last, 0, sample, Math.max(0, size - sample)),
+        ),
+      );
+    }
+    return hash.digest("hex");
+  } catch {
+    return undefined;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
 }
 
 function safeString(value: unknown, max = 160): string | undefined {
@@ -277,8 +313,10 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
   private readonly doltExecutable: string;
   private bdVersionCheck: Promise<Capture | undefined> | undefined;
   private bdVersionExecutable: Executable | undefined;
+  private bdRejectedExecutable: Executable | undefined;
   private doltVersionCheck: Promise<Capture | undefined> | undefined;
   private doltVersionExecutable: Executable | undefined;
+  private doltRejectedExecutable: Executable | undefined;
   private readonly prefix: string;
   private readonly projections: ProjectionPersistencePort;
   private readonly remote:
@@ -549,7 +587,12 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
 
   private async run(argv: readonly string[]): Promise<Capture | undefined> {
     const executable = this.executable(this.bdExecutable);
-    if (executable === undefined) return undefined;
+    if (
+      executable === undefined ||
+      sameExecutable(this.bdRejectedExecutable, executable)
+    )
+      return undefined;
+    this.bdRejectedExecutable = undefined;
     if (!sameExecutable(this.bdVersionExecutable, executable)) {
       this.bdVersionCheck = undefined;
       this.bdVersionExecutable = executable;
@@ -565,7 +608,12 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       ).test(version.stdout)
     )
       return undefined;
-    return this.runOnce(executable.path, argv);
+    const operational = this.executable(this.bdExecutable);
+    if (operational === undefined || !sameExecutable(executable, operational)) {
+      this.bdRejectedExecutable = operational ?? executable;
+      return undefined;
+    }
+    return this.runOnce(operational.path, argv);
   }
 
   private async runOnce(
@@ -751,7 +799,12 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
     argv: readonly string[],
   ): Promise<Capture | undefined> {
     const executable = this.executable(this.doltExecutable);
-    if (executable === undefined) return undefined;
+    if (
+      executable === undefined ||
+      sameExecutable(this.doltRejectedExecutable, executable)
+    )
+      return undefined;
+    this.doltRejectedExecutable = undefined;
     if (!sameExecutable(this.doltVersionExecutable, executable)) {
       this.doltVersionCheck = undefined;
       this.doltVersionExecutable = executable;
@@ -766,7 +819,12 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       version.stdout.split("\n", 1)[0] !== `dolt version ${PINNED_DOLT_VERSION}`
     )
       return undefined;
-    return this.runDoltOnce(executable.path, cwd, argv);
+    const operational = this.executable(this.doltExecutable);
+    if (operational === undefined || !sameExecutable(executable, operational)) {
+      this.doltRejectedExecutable = operational ?? executable;
+      return undefined;
+    }
+    return this.runDoltOnce(operational.path, cwd, argv);
   }
 
   private executable(value: string): Executable | undefined {
@@ -775,12 +833,17 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
     try {
       const path = realpathSync.native(value);
       const stat = statSync(path, { throwIfNoEntry: false });
-      return stat === undefined || !stat.isFile()
+      const digest =
+        stat === undefined ? undefined : executableDigest(path, stat.size);
+      return stat === undefined || !stat.isFile() || digest === undefined
         ? undefined
         : {
+            ctimeMs: stat.ctimeMs,
             dev: stat.dev,
+            digest,
             ino: stat.ino,
             mtimeMs: stat.mtimeMs,
+            mode: stat.mode,
             path,
             size: stat.size,
           };

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
@@ -459,6 +459,86 @@ test("pinned process refuses schema skew without surfacing subprocess secrets", 
   }
 });
 
+test("projection reads reject swapped, duplicate, extra, skewed, and wrong commitment rows", async () => {
+  const root = await mkdtemp("/private/tmp/sce-real-rows-");
+  const fakeDolt = join(root, "dolt");
+  try {
+    const state0 = fixtureRun();
+    const state1 = reduced(state0, "reservation_intent", {
+      reservations: [
+        { id: "reservation-rows", namespace: "branch", resource: "main" },
+      ],
+    });
+    const controllerBatch = batch(state0, state1);
+    const rootRow = {
+      id: "sce-root",
+      sce: {
+        commitment: controllerBatch.next.root.aggregateCommitment,
+        projection: controllerBatch.next.root,
+      },
+    };
+    const child = controllerBatch.next.children[0];
+    assert.ok(child);
+    const childRow = {
+      id: "sce-child",
+      sce: { commitment: child.commitment, projection: child },
+    };
+    const malformedRows: readonly unknown[][] = [
+      [
+        { ...rootRow, id: "sce-child" },
+        { ...childRow, id: "sce-root" },
+      ],
+      [rootRow, rootRow],
+      [rootRow, childRow, { ...childRow, id: "sce-extra" }],
+      [
+        { ...rootRow, sce: { ...rootRow.sce, commitment: "0".repeat(64) } },
+        childRow,
+      ],
+      [{ ...rootRow, extra: true }, childRow],
+      [{ ...rootRow, sce: { ...rootRow.sce, extra: true } }, childRow],
+    ];
+    for (const rows of malformedRows) {
+      const output = Buffer.from(JSON.stringify({ rows }), "utf8").toString(
+        "base64",
+      );
+      await executable(fakeDolt, [
+        "#!/bin/sh",
+        'if [ "$1" = "version" ]; then printf "dolt version 2.2.1\\n"; exit 0; fi',
+        `printf '%s' '${output}' | base64 -D 2>/dev/null || printf '%s' '${output}' | base64 -d`,
+      ]);
+      const persistence = new DoltProjectionPersistence({
+        childIssueId: (unitId) =>
+          unitId === "unit-1" ? "sce-child" : undefined,
+        databaseDirectory: root,
+        doltExecutable: fakeDolt,
+        rootIssueId: "sce-root",
+      });
+      assert.equal(await persistence.readback(controllerBatch), undefined);
+      assert.equal(
+        await persistence.discover({
+          batch: controllerBatch,
+          kind: "discover",
+          point: "after_commit",
+        }),
+        undefined,
+      );
+      assert.equal(
+        await persistence.discoverAt(
+          {
+            batch: controllerBatch,
+            kind: "discover",
+            point: "after_push",
+          },
+          "origin/main",
+        ),
+        undefined,
+      );
+    }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
 test("projection executor bounds malformed, oversized, timed-out, replaced, and secret subprocess output", async () => {
   const root = await mkdtemp("/private/tmp/sce-real-exec-");
   const fakeDolt = join(root, "dolt");
@@ -515,6 +595,141 @@ test("projection executor bounds malformed, oversized, timed-out, replaced, and 
     const started = Date.now();
     assert.equal(await persistence.readback(controllerBatch), undefined);
     assert.ok(Date.now() - started >= 14_000);
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("post-version executable replacement never reaches projection Dolt, pinned bd, or process Dolt", async () => {
+  const root = await mkdtemp("/private/tmp/sce-real-self-replace-");
+  const fakeDolt = join(root, "dolt");
+  const fakeBd = join(root, "bd");
+  const replacement = join(root, "replacement");
+  const marker = join(root, "replacement-ran");
+  try {
+    const state0 = fixtureRun();
+    const state1 = reduced(state0, "reservation_intent", {
+      reservations: [
+        {
+          id: "reservation-self-replace",
+          namespace: "branch",
+          resource: "main",
+        },
+      ],
+    });
+    const controllerBatch = batch(state0, state1);
+    await executable(replacement, ["#!/bin/sh", `touch '${marker}'`, "exit 0"]);
+
+    await executable(fakeDolt, [
+      "#!/bin/sh",
+      'if [ "$1" = "version" ]; then',
+      '  printf "dolt version 2.2.1\\n"',
+      `  cp -f '${replacement}' "$0"`,
+      '  chmod 700 "$0"',
+      "  exit 0",
+      "fi",
+      `touch '${marker}'`,
+    ]);
+    const projection = new DoltProjectionPersistence({
+      childIssueId: (unitId) => (unitId === "unit-1" ? "sce-child" : undefined),
+      databaseDirectory: root,
+      doltExecutable: fakeDolt,
+      rootIssueId: "sce-root",
+    });
+    assert.equal(await projection.readback(controllerBatch), undefined);
+    await assert.rejects(access(marker));
+
+    await executable(fakeBd, [
+      "#!/bin/sh",
+      'if [ "$1" = "--version" ]; then',
+      "  printf 'bd version 1.1.0\\n'",
+      `  cp -f '${replacement}' "$0"`,
+      '  chmod 700 "$0"',
+      "  exit 0",
+      "fi",
+      `touch '${marker}'`,
+    ]);
+    const bdReplacement = new PinnedBdEmbeddedProcess({
+      bdExecutable: fakeBd,
+      cwd: root,
+      databaseDirectory: root,
+      doltExecutable: DOLT,
+      prefix: "sce",
+      projections: {
+        async discover() {
+          return undefined;
+        },
+        async discoverAt() {
+          return undefined;
+        },
+        async mutate() {
+          return { kind: "mutation", value: "quarantined" } as const;
+        },
+        async readback() {
+          return undefined;
+        },
+      },
+      scope,
+    });
+    const bdState = await bdReplacement.execute({ kind: "state" });
+    assert.equal(bdState.kind, "state");
+    assert.equal(bdState.value.reachable, false);
+    await assert.rejects(access(marker));
+
+    await mkdir(join(root, "database"));
+    await executable(fakeBd, [
+      "#!/bin/sh",
+      'if [ "$1" = "--version" ]; then printf "bd version 1.1.0\\n"; exit 0; fi',
+      'if [ "$1" = "dolt" ] && [ "$2" = "status" ]; then',
+      `  printf '{"mode":"embedded","schema_version":1,"data_dir_exists":true,"data_dir":"${root}","server_running":false}'`,
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "dolt" ] && [ "$2" = "show" ]; then',
+      `  printf '{"backend":"dolt","embedded":true,"schema_version":1,"data_dir":"${root}","database":"database"}'`,
+      "  exit 0",
+      "fi",
+      'if [ "$1" = "config" ]; then',
+      '  printf \'{"key":"dolt.auto-commit","schema_version":1,"value":"on"}\'',
+      "  exit 0",
+      "fi",
+      "exit 1",
+    ]);
+    await executable(fakeDolt, [
+      "#!/bin/sh",
+      'if [ "$1" = "version" ]; then',
+      '  printf "dolt version 2.2.1\\n"',
+      `  cp -f '${replacement}' "$0"`,
+      '  chmod 700 "$0"',
+      "  exit 0",
+      "fi",
+      `touch '${marker}'`,
+    ]);
+    const doltReplacement = new PinnedBdEmbeddedProcess({
+      bdExecutable: fakeBd,
+      cwd: root,
+      databaseDirectory: join(root, "database"),
+      doltExecutable: fakeDolt,
+      prefix: "sce",
+      projections: {
+        async discover() {
+          return undefined;
+        },
+        async discoverAt() {
+          return undefined;
+        },
+        async mutate() {
+          return { kind: "mutation", value: "quarantined" } as const;
+        },
+        async readback() {
+          return undefined;
+        },
+      },
+      scope,
+    });
+    const doltState = await doltReplacement.execute({ kind: "state" });
+    assert.equal(doltState.kind, "state");
+    assert.equal(doltState.value.reachable, false);
+    await assert.rejects(access(marker));
   } finally {
     await rm(root, { force: true, recursive: true });
   }

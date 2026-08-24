@@ -647,9 +647,6 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
     assert.equal(releasedState.value.remoteHead, releasedState.value.head);
     assert.equal(releasedSlot.kind, "slot");
     assert.equal(releasedSlot.value.status, "available");
-    const remoteWorkerBaseline = await restartAdapter.workerBaseline();
-    assert.ok(remoteWorkerBaseline);
-    assert.ok(remoteWorkerBaseline.remoteHead);
     assert.equal(
       (await secondProcess.execute({ kind: "pull" })).value,
       "applied",
@@ -661,6 +658,14 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
     });
     assert.equal(availableSlot.kind, "slot");
     assert.equal(availableSlot.value.status, "available");
+    assert.equal((await restartAdapter.acquire()).code, "applied");
+    const remoteWorkerBaseline = await restartAdapter.workerBaseline();
+    assert.ok(remoteWorkerBaseline);
+    assert.ok(remoteWorkerBaseline.remoteHead);
+    assert.equal(
+      (await secondProcess.execute({ kind: "pull" })).value,
+      "applied",
+    );
 
     // A different clone advances only the remote. The first process fetches
     // during its state read and must refuse to bless a worker baseline whose

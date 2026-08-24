@@ -118,11 +118,15 @@ class ScriptedPort implements EmbeddedProcessPort {
   }
 }
 
-function adapter(port: EmbeddedProcessPort, mode: "local-only" | "git-sync") {
+function adapter(
+  port: EmbeddedProcessPort,
+  mode: "local-only" | "git-sync",
+  actor = holder,
+) {
   if (port instanceof ScriptedPort)
     port.identity = processIdentity(mode === "git-sync");
   return new EmbeddedBeadsAdapter({
-    holder,
+    holder: actor,
     mode,
     prefix: "sce",
     preflight: preflight(mode === "git-sync"),
@@ -131,11 +135,28 @@ function adapter(port: EmbeddedProcessPort, mode: "local-only" | "git-sync") {
   });
 }
 
-function journalBatch(): MutationBatch {
+function journalBatch(
+  options: {
+    holder?: string;
+    scope?: FencingScope;
+  } = {},
+): MutationBatch {
   const base = fixtureRun([]);
+  const expectedScope = options.scope ?? scope;
+  const expectedHolder = options.holder ?? holder;
+  const [runId, incarnationId] = expectedHolder.split("/");
   const initial = {
     ...base,
-    controller: { ...base.controller, state: "unacquired" as const },
+    controller: {
+      ...base.controller,
+      incarnationId: incarnationId ?? "",
+      holder: expectedHolder,
+      runId: runId ?? "",
+      state: "unacquired" as const,
+    },
+    integrationBranch: expectedScope.integrationBranch,
+    repositoryIdentity: expectedScope.gitRepositoryIdentity,
+    storeIdentity: expectedScope.beadsStoreIdentity,
     state: "initializing" as const,
   };
   const transition = reduce(initial, {
@@ -416,6 +437,128 @@ test("post-push remote-row mismatch remains ambiguous with the journal batch", a
   assert.equal(last.batch, batch);
 });
 
+test("compare-and-set refuses an otherwise-valid foreign batch before any command", async () => {
+  const foreignScope: FencingScope = {
+    beadsStoreIdentity: "store-2",
+    gitRepositoryIdentity: "repo-2",
+    integrationBranch: "release",
+  };
+  for (const foreign of [
+    journalBatch({ holder: "run-2/incarnation-1" }),
+    journalBatch({ scope: foreignScope }),
+  ]) {
+    for (const workingSet of ["clean", "pending"] as const) {
+      const port = new ScriptedPort([
+        {
+          kind: "state",
+          value: {
+            autoCommit: "batch",
+            head: "e".repeat(40),
+            reachable: true,
+            workingSet,
+          },
+        },
+      ]);
+      assert.equal(
+        (await adapter(port, "local-only").compareAndSet(foreign)).status,
+        "quarantined",
+      );
+      assert.deepEqual(port.requests, []);
+    }
+  }
+});
+
+test("acquisition accepts only explicit projected resume or continuation authority", async () => {
+  const sameHolder = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: "a".repeat(40),
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("acquired", holder) },
+  ]);
+  assert.equal(
+    (await adapter(sameHolder, "local-only").acquire({ knownHolder: holder }))
+      .code,
+    "applied",
+  );
+
+  const previousHolder = holder;
+  const nextHolder = "run-1/incarnation-2";
+  const after = slot("acquired", nextHolder);
+  const continuation = {
+    after,
+    before: slot("acquired", previousHolder),
+    nextHolder,
+    previousHolder,
+  };
+  const continued = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: "a".repeat(40),
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: after },
+  ]);
+  assert.equal(
+    (
+      await adapter(continued, "local-only", nextHolder).acquire({
+        continuation,
+        knownHolder: previousHolder,
+      })
+    ).code,
+    "applied",
+  );
+
+  const unproved = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: "a".repeat(40),
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: after },
+  ]);
+  assert.equal(
+    (await adapter(unproved, "local-only", nextHolder).acquire()).code,
+    "blocked",
+  );
+  assert.equal(
+    unproved.requests.some(
+      (request) => request.kind === "slot" && request.action === "acquire",
+    ),
+    false,
+  );
+
+  for (const malformed of [
+    {},
+    { knownHolder: holder, unexpected: true },
+    { continuation: {}, knownHolder: holder },
+  ]) {
+    const port = new ScriptedPort([]);
+    assert.equal(
+      (
+        await adapter(port, "local-only").acquire(
+          malformed as unknown as { readonly knownHolder: string },
+        )
+      ).code,
+      "quarantined",
+    );
+    assert.deepEqual(port.requests, []);
+  }
+});
+
 test("worker tracker detection blocks qualification instead of repairing movement", async () => {
   const oldHead = "c".repeat(40);
   const port = new ScriptedPort([
@@ -598,7 +741,42 @@ test("adapter binds preflight identity to the concrete process before any comman
       scope,
     });
     assert.equal((await runtime.acquire()).code, "quarantined");
+    assert.equal(await runtime.workerBaseline(), undefined);
+    assert.equal(
+      (
+        await runtime.verifyWorkerBaseline({
+          slot: slot("acquired", holder),
+          workingSet: "clean",
+        })
+      ).code,
+      "quarantined",
+    );
     assert.deepEqual(port.requests, []);
+  }
+});
+
+test("worker baseline requires the exact currently acquired controller slot", async () => {
+  for (const observation of [
+    slot("available"),
+    slot("acquired", "run-2/incarnation-1"),
+  ]) {
+    const port = new ScriptedPort([
+      {
+        kind: "state",
+        value: {
+          autoCommit: "on",
+          head: "f".repeat(40),
+          reachable: true,
+          workingSet: "clean",
+        },
+      },
+      { kind: "slot", value: observation },
+    ]);
+    assert.equal(await adapter(port, "local-only").workerBaseline(), undefined);
+    assert.deepEqual(
+      port.requests.map((request) => request.kind),
+      ["state", "slot"],
+    );
   }
 });
 
