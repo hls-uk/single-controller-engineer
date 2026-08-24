@@ -7,7 +7,11 @@ import {
   parseEnvelope,
   validate,
 } from "../../src/protocol/schemas.js";
-import { HASH, OID_A, OID_B, OID_C, run } from "./fixtures.js";
+import {
+  deriveIdempotencyKey,
+  runInvariantErrors,
+} from "../../src/protocol/reducer.js";
+import { HASH, OID_A, OID_B, OID_C, run, unit } from "./fixtures.js";
 
 test("strict schemas reject unknown properties, coercion, and incomplete effect observations", () => {
   assert.equal(
@@ -85,5 +89,96 @@ test("envelope parsing remains bounded and corrupt inputs fail closed", () => {
   assert.equal(
     parseEnvelope(RepositoryRunEnvelopeSchema, " ".repeat(131_073)).ok,
     false,
+  );
+});
+
+test("Git object observations reject abbreviated OIDs", () => {
+  assert.equal(
+    validate(ProtocolEventSchema, {
+      eventId: "candidate-1",
+      expectedRevision: 0,
+      unitId: "unit-1",
+      type: "candidate_observed",
+      effectId: "candidate-intent:candidate_collect",
+      effectKind: "candidate_collect",
+      observationHash: HASH,
+      headOid: "a".repeat(39),
+      treeOid: OID_C,
+    }).ok,
+    false,
+  );
+});
+
+test("idempotency digest stays bounded while 160-character IDs remain valid", () => {
+  const runId = "r".repeat(160);
+  const incarnationId = "i".repeat(160);
+  const holder = `${runId}/${incarnationId}`;
+  const state = {
+    controller: {
+      ...run().controller,
+      runId,
+      incarnationId,
+      holder,
+    },
+  };
+  const unitId = "u".repeat(160);
+  const key = deriveIdempotencyKey(
+    state,
+    Number.MAX_SAFE_INTEGER,
+    unitId,
+    "reservation_release",
+  );
+  assert.match(key, /^sce:[0-9a-f]{64}$/);
+  assert.equal(
+    validate(RepositoryRunEnvelopeSchema, {
+      schema: "sce.repository-run",
+      version: 1,
+      payload: {
+        ...run(),
+        storeIdentity: "s".repeat(160),
+        repositoryIdentity: "p".repeat(160),
+        integrationBranch: "b".repeat(160),
+        controller: state.controller,
+      },
+    }).ok,
+    true,
+  );
+  assert.equal(
+    validate(ProtocolEventSchema, {
+      eventId: "e".repeat(160),
+      expectedRevision: Number.MAX_SAFE_INTEGER,
+      unitId,
+      type: "reservation_release_intent",
+      idempotencyKey: key,
+      paramsHash: HASH,
+    }).ok,
+    true,
+  );
+  const base = deriveIdempotencyKey(run(), 1, "unit-1", "repair");
+  assert.notEqual(
+    base,
+    deriveIdempotencyKey(
+      { controller: { ...run().controller, runId: "another-run" } },
+      1,
+      "unit-1",
+      "repair",
+    ),
+  );
+  assert.notEqual(base, deriveIdempotencyKey(run(), 2, "unit-1", "repair"));
+  assert.notEqual(base, deriveIdempotencyKey(run(), 1, "unit-2", "repair"));
+  assert.notEqual(base, deriveIdempotencyKey(run(), 1, "unit-1", "park"));
+});
+
+test("hydrated aggregates cannot exceed the durable envelope budget", () => {
+  const oversized = run(
+    Array.from({ length: 64 }, (_, index) => ({
+      ...unit(`unit-${index + 1}`),
+      worktreePath: `/${"x".repeat(8_191)}`,
+    })),
+  );
+  assert.ok(
+    runInvariantErrors(oversized).includes(
+      "repository run envelope exceeds byte limit",
+    ),
   );
 });

@@ -10,7 +10,7 @@ export const SCHEMA_VERSION = 1 as const;
 export const LIMITS = {
   envelopeBytes: 131_072,
   effectJournal: 256,
-  eventHistory: 512,
+  eventHistory: 256,
   units: 64,
   reservations: 128,
   text: 8_192,
@@ -22,8 +22,37 @@ const identifier = () =>
     maxLength: 160,
     pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
   });
+const effectIdentifier = () =>
+  Type.String({
+    minLength: 1,
+    // An emitted effect id is `${eventId}:${effectKind}`. Event IDs retain
+    // the shared 160-character identifier vocabulary.
+    maxLength: 192,
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+  });
+const controllerHolder = () =>
+  Type.String({
+    minLength: 3,
+    // Immutable holder is the exact `${runId}/${incarnationId}` pair.
+    maxLength: 321,
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+  });
+// Keys bind immutable run identity, aggregate revision, unit scope, and
+// effect kind, so their bounded wire representation is wider than an ID.
+const idempotencyKey = () =>
+  Type.String({
+    minLength: 1,
+    maxLength: 160,
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+  });
+const revision = () =>
+  Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
 const oid = () =>
-  Type.String({ minLength: 7, maxLength: 128, pattern: "^[0-9a-f]+$" });
+  Type.String({
+    minLength: 40,
+    maxLength: 64,
+    pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+  });
 const hash = () =>
   Type.String({ minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" });
 const text = (minLength = 1) =>
@@ -64,9 +93,9 @@ export const EffectKindSchema = Type.Union([
 ]);
 export type EffectKind = Static<typeof EffectKindSchema>;
 export const EffectJournalEntrySchema = strictObject({
-  effectId: identifier(),
+  effectId: effectIdentifier(),
   unitId: nullableIdentifier(),
-  idempotencyKey: identifier(),
+  idempotencyKey: idempotencyKey(),
   kind: EffectKindSchema,
   paramsHash: hash(),
   status: EffectStatusSchema,
@@ -88,8 +117,8 @@ export const ReservationSchema = strictObject({
   namespace: identifier(),
   resource: identifier(),
   state: ReservationStateSchema,
-  acquireEffectId: Type.Optional(identifier()),
-  releaseEffectId: Type.Optional(identifier()),
+  acquireEffectId: Type.Optional(effectIdentifier()),
+  releaseEffectId: Type.Optional(effectIdentifier()),
 });
 export type Reservation = Static<typeof ReservationSchema>;
 
@@ -132,9 +161,27 @@ export const UnitStateSchema = Type.Union([
   Type.Literal("closed"),
 ]);
 export type UnitState = Static<typeof UnitStateSchema>;
+const RepairContextSchema = strictObject({
+  baseOid: oid(),
+  headOid: oid(),
+  treeOid: oid(),
+  responseHash: hash(),
+  rationale: text(),
+  findings: Type.Array(
+    strictObject({
+      id: identifier(),
+      severity: Type.Union([
+        Type.Literal("blocking"),
+        Type.Literal("non_blocking"),
+      ]),
+      detail: text(),
+    }),
+    { minItems: 1, maxItems: LIMITS.findings },
+  ),
+});
 export const UnitSchema = strictObject({
   id: identifier(),
-  revision: Type.Integer({ minimum: 0 }),
+  revision: revision(),
   state: UnitStateSchema,
   baseOid: oid(),
   branchRef: Type.Optional(identifier()),
@@ -163,6 +210,7 @@ export const UnitSchema = strictObject({
   approvalResponseHash: Type.Optional(hash()),
   landedOid: Type.Optional(oid()),
   repairCount: Type.Integer({ minimum: 0, maximum: 16 }),
+  repairContext: Type.Optional(RepairContextSchema),
 });
 export type Unit = Static<typeof UnitSchema>;
 
@@ -175,10 +223,49 @@ export const AggregateStateSchema = Type.Union([
   Type.Literal("blocked"),
 ]);
 export type AggregateState = Static<typeof AggregateStateSchema>;
+export const AuthorityProfileSchema = Type.Union([
+  Type.Literal("local-change-only"),
+  Type.Literal("push-branch"),
+  Type.Literal("open-pr"),
+  Type.Literal("integrate"),
+]);
+export type AuthorityProfile = Static<typeof AuthorityProfileSchema>;
+export const IntegrationProfileSchema = Type.Union([
+  Type.Literal("none"),
+  Type.Literal("local-ff"),
+  Type.Literal("remote-ff"),
+  Type.Literal("github-merge-group"),
+]);
+export type IntegrationProfile = Static<typeof IntegrationProfileSchema>;
+export const GitObjectFormatSchema = Type.Union([
+  Type.Literal("sha1"),
+  Type.Literal("sha256"),
+]);
+export type GitObjectFormat = Static<typeof GitObjectFormatSchema>;
+export const WaveSchema = strictObject({
+  id: identifier(),
+  unitIds: Type.Array(identifier(), {
+    maxItems: LIMITS.units,
+    uniqueItems: true,
+  }),
+});
+export type Wave = Static<typeof WaveSchema>;
+export const JournalCheckpointSchema = strictObject({
+  revision: revision(),
+  compactedEffects: Type.Integer({ minimum: 0 }),
+  compactedEvents: Type.Integer({ minimum: 0 }),
+  compactedIdempotencyKeys: Type.Integer({ minimum: 0 }),
+});
 export const ControllerOwnershipSchema = strictObject({
-  holder: identifier(),
+  runId: identifier(),
+  incarnationId: identifier(),
+  holder: controllerHolder(),
+  requestedModel: text(),
+  returnedModel: text(),
+  promptHash: hash(),
   state: Type.Union([
     Type.Literal("unacquired"),
+    Type.Literal("acquire_intent"),
     Type.Literal("acquired"),
     Type.Literal("release_intent"),
     Type.Literal("released"),
@@ -186,11 +273,14 @@ export const ControllerOwnershipSchema = strictObject({
 });
 export type ControllerOwnership = Static<typeof ControllerOwnershipSchema>;
 export const RepositoryRunSchema = strictObject({
-  revision: Type.Integer({ minimum: 0 }),
+  revision: revision(),
   state: AggregateStateSchema,
   storeIdentity: identifier(),
   repositoryIdentity: identifier(),
   integrationBranch: identifier(),
+  authorityProfile: AuthorityProfileSchema,
+  integrationProfile: IntegrationProfileSchema,
+  gitObjectFormat: GitObjectFormatSchema,
   controllerFencingToken: identifier(),
   controller: ControllerOwnershipSchema,
   units: Type.Record(identifier(), UnitSchema, {
@@ -208,6 +298,15 @@ export const RepositoryRunSchema = strictObject({
   qualificationOwnerUnitId: Type.Optional(identifier()),
   integrationOwnerUnitId: Type.Optional(identifier()),
   currentReviewerUnitId: Type.Optional(identifier()),
+  wave: WaveSchema,
+  qualificationQueue: Type.Array(identifier(), {
+    maxItems: LIMITS.units,
+    uniqueItems: true,
+  }),
+  integrationQueue: Type.Array(identifier(), {
+    maxItems: LIMITS.units,
+    uniqueItems: true,
+  }),
   effectJournal: Type.Array(EffectJournalEntrySchema, {
     maxItems: LIMITS.effectJournal,
   }),
@@ -215,21 +314,26 @@ export const RepositoryRunSchema = strictObject({
     maxItems: LIMITS.eventHistory,
     uniqueItems: true,
   }),
+  processedIdempotencyKeys: Type.Array(idempotencyKey(), {
+    maxItems: LIMITS.eventHistory,
+    uniqueItems: true,
+  }),
+  journalCheckpoint: JournalCheckpointSchema,
 });
 export type RepositoryRun = Static<typeof RepositoryRunSchema>;
 
 const eventBase = {
   eventId: identifier(),
-  expectedRevision: Type.Integer({ minimum: 0 }),
+  expectedRevision: revision(),
   unitId: identifier(),
 };
 const controllerEventBase = {
   eventId: identifier(),
-  expectedRevision: Type.Integer({ minimum: 0 }),
+  expectedRevision: revision(),
 };
-const effectIntent = { idempotencyKey: identifier(), paramsHash: hash() };
+const effectIntent = { idempotencyKey: idempotencyKey(), paramsHash: hash() };
 const observedEffect = {
-  effectId: identifier(),
+  effectId: effectIdentifier(),
   effectKind: EffectKindSchema,
   observationHash: hash(),
 };
@@ -262,7 +366,7 @@ const judgmentBase = {
   sessionId: identifier(),
   requestedModel: text(),
   returnedModel: text(),
-  aggregateRevision: Type.Integer({ minimum: 0 }),
+  aggregateRevision: revision(),
   promptHash: hash(),
   responseHash: hash(),
   rationale: text(),
@@ -496,7 +600,7 @@ export const ProtocolEventSchema = Type.Union([
     ...eventBase,
     type: Type.Literal("repair_intent"),
     ...effectIntent,
-    judgment: Type.Optional(JudgmentSchema),
+    judgment: ControllerJudgmentSchema,
   }),
   strictObject({
     ...eventBase,
@@ -545,9 +649,11 @@ export const ProtocolEventSchema = Type.Union([
     ...observedEffect,
   }),
   strictObject({
-    ...eventBase,
+    eventId: identifier(),
+    expectedRevision: revision(),
+    unitId: nullableIdentifier(),
     type: Type.Literal("effect_ambiguous"),
-    effectId: identifier(),
+    effectId: effectIdentifier(),
     effectKind: EffectKindSchema,
     observationHash: Type.Optional(hash()),
   }),
@@ -579,9 +685,9 @@ export const RuntimeEffectSchema = Type.Union(
   runtimeKinds.map((kind) =>
     strictObject({
       kind: Type.Literal(kind),
-      effectId: identifier(),
+      effectId: effectIdentifier(),
       unitId: nullableIdentifier(),
-      idempotencyKey: identifier(),
+      idempotencyKey: idempotencyKey(),
       paramsHash: hash(),
       schemaVersion: Type.Literal(SCHEMA_VERSION),
     }),
