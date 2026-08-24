@@ -14,6 +14,7 @@ import {
 } from "./schemas.js";
 import { canonicalJson } from "./canonical.js";
 import { sha256 } from "./evidence.js";
+import { canEnterTerminalIntent } from "./guards.js";
 
 export type ProtocolEffect = RuntimeEffect;
 export type Reduction =
@@ -591,10 +592,7 @@ export function reduce(
       });
       break;
     case "failure_intent":
-      if (
-        ["closed", "reservation_release_intent", "landed"].includes(unit.state)
-      )
-        return illegal(unit, event.type);
+      if (!canEnterTerminalIntent(unit.state)) return illegal(unit, event.type);
       result = terminalIntent(state, unit, "failure_intent", event, "failure");
       break;
     case "failure_observed":
@@ -613,10 +611,7 @@ export function reduce(
       );
       break;
     case "timeout_intent":
-      if (
-        ["closed", "reservation_release_intent", "landed"].includes(unit.state)
-      )
-        return illegal(unit, event.type);
+      if (!canEnterTerminalIntent(unit.state)) return illegal(unit, event.type);
       result = terminalIntent(state, unit, "timeout_intent", event, "timeout");
       break;
     case "timeout_observed":
@@ -635,10 +630,7 @@ export function reduce(
       );
       break;
     case "park_intent":
-      if (
-        ["closed", "reservation_release_intent", "landed"].includes(unit.state)
-      )
-        return illegal(unit, event.type);
+      if (!canEnterTerminalIntent(unit.state)) return illegal(unit, event.type);
       result = terminalIntent(state, unit, "park_intent", event, "park");
       break;
     case "park_observed":
@@ -657,10 +649,7 @@ export function reduce(
       );
       break;
     case "cancel_intent":
-      if (
-        ["closed", "reservation_release_intent", "landed"].includes(unit.state)
-      )
-        return illegal(unit, event.type);
+      if (!canEnterTerminalIntent(unit.state)) return illegal(unit, event.type);
       result = terminalIntent(state, unit, "cancel_intent", event, "cancel");
       break;
     case "cancel_observed":

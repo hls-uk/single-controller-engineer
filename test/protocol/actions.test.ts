@@ -309,7 +309,12 @@ test("terminal, repair, cap, ownership, and order guards are represented", () =>
   );
 
   const failing = step(run(), "failure_intent", { paramsHash: HASH });
-  assert.ok(actionTypes(failing).includes("failure_observed"));
+  assert.deepEqual(actionTypes(failing), ["failure_observed"]);
+  const reserving = step(run(), "reservation_intent", {
+    paramsHash: HASH,
+    reservations: [{ id: "res-1", namespace: "port", resource: "3001" }],
+  });
+  assert.deepEqual(actionTypes(reserving), ["reservation_observed"]);
   const failed: RepositoryRun = {
     ...run(),
     units: {

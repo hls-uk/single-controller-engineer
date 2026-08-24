@@ -6,9 +6,11 @@ import {
   reduce,
   runInvariantErrors,
 } from "../../src/protocol/reducer.js";
+import { canEnterTerminalIntent } from "../../src/protocol/guards.js";
 import type {
   ProtocolEvent,
   RepositoryRun,
+  UnitState,
 } from "../../src/protocol/schemas.js";
 import {
   LIMITS,
@@ -923,4 +925,74 @@ test("hydration rejects fabricated reservation lineage and active parking remain
     activeModifyingUnitIds: ["unit-1"],
   };
   assert.deepEqual(runInvariantErrors(parked), []);
+});
+
+test("terminal intents start only from stable observed lifecycle states", () => {
+  const allowed: readonly UnitState[] = [
+    "planned",
+    "resources_reserved",
+    "branch_observed",
+    "worktree_observed",
+    "dispatched",
+    "collected",
+    "candidate_committed",
+    "qualified",
+    "reviewer_dispatched",
+    "approved",
+    "published",
+    "repair_required",
+  ];
+  const forbidden: readonly UnitState[] = [
+    "reservation_intent",
+    "branch_intent",
+    "worktree_intent",
+    "dispatch_intent",
+    "collect_intent",
+    "candidate_intent",
+    "verification_intent",
+    "reviewer_dispatch_intent",
+    "review_collect_intent",
+    "publish_intent",
+    "integrate_intent",
+    "landed",
+    "reservation_release_intent",
+    "repair_intent",
+    "failure_intent",
+    "failed",
+    "timeout_intent",
+    "timed_out",
+    "park_intent",
+    "parked",
+    "cancel_intent",
+    "cancelled",
+    "blocked",
+    "closed",
+  ];
+
+  assert.equal(new Set([...allowed, ...forbidden]).size, 36);
+  for (const state of allowed)
+    assert.equal(canEnterTerminalIntent(state), true);
+  for (const state of forbidden)
+    assert.equal(canEnterTerminalIntent(state), false);
+
+  const reserving = step(run(), "reservation_intent", {
+    paramsHash: HASH,
+    reservations: [{ id: "res-1", namespace: "port", resource: "3001" }],
+  });
+  const stackedCancellation = reduce(
+    reserving,
+    event(reserving, "cancel_intent", { paramsHash: HASH }),
+  );
+  assert.equal(stackedCancellation.ok, false);
+  if (!stackedCancellation.ok)
+    assert.equal(stackedCancellation.code, "illegal_transition");
+
+  const failing = step(run(), "failure_intent", { paramsHash: HASH });
+  const stackedTimeout = reduce(
+    failing,
+    event(failing, "timeout_intent", { paramsHash: HASH }),
+  );
+  assert.equal(stackedTimeout.ok, false);
+  if (!stackedTimeout.ok)
+    assert.equal(stackedTimeout.code, "illegal_transition");
 });

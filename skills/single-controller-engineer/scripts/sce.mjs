@@ -1870,8 +1870,8 @@ var require_keyword = __commonJS({
       var _a;
       const { gen, keyword, schema, parentSchema, $data, it } = cxt;
       checkAsyncKeyword(it, def);
-      const validate = !$data && def.compile ? def.compile.call(it.self, schema, parentSchema, it) : def.validate;
-      const validateRef = useKeyword(gen, keyword, validate);
+      const validate2 = !$data && def.compile ? def.compile.call(it.self, schema, parentSchema, it) : def.validate;
+      const validateRef = useKeyword(gen, keyword, validate2);
       const valid = gen.let("valid");
       cxt.block$data(valid, validateKeyword);
       cxt.ok((_a = def.valid) !== null && _a !== void 0 ? _a : valid);
@@ -2944,28 +2944,28 @@ var require_compile = __commonJS({
         if (this.opts.code.process)
           sourceCode = this.opts.code.process(sourceCode, sch);
         const makeValidate = new Function(`${names_1.default.self}`, `${names_1.default.scope}`, sourceCode);
-        const validate = makeValidate(this, this.scope.get());
-        this.scope.value(validateName, { ref: validate });
-        validate.errors = null;
-        validate.schema = sch.schema;
-        validate.schemaEnv = sch;
+        const validate2 = makeValidate(this, this.scope.get());
+        this.scope.value(validateName, { ref: validate2 });
+        validate2.errors = null;
+        validate2.schema = sch.schema;
+        validate2.schemaEnv = sch;
         if (sch.$async)
-          validate.$async = true;
+          validate2.$async = true;
         if (this.opts.code.source === true) {
-          validate.source = { validateName, validateCode, scopeValues: gen._values };
+          validate2.source = { validateName, validateCode, scopeValues: gen._values };
         }
         if (this.opts.unevaluated) {
           const { props, items } = schemaCxt;
-          validate.evaluated = {
+          validate2.evaluated = {
             props: props instanceof codegen_1.Name ? void 0 : props,
             items: items instanceof codegen_1.Name ? void 0 : items,
             dynamicProps: props instanceof codegen_1.Name,
             dynamicItems: items instanceof codegen_1.Name
           };
-          if (validate.source)
-            validate.source.evaluated = (0, codegen_1.stringify)(validate.evaluated);
+          if (validate2.source)
+            validate2.source.evaluated = (0, codegen_1.stringify)(validate2.evaluated);
         }
-        sch.validate = validate;
+        sch.validate = validate2;
         return sch;
       } catch (e) {
         delete sch.validate;
@@ -9489,7 +9489,7 @@ var SCHEMA_VERSION = 1;
 var LIMITS = {
   envelopeBytes: 131072,
   effectJournal: 256,
-  eventHistory: 512,
+  eventHistory: 256,
   units: 64,
   reservations: 128,
   text: 8192,
@@ -9500,7 +9500,30 @@ var identifier = () => Type.String({
   maxLength: 160,
   pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
 });
-var oid = () => Type.String({ minLength: 7, maxLength: 128, pattern: "^[0-9a-f]+$" });
+var effectIdentifier = () => Type.String({
+  minLength: 1,
+  // An emitted effect id is `${eventId}:${effectKind}`. Event IDs retain
+  // the shared 160-character identifier vocabulary.
+  maxLength: 192,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+});
+var controllerHolder = () => Type.String({
+  minLength: 3,
+  // Immutable holder is the exact `${runId}/${incarnationId}` pair.
+  maxLength: 321,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+});
+var idempotencyKey = () => Type.String({
+  minLength: 1,
+  maxLength: 160,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+});
+var revision = () => Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
+var oid = () => Type.String({
+  minLength: 40,
+  maxLength: 64,
+  pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+});
 var hash = () => Type.String({ minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" });
 var text = (minLength = 1) => Type.String({ minLength, maxLength: LIMITS.text });
 var nullableIdentifier = () => Type.Union([identifier(), Type.Null()]);
@@ -9534,9 +9557,9 @@ var EffectKindSchema = Type.Union([
   Type.Literal("controller_release")
 ]);
 var EffectJournalEntrySchema = strictObject({
-  effectId: identifier(),
+  effectId: effectIdentifier(),
   unitId: nullableIdentifier(),
-  idempotencyKey: identifier(),
+  idempotencyKey: idempotencyKey(),
   kind: EffectKindSchema,
   paramsHash: hash(),
   status: EffectStatusSchema,
@@ -9555,8 +9578,8 @@ var ReservationSchema = strictObject({
   namespace: identifier(),
   resource: identifier(),
   state: ReservationStateSchema,
-  acquireEffectId: Type.Optional(identifier()),
-  releaseEffectId: Type.Optional(identifier())
+  acquireEffectId: Type.Optional(effectIdentifier()),
+  releaseEffectId: Type.Optional(effectIdentifier())
 });
 var UnitStateSchema = Type.Union([
   Type.Literal("planned"),
@@ -9596,9 +9619,27 @@ var UnitStateSchema = Type.Union([
   Type.Literal("blocked"),
   Type.Literal("closed")
 ]);
+var RepairContextSchema = strictObject({
+  baseOid: oid(),
+  headOid: oid(),
+  treeOid: oid(),
+  responseHash: hash(),
+  rationale: text(),
+  findings: Type.Array(
+    strictObject({
+      id: identifier(),
+      severity: Type.Union([
+        Type.Literal("blocking"),
+        Type.Literal("non_blocking")
+      ]),
+      detail: text()
+    }),
+    { minItems: 1, maxItems: LIMITS.findings }
+  )
+});
 var UnitSchema = strictObject({
   id: identifier(),
-  revision: Type.Integer({ minimum: 0 }),
+  revision: revision(),
   state: UnitStateSchema,
   baseOid: oid(),
   branchRef: Type.Optional(identifier()),
@@ -9626,7 +9667,8 @@ var UnitSchema = strictObject({
   reviewTree: Type.Optional(oid()),
   approvalResponseHash: Type.Optional(hash()),
   landedOid: Type.Optional(oid()),
-  repairCount: Type.Integer({ minimum: 0, maximum: 16 })
+  repairCount: Type.Integer({ minimum: 0, maximum: 16 }),
+  repairContext: Type.Optional(RepairContextSchema)
 });
 var AggregateStateSchema = Type.Union([
   Type.Literal("initializing"),
@@ -9636,21 +9678,59 @@ var AggregateStateSchema = Type.Union([
   Type.Literal("released"),
   Type.Literal("blocked")
 ]);
+var AuthorityProfileSchema = Type.Union([
+  Type.Literal("local-change-only"),
+  Type.Literal("push-branch"),
+  Type.Literal("open-pr"),
+  Type.Literal("integrate")
+]);
+var IntegrationProfileSchema = Type.Union([
+  Type.Literal("none"),
+  Type.Literal("local-ff"),
+  Type.Literal("remote-ff"),
+  Type.Literal("github-merge-group")
+]);
+var GitObjectFormatSchema = Type.Union([
+  Type.Literal("sha1"),
+  Type.Literal("sha256")
+]);
+var WaveSchema = strictObject({
+  id: identifier(),
+  unitIds: Type.Array(identifier(), {
+    maxItems: LIMITS.units,
+    uniqueItems: true
+  })
+});
+var JournalCheckpointSchema = strictObject({
+  revision: revision(),
+  compactedEffects: Type.Integer({ minimum: 0 }),
+  compactedEvents: Type.Integer({ minimum: 0 }),
+  compactedIdempotencyKeys: Type.Integer({ minimum: 0 })
+});
 var ControllerOwnershipSchema = strictObject({
-  holder: identifier(),
+  runId: identifier(),
+  incarnationId: identifier(),
+  holder: controllerHolder(),
+  requestedModel: text(),
+  returnedModel: text(),
+  promptHash: hash(),
   state: Type.Union([
     Type.Literal("unacquired"),
+    Type.Literal("acquire_intent"),
     Type.Literal("acquired"),
     Type.Literal("release_intent"),
     Type.Literal("released")
   ])
 });
 var RepositoryRunSchema = strictObject({
-  revision: Type.Integer({ minimum: 0 }),
+  revision: revision(),
   state: AggregateStateSchema,
   storeIdentity: identifier(),
   repositoryIdentity: identifier(),
   integrationBranch: identifier(),
+  authorityProfile: AuthorityProfileSchema,
+  integrationProfile: IntegrationProfileSchema,
+  gitObjectFormat: GitObjectFormatSchema,
   controllerFencingToken: identifier(),
   controller: ControllerOwnershipSchema,
   units: Type.Record(identifier(), UnitSchema, {
@@ -9668,26 +9748,40 @@ var RepositoryRunSchema = strictObject({
   qualificationOwnerUnitId: Type.Optional(identifier()),
   integrationOwnerUnitId: Type.Optional(identifier()),
   currentReviewerUnitId: Type.Optional(identifier()),
+  wave: WaveSchema,
+  qualificationQueue: Type.Array(identifier(), {
+    maxItems: LIMITS.units,
+    uniqueItems: true
+  }),
+  integrationQueue: Type.Array(identifier(), {
+    maxItems: LIMITS.units,
+    uniqueItems: true
+  }),
   effectJournal: Type.Array(EffectJournalEntrySchema, {
     maxItems: LIMITS.effectJournal
   }),
   processedEventIds: Type.Array(identifier(), {
     maxItems: LIMITS.eventHistory,
     uniqueItems: true
-  })
+  }),
+  processedIdempotencyKeys: Type.Array(idempotencyKey(), {
+    maxItems: LIMITS.eventHistory,
+    uniqueItems: true
+  }),
+  journalCheckpoint: JournalCheckpointSchema
 });
 var eventBase = {
   eventId: identifier(),
-  expectedRevision: Type.Integer({ minimum: 0 }),
+  expectedRevision: revision(),
   unitId: identifier()
 };
 var controllerEventBase = {
   eventId: identifier(),
-  expectedRevision: Type.Integer({ minimum: 0 })
+  expectedRevision: revision()
 };
-var effectIntent = { idempotencyKey: identifier(), paramsHash: hash() };
+var effectIntent = { idempotencyKey: idempotencyKey(), paramsHash: hash() };
 var observedEffect = {
-  effectId: identifier(),
+  effectId: effectIdentifier(),
   effectKind: EffectKindSchema,
   observationHash: hash()
 };
@@ -9719,7 +9813,7 @@ var judgmentBase = {
   sessionId: identifier(),
   requestedModel: text(),
   returnedModel: text(),
-  aggregateRevision: Type.Integer({ minimum: 0 }),
+  aggregateRevision: revision(),
   promptHash: hash(),
   responseHash: hash(),
   rationale: text()
@@ -9950,7 +10044,7 @@ var ProtocolEventSchema = Type.Union([
     ...eventBase,
     type: Type.Literal("repair_intent"),
     ...effectIntent,
-    judgment: Type.Optional(JudgmentSchema)
+    judgment: ControllerJudgmentSchema
   }),
   strictObject({
     ...eventBase,
@@ -9999,9 +10093,11 @@ var ProtocolEventSchema = Type.Union([
     ...observedEffect
   }),
   strictObject({
-    ...eventBase,
+    eventId: identifier(),
+    expectedRevision: revision(),
+    unitId: nullableIdentifier(),
     type: Type.Literal("effect_ambiguous"),
-    effectId: identifier(),
+    effectId: effectIdentifier(),
     effectKind: EffectKindSchema,
     observationHash: Type.Optional(hash())
   })
@@ -10031,9 +10127,9 @@ var RuntimeEffectSchema = Type.Union(
   runtimeKinds.map(
     (kind) => strictObject({
       kind: Type.Literal(kind),
-      effectId: identifier(),
+      effectId: effectIdentifier(),
       unitId: nullableIdentifier(),
-      idempotencyKey: identifier(),
+      idempotencyKey: idempotencyKey(),
       paramsHash: hash(),
       schemaVersion: Type.Literal(SCHEMA_VERSION)
     })
@@ -10061,6 +10157,518 @@ var ajv = new import_ajv.Ajv({
   useDefaults: false,
   strict: true
 });
+function validate(schema, input) {
+  const validator = ajv.compile(schema);
+  if (validator(input)) return { ok: true, value: input, errors: [] };
+  return { ok: false, errors: (validator.errors ?? []).map(formatError) };
+}
+function formatError(error) {
+  return `${error.instancePath || "/"} ${error.message ?? "is invalid"}`;
+}
+
+// src/protocol/guards.ts
+var TERMINAL_INTENT_STATES = /* @__PURE__ */ new Set([
+  "planned",
+  "resources_reserved",
+  "branch_observed",
+  "worktree_observed",
+  "dispatched",
+  "collected",
+  "candidate_committed",
+  "qualified",
+  "reviewer_dispatched",
+  "approved",
+  "published",
+  "repair_required"
+]);
+function canEnterTerminalIntent(state) {
+  return TERMINAL_INTENT_STATES.has(state);
+}
+
+// src/protocol/reducer.ts
+function runInvariantErrors(state) {
+  const errors = [], effectIds = /* @__PURE__ */ new Set(), idempotency = /* @__PURE__ */ new Set();
+  if (new TextEncoder().encode(
+    JSON.stringify({
+      schema: "sce.repository-run",
+      version: SCHEMA_VERSION,
+      payload: state
+    })
+  ).byteLength > LIMITS.envelopeBytes)
+    errors.push("repository run envelope exceeds byte limit");
+  if (state.controller.holder !== `${state.controller.runId}/${state.controller.incarnationId}`)
+    errors.push("controller holder does not bind immutable run incarnation");
+  if (state.authorityProfile !== "integrate" && ["remote-ff", "github-merge-group"].includes(state.integrationProfile))
+    errors.push(
+      "non-integrating authority cannot claim a remote integration profile"
+    );
+  for (const queue of [
+    state.wave.unitIds,
+    state.qualificationQueue,
+    state.integrationQueue
+  ]) {
+    if (new Set(queue).size !== queue.length || queue.some((id) => state.units[id] === void 0))
+      errors.push("queue contains duplicate or unknown unit");
+    if (queue !== state.wave.unitIds && queue.join("\0") !== [...queue].sort().join("\0"))
+      errors.push("queue order is not deterministic");
+  }
+  const oidLength = state.gitObjectFormat === "sha1" ? 40 : 64;
+  for (const unit of Object.values(state.units))
+    for (const value of [
+      unit.baseOid,
+      unit.candidateHead,
+      unit.candidateTree,
+      unit.verificationBaseOid,
+      unit.verificationHeadOid,
+      unit.verificationTree,
+      unit.reviewBaseOid,
+      unit.reviewHeadOid,
+      unit.reviewTree,
+      unit.landedOid
+    ])
+      if (value !== void 0 && value.length !== oidLength)
+        errors.push(
+          `unit ${unit.id} has an OID incompatible with repository object format`
+        );
+  const sessions = /* @__PURE__ */ new Set();
+  const requiredActiveStates = /* @__PURE__ */ new Set([
+    "dispatch_intent",
+    "dispatched",
+    "collect_intent",
+    "repair_intent"
+  ]);
+  const optionallyActiveStates = /* @__PURE__ */ new Set([
+    ...requiredActiveStates,
+    "failure_intent",
+    "timeout_intent",
+    "cancel_intent",
+    "park_intent"
+  ]);
+  for (const id of state.activeModifyingUnitIds)
+    if (state.units[id] === void 0)
+      errors.push(`active modifying unit ${id} is unknown`);
+  for (const [id, unit] of Object.entries(state.units)) {
+    if (id !== unit.id)
+      errors.push(`unit map key ${id} does not match unit id ${unit.id}`);
+    if (unit.reservationIds.some(
+      (reservationId) => state.reservations[reservationId]?.unitId !== unit.id
+    ))
+      errors.push(`unit ${id} claims an invalid reservation`);
+    const intended = (kind) => state.effectJournal.some(
+      (effect) => effect.unitId === id && effect.kind === kind && effect.status === "intended"
+    );
+    const observed = (kind) => state.effectJournal.some(
+      (effect) => effect.unitId === id && effect.kind === kind && effect.status === "observed"
+    );
+    if (unit.state === "reservation_intent" && !intended("reservation_acquire"))
+      errors.push(`reservation intent ${id} lacks journal lineage`);
+    if ([
+      "resources_reserved",
+      "branch_intent",
+      "branch_observed",
+      "worktree_intent",
+      "worktree_observed"
+    ].includes(unit.state) && !unit.reservationIds.every(
+      (reservationId) => state.reservations[reservationId]?.state === "reserved"
+    ))
+      errors.push(`reserved lifecycle ${id} lacks acquired reservations`);
+    if ([
+      "branch_intent",
+      "branch_observed",
+      "worktree_intent",
+      "worktree_observed"
+    ].includes(unit.state) && unit.branchRef === void 0)
+      errors.push(`branch lifecycle ${id} lacks branch ref`);
+    if (unit.state === "branch_intent" && !intended("branch_create"))
+      errors.push(`branch intent ${id} lacks journal lineage`);
+    if (["worktree_intent", "worktree_observed"].includes(unit.state) && unit.worktreePath === void 0)
+      errors.push(`worktree lifecycle ${id} lacks worktree path`);
+    if (unit.state === "worktree_intent" && !intended("worktree_create"))
+      errors.push(`worktree intent ${id} lacks journal lineage`);
+    if ([
+      "dispatched",
+      "collect_intent",
+      "collected",
+      "candidate_intent",
+      "candidate_committed"
+    ].includes(unit.state) && (unit.workerSessionId === void 0 || unit.workerPromptHash === void 0 || unit.workerRequestedModel === void 0 || unit.workerReturnedModel === void 0))
+      errors.push(`worker lifecycle ${id} lacks bound session`);
+    if (unit.state === "dispatch_intent" && !intended("dispatch"))
+      errors.push(`dispatch intent ${id} lacks journal lineage`);
+    if (unit.state === "collect_intent" && !intended("worker_collect"))
+      errors.push(`collect intent ${id} lacks journal lineage`);
+    if (unit.state === "candidate_intent" && !intended("candidate_collect"))
+      errors.push(`candidate intent ${id} lacks journal lineage`);
+    if ([
+      "candidate_committed",
+      "verification_intent",
+      "qualified",
+      "reviewer_dispatch_intent",
+      "reviewer_dispatched",
+      "review_collect_intent",
+      "approved",
+      "publish_intent",
+      "published",
+      "integrate_intent",
+      "landed"
+    ].includes(unit.state) && (unit.candidateHead === void 0 || unit.candidateTree === void 0))
+      errors.push(`candidate lifecycle ${id} lacks exact objects`);
+    if (unit.state === "verification_intent" && !intended("verify"))
+      errors.push(`verification intent ${id} lacks journal lineage`);
+    if ([
+      "qualified",
+      "reviewer_dispatch_intent",
+      "reviewer_dispatched",
+      "review_collect_intent",
+      "approved",
+      "publish_intent",
+      "published",
+      "integrate_intent",
+      "landed"
+    ].includes(unit.state) && (unit.verificationBaseOid === void 0 || unit.verificationHeadOid === void 0 || unit.verificationTree === void 0 || unit.verificationEvidenceHash === void 0))
+      errors.push(`qualification lifecycle ${id} lacks verification evidence`);
+    if (unit.state === "reviewer_dispatch_intent" && !intended("review_dispatch"))
+      errors.push(`review dispatch intent ${id} lacks journal lineage`);
+    if (["reviewer_dispatched", "review_collect_intent"].includes(unit.state) && (unit.reviewerSessionId === void 0 || unit.reviewPromptHash === void 0 || unit.reviewerRequestedModel === void 0 || unit.reviewerReturnedModel === void 0))
+      errors.push(`review lifecycle ${id} lacks bound session`);
+    if (unit.state === "review_collect_intent" && !intended("review_collect"))
+      errors.push(`review collect intent ${id} lacks journal lineage`);
+    if ([
+      "approved",
+      "publish_intent",
+      "published",
+      "integrate_intent",
+      "landed"
+    ].includes(unit.state) && (unit.reviewBaseOid === void 0 || unit.reviewHeadOid === void 0 || unit.reviewTree === void 0 || unit.approvalResponseHash === void 0))
+      errors.push(`approval lifecycle ${id} lacks exact verdict`);
+    if (unit.state === "publish_intent" && !intended("publish"))
+      errors.push(`publish intent ${id} lacks journal lineage`);
+    if (unit.state === "integrate_intent" && !intended("integrate"))
+      errors.push(`integration intent ${id} lacks journal lineage`);
+    if (unit.state === "landed" && unit.landedOid === void 0)
+      errors.push(`landed ${id} lacks integration readback`);
+    if (unit.state === "repair_required" && unit.repairContext === void 0)
+      errors.push(`repair-required ${id} lacks retained review findings`);
+    const isActive = state.activeModifyingUnitIds.includes(id);
+    for (const session2 of [unit.workerSessionId, unit.reviewerSessionId])
+      if (session2 !== void 0) {
+        if (sessions.has(session2)) errors.push(`reused session ${session2}`);
+        sessions.add(session2);
+      }
+    const allowedActive = optionallyActiveStates.has(unit.state) || unit.state === "blocked" && state.effectJournal.some(
+      (effect) => effect.unitId === id && effect.status === "ambiguous" && ["dispatch", "repair", "worker_collect"].includes(effect.kind)
+    );
+    if (requiredActiveStates.has(unit.state) && !isActive || isActive && !allowedActive)
+      errors.push(`active-session set disagrees with ${id}`);
+  }
+  for (const [id, reservation] of Object.entries(state.reservations)) {
+    if (id !== reservation.id)
+      errors.push(`reservation map key ${id} does not match reservation id`);
+    if (state.units[reservation.unitId] === void 0)
+      errors.push(`reservation ${id} has unknown owner`);
+    if (reservation.state === "reserved" && reservation.acquireEffectId === void 0)
+      errors.push(`reserved ${id} has no acquisition readback`);
+    if (reservation.state === "reserved" && !state.effectJournal.some(
+      (effect) => effect.effectId === reservation.acquireEffectId && effect.unitId === reservation.unitId && effect.kind === "reservation_acquire" && effect.status === "observed"
+    ))
+      errors.push(`reserved ${id} has no exact acquisition journal lineage`);
+    if (reservation.state === "released" && reservation.releaseEffectId === void 0)
+      errors.push(`released ${id} has no release readback`);
+    if (reservation.state === "released" && !state.effectJournal.some(
+      (effect) => effect.effectId === reservation.releaseEffectId && effect.unitId === reservation.unitId && effect.kind === "reservation_release" && effect.status === "observed"
+    ))
+      errors.push(`released ${id} has no exact release journal lineage`);
+  }
+  for (const effect of state.effectJournal) {
+    if (effectIds.has(effect.effectId))
+      errors.push(`duplicate effect id ${effect.effectId}`);
+    effectIds.add(effect.effectId);
+    if (idempotency.has(effect.idempotencyKey))
+      errors.push(`duplicate idempotency key ${effect.idempotencyKey}`);
+    idempotency.add(effect.idempotencyKey);
+    if (effect.unitId !== null && state.units[effect.unitId] === void 0)
+      errors.push(`effect ${effect.effectId} has unknown unit`);
+    if (effect.status === "intended" && effect.observationHash !== void 0)
+      errors.push(`intended effect ${effect.effectId} has an observation`);
+    if ((effect.status === "observed" || effect.status === "ambiguous") && effect.status === "observed" && effect.observationHash === void 0)
+      errors.push(
+        `${effect.status} effect ${effect.effectId} has no observation`
+      );
+  }
+  const qualificationStates = /* @__PURE__ */ new Set([
+    "verification_intent",
+    "qualified",
+    "reviewer_dispatch_intent",
+    "reviewer_dispatched",
+    "review_collect_intent",
+    "approved",
+    "publish_intent",
+    "published",
+    "integrate_intent"
+  ]);
+  if (state.qualificationOwnerUnitId !== void 0 && !qualificationStates.has(
+    state.units[state.qualificationOwnerUnitId]?.state ?? "planned"
+  ))
+    errors.push("qualification owner is not qualifying");
+  for (const unit of Object.values(state.units))
+    if (qualificationStates.has(unit.state) && state.qualificationOwnerUnitId !== unit.id)
+      errors.push(`qualifying unit ${unit.id} lacks owner converse`);
+  if (state.qualificationOwnerUnitId !== void 0 && state.qualificationQueue[0] !== state.qualificationOwnerUnitId)
+    errors.push("qualification owner is not queue head");
+  if (state.integrationOwnerUnitId !== void 0 && state.units[state.integrationOwnerUnitId]?.state !== "integrate_intent")
+    errors.push("integration owner is not integrating");
+  if (state.integrationOwnerUnitId !== void 0 && state.integrationQueue[0] !== state.integrationOwnerUnitId)
+    errors.push("integration owner is not queue head");
+  const reviewerStates = /* @__PURE__ */ new Set([
+    "reviewer_dispatch_intent",
+    "reviewer_dispatched",
+    "review_collect_intent"
+  ]);
+  if (state.currentReviewerUnitId !== void 0 && !reviewerStates.has(
+    state.units[state.currentReviewerUnitId]?.state ?? "planned"
+  ))
+    errors.push("current reviewer is not active");
+  if (state.currentReviewerUnitId !== void 0 && state.qualificationOwnerUnitId !== state.currentReviewerUnitId)
+    errors.push("reviewer is not owned by qualification");
+  if (state.state === "active" && state.controller.state !== "acquired")
+    errors.push("active aggregate lacks controller ownership");
+  if (state.state === "released" && state.controller.state !== "released")
+    errors.push("released aggregate lacks controller release readback");
+  if (state.controller.state === "released" && state.state !== "released")
+    errors.push("released controller has non-released aggregate");
+  return errors;
+}
+
+// src/protocol/actions.ts
+function legalActions(stateInput) {
+  const parsed = validate(RepositoryRunSchema, stateInput);
+  if (!parsed.ok || parsed.value === void 0) return [];
+  const state = parsed.value;
+  if (runInvariantErrors(state).length > 0) return [];
+  const controllerActions = actionsForController(state);
+  if (controllerActions !== void 0) return sortActions(controllerActions);
+  if (state.state === "released" || state.state === "blocked") return [];
+  if (state.controller.state !== "acquired") return [];
+  return sortActions(
+    Object.values(state.units).flatMap((unit) => actionsForUnit(state, unit)).filter(
+      (action) => (action.mode !== "emit" || action.effectKind === void 0 || effectAllowed(state, action.effectKind)) && (action.mode !== "record" || pendingUnitEffect(state, action))
+    )
+  );
+}
+function actionsForController(state) {
+  if (state.controller.state === "unacquired") {
+    return state.state === "initializing" ? [
+      controllerAction(
+        "controller_acquire_intent",
+        "emit",
+        "controller_acquire"
+      )
+    ] : [];
+  }
+  if (state.controller.state === "acquire_intent") {
+    return (state.state === "initializing" || state.state === "blocked") && pendingControllerEffect(state, "controller_acquire") ? [
+      controllerAction(
+        "controller_acquired",
+        "record",
+        "controller_acquire"
+      )
+    ] : [];
+  }
+  if (state.controller.state === "release_intent") {
+    return (state.state === "release_intent" || state.state === "blocked") && pendingControllerEffect(state, "controller_release") ? [
+      controllerAction(
+        "controller_released",
+        "record",
+        "controller_release"
+      )
+    ] : [];
+  }
+  if (state.controller.state === "released") return [];
+  if (canReleaseController(state))
+    return [
+      controllerAction(
+        "controller_release_intent",
+        "emit",
+        "controller_release"
+      )
+    ];
+  return void 0;
+}
+function controllerAction(type, mode, effectKind) {
+  return { type, mode, effectKind };
+}
+function actionsForUnit(state, unit) {
+  return [...lifecycleActions(state, unit), ...terminalIntents(unit)];
+}
+function lifecycleActions(state, unit) {
+  switch (unit.state) {
+    case "planned":
+      return [
+        unitAction(unit, "reservation_intent", "emit", "reservation_acquire")
+      ];
+    case "reservation_intent":
+      return [
+        unitAction(
+          unit,
+          "reservation_observed",
+          "record",
+          "reservation_acquire"
+        )
+      ];
+    case "resources_reserved":
+      return [unitAction(unit, "branch_intent", "emit", "branch_create")];
+    case "branch_intent":
+      return [unitAction(unit, "branch_observed", "record", "branch_create")];
+    case "branch_observed":
+      return [unitAction(unit, "worktree_intent", "emit", "worktree_create")];
+    case "worktree_intent":
+      return [
+        unitAction(unit, "worktree_observed", "record", "worktree_create")
+      ];
+    case "worktree_observed":
+      return state.activeModifyingUnitIds.length < 3 ? [unitAction(unit, "dispatch_intent", "emit", "dispatch")] : [];
+    case "dispatch_intent":
+      return [unitAction(unit, "dispatch_observed", "record", "dispatch")];
+    case "dispatched":
+      return [unitAction(unit, "collect_intent", "emit", "worker_collect")];
+    case "collect_intent":
+      return [unitAction(unit, "worker_collected", "record", "worker_collect")];
+    case "collected":
+      return [
+        unitAction(unit, "candidate_intent", "emit", "candidate_collect")
+      ];
+    case "candidate_intent":
+      return [
+        unitAction(unit, "candidate_observed", "record", "candidate_collect")
+      ];
+    case "candidate_committed":
+      return state.qualificationOwnerUnitId === void 0 && state.qualificationQueue[0] === unit.id ? [unitAction(unit, "verification_intent", "emit", "verify")] : [];
+    case "verification_intent":
+      return state.qualificationOwnerUnitId === unit.id ? [unitAction(unit, "verification_observed", "record", "verify")] : [];
+    case "qualified":
+      return state.qualificationOwnerUnitId === unit.id && state.currentReviewerUnitId === void 0 ? [
+        unitAction(
+          unit,
+          "reviewer_dispatch_intent",
+          "emit",
+          "review_dispatch"
+        )
+      ] : [];
+    case "reviewer_dispatch_intent":
+      return state.currentReviewerUnitId === unit.id ? [unitAction(unit, "reviewer_observed", "record", "review_dispatch")] : [];
+    case "reviewer_dispatched":
+      return state.currentReviewerUnitId === unit.id ? [unitAction(unit, "review_collect_intent", "emit", "review_collect")] : [];
+    case "review_collect_intent":
+      return state.currentReviewerUnitId === unit.id ? [unitAction(unit, "review_collected", "record", "review_collect")] : [];
+    case "approved":
+      return isCurrentApproval(unit) && state.qualificationOwnerUnitId === unit.id ? [unitAction(unit, "publish_intent", "emit", "publish")] : [];
+    case "publish_intent":
+      return [unitAction(unit, "publish_observed", "record", "publish")];
+    case "published":
+      return hasCurrentApproval(unit) && state.qualificationOwnerUnitId === unit.id && (state.integrationOwnerUnitId === void 0 || state.integrationOwnerUnitId === unit.id) && state.integrationQueue[0] === unit.id ? [unitAction(unit, "integrate_intent", "emit", "integrate")] : [];
+    case "integrate_intent":
+      return state.integrationOwnerUnitId === unit.id ? [unitAction(unit, "integrate_observed", "record", "integrate")] : [];
+    case "landed":
+    case "cancelled":
+    case "parked":
+    case "failed":
+    case "timed_out":
+      return [
+        ...repairIsEligible(state, unit) ? [unitAction(unit, "repair_intent", "emit", "repair")] : [],
+        unitAction(
+          unit,
+          "reservation_release_intent",
+          "emit",
+          "reservation_release"
+        )
+      ];
+    case "reservation_release_intent":
+      return [
+        unitAction(
+          unit,
+          "reservation_released",
+          "record",
+          "reservation_release"
+        )
+      ];
+    case "repair_required":
+      return repairIsEligible(state, unit) ? [unitAction(unit, "repair_intent", "emit", "repair")] : [];
+    case "repair_intent":
+      return [unitAction(unit, "repair_observed", "record", "repair")];
+    case "failure_intent":
+      return [unitAction(unit, "failure_observed", "record", "failure")];
+    case "timeout_intent":
+      return [unitAction(unit, "timeout_observed", "record", "timeout")];
+    case "park_intent":
+      return [unitAction(unit, "park_observed", "record", "park")];
+    case "cancel_intent":
+      return [unitAction(unit, "cancel_observed", "record", "cancel")];
+    case "blocked":
+    case "closed":
+      return [];
+  }
+}
+function terminalIntents(unit) {
+  if (!canEnterTerminalIntent(unit.state)) return [];
+  return [
+    unitAction(unit, "failure_intent", "emit", "failure"),
+    unitAction(unit, "timeout_intent", "emit", "timeout"),
+    unitAction(unit, "park_intent", "emit", "park"),
+    unitAction(unit, "cancel_intent", "emit", "cancel")
+  ];
+}
+function unitAction(unit, type, mode, effectKind) {
+  return { type, mode, unitId: unit.id, effectKind };
+}
+function repairIsEligible(state, unit) {
+  return unit.repairContext !== void 0 && unit.repairContext.headOid === unit.candidateHead && unit.repairCount < 16 && state.activeModifyingUnitIds.length < 3;
+}
+function isCurrentApproval(unit) {
+  return unit.state === "approved" && unit.reviewBaseOid === unit.baseOid && unit.reviewHeadOid === unit.candidateHead && unit.reviewTree === unit.candidateTree && unit.approvalResponseHash !== void 0;
+}
+function hasCurrentApproval(unit) {
+  return unit.reviewBaseOid === unit.baseOid && unit.reviewHeadOid === unit.candidateHead && unit.reviewTree === unit.candidateTree && unit.approvalResponseHash !== void 0;
+}
+function canReleaseController(state) {
+  return state.controller.state === "acquired" && state.activeModifyingUnitIds.length === 0 && state.qualificationOwnerUnitId === void 0 && state.integrationOwnerUnitId === void 0 && state.currentReviewerUnitId === void 0 && Object.values(state.units).every((unit) => unit.state === "closed") && Object.values(state.reservations).every(
+    (reservation) => reservation.state === "released"
+  );
+}
+function effectAllowed(state, kind) {
+  if (kind === "publish")
+    return ["push-branch", "open-pr", "integrate"].includes(
+      state.authorityProfile
+    );
+  if (kind !== "integrate") return true;
+  return (state.authorityProfile === "integrate" || state.authorityProfile === "local-change-only" && state.integrationProfile === "local-ff") && state.integrationProfile !== "none";
+}
+function pendingUnitEffect(state, action) {
+  return action.unitId !== void 0 && action.effectKind !== void 0 && state.effectJournal.some(
+    (effect) => effect.unitId === action.unitId && effect.kind === action.effectKind && effect.status === "intended"
+  );
+}
+function pendingControllerEffect(state, kind) {
+  return state.effectJournal.some(
+    (effect) => effect.unitId === null && effect.kind === kind && (effect.status === "intended" || effect.status === "ambiguous")
+  );
+}
+function sortActions(actions) {
+  return [...actions].sort((left, right) => {
+    const leftKey = [
+      left.type,
+      left.unitId ?? "",
+      left.mode,
+      left.effectKind ?? ""
+    ].join("\0");
+    const rightKey = [
+      right.type,
+      right.unitId ?? "",
+      right.mode,
+      right.effectKind ?? ""
+    ].join("\0");
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
+}
 
 // src/commands/index.ts
 var commandNames = [
@@ -10090,6 +10698,7 @@ var feedbackActions = [
   "flush"
 ];
 var MAX_CLI_REQUEST_BYTES = 128 * 1024;
+var MAX_CLI_RESPONSE_BYTES = 128 * 1024;
 var MAX_JSON_ITEMS = 256;
 var MAX_TEXT = 8192;
 function strictObject2(properties) {
@@ -10112,52 +10721,74 @@ var JsonObjectSchema = Type.Record(
   JsonValueSchema,
   { maxProperties: MAX_JSON_ITEMS }
 );
-var CommandNameSchema = Type.Union([
-  Type.Literal("inspect"),
-  Type.Literal("acquire-controller"),
-  Type.Literal("next"),
-  Type.Literal("plan-wave"),
-  Type.Literal("prepare-wave"),
-  Type.Literal("dispatch-request"),
-  Type.Literal("record-dispatch"),
-  Type.Literal("collect-candidate"),
-  Type.Literal("qualify"),
-  Type.Literal("review-prepare"),
-  Type.Literal("review-record"),
-  Type.Literal("publish"),
-  Type.Literal("integrate"),
-  Type.Literal("gate-wave"),
-  Type.Literal("resume"),
-  Type.Literal("status"),
-  Type.Literal("release-controller"),
-  Type.Literal("feedback")
-]);
 var FeedbackActionSchema = Type.Union([
   Type.Literal("prepare"),
   Type.Literal("preview"),
   Type.Literal("submit"),
   Type.Literal("flush")
 ]);
-var CommandRequestSchema = strictObject2({
-  command: CommandNameSchema,
-  feedbackAction: Type.Optional(FeedbackActionSchema),
-  options: strictObject2({
-    expectedRevision: Type.Optional(
-      Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })
-    ),
-    idempotencyKey: Type.Optional(
-      Type.String({
-        minLength: 1,
-        maxLength: 160,
-        pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
-      })
-    ),
-    json: Type.Boolean(),
-    request: Type.Optional(JsonObjectSchema)
-  }),
+var RequestMetadataSchema = {
+  expectedRevision: Type.Optional(
+    Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })
+  ),
+  idempotencyKey: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 160,
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    })
+  ),
+  json: Type.Boolean()
+};
+var StateRequestSchema = strictObject2({ run: RepositoryRunSchema });
+var StateOptionsSchema = strictObject2({
+  ...RequestMetadataSchema,
+  request: StateRequestSchema
+});
+var NoPayloadOptionsSchema = strictObject2(RequestMetadataSchema);
+var StateCommandSchema = strictObject2({
+  command: Type.Union([
+    Type.Literal("inspect"),
+    Type.Literal("next"),
+    Type.Literal("status")
+  ]),
+  options: StateOptionsSchema,
   schema: Type.Literal("sce.command.request"),
   version: Type.Literal(1)
 });
+var FeedbackCommandSchema = strictObject2({
+  command: Type.Literal("feedback"),
+  feedbackAction: FeedbackActionSchema,
+  options: NoPayloadOptionsSchema,
+  schema: Type.Literal("sce.command.request"),
+  version: Type.Literal(1)
+});
+var UnavailableCommandSchema = strictObject2({
+  command: Type.Union([
+    Type.Literal("acquire-controller"),
+    Type.Literal("plan-wave"),
+    Type.Literal("prepare-wave"),
+    Type.Literal("dispatch-request"),
+    Type.Literal("record-dispatch"),
+    Type.Literal("collect-candidate"),
+    Type.Literal("qualify"),
+    Type.Literal("review-prepare"),
+    Type.Literal("review-record"),
+    Type.Literal("publish"),
+    Type.Literal("integrate"),
+    Type.Literal("gate-wave"),
+    Type.Literal("resume"),
+    Type.Literal("release-controller")
+  ]),
+  options: NoPayloadOptionsSchema,
+  schema: Type.Literal("sce.command.request"),
+  version: Type.Literal(1)
+});
+var CommandRequestSchema = Type.Union([
+  StateCommandSchema,
+  FeedbackCommandSchema,
+  UnavailableCommandSchema
+]);
 var CommandRunnerResultSchema = Type.Union([
   strictObject2({
     result: JsonObjectSchema,
@@ -10177,7 +10808,6 @@ var CommandRunnerResultSchema = Type.Union([
     version: Type.Literal(1)
   })
 ]);
-var StateRequestSchema = strictObject2({ run: RepositoryRunSchema });
 var ajv2 = new import_ajv2.Ajv({
   allErrors: true,
   coerceTypes: false,
@@ -10191,9 +10821,6 @@ var requestValidator = ajv2.compile(
 var runnerResultValidator = ajv2.compile(
   CommandRunnerResultSchema
 );
-var stateRequestValidator = ajv2.compile(
-  StateRequestSchema
-);
 function validateCommandRequest(input) {
   return requestValidator(input);
 }
@@ -10205,11 +10832,11 @@ function validateCommandPayload(input) {
 }
 var stateOnlyCommandRunner = (request) => {
   if (!validateCommandRequest(request)) return invalidStateRequest();
-  if (request.command !== "inspect" && request.command !== "status" && request.command !== "next")
-    return unavailable();
-  if (!stateRequestValidator(request.options.request))
-    return invalidStateRequest();
+  if (!isStateCommandRequest(request)) return unavailable();
   const run = request.options.request.run;
+  const parsedRun = validate(RepositoryRunSchema, run);
+  if (!parsedRun.ok || parsedRun.value === void 0)
+    return invalidStateRequest();
   if (request.command === "inspect") {
     return {
       schema: "sce.command.result",
@@ -10237,13 +10864,22 @@ var stateOnlyCommandRunner = (request) => {
       }
     };
   }
+  if (runInvariantErrors(run).length > 0) return invalidStateRequest();
   return {
     schema: "sce.command.result",
     version: 1,
     status: "ok",
-    result: { legalActions: nextActions(run), revision: run.revision }
+    result: {
+      legalActions: legalActions(run).map((action) => ({
+        ...action
+      })),
+      revision: run.revision
+    }
   };
 };
+function isStateCommandRequest(request) {
+  return request.command === "inspect" || request.command === "next" || request.command === "status";
+}
 function invalidStateRequest() {
   return {
     code: "SCE_INVALID_STATE_REQUEST",
@@ -10263,17 +10899,6 @@ function isFeedbackAction(value) {
 }
 function isJsonObject(value) {
   return value !== null && !Array.isArray(value) && typeof value === "object";
-}
-function nextActions(run) {
-  if (run.state === "blocked" || run.state === "released") return [];
-  if (run.effectJournal.some((entry) => entry.status !== "observed"))
-    return ["resume"];
-  const states = Object.values(run.units).map((unit) => unit.state);
-  if (states.includes("planned")) return ["plan-wave"];
-  if (states.includes("candidate_committed")) return ["qualify"];
-  if (states.includes("approved")) return ["publish"];
-  if (states.includes("published")) return ["integrate"];
-  return ["status"];
 }
 
 // src/cli.ts
@@ -10440,11 +11065,11 @@ function parsePositionals(command, positionals) {
 }
 function parseOptions(values) {
   const expectedRevision = optionValue(values, "--expected-revision");
-  const idempotencyKey = optionValue(values, "--idempotency-key");
+  const idempotencyKey2 = optionValue(values, "--idempotency-key");
   const request = optionValue(values, "--request");
   return {
     ...expectedRevision === void 0 ? {} : { expectedRevision: parseExpectedRevision(expectedRevision) },
-    ...idempotencyKey === void 0 ? {} : { idempotencyKey: parseNonEmpty(idempotencyKey, "--idempotency-key") },
+    ...idempotencyKey2 === void 0 ? {} : { idempotencyKey: parseNonEmpty(idempotencyKey2, "--idempotency-key") },
     json: values.has("--json"),
     ...request === void 0 ? {} : { request: parseRequest(request) }
   };
@@ -10460,14 +11085,14 @@ function parseExpectedRevision(value) {
       "--expected-revision must be a non-negative integer."
     );
   }
-  const revision = Number(value);
-  if (!Number.isSafeInteger(revision)) {
+  const revision2 = Number(value);
+  if (!Number.isSafeInteger(revision2)) {
     throw new CliError(
       "SCE_INVALID_OPTION_VALUE",
       "--expected-revision must be a safe integer."
     );
   }
-  return revision;
+  return revision2;
 }
 function parseNonEmpty(value, option) {
   if (value.length === 0) {
@@ -10586,8 +11211,25 @@ function failure(code, message, exitCode, command) {
   );
 }
 function execution(response, exitCode) {
-  return { exitCode, response, stdout: `${canonicalJson(response)}
-` };
+  const stdout = `${canonicalJson2(response)}
+`;
+  if (new TextEncoder().encode(stdout).byteLength <= MAX_CLI_RESPONSE_BYTES)
+    return { exitCode, response, stdout };
+  const boundedResponse = {
+    error: {
+      code: "SCE_RESULT_TOO_LARGE",
+      message: "The command result exceeds the 128 KiB limit."
+    },
+    ok: false,
+    schema: RESPONSE_SCHEMA,
+    version: SCHEMA_VERSION2
+  };
+  return {
+    exitCode: EXIT_SOFTWARE,
+    response: boundedResponse,
+    stdout: `${canonicalJson2(boundedResponse)}
+`
+  };
 }
 function helpResult(command, version) {
   if (command === void 0) {
@@ -10604,7 +11246,7 @@ function helpResult(command, version) {
     usage: command === "feedback" ? "sce feedback <prepare|preview|submit|flush> [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]" : `sce ${command} [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]`
   };
 }
-function canonicalJson(value) {
+function canonicalJson2(value) {
   if (value === null || typeof value === "boolean" || typeof value === "string") {
     return JSON.stringify(value);
   }
@@ -10615,13 +11257,13 @@ function canonicalJson(value) {
     return JSON.stringify(value);
   }
   if (Array.isArray(value)) {
-    return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+    return `[${value.map((item) => canonicalJson2(item)).join(",")}]`;
   }
   if (typeof value !== "object") {
     throw new TypeError("Value is not JSON serializable.");
   }
   const object = value;
-  return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(",")}}`;
+  return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson2(object[key])}`).join(",")}}`;
 }
 function isEntrypoint() {
   const entrypoint = process.argv[1];
@@ -10645,7 +11287,7 @@ export {
   REQUEST_SCHEMA,
   RESPONSE_SCHEMA,
   SCHEMA_VERSION2 as SCHEMA_VERSION,
-  canonicalJson,
+  canonicalJson2 as canonicalJson,
   main,
   parseCliArguments,
   runCli

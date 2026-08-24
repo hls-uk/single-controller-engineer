@@ -6,6 +6,7 @@ import {
   validate,
 } from "./schemas.js";
 import { runInvariantErrors } from "./reducer.js";
+import { canEnterTerminalIntent } from "./guards.js";
 
 export interface ActionDescriptor {
   readonly type: string;
@@ -256,8 +257,7 @@ function lifecycleActions(
 }
 
 function terminalIntents(unit: Unit): readonly ActionDescriptor[] {
-  if (["closed", "reservation_release_intent", "landed"].includes(unit.state))
-    return [];
+  if (!canEnterTerminalIntent(unit.state)) return [];
   return [
     unitAction(unit, "failure_intent", "emit", "failure"),
     unitAction(unit, "timeout_intent", "emit", "timeout"),
