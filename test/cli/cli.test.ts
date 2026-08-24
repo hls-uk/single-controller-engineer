@@ -270,6 +270,85 @@ test("read commands expose the exact bounded ambiguity recovery", async () => {
     },
   ]);
 });
+
+test("blocked read commands expose every durable in-flight observation", async () => {
+  const unitIds = ["unit-1", "unit-2", "unit-3"] as const;
+  let state = run(unitIds.map((id) => unit(id)));
+  const effectIds = new Map<string, string>();
+  for (const [index, unitId] of unitIds.entries()) {
+    state = transition(
+      state,
+      event(
+        state,
+        "reservation_intent",
+        {
+          reservations: [
+            {
+              id: `res-${index + 1}`,
+              namespace: "port",
+              resource: `${3001 + index}`,
+            },
+          ],
+        },
+        unitId,
+      ),
+      reduce,
+    );
+    effectIds.set(
+      unitId,
+      state.effectJournal.at(-1)?.effectId ?? "missing-effect-id",
+    );
+  }
+  state = transition(
+    state,
+    event(
+      state,
+      "effect_ambiguous",
+      {
+        effectId: effectIds.get("unit-1"),
+        effectKind: "reservation_acquire",
+      },
+      "unit-1",
+    ),
+    reduce,
+  );
+  const expected = unitIds.map((unitId) => ({
+    effectId: effectIds.get(unitId),
+    effectKind: "reservation_acquire",
+    observationType: "reservation_observed",
+    unitId,
+  }));
+  for (const command of ["inspect", "status"]) {
+    const execution = await runCli([
+      command,
+      "--request",
+      JSON.stringify({ run: state }),
+    ]);
+    assert.equal(execution.exitCode, 0);
+    assert.deepEqual(JSON.parse(execution.stdout).result.ambiguities, expected);
+  }
+  const next = await runCli([
+    "next",
+    "--request",
+    JSON.stringify({ run: state }),
+  ]);
+  assert.equal(next.exitCode, 0);
+  const actions = JSON.parse(next.stdout).result.legalActions;
+  assert.deepEqual(
+    actions,
+    expected.map((item) => ({
+      effectId: item.effectId,
+      effectKind: item.effectKind,
+      mode: "record",
+      type: item.observationType,
+      unitId: item.unitId,
+    })),
+  );
+  assert.equal(
+    actions.some((action: { mode: string }) => action.mode === "emit"),
+    false,
+  );
+});
 test("malformed, oversize, and invalid state requests fail closed", async () => {
   const tooLarge = `{\"payload\":\"${"x".repeat(128 * 1024)}\"}`;
   for (const [source, code] of [

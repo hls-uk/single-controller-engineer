@@ -354,6 +354,48 @@ test("observations reject wrong kind, stale revision, duplicate IDs, and moved p
   );
 });
 
+test("verification observations preserve the original base binding", () => {
+  let state = completeCandidate();
+  const originalBaseOid = state.units["unit-1"]?.baseOid;
+  state = step(state, "verification_intent", {});
+  const verificationEffect = state.effectJournal.at(-1);
+  assert.deepEqual(verificationEffect?.kind, "verify");
+  assert.deepEqual(
+    reduce(
+      state,
+      event(state, "verification_observed", {
+        effectId: effectId(state, "verify"),
+        effectKind: "verify",
+        observationHash: HASH,
+        baseOid: OID_C,
+        headOid: OID_B,
+        treeOid: OID_C,
+      }),
+    ).ok,
+    false,
+  );
+  assert.equal(state.units["unit-1"]?.baseOid, originalBaseOid);
+
+  const exact = reduce(
+    state,
+    event(state, "verification_observed", {
+      effectId: effectId(state, "verify"),
+      effectKind: "verify",
+      observationHash: HASH,
+      baseOid: OID_A,
+      headOid: OID_B,
+      treeOid: OID_C,
+    }),
+  );
+  assert.equal(exact.ok, true);
+  if (!exact.ok) return;
+  assert.equal(exact.nextState.units["unit-1"]?.baseOid, originalBaseOid);
+  assert.equal(
+    exact.nextState.units["unit-1"]?.verificationBaseOid,
+    originalBaseOid,
+  );
+});
+
 test("review approval binds role, session, exact model, revision, prompt, and Git facts", () => {
   let state = completeCandidate();
   state = step(state, "verification_intent", {
@@ -527,6 +569,63 @@ test("ambiguous effect blocks instead of retrying and controller release needs l
     }).ok,
     false,
   );
+});
+
+test("hydrated multi-unit ambiguity converges through exact observations", () => {
+  const unitIds = ["unit-1", "unit-2", "unit-3"] as const;
+  let state = run(unitIds.map((id) => unit(id)));
+  const effectIds = new Map<string, string>();
+  for (const [index, unitId] of unitIds.entries()) {
+    state = stepUnit(state, unitId, "reservation_intent", {
+      reservations: [
+        {
+          id: `res-${index + 1}`,
+          namespace: "port",
+          resource: `${3001 + index}`,
+        },
+      ],
+    });
+    effectIds.set(
+      unitId,
+      state.effectJournal.at(-1)?.effectId ?? "missing-effect-id",
+    );
+  }
+  state = {
+    ...state,
+    state: "blocked",
+    units: {
+      ...state.units,
+      "unit-1": { ...state.units["unit-1"]!, state: "blocked" },
+      "unit-2": { ...state.units["unit-2"]!, state: "blocked" },
+    },
+    effectJournal: state.effectJournal.map((entry) =>
+      entry.unitId === "unit-1" || entry.unitId === "unit-2"
+        ? { ...entry, status: "ambiguous" as const, observationHash: HASH }
+        : entry,
+    ),
+  };
+  assert.deepEqual(runInvariantErrors(state), []);
+
+  const observeReservation = (unitId: (typeof unitIds)[number]) => {
+    state = stepUnit(state, unitId, "reservation_observed", {
+      effectId: effectIds.get(unitId),
+      effectKind: "reservation_acquire",
+      observationHash: HASH,
+    });
+  };
+  // An already-intended sibling may report before either ambiguous effect,
+  // then each recovery is applied independently without hiding the other.
+  observeReservation("unit-3");
+  assert.equal(state.state, "blocked");
+  observeReservation("unit-2");
+  assert.equal(state.state, "blocked");
+  observeReservation("unit-1");
+  assert.equal(state.state, "active");
+  assert.equal(
+    state.effectJournal.every((entry) => entry.status === "observed"),
+    true,
+  );
+  assert.deepEqual(runInvariantErrors(state), []);
 });
 
 test("an ambiguous active terminal effect blocks durably and only its exact observation reconciles", () => {

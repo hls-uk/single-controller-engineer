@@ -31,11 +31,14 @@ export function legalActions(
   const state = parsed.value;
   if (runInvariantErrors(state).length > 0) return [];
 
+  if (state.state === "released") return [];
+  // A blocked aggregate may only record exact facts for effects that were
+  // already durable. This includes still-intended sibling effects as well as
+  // explicitly ambiguous ones, and never offers a new emit action.
+  if (state.state === "blocked") return ambiguityRecoveryActions(state);
   const controllerActions = actionsForController(state);
   if (controllerActions !== undefined) return sortActions(controllerActions);
-  if (state.state === "released") return [];
   if (state.controller.state !== "acquired") return [];
-  if (state.state === "blocked") return ambiguityRecoveryActions(state);
 
   return sortActions(
     Object.values(state.units)
@@ -81,7 +84,8 @@ export function ambiguityRecoveryActions(
   return sortActions(
     state.effectJournal
       .filter(
-        (effect) => effect.unitId !== null && effect.status === "ambiguous",
+        (effect) =>
+          effect.status === "intended" || effect.status === "ambiguous",
       )
       .map((effect) => ({
         effectId: effect.effectId,

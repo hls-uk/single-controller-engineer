@@ -44,6 +44,21 @@ export function reduce(
   stateInput: RepositoryRun,
   eventInput: ProtocolEvent,
 ): Reduction {
+  return reduceInternal(stateInput, eventInput);
+}
+
+/**
+ * `reconcilingBlockedObservation` is only used after the outer reduction has
+ * validated a durable blocked aggregate and prepared one exact observation.
+ * That preparation is deliberately transient: it restores the affected
+ * unit's intent state so the ordinary observation transition remains the one
+ * place that advances lifecycle facts.
+ */
+function reduceInternal(
+  stateInput: RepositoryRun,
+  eventInput: ProtocolEvent,
+  reconcilingBlockedObservation = false,
+): Reduction {
   const parsedState = validate<RepositoryRun>(RepositoryRunSchema, stateInput);
   if (!parsedState.ok || parsedState.value === undefined)
     return reject("invalid_state", parsedState.errors.join("; "));
@@ -52,8 +67,10 @@ export function reduce(
     return reject("invalid_event", parsedEvent.errors.join("; "));
   const state = parsedState.value;
   const event = parsedEvent.value;
-  const errors = runInvariantErrors(state);
-  if (errors.length) return reject("invariant", errors.join("; "));
+  if (!reconcilingBlockedObservation) {
+    const errors = runInvariantErrors(state);
+    if (errors.length) return reject("invariant", errors.join("; "));
+  }
   if (event.expectedRevision !== state.revision)
     return reject(
       "stale_revision",
@@ -95,42 +112,17 @@ export function reduce(
     return reduceController(state, event);
   if (state.state === "released")
     return reject("illegal_transition", `aggregate is ${state.state}`);
-  if (state.state === "blocked") {
-    const recovered = recoverAmbiguousUnitObservation(state, event);
+  if (event.type === "effect_ambiguous") {
+    const blocked = markEffectAmbiguous(state, event);
+    return blocked === undefined
+      ? badObservation()
+      : commit(blocked, event, []);
+  }
+  if (state.state === "blocked" && !reconcilingBlockedObservation) {
+    const recovered = prepareBlockedUnitObservation(state, event);
     if (recovered === undefined)
       return reject("illegal_transition", "aggregate is blocked");
-    return reduce(recovered, event);
-  }
-  if (event.type === "effect_ambiguous" && event.unitId === null) {
-    const entry = state.effectJournal.find(
-      (item) => item.effectId === event.effectId,
-    );
-    if (
-      entry === undefined ||
-      entry.unitId !== null ||
-      entry.kind !== event.effectKind ||
-      entry.status !== "intended"
-    )
-      return badObservation();
-    return commit(
-      {
-        ...state,
-        state: "blocked",
-        effectJournal: state.effectJournal.map((item) =>
-          item.effectId === entry.effectId
-            ? {
-                ...item,
-                status: "ambiguous" as const,
-                ...(event.observationHash === undefined
-                  ? {}
-                  : { observationHash: event.observationHash }),
-              }
-            : item,
-        ),
-      },
-      event,
-      [],
-    );
+    return reduceInternal(recovered, event, true);
   }
   if (state.controller.state !== "acquired")
     return reject(
@@ -418,6 +410,7 @@ export function reduce(
       if (
         unit.state !== "verification_intent" ||
         state.qualificationOwnerUnitId !== unit.id ||
+        unit.baseOid !== event.baseOid ||
         unit.candidateHead !== event.headOid ||
         unit.candidateTree !== event.treeOid
       )
@@ -425,8 +418,7 @@ export function reduce(
       if (!matchesIntended(state, event, unit.id, "verify"))
         return badObservation();
       result = observe(state, unit, "qualified", event, {
-        baseOid: event.baseOid,
-        verificationBaseOid: event.baseOid,
+        verificationBaseOid: unit.baseOid,
         verificationHeadOid: event.headOid,
         verificationTree: event.treeOid,
         verificationEvidenceHash: event.observationHash,
@@ -814,38 +806,6 @@ export function reduce(
         clearUnitOwners(state, unit.id),
       );
       break;
-    case "effect_ambiguous": {
-      const entry = state.effectJournal.find(
-        (candidate) => candidate.effectId === event.effectId,
-      );
-      if (
-        entry === undefined ||
-        entry.unitId !== unit.id ||
-        entry.kind !== event.effectKind ||
-        entry.status !== "intended"
-      )
-        return badObservation();
-      result = {
-        state: {
-          ...state,
-          state: "blocked",
-          effectJournal: state.effectJournal.map((candidate) =>
-            candidate.effectId === entry.effectId
-              ? {
-                  ...candidate,
-                  status: "ambiguous" as const,
-                  ...(event.observationHash === undefined
-                    ? {}
-                    : { observationHash: event.observationHash }),
-                }
-              : candidate,
-          ),
-          units: replaceUnit(state, { ...unit, state: "blocked" }),
-        },
-        effects: [],
-      };
-      break;
-    }
     default:
       return exhaustive(event);
   }
@@ -1122,7 +1082,13 @@ function effectMatchesObservation(
   };
   return observations[kind] === type;
 }
-function recoverAmbiguousUnitObservation(
+/**
+ * An ambiguity blocks *new* effects, not facts already bound to a durable
+ * intent. Restore only the exact ambiguous entry's lifecycle shape, then let
+ * the ordinary observation case verify and commit the fact. Other ambiguous
+ * effects remain untouched, so the aggregate cannot accidentally resume.
+ */
+function prepareBlockedUnitObservation(
   state: RepositoryRun,
   event: ProtocolEvent,
 ): RepositoryRun | undefined {
@@ -1140,20 +1106,21 @@ function recoverAmbiguousUnitObservation(
       effect.effectId === event.effectId &&
       effect.unitId === event.unitId &&
       effect.kind === event.effectKind &&
-      effect.status === "ambiguous",
+      (effect.status === "intended" || effect.status === "ambiguous"),
   );
   const recoveredState = intentStateForEffect(event.effectKind);
   if (
     unit === undefined ||
-    unit.state !== "blocked" ||
     entry === undefined ||
     recoveredState === undefined ||
     !effectMatchesObservation(event.type, event.effectKind)
   )
     return undefined;
+  if (entry.status === "intended")
+    return unit.state === recoveredState ? state : undefined;
+  if (unit.state !== "blocked") return undefined;
   return {
     ...state,
-    state: "active",
     units: replaceUnit(state, { ...unit, state: recoveredState }),
     effectJournal: state.effectJournal.map((effect) =>
       effect.effectId === entry.effectId ? restoreIntended(effect) : effect,
@@ -1164,6 +1131,58 @@ function recoverAmbiguousUnitObservation(
 function restoreIntended(entry: EffectJournalEntry): EffectJournalEntry {
   const { observationHash: _ambiguousObservation, ...intended } = entry;
   return { ...intended, status: "intended" };
+}
+
+/** Mark exactly one already-intended effect ambiguous without emitting work. */
+function markEffectAmbiguous(
+  state: RepositoryRun,
+  event: Extract<ProtocolEvent, { type: "effect_ambiguous" }>,
+): RepositoryRun | undefined {
+  const entry = state.effectJournal.find(
+    (candidate) =>
+      candidate.effectId === event.effectId &&
+      candidate.unitId === event.unitId &&
+      candidate.kind === event.effectKind &&
+      candidate.status === "intended",
+  );
+  if (entry === undefined) return undefined;
+  if (entry.unitId === null) {
+    const expectedControllerState =
+      entry.kind === "controller_acquire"
+        ? "acquire_intent"
+        : entry.kind === "controller_release"
+          ? "release_intent"
+          : undefined;
+    if (expectedControllerState !== state.controller.state) return undefined;
+  } else {
+    const unit = state.units[entry.unitId];
+    const expectedUnitState = intentStateForEffect(entry.kind);
+    if (unit === undefined || unit.state !== expectedUnitState)
+      return undefined;
+  }
+  return {
+    ...state,
+    state: "blocked",
+    effectJournal: state.effectJournal.map((candidate) =>
+      candidate.effectId === entry.effectId
+        ? {
+            ...candidate,
+            status: "ambiguous" as const,
+            ...(event.observationHash === undefined
+              ? {}
+              : { observationHash: event.observationHash }),
+          }
+        : candidate,
+    ),
+    ...(entry.unitId === null
+      ? {}
+      : {
+          units: replaceUnit(state, {
+            ...state.units[entry.unitId]!,
+            state: "blocked",
+          }),
+        }),
+  };
 }
 
 function reduceController(
@@ -1199,10 +1218,12 @@ function reduceController(
       )
         return badObservation();
       result = {
-        state: markObserved(state, event.effectId, event.observationHash, {
-          state: "active",
-          controller: { ...state.controller, state: "acquired" },
-        }),
+        state: settleAmbiguityState(
+          markObserved(state, event.effectId, event.observationHash, {
+            state: "active",
+            controller: { ...state.controller, state: "acquired" },
+          }),
+        ),
         effects: [],
       };
       break;
@@ -1228,10 +1249,12 @@ function reduceController(
       )
         return badObservation();
       result = {
-        state: markObserved(state, event.effectId, event.observationHash, {
-          state: "released",
-          controller: { ...state.controller, state: "released" },
-        }),
+        state: settleAmbiguityState(
+          markObserved(state, event.effectId, event.observationHash, {
+            state: "released",
+            controller: { ...state.controller, state: "released" },
+          }),
+        ),
         effects: [],
       };
       break;
@@ -1585,7 +1608,10 @@ function observe(
     event.effectId,
     event.observationHash,
   );
-  return { state: normalizeOwners(nextState, aggregateChanges), effects: [] };
+  return {
+    state: settleAmbiguityState(normalizeOwners(nextState, aggregateChanges)),
+    effects: [],
+  };
 }
 function markObserved(
   state: RepositoryRun,
@@ -1614,6 +1640,21 @@ function normalizeOwners(
     delete next.integrationOwnerUnitId;
   if (changes.currentReviewerUnitId === null) delete next.currentReviewerUnitId;
   return next;
+}
+
+/**
+ * The aggregate resumes only once every ambiguous journal entry has an exact
+ * observation. Any remaining ambiguity keeps normal emit actions suspended.
+ */
+function settleAmbiguityState(state: RepositoryRun): RepositoryRun {
+  const hasAmbiguity = state.effectJournal.some(
+    (entry) => entry.status === "ambiguous",
+  );
+  if (hasAmbiguity && state.state !== "blocked")
+    return { ...state, state: "blocked" };
+  if (!hasAmbiguity && state.state === "blocked")
+    return { ...state, state: "active" };
+  return state;
 }
 function replaceUnit(state: RepositoryRun, unit: Unit): RepositoryRun["units"] {
   return { ...state.units, [unit.id]: unit };
@@ -1976,6 +2017,13 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     packedSessions.every((value) => value === 0)
   )
     errors.push("used session identity history has no set bits for its count");
+  const hasAmbiguousEffect = state.effectJournal.some(
+    (effect) => effect.status === "ambiguous",
+  );
+  if (hasAmbiguousEffect && state.state !== "blocked")
+    errors.push("ambiguous effects require a blocked aggregate");
+  if (!hasAmbiguousEffect && state.state === "blocked")
+    errors.push("blocked aggregate lacks an ambiguous effect");
   for (const effect of state.effectJournal) {
     if (effectIds.has(effect.effectId))
       errors.push(`duplicate effect id ${effect.effectId}`);

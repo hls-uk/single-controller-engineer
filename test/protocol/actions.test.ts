@@ -123,6 +123,7 @@ test("legal actions are pure, ownership-aware, and acquisition emits once", () =
   if (!ambiguous.ok) return;
   assert.deepEqual(legalActions(ambiguous.nextState), [
     {
+      effectId: "acquire-1:controller_acquire",
       effectKind: "controller_acquire",
       mode: "record",
       type: "controller_acquired",
@@ -178,6 +179,107 @@ test("record actions are withheld until their exact intended effect is durable",
         unitId: "unit-1",
       },
     ]);
+});
+
+test("blocked recovery describes every durable effect and never re-emits work", () => {
+  const unitIds = ["unit-1", "unit-2", "unit-3"] as const;
+  let state = run(unitIds.map((id) => unit(id)));
+  const effectIds = new Map<string, string>();
+  for (const [index, unitId] of unitIds.entries()) {
+    state = step(
+      state,
+      "reservation_intent",
+      {
+        reservations: [
+          {
+            id: `res-${index + 1}`,
+            namespace: "port",
+            resource: `${3001 + index}`,
+          },
+        ],
+      },
+      unitId,
+    );
+    effectIds.set(
+      unitId,
+      state.effectJournal.at(-1)?.effectId ?? "missing-effect-id",
+    );
+  }
+  const record = (unitId: string) => ({
+    effectId: effectIds.get(unitId),
+    effectKind: "reservation_acquire",
+    mode: "record" as const,
+    type: "reservation_observed",
+    unitId,
+  });
+
+  state = step(
+    state,
+    "effect_ambiguous",
+    {
+      effectId: effectIds.get("unit-1"),
+      effectKind: "reservation_acquire",
+    },
+    "unit-1",
+  );
+  assert.deepEqual(legalActions(state), unitIds.map(record));
+  assert.equal(
+    legalActions(state).some((action) => action.mode === "emit"),
+    false,
+  );
+
+  // The aggregate is already blocked, but another durable effect can become
+  // ambiguous and a third can report its exact outcome in either order.
+  state = step(
+    state,
+    "effect_ambiguous",
+    {
+      effectId: effectIds.get("unit-2"),
+      effectKind: "reservation_acquire",
+    },
+    "unit-2",
+  );
+  state = step(
+    state,
+    "reservation_observed",
+    {
+      effectId: effectIds.get("unit-3"),
+      effectKind: "reservation_acquire",
+      observationHash: HASH,
+    },
+    "unit-3",
+  );
+  assert.equal(state.state, "blocked");
+  assert.deepEqual(legalActions(state), [record("unit-1"), record("unit-2")]);
+
+  state = step(
+    state,
+    "reservation_observed",
+    {
+      effectId: effectIds.get("unit-1"),
+      effectKind: "reservation_acquire",
+      observationHash: HASH,
+    },
+    "unit-1",
+  );
+  assert.equal(state.state, "blocked");
+  assert.deepEqual(legalActions(state), [record("unit-2")]);
+
+  state = step(
+    state,
+    "reservation_observed",
+    {
+      effectId: effectIds.get("unit-2"),
+      effectKind: "reservation_acquire",
+      observationHash: HASH,
+    },
+    "unit-2",
+  );
+  assert.equal(state.state, "active");
+  assert.deepEqual(
+    legalActions(state).filter((action) => action.mode === "record"),
+    [],
+  );
 });
 
 test("every normal lifecycle state exposes its reducer-legal progress descriptor", () => {
