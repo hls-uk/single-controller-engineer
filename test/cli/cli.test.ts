@@ -225,7 +225,6 @@ test("read commands expose the exact bounded ambiguity recovery", async () => {
   state = transition(
     state,
     event(state, "reservation_intent", {
-      paramsHash: HASH,
       reservations: [{ id: "res-1", namespace: "port", resource: "3001" }],
     }),
     reduce,

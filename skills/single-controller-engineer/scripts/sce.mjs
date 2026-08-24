@@ -6616,8 +6616,8 @@ var require_discriminator = __commonJS({
           if (!tagRequired)
             throw new Error(`discriminator: "${tagName}" must be required`);
           return oneOfMapping;
-          function hasRequired({ required }) {
-            return Array.isArray(required) && required.includes(tagName);
+          function hasRequired({ required: required2 }) {
+            return Array.isArray(required2) && required2.includes(tagName);
           }
           function addMappings(sch, i) {
             if (sch.const) {
@@ -8002,8 +8002,8 @@ function RequiredArray(properties) {
   return globalThis.Object.keys(properties).filter((key) => !IsOptional(properties[key]));
 }
 function _Object_(properties, options) {
-  const required = RequiredArray(properties);
-  const schema = required.length > 0 ? { [Kind]: "Object", type: "object", required, properties } : { [Kind]: "Object", type: "object", properties };
+  const required2 = RequiredArray(properties);
+  const schema = required2.length > 0 ? { [Kind]: "Object", type: "object", required: required2, properties } : { [Kind]: "Object", type: "object", properties };
   return CreateType(schema, options);
 }
 var Object2 = _Object_;
@@ -9646,6 +9646,15 @@ var RepairContextSchema = strictObject({
     { minItems: 1, maxItems: LIMITS.findings }
   )
 });
+var PullRequestObservationSchema = strictObject({
+  providerPrId: identifier(),
+  // Provider URLs are retained only when the consuming policy permits them.
+  url: Type.Optional(text()),
+  state: Type.Literal("open"),
+  baseRef: identifier(),
+  baseOid: oid(),
+  remoteHeadOid: oid()
+});
 var UnitSchema = strictObject({
   id: identifier(),
   revision: revision(),
@@ -9660,6 +9669,7 @@ var UnitSchema = strictObject({
   candidateHead: Type.Optional(oid()),
   candidateTree: Type.Optional(oid()),
   publishedHeadOid: Type.Optional(oid()),
+  openPullRequest: Type.Optional(PullRequestObservationSchema),
   workerSessionId: Type.Optional(identifier()),
   workerRequestedModel: Type.Optional(text()),
   workerReturnedModel: Type.Optional(text()),
@@ -9805,6 +9815,9 @@ var RepositoryRunSchema = strictObject({
     minimum: 0,
     maximum: LIMITS.sessionHistory
   }),
+  // Detects snapshot corruption of the bounded Bloom bitmap and its count.
+  // It is an integrity binding, not an attempt to reconstruct historical IDs.
+  usedSessionFilterHash: hash(),
   journalCheckpoint: JournalCheckpointSchema
 });
 var eventBase = {
@@ -9816,7 +9829,7 @@ var controllerEventBase = {
   eventId: identifier(),
   expectedRevision: revision()
 };
-var effectIntent = { idempotencyKey: idempotencyKey(), paramsHash: hash() };
+var effectIntent = { idempotencyKey: idempotencyKey() };
 var observedEffect = {
   effectId: effectIdentifier(),
   effectKind: EffectKindSchema,
@@ -9863,8 +9876,7 @@ var ControllerJudgmentSchema = strictObject({
     Type.Literal("decomposition"),
     Type.Literal("conflict_classification"),
     Type.Literal("additional_tests"),
-    Type.Literal("qualitative_acceptance"),
-    Type.Literal("repair_disposition")
+    Type.Literal("qualitative_acceptance")
   ]),
   unitId: identifier(),
   factOid: oid(),
@@ -9875,6 +9887,18 @@ var ControllerJudgmentSchema = strictObject({
     Type.Literal("park"),
     Type.Literal("cancel")
   ])
+});
+var RepairDispositionJudgmentSchema = strictObject({
+  ...judgmentBase,
+  role: Type.Literal("controller"),
+  kind: Type.Literal("repair_disposition"),
+  unitId: identifier(),
+  factOid: oid(),
+  decision: Type.Literal("repair"),
+  // Binds the disposition to the evidence currently retained by the unit,
+  // rather than to an earlier controller prompt.
+  currentEvidenceHash: hash(),
+  findingsContextHash: hash()
 });
 var WorkerJudgmentSchema = strictObject({
   ...judgmentBase,
@@ -9907,6 +9931,7 @@ var ReviewerJudgmentSchema = strictObject({
 });
 var JudgmentSchema = Type.Union([
   ControllerJudgmentSchema,
+  RepairDispositionJudgmentSchema,
   WorkerJudgmentSchema,
   ReviewerJudgmentSchema
 ]);
@@ -10058,7 +10083,16 @@ var ProtocolEventSchema = Type.Union([
     ...eventBase,
     type: Type.Literal("publish_observed"),
     ...observedEffect,
-    remoteHeadOid: oid()
+    publication: Type.Union([
+      strictObject({
+        kind: Type.Literal("push_branch"),
+        remoteHeadOid: oid()
+      }),
+      strictObject({
+        kind: Type.Literal("open_pr"),
+        pullRequest: PullRequestObservationSchema
+      })
+    ])
   }),
   strictObject({
     ...eventBase,
@@ -10089,7 +10123,7 @@ var ProtocolEventSchema = Type.Union([
     ...eventBase,
     type: Type.Literal("repair_intent"),
     ...effectIntent,
-    judgment: ControllerJudgmentSchema,
+    judgment: RepairDispositionJudgmentSchema,
     requestedModel: text(),
     promptHash: hash()
   }),
@@ -10153,8 +10187,8 @@ var runtimeEffectBase = {
   effectId: effectIdentifier(),
   unitId: nullableIdentifier(),
   idempotencyKey: idempotencyKey(),
-  // Kept as the journal audit binding. Adapters execute the typed params
-  // below, never this opaque digest.
+  // The reducer derives this domain-separated digest from the typed params
+  // below; adapters execute the typed params, never the opaque digest.
   paramsHash: hash(),
   schemaVersion: Type.Literal(SCHEMA_VERSION)
 };
@@ -10305,7 +10339,14 @@ var RuntimeEffectSchema = Type.Union([
       ...runtimeEffectBase,
       kind: Type.Literal(kind),
       unitId: identifier(),
-      params: strictObject({ activeSessionId: Type.Optional(identifier()) })
+      params: Type.Union([
+        strictObject({ role: Type.Literal("none") }),
+        strictObject({ role: Type.Literal("worker"), sessionId: identifier() }),
+        strictObject({
+          role: Type.Literal("reviewer"),
+          sessionId: identifier()
+        })
+      ])
     })
   ),
   strictObject({
@@ -10447,6 +10488,32 @@ function canEnterTerminalIntent(state) {
 }
 
 // src/protocol/reducer.ts
+function deriveParamsHash(kind, params) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.effect-params.v1",
+      effectKind: kind,
+      params,
+      schemaVersion: SCHEMA_VERSION
+    })
+  );
+}
+function deriveSessionFilterHash(usedSessionFilter, usedSessionCount) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.session-filter.v1",
+      usedSessionCount,
+      usedSessionFilter
+    })
+  );
+}
+function controllerIdentityMatches(state, sessionId) {
+  return [
+    state.controller.runId,
+    state.controller.incarnationId,
+    state.controller.holder
+  ].includes(sessionId);
+}
 function hasUsedSession(state, sessionId) {
   if (state.usedSessionFilter.length === 0) return false;
   const filter = sessionFilter(state.usedSessionFilter);
@@ -10490,6 +10557,153 @@ function intentStateForEffect(kind) {
     cancel: "cancel_intent"
   };
   return states[kind];
+}
+function runtimeEffectParams(state, unitId, kind) {
+  if (kind === "controller_acquire")
+    return {
+      holder: state.controller.holder,
+      controllerFencingToken: state.controllerFencingToken,
+      requestedModel: state.controller.requestedModel,
+      returnedModel: state.controller.returnedModel,
+      promptHash: state.controller.promptHash
+    };
+  if (kind === "controller_release")
+    return {
+      holder: state.controller.holder,
+      controllerFencingToken: state.controllerFencingToken
+    };
+  if (unitId === null) throw new Error(`${kind} requires a unit`);
+  const unit = state.units[unitId];
+  if (unit === void 0) throw new Error(`${kind} has an unknown unit`);
+  const worker = () => ({
+    branchRef: required(unit.branchRef, "branch ref", kind),
+    worktreePath: required(unit.worktreePath, "worktree path", kind),
+    requestedModel: required(unit.workerRequestedModel, "worker model", kind),
+    promptHash: required(unit.workerPromptHash, "worker prompt", kind)
+  });
+  const candidate = () => ({
+    baseOid: required(
+      unit.verificationBaseOid ?? unit.baseOid,
+      "candidate base",
+      kind
+    ),
+    headOid: required(unit.candidateHead, "candidate head", kind),
+    treeOid: required(unit.candidateTree, "candidate tree", kind)
+  });
+  switch (kind) {
+    case "reservation_acquire":
+      return {
+        reservations: unit.reservationIds.map((id) => {
+          const reservation = state.reservations[id];
+          if (reservation === void 0)
+            throw new Error(
+              `reservation acquire has unknown reservation ${id}`
+            );
+          return {
+            id: reservation.id,
+            namespace: reservation.namespace,
+            resource: reservation.resource
+          };
+        })
+      };
+    case "branch_create":
+      return {
+        baseOid: unit.baseOid,
+        branchRef: required(unit.branchRef, "branch ref", kind)
+      };
+    case "worktree_create":
+      return {
+        branchRef: required(unit.branchRef, "branch ref", kind),
+        worktreePath: required(unit.worktreePath, "worktree path", kind)
+      };
+    case "dispatch":
+      return worker();
+    case "worker_collect":
+      return {
+        sessionId: required(unit.workerSessionId, "worker session", kind)
+      };
+    case "candidate_collect":
+      return {
+        branchRef: required(unit.branchRef, "branch ref", kind),
+        worktreePath: required(unit.worktreePath, "worktree path", kind)
+      };
+    case "verify":
+      return {
+        candidate: {
+          baseOid: unit.baseOid,
+          headOid: required(unit.candidateHead, "candidate head", kind),
+          treeOid: required(unit.candidateTree, "candidate tree", kind)
+        },
+        commands: required(
+          unit.verificationCommands,
+          "verification commands",
+          kind
+        )
+      };
+    case "review_dispatch":
+      return {
+        candidate: candidate(),
+        requestedModel: required(
+          unit.reviewerRequestedModel,
+          "reviewer model",
+          kind
+        ),
+        promptHash: required(unit.reviewPromptHash, "reviewer prompt", kind)
+      };
+    case "review_collect":
+      return {
+        sessionId: required(unit.reviewerSessionId, "reviewer session", kind),
+        candidate: candidate()
+      };
+    case "publish":
+      return {
+        branchRef: required(unit.branchRef, "branch ref", kind),
+        candidate: candidate(),
+        authorityProfile: state.authorityProfile
+      };
+    case "integrate":
+      return {
+        integrationBranch: state.integrationBranch,
+        integrationProfile: state.integrationProfile,
+        controllerFencingToken: state.controllerFencingToken,
+        candidate: candidate()
+      };
+    case "reservation_release":
+      return { reservationIds: [...unit.reservationIds] };
+    case "repair": {
+      const context = required(unit.repairContext, "repair context", kind);
+      return {
+        ...worker(),
+        repairBaseOid: context.baseOid,
+        ...context.headOid === void 0 ? {} : { repairHeadOid: context.headOid },
+        ...context.treeOid === void 0 ? {} : { repairTreeOid: context.treeOid }
+      };
+    }
+    case "failure":
+    case "timeout":
+    case "park":
+    case "cancel":
+      return terminalEffectParams(state, unit, kind);
+    default:
+      return exhaustive(kind);
+  }
+}
+function terminalEffectParams(state, unit, kind) {
+  if (state.currentReviewerUnitId === unit.id)
+    return {
+      role: "reviewer",
+      sessionId: required(unit.reviewerSessionId, "reviewer session", kind)
+    };
+  if (state.activeModifyingUnitIds.includes(unit.id))
+    return {
+      role: "worker",
+      sessionId: required(unit.workerSessionId, "worker session", kind)
+    };
+  return { role: "none" };
+}
+function required(value, name, kind) {
+  if (value === void 0) throw new Error(`${kind} lacks ${name}`);
+  return value;
 }
 function runInvariantErrors(state) {
   const errors = [];
@@ -10553,6 +10767,8 @@ function runInvariantErrors(state) {
       unit.reviewHeadOid,
       unit.reviewTree,
       unit.landedOid,
+      unit.openPullRequest?.baseOid,
+      unit.openPullRequest?.remoteHeadOid,
       unit.repairContext?.baseOid,
       unit.repairContext?.headOid,
       unit.repairContext?.treeOid
@@ -10564,6 +10780,10 @@ function runInvariantErrors(state) {
   const packedSessions = Buffer.from(state.usedSessionFilter, "base64");
   if (state.usedSessionCount === 0 && state.usedSessionFilter !== "" || state.usedSessionCount > 0 && (packedSessions.length !== LIMITS.sessionFilterBytes || packedSessions.toString("base64") !== state.usedSessionFilter))
     errors.push("used session identity history is invalid");
+  if (state.usedSessionFilterHash !== deriveSessionFilterHash(state.usedSessionFilter, state.usedSessionCount))
+    errors.push("used session identity history integrity hash is invalid");
+  if (state.usedSessionCount > 0 && packedSessions.length === LIMITS.sessionFilterBytes && packedSessions.every((value) => value === 0))
+    errors.push("used session identity history has no set bits for its count");
   for (const effect of state.effectJournal) {
     if (effectIds.has(effect.effectId))
       errors.push(`duplicate effect id ${effect.effectId}`);
@@ -10579,6 +10799,25 @@ function runInvariantErrors(state) {
       errors.push(`observed effect ${effect.effectId} has no observation`);
     if (effect.status === "intended" || effect.status === "ambiguous")
       addUnresolved(effect);
+    if (effect.unitId !== null && (effect.status === "intended" || effect.status === "ambiguous") && !waveIds.has(effect.unitId))
+      errors.push(
+        `unresolved effect ${effect.effectId} is outside the current wave`
+      );
+    if (effect.status === "intended" || effect.status === "ambiguous") {
+      try {
+        const expectedParams = runtimeEffectParams(
+          state,
+          effect.unitId,
+          effect.kind
+        );
+        if (effect.paramsHash !== deriveParamsHash(effect.kind, expectedParams))
+          errors.push(`effect ${effect.effectId} has an invalid params hash`);
+      } catch {
+        errors.push(
+          `effect ${effect.effectId} lacks reconstructable parameters`
+        );
+      }
+    }
   }
   const intentByState = {
     reservation_intent: "reservation_acquire",
@@ -10618,6 +10857,7 @@ function runInvariantErrors(state) {
     else if (!waveIds.has(id))
       errors.push(`active modifying unit ${id} is outside the current wave`);
   }
+  const assignedSessions = /* @__PURE__ */ new Map();
   for (const [id, unit] of Object.entries(state.units)) {
     if (id !== unit.id)
       errors.push(`unit map key ${id} does not match unit id ${unit.id}`);
@@ -10626,6 +10866,10 @@ function runInvariantErrors(state) {
     ))
       errors.push(`unit ${id} claims an invalid reservation`);
     const unresolved = unresolvedByUnit.get(id) ?? [];
+    if (unresolved.length > 0 && !waveIds.has(id))
+      errors.push(
+        `unit ${id} has unresolved evidence outside the current wave`
+      );
     const expectedKind = intentByState[unit.state];
     if (unit.state === "blocked") {
       if (unresolved.length !== 1 || unresolved[0]?.status !== "ambiguous" || intentStateForEffect(unresolved[0]?.kind ?? "dispatch") === void 0)
@@ -10706,13 +10950,36 @@ function runInvariantErrors(state) {
       errors.push(`approval lifecycle ${id} lacks exact verdict`);
     if (["published", "handoff"].includes(unit.state) && unit.publishedHeadOid === void 0)
       errors.push(`published unit ${id} lacks remote-head readback`);
+    if (state.authorityProfile === "open-pr" && unit.state === "handoff" && (unit.openPullRequest === void 0 || unit.openPullRequest.baseRef !== state.integrationBranch || unit.openPullRequest.baseOid !== unit.reviewBaseOid || unit.openPullRequest.remoteHeadOid !== unit.publishedHeadOid || unit.openPullRequest.remoteHeadOid !== unit.candidateHead))
+      errors.push(
+        `open-pr handoff ${id} lacks exact open pull-request evidence`
+      );
+    if (unit.openPullRequest !== void 0 && state.authorityProfile !== "open-pr")
+      errors.push(
+        `unit ${id} retains pull-request evidence outside open-pr authority`
+      );
     if (unit.state === "landed" && unit.landedOid === void 0)
       errors.push(`landed ${id} lacks integration readback`);
     if (unit.state === "repair_required" && unit.repairContext === void 0)
       errors.push(`repair-required ${id} lacks retained repair context`);
-    for (const session2 of [unit.workerSessionId, unit.reviewerSessionId])
-      if (session2 !== void 0 && !hasUsedSession(state, session2))
+    if (unit.workerSessionId !== void 0 && unit.workerSessionId === unit.reviewerSessionId)
+      errors.push(`unit ${id} reuses one session for worker and reviewer`);
+    for (const [role, session2] of [
+      ["worker", unit.workerSessionId],
+      ["reviewer", unit.reviewerSessionId]
+    ]) {
+      if (session2 === void 0) continue;
+      if (!hasUsedSession(state, session2))
         errors.push(`session ${session2} is not retained in durable history`);
+      if (controllerIdentityMatches(state, session2))
+        errors.push(`session ${session2} aliases controller identity`);
+      const prior = assignedSessions.get(session2);
+      if (prior !== void 0)
+        errors.push(
+          `session ${session2} is shared by ${prior} and ${id}/${role}`
+        );
+      else assignedSessions.set(session2, `${id}/${role}`);
+    }
     const isActive = state.activeModifyingUnitIds.includes(id);
     const ambiguousKind = unresolved[0]?.status === "ambiguous" ? unresolved[0].kind : void 0;
     const allowedActive = optionallyActiveStates.has(unit.state) || unit.state === "blocked" && ambiguousKind !== void 0 && [
@@ -10763,7 +11030,14 @@ function runInvariantErrors(state) {
     "published",
     "integrate_intent"
   ]);
-  const expectedQualificationQueue = Object.values(state.units).filter((unit) => qualificationQueueStates.has(unit.state)).map((unit) => unit.id).sort();
+  const expectedQualificationQueue = Object.values(state.units).filter(
+    (unit) => qualificationQueueStates.has(unit.state) || state.qualificationOwnerUnitId === unit.id && [
+      "failure_intent",
+      "timeout_intent",
+      "park_intent",
+      "cancel_intent"
+    ].includes(unit.state)
+  ).map((unit) => unit.id).sort();
   const expectedIntegrationQueue = Object.values(state.units).filter((unit) => integrationQueueStates.has(unit.state)).map((unit) => unit.id).sort();
   if (state.qualificationQueue.join("\0") !== expectedQualificationQueue.join("\0"))
     errors.push("qualification queue disagrees with unit state");
@@ -10780,7 +11054,16 @@ function runInvariantErrors(state) {
     "published",
     "integrate_intent"
   ]);
-  if (state.qualificationOwnerUnitId !== void 0 && !qualificationOwnerStates.has(
+  const qualificationOwnerAllowedStates = /* @__PURE__ */ new Set([
+    ...qualificationOwnerStates,
+    // A terminal act begun while qualification/review owns the unit retains
+    // that owner until its exact observation is recorded.
+    "failure_intent",
+    "timeout_intent",
+    "park_intent",
+    "cancel_intent"
+  ]);
+  if (state.qualificationOwnerUnitId !== void 0 && !qualificationOwnerAllowedStates.has(
     state.units[state.qualificationOwnerUnitId]?.state ?? "planned"
   ))
     errors.push("qualification owner is not qualifying");
@@ -10791,6 +11074,11 @@ function runInvariantErrors(state) {
     errors.push("qualification owner is not queue head");
   if (state.integrationOwnerUnitId !== void 0 && state.units[state.integrationOwnerUnitId]?.state !== "integrate_intent")
     errors.push("integration owner is not integrating");
+  for (const unit of Object.values(state.units))
+    if (unit.state === "integrate_intent" && state.integrationOwnerUnitId !== unit.id)
+      errors.push(
+        `integrating unit ${unit.id} lacks integration owner converse`
+      );
   if (state.integrationOwnerUnitId !== void 0 && state.integrationQueue[0] !== state.integrationOwnerUnitId)
     errors.push("integration owner is not queue head");
   const reviewerStates = /* @__PURE__ */ new Set([
@@ -10798,10 +11086,20 @@ function runInvariantErrors(state) {
     "reviewer_dispatched",
     "review_collect_intent"
   ]);
-  if (state.currentReviewerUnitId !== void 0 && !reviewerStates.has(
+  const reviewerOwnerStates = /* @__PURE__ */ new Set([
+    ...reviewerStates,
+    "failure_intent",
+    "timeout_intent",
+    "park_intent",
+    "cancel_intent"
+  ]);
+  if (state.currentReviewerUnitId !== void 0 && !reviewerOwnerStates.has(
     state.units[state.currentReviewerUnitId]?.state ?? "planned"
   ))
     errors.push("current reviewer is not active");
+  for (const unit of Object.values(state.units))
+    if (reviewerStates.has(unit.state) && state.currentReviewerUnitId !== unit.id)
+      errors.push(`reviewer unit ${unit.id} lacks current reviewer converse`);
   if (state.currentReviewerUnitId !== void 0 && state.qualificationOwnerUnitId !== state.currentReviewerUnitId)
     errors.push("reviewer is not owned by qualification");
   if (state.state === "blocked" && controllerUnresolved.every((entry) => entry.status !== "ambiguous") && !Object.values(state.units).some((unit) => unit.state === "blocked"))
@@ -10814,6 +11112,9 @@ function runInvariantErrors(state) {
     errors.push("released controller has non-released aggregate");
   return errors;
 }
+function exhaustive(value) {
+  throw new Error(`Unhandled protocol event: ${JSON.stringify(value)}`);
+}
 
 // src/protocol/actions.ts
 function legalActions(stateInput) {
@@ -10823,12 +11124,47 @@ function legalActions(stateInput) {
   if (runInvariantErrors(state).length > 0) return [];
   const controllerActions = actionsForController(state);
   if (controllerActions !== void 0) return sortActions(controllerActions);
-  if (state.state === "released" || state.state === "blocked") return [];
+  if (state.state === "released") return [];
   if (state.controller.state !== "acquired") return [];
+  if (state.state === "blocked") return ambiguityRecoveryActions(state);
   return sortActions(
     Object.values(state.units).filter((unit) => state.wave.unitIds.includes(unit.id)).flatMap((unit) => actionsForUnit(state, unit)).filter(
       (action) => (action.mode !== "emit" || action.effectKind === void 0 || effectAllowed(state, action.effectKind) && (action.unitId === void 0 || !hasUnresolvedUnitEffect(state, action.unitId))) && (action.mode !== "record" || pendingUnitEffect(state, action))
     )
+  );
+}
+var observationForEffect = {
+  controller_acquire: "controller_acquired",
+  reservation_acquire: "reservation_observed",
+  branch_create: "branch_observed",
+  worktree_create: "worktree_observed",
+  dispatch: "dispatch_observed",
+  worker_collect: "worker_collected",
+  candidate_collect: "candidate_observed",
+  verify: "verification_observed",
+  review_dispatch: "reviewer_observed",
+  review_collect: "review_collected",
+  publish: "publish_observed",
+  integrate: "integrate_observed",
+  reservation_release: "reservation_released",
+  repair: "repair_observed",
+  failure: "failure_observed",
+  timeout: "timeout_observed",
+  park: "park_observed",
+  cancel: "cancel_observed",
+  controller_release: "controller_released"
+};
+function ambiguityRecoveryActions(state) {
+  return sortActions(
+    state.effectJournal.filter(
+      (effect) => effect.unitId !== null && effect.status === "ambiguous"
+    ).map((effect) => ({
+      effectId: effect.effectId,
+      effectKind: effect.kind,
+      mode: "record",
+      type: observationForEffect[effect.kind],
+      ...effect.unitId === null ? {} : { unitId: effect.unitId }
+    }))
   );
 }
 function actionsForController(state) {
@@ -10998,7 +11334,7 @@ function unitAction(unit, type, mode, effectKind) {
   return { type, mode, unitId: unit.id, effectKind };
 }
 function repairIsEligible(state, unit) {
-  return unit.repairContext !== void 0 && (unit.repairContext.headOid === void 0 || unit.repairContext.headOid === unit.candidateHead) && unit.repairCount < 16 && state.activeModifyingUnitIds.length < 3;
+  return unit.repairContext !== void 0 && unit.branchRef !== void 0 && unit.worktreePath !== void 0 && (unit.repairContext.headOid === void 0 || unit.repairContext.headOid === unit.candidateHead) && unit.repairCount < 16 && state.activeModifyingUnitIds.length < 3;
 }
 function isCurrentApproval(unit) {
   return unit.state === "approved" && unit.reviewBaseOid === unit.baseOid && unit.reviewHeadOid === unit.candidateHead && unit.reviewTree === unit.candidateTree && unit.approvalResponseHash !== void 0;
@@ -11040,13 +11376,15 @@ function sortActions(actions) {
       left.type,
       left.unitId ?? "",
       left.mode,
-      left.effectKind ?? ""
+      left.effectKind ?? "",
+      left.effectId ?? ""
     ].join("\0");
     const rightKey = [
       right.type,
       right.unitId ?? "",
       right.mode,
-      right.effectKind ?? ""
+      right.effectKind ?? "",
+      right.effectId ?? ""
     ].join("\0");
     return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
   });
@@ -11223,12 +11561,23 @@ var stateOnlyCommandRunner = (request) => {
     return invalidStateRequest();
   const run = parsedRun.value;
   if (runInvariantErrors(run).length > 0) return invalidStateRequest();
+  const ambiguities = ambiguityRecoveryActions(run).flatMap(
+    (action) => action.effectId === void 0 || action.effectKind === void 0 ? [] : [
+      {
+        effectId: action.effectId,
+        effectKind: action.effectKind,
+        observationType: action.type,
+        unitId: action.unitId ?? null
+      }
+    ]
+  );
   if (request.command === "inspect") {
     return {
       schema: "sce.command.result",
       version: 1,
       status: "ok",
       result: {
+        ambiguities,
         integrationBranch: run.integrationBranch,
         repositoryIdentity: run.repositoryIdentity,
         revision: run.revision,
@@ -11244,6 +11593,7 @@ var stateOnlyCommandRunner = (request) => {
       status: "ok",
       result: {
         activeModifyingUnitIds: [...run.activeModifyingUnitIds].sort(),
+        ambiguities,
         effectCount: run.effectJournal.length,
         revision: run.revision,
         state: run.state
