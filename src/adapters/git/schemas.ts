@@ -42,28 +42,23 @@ export const GitObjectFormatSchema = Type.Union([
 ]);
 export type GitObjectFormatWire = Static<typeof GitObjectFormatSchema>;
 
+/**
+ * Signal names vary by platform. Any bounded POSIX-shaped signal is treated
+ * as an ambiguous subprocess termination; accepting an unfamiliar name is
+ * safer than misclassifying a possibly-applied mutation as a refusal.
+ */
+const ProcessSignalSchema = Type.Union([
+  Type.String({ minLength: 4, maxLength: 19, pattern: "^SIG[A-Z0-9]{1,16}$" }),
+  Type.Null(),
+]);
+
 /** The only subprocess observation accepted from an injected Git runner. */
 export const GitResultSchema = strictObject({
   exitCode: Type.Union([
     Type.Integer({ minimum: 0, maximum: 255 }),
     Type.Null(),
   ]),
-  signal: Type.Union([
-    Type.Literal("SIGABRT"),
-    Type.Literal("SIGALRM"),
-    Type.Literal("SIGBUS"),
-    Type.Literal("SIGFPE"),
-    Type.Literal("SIGHUP"),
-    Type.Literal("SIGILL"),
-    Type.Literal("SIGINT"),
-    Type.Literal("SIGKILL"),
-    Type.Literal("SIGPIPE"),
-    Type.Literal("SIGQUIT"),
-    Type.Literal("SIGSEGV"),
-    Type.Literal("SIGTERM"),
-    Type.Literal("SIGTRAP"),
-    Type.Null(),
-  ]),
+  signal: ProcessSignalSchema,
   stdout: Type.String({ minLength: 0, maxLength: 65536, maxUtf8Bytes: 65536 }),
   timedOut: Type.Optional(Type.Boolean()),
   unavailable: Type.Optional(Type.Boolean()),
@@ -77,7 +72,7 @@ export const GitRepositorySchema = strictObject({
   objectFormat: GitObjectFormatSchema,
   remoteUrls: Type.Array(
     Type.String({ minLength: 1, maxLength: 1024, maxUtf8Bytes: 1024 }),
-    { minItems: 1, maxItems: 16 },
+    { maxItems: 16 },
   ),
 });
 export const GitSnapshotSchema = strictObject({
@@ -98,6 +93,7 @@ export const GitEffectSchema = strictObject({
     Type.Literal("GIT_NOT_FAST_FORWARD"),
     Type.Literal("GIT_REFUSED"),
     Type.Literal("GIT_REMOTE_AMBIGUOUS"),
+    Type.Literal("GIT_REMOTE_MISSING"),
     Type.Literal("GIT_UNSUPPORTED_OBJECT_FORMAT"),
     Type.Literal("GIT_UNRESOLVED_EFFECT"),
   ]),

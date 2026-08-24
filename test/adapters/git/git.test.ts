@@ -8,10 +8,14 @@ import test from "node:test";
 
 import {
   discoverIntegration,
+  discoverRemoteIntegration,
   ensureBranch,
   ensureWorktree,
+  GitRepositorySchema,
+  GitResultSchema,
   integrateLocalFastForward,
   integrateRemoteFastForward,
+  isGitSchema,
   nodeGitRunner,
   observeCandidate,
   publishCandidate,
@@ -131,6 +135,22 @@ test("branch and worktree creation are exact idempotent triples and refuse forei
     ).code,
     "GIT_FOREIGN_WORKTREE",
   );
+  const dirtyExisting = scripted(
+    ...identityResults(),
+    ok(`worktree /work\nHEAD ${base}\nbranch refs/heads/sce/task\n\n`),
+    ok("/repo/.git\n"),
+    ok(" M src/adapters/git/index.ts\u0000"),
+  );
+  assert.equal(
+    (
+      await ensureWorktree(dirtyExisting, repository(), {
+        branch: "sce/task",
+        head: base,
+        path: "/work",
+      })
+    ).code,
+    "GIT_DIRTY",
+  );
 });
 
 test("local fast-forward refuses a moved approved base and discovers crash outcomes by readback", async () => {
@@ -187,6 +207,7 @@ test("remote ff performs one non-force push and rejects a stale remote readback"
   const base = sha1("1");
   const candidate = sha1("2");
   const stale = scripted(
+    ...identityResults(),
     ok("https://example.invalid/repo.git\n"),
     ok(`${base}\trefs/heads/main\n`),
     failed(),
@@ -206,13 +227,16 @@ test("remote ff performs one non-force push and rejects a stale remote readback"
   const calls: string[][] = [];
   const capture: GitRunner = async ({ argv }) => {
     calls.push([...argv]);
-    return calls.length === 1
-      ? ok("https://example.invalid/repo.git\n")
-      : calls.length === 2
+    if (argv[0] === "rev-parse")
+      return argv[1] === "--git-common-dir" ? ok("/repo/.git\n") : ok("sha1\n");
+    if (argv[0] === "config")
+      return ok("remote.origin.url\nhttps://example.invalid/repo.git\u0000");
+    if (argv[0] === "remote") return ok("https://example.invalid/repo.git\n");
+    if (argv[0] === "ls-remote")
+      return calls.filter((call) => call[0] === "ls-remote").length === 1
         ? ok(`${base}\trefs/heads/main\n`)
-        : calls.length === 3
-          ? ok()
-          : ok(`${candidate}\trefs/heads/main\n`);
+        : ok(`${candidate}\trefs/heads/main\n`);
+    return ok();
   };
   assert.equal(
     (
@@ -225,16 +249,18 @@ test("remote ff performs one non-force push and rejects a stale remote readback"
     ).state,
     "observed",
   );
-  assert.deepEqual(calls[2], [
+  const guardedPush = calls.find((argv) => argv[0] === "-c");
+  assert.deepEqual(guardedPush?.slice(2), [
     "push",
     "origin",
     `${candidate}:refs/heads/main`,
   ]);
   assert.equal(
-    calls[2]?.some((part) => part === "--force"),
+    guardedPush?.some((part) => part === "--force"),
     false,
   );
   const unavailableBeforePush = scripted(
+    ...identityResults(),
     ok("https://example.invalid/repo.git\n"),
     { exitCode: null, signal: "SIGKILL", stdout: "" },
   );
@@ -250,6 +276,7 @@ test("remote ff performs one non-force push and rejects a stale remote readback"
     "GIT_UNRESOLVED_EFFECT",
   );
   const unreadableAfterPush = scripted(
+    ...identityResults(),
     ok("https://example.invalid/repo.git\n"),
     ok(`${base}\trefs/heads/main\n`),
     failed(),
@@ -266,7 +293,10 @@ test("remote ff performs one non-force push and rejects a stale remote readback"
     ).code,
     "GIT_UNRESOLVED_EFFECT",
   );
-  const divergentPushUrl = scripted(ok("https://example.invalid/other.git\n"));
+  const divergentPushUrl = scripted(
+    ...identityResults(),
+    ok("https://example.invalid/other.git\n"),
+  );
   assert.equal(
     (
       await integrateRemoteFastForward(divergentPushUrl, repository(), {
@@ -285,11 +315,13 @@ test("publication is a separate handoff boundary with remote candidate readback"
   const calls: string[][] = [];
   const runner: GitRunner = async ({ argv }) => {
     calls.push([...argv]);
-    return calls.length === 1
-      ? ok("https://example.invalid/repo.git\n")
-      : calls.length === 2
-        ? ok()
-        : ok(`${candidate}\trefs/heads/sce/task\n`);
+    if (argv[0] === "rev-parse")
+      return argv[1] === "--git-common-dir" ? ok("/repo/.git\n") : ok("sha1\n");
+    if (argv[0] === "config")
+      return ok("remote.origin.url\nhttps://example.invalid/repo.git\u0000");
+    if (argv[0] === "remote") return ok("https://example.invalid/repo.git\n");
+    if (argv[0] === "push") return ok();
+    return ok(`${candidate}\trefs/heads/sce/task\n`);
   };
   assert.equal(
     (
@@ -305,6 +337,59 @@ test("publication is a separate handoff boundary with remote candidate readback"
     calls.some((argv) => argv[0] === "merge"),
     false,
   );
+});
+
+test("schemas admit local-only identity and valid Node signals while strict refs reject adversarial atoms", async () => {
+  assert.equal(
+    isGitSchema(GitRepositorySchema, {
+      commonDir: "/repo/.git",
+      cwd: "/repo",
+      identity: "local:/repo/.git",
+      objectFormat: "sha1",
+      remoteUrls: [],
+    }),
+    true,
+  );
+  assert.equal(
+    isGitSchema(GitResultSchema, {
+      exitCode: null,
+      signal: "SIGUSR2",
+      stdout: "",
+    }),
+    true,
+  );
+  assert.equal(
+    isGitSchema(GitResultSchema, {
+      exitCode: null,
+      signal: "SIGUNKNOWN",
+      stdout: "",
+    }),
+    true,
+  );
+  assert.equal(
+    isGitSchema(GitResultSchema, {
+      exitCode: null,
+      signal: "usr2",
+      stdout: "",
+    }),
+    false,
+  );
+  const blocked = await nodeGitRunner({
+    argv: ["branch", "sce//bad", sha1("1")],
+    cwd: "/repo",
+  });
+  assert.equal(blocked.unavailable, true);
+  const forgedHook = await nodeGitRunner({
+    argv: [
+      "-c",
+      `core.hooksPath=${join(tmpdir(), "sce-git-pre-push-forged")}`,
+      "push",
+      "origin",
+      `${sha1("2")}:refs/heads/main`,
+    ],
+    cwd: "/repo",
+  });
+  assert.equal(forgedHook.unavailable, true);
 });
 
 async function git(cwd: string, ...argv: string[]): Promise<string> {
@@ -443,6 +528,205 @@ test("real disposable bare remote proves worktree discovery, local ff, and stale
       })
     ).code,
     "GIT_MOVED_BASE",
+  );
+});
+
+test("real guarded remote ff rejects an intermediate ancestor that races after precheck", async (t) => {
+  const fixture = await setupRepository();
+  t.after(() => rm(join(fixture.cwd, ".."), { force: true, recursive: true }));
+  const repo = await actualRepository(fixture.cwd);
+  await git(fixture.cwd, "commit", "--allow-empty", "-m", "intermediate");
+  const intermediate = (await git(fixture.cwd, "rev-parse", "HEAD")).trim();
+  await git(
+    fixture.cwd,
+    "push",
+    "origin",
+    `${intermediate}:refs/heads/sce/race-object`,
+  );
+  await git(fixture.cwd, "commit", "--allow-empty", "-m", "candidate");
+  const candidate = (await git(fixture.cwd, "rev-parse", "HEAD")).trim();
+  let raced = false;
+  const runner: GitRunner = async (request) => {
+    if (request.argv[0] === "-c" && !raced) {
+      raced = true;
+      await execFile("git", [
+        "--git-dir",
+        fixture.remote,
+        "update-ref",
+        "refs/heads/main",
+        intermediate,
+      ]);
+    }
+    return nodeGitRunner(request);
+  };
+  const outcome = await integrateRemoteFastForward(runner, repo, {
+    base: fixture.base,
+    candidate,
+    integrationBranch: "main",
+    remote: "origin",
+  });
+  assert.equal(raced, true);
+  assert.equal(outcome.code, "GIT_MOVED_BASE");
+  assert.equal(
+    (await git(fixture.cwd, "ls-remote", "--refs", "origin", "refs/heads/main"))
+      .split("\t")[0]
+      ?.trim(),
+    intermediate,
+  );
+});
+
+test("real guarded remote ff accepts only the exact advertised base", async (t) => {
+  const fixture = await setupRepository();
+  t.after(() => rm(join(fixture.cwd, ".."), { force: true, recursive: true }));
+  const repo = await actualRepository(fixture.cwd);
+  await git(fixture.cwd, "commit", "--allow-empty", "-m", "candidate");
+  const candidate = (await git(fixture.cwd, "rev-parse", "HEAD")).trim();
+  assert.equal(
+    (
+      await integrateRemoteFastForward(nodeGitRunner, repo, {
+        base: fixture.base,
+        candidate,
+        integrationBranch: "main",
+        remote: "origin",
+      })
+    ).state,
+    "observed",
+  );
+  assert.equal(
+    (await git(fixture.cwd, "ls-remote", "--refs", "origin", "refs/heads/main"))
+      .split("\t")[0]
+      ?.trim(),
+    candidate,
+  );
+});
+
+test("remote discovery positively observes an already-landed candidate without pushing", async () => {
+  const candidate = sha1("2");
+  const calls: string[][] = [];
+  const runner: GitRunner = async ({ argv }) => {
+    calls.push([...argv]);
+    if (argv[0] === "rev-parse")
+      return argv[1] === "--git-common-dir" ? ok("/repo/.git\n") : ok("sha1\n");
+    if (argv[0] === "config")
+      return ok("remote.origin.url\nhttps://example.invalid/repo.git\u0000");
+    if (argv[0] === "remote") return ok("https://example.invalid/repo.git\n");
+    return ok(`${candidate}\trefs/heads/main\n`);
+  };
+  assert.equal(
+    (
+      await discoverRemoteIntegration(runner, repository(), {
+        candidate,
+        integrationBranch: "main",
+        remote: "origin",
+      })
+    ).state,
+    "observed",
+  );
+  assert.equal(
+    calls.some((argv) => argv.includes("push")),
+    false,
+  );
+  const missing = scripted(
+    ...identityResults(),
+    ok("https://example.invalid/repo.git\n"),
+    { exitCode: 2, signal: null, stdout: "" },
+  );
+  assert.equal(
+    (
+      await discoverRemoteIntegration(missing, repository(), {
+        candidate,
+        integrationBranch: "main",
+        remote: "origin",
+      })
+    ).code,
+    "GIT_REMOTE_MISSING",
+  );
+});
+
+test("crash-after-act readback positively discovers every Git mutation boundary", async () => {
+  const base = sha1("1");
+  const candidate = sha1("2");
+  const crashed: GitResult = { exitCode: null, signal: "SIGUSR2", stdout: "" };
+  assert.equal(
+    (
+      await ensureBranch(
+        scripted(...identityResults(), ok(), crashed, ok(`${base}\n`)),
+        repository(),
+        { base, branch: "sce/crash-branch" },
+      )
+    ).state,
+    "observed",
+  );
+  assert.equal(
+    (
+      await ensureWorktree(
+        scripted(
+          ...identityResults(),
+          ok(`worktree /repo\nHEAD ${base}\nbranch refs/heads/main\n\n`),
+          crashed,
+          ok(
+            `worktree /repo\nHEAD ${base}\nbranch refs/heads/main\n\nworktree /private/tmp/sce-crash-worktree\nHEAD ${base}\nbranch refs/heads/sce/crash-worktree\n\n`,
+          ),
+          ok("/repo/.git\n"),
+          ok(),
+        ),
+        repository(),
+        {
+          branch: "sce/crash-worktree",
+          head: base,
+          path: "/private/tmp/sce-crash-worktree",
+        },
+      )
+    ).state,
+    "observed",
+  );
+  assert.equal(
+    (
+      await integrateLocalFastForward(
+        scripted(
+          ...identityResults(),
+          ok(`${base}\n`),
+          ok("refs/heads/main\n"),
+          ok(),
+          crashed,
+          ok(`${candidate}\n`),
+        ),
+        repository(),
+        { base, candidate, integrationRef: "refs/heads/main" },
+      )
+    ).state,
+    "observed",
+  );
+  assert.equal(
+    (
+      await publishCandidate(
+        scripted(
+          ...identityResults(),
+          ok("https://example.invalid/repo.git\n"),
+          crashed,
+          ok(`${candidate}\trefs/heads/sce/crash\n`),
+        ),
+        repository(),
+        { candidate, remote: "origin", remoteBranch: "sce/crash" },
+      )
+    ).state,
+    "observed",
+  );
+  assert.equal(
+    (
+      await integrateRemoteFastForward(
+        scripted(
+          ...identityResults(),
+          ok("https://example.invalid/repo.git\n"),
+          ok(`${base}\trefs/heads/main\n`),
+          crashed,
+          ok(`${candidate}\trefs/heads/main\n`),
+        ),
+        repository(),
+        { base, candidate, integrationBranch: "main", remote: "origin" },
+      )
+    ).state,
+    "observed",
   );
 });
 

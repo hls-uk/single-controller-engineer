@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import {
   basename,
   dirname,
@@ -30,7 +32,7 @@ export type GitEffectState = "observed" | "refused" | "ambiguous";
 
 export type GitResult = Readonly<{
   exitCode: number | null;
-  signal: NodeJS.Signals | null;
+  signal: string | null;
   stdout: string;
   timedOut?: boolean;
   unavailable?: boolean;
@@ -71,6 +73,7 @@ export type GitEffect = Readonly<{
     | "GIT_NOT_FAST_FORWARD"
     | "GIT_REFUSED"
     | "GIT_REMOTE_AMBIGUOUS"
+    | "GIT_REMOTE_MISSING"
     | "GIT_UNSUPPORTED_OBJECT_FORMAT"
     | "GIT_UNRESOLVED_EFFECT";
   state: GitEffectState;
@@ -86,13 +89,31 @@ const REF = /^(?:[A-Za-z0-9][A-Za-z0-9._/-]*)(?:[A-Za-z0-9._/-])?$/u;
 const REMOTE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 const PATH = /^[^\u0000\r\n]{1,4096}$/u;
 const MAX_OUTPUT = 65_536;
+const activeHookPaths = new Set<string>();
 
 function exactOid(format: GitObjectFormat, value: string): boolean {
   return OID.test(value) && value.length === (format === "sha1" ? 40 : 64);
 }
 
 function safeRef(value: string): boolean {
-  return REF.test(value) && !value.includes("..") && !value.endsWith(".");
+  return (
+    REF.test(value) &&
+    !value.startsWith("/") &&
+    !value.endsWith("/") &&
+    !value.includes("//") &&
+    !value.includes("..") &&
+    !value.includes("@{") &&
+    !/[\\ ~^:?*\[\u0000-\u001f\u007f]/u.test(value) &&
+    value
+      .split("/")
+      .every(
+        (part) =>
+          part.length > 0 &&
+          !part.startsWith(".") &&
+          !part.endsWith(".") &&
+          !part.endsWith(".lock"),
+      )
+  );
 }
 
 function safePath(value: string): boolean {
@@ -102,6 +123,20 @@ function safePath(value: string): boolean {
 function safeAbsolutePath(value: string): boolean {
   return (
     isAbsolute(value) && safePath(value) && normalize(resolve(value)) !== "/"
+  );
+}
+
+function scopedHookPath(value: string): boolean {
+  if (!safeAbsolutePath(value)) return false;
+  const root = normalize(resolve(tmpdir()));
+  const candidate = normalize(resolve(value));
+  const suffix = relative(root, candidate);
+  return (
+    !isAbsolute(suffix) &&
+    !suffix.startsWith("../") &&
+    suffix.startsWith("sce-git-pre-push-") &&
+    !suffix.includes("/") &&
+    activeHookPaths.has(candidate)
   );
 }
 
@@ -192,6 +227,21 @@ function allowedGitArgv(argv: readonly string[]): boolean {
     return (
       args.length === 2 &&
       REMOTE.test(args[0] ?? "") &&
+      destination !== null &&
+      safeRef(destination[2] ?? "")
+    );
+  }
+  if (command === "-c") {
+    const hookPath = (args[0] ?? "").slice("core.hooksPath=".length);
+    const destination = /^([0-9a-f]{40}|[0-9a-f]{64}):refs\/heads\/(.+)$/u.exec(
+      args[3] ?? "",
+    );
+    return (
+      args.length === 4 &&
+      args[0]?.startsWith("core.hooksPath=") === true &&
+      scopedHookPath(hookPath) &&
+      args[1] === "push" &&
+      REMOTE.test(args[2] ?? "") &&
       destination !== null &&
       safeRef(destination[2] ?? "")
     );
@@ -330,7 +380,7 @@ async function run(
   try {
     const observed = parseGitResult(
       await runner({ argv, cwd: repository.cwd }),
-    );
+    ) as GitResult | undefined;
     return (
       observed ?? {
         exitCode: null,
@@ -350,7 +400,8 @@ async function runAt(
   argv: readonly string[],
 ): Promise<GitResult> {
   try {
-    const observed = parseGitResult(await runner({ argv, cwd }));
+    const observed = parseGitResult(await runner({ argv, cwd })) as
+      GitResult | undefined;
     return (
       observed ?? {
         exitCode: null,
@@ -443,6 +494,20 @@ async function verifyWorktreeOwnership(
     : effect("refused", "GIT_FOREIGN_WORKTREE");
 }
 
+async function verifyCleanWorktree(
+  runner: GitRunner,
+  repository: GitRepository,
+  path: string,
+): Promise<GitEffect> {
+  const ownership = await verifyWorktreeOwnership(runner, repository, path);
+  if (ownership.state !== "observed") return ownership;
+  const status = await runAt(runner, path, ["status", "--porcelain=v1", "-z"]);
+  if (!commandOk(status)) return effect("refused", "GIT_FOREIGN_WORKTREE");
+  return status.stdout.length === 0
+    ? effect("observed", "GIT_OK")
+    : effect("refused", "GIT_DIRTY");
+}
+
 async function verifySinglePushRemote(
   runner: GitRunner,
   repository: GitRepository,
@@ -477,6 +542,52 @@ async function verifySinglePushRemote(
   )
     return effect("refused", "GIT_REMOTE_AMBIGUOUS");
   return effect("observed", "GIT_OK");
+}
+
+/**
+ * Git's ordinary non-force fast-forward rule cannot distinguish an approved
+ * base from an intervening ancestor. A one-shot pre-push hook receives the
+ * remote's advertised old OID in this push transaction and rejects any move.
+ * It lives in a private temporary directory and never changes repository hooks.
+ */
+async function guardedPush(
+  runner: GitRunner,
+  repository: GitRepository,
+  input: Readonly<{
+    base: string;
+    candidate: string;
+    ref: string;
+    remote: string;
+  }>,
+): Promise<GitResult> {
+  let directory: string | undefined;
+  try {
+    directory = await mkdtemp(join(tmpdir(), "sce-git-pre-push-"));
+    const hook = join(directory, "pre-push");
+    await writeFile(
+      hook,
+      `#!/bin/sh\nIFS=' '\nread -r local_ref local_oid remote_ref remote_oid || exit 1\n[ "$local_oid" = '${input.candidate}' ] || exit 1\n[ "$remote_ref" = '${input.ref}' ] || exit 1\n[ "$remote_oid" = '${input.base}' ] || exit 1\nexit 0\n`,
+      { encoding: "utf8", mode: 0o700 },
+    );
+    await chmod(hook, 0o700);
+    activeHookPaths.add(normalize(resolve(directory)));
+    return await run(runner, repository, [
+      "-c",
+      `core.hooksPath=${directory}`,
+      "push",
+      input.remote,
+      `${input.candidate}:${input.ref}`,
+    ]);
+  } catch {
+    return { exitCode: null, signal: null, stdout: "", unavailable: true };
+  } finally {
+    if (directory !== undefined) {
+      activeHookPaths.delete(normalize(resolve(directory)));
+      await rm(directory, { force: true, recursive: true }).catch(
+        () => undefined,
+      );
+    }
+  }
 }
 
 /** Verify exact common-dir/object-format identity before every mutating effect. */
@@ -660,12 +771,14 @@ export async function ensureBranch(
     input.branch,
     input.base,
   ]);
-  const failed = terminalFailure(created);
-  if (failed !== undefined) return failed;
   const after = await refOid(runner, repository, ref);
-  return after.state === "found" && after.oid === input.base
-    ? effect("observed", "GIT_OK")
-    : effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  if (after.state === "found" && after.oid === input.base)
+    return effect("observed", "GIT_OK");
+  if (after.state === "unreadable" || terminalFailure(created) !== undefined)
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  return created.exitCode === 0
+    ? effect("ambiguous", "GIT_UNRESOLVED_EFFECT")
+    : effect("refused", "GIT_REFUSED");
 }
 
 type WorktreeRecord = Readonly<{
@@ -751,7 +864,7 @@ export async function ensureWorktree(
   const wantedBranch = `refs/heads/${input.branch}`;
   if (existing !== undefined)
     return existing.head === input.head && existing.branch === wantedBranch
-      ? verifyWorktreeOwnership(runner, repository, input.path)
+      ? verifyCleanWorktree(runner, repository, input.path)
       : effect("refused", "GIT_FOREIGN_WORKTREE");
   if (records.some((record) => record.branch === wantedBranch))
     return effect("refused", "GIT_FOREIGN_WORKTREE");
@@ -761,22 +874,21 @@ export async function ensureWorktree(
     input.path,
     input.branch,
   ]);
-  const addFailure = terminalFailure(added);
-  if (addFailure !== undefined) return addFailure;
   const reread = await run(runner, repository, [
     "worktree",
     "list",
     "--porcelain",
   ]);
-  const rereadFailure = outputResult(reread);
-  if (rereadFailure !== undefined) return rereadFailure;
+  if (!commandOk(reread)) return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
   const discovered = parseWorktreeList(
     reread.stdout,
     repository.objectFormat,
   )?.find((record) => record.path === wantedPath);
   if (discovered?.head !== input.head || discovered.branch !== wantedBranch)
-    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
-  return verifyWorktreeOwnership(runner, repository, input.path);
+    return terminalFailure(added) === undefined && added.exitCode !== 0
+      ? effect("refused", "GIT_REFUSED")
+      : effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  return verifyCleanWorktree(runner, repository, input.path);
 }
 
 /** Recovery is read-only: it determines whether an intent already took effect. */
@@ -830,11 +942,11 @@ export async function integrateLocalFastForward(
     "--ff-only",
     input.candidate,
   ]);
-  const failure = terminalFailure(merged);
-  if (failure !== undefined) return failure;
   const after = await refOid(runner, repository, input.integrationRef);
   if (after.state === "found" && after.oid === input.candidate)
     return effect("observed", "GIT_OK");
+  if (after.state === "unreadable" || terminalFailure(merged) !== undefined)
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
   return merged.exitCode === 0
     ? effect("ambiguous", "GIT_UNRESOLVED_EFFECT")
     : effect("refused", "GIT_NOT_FAST_FORWARD");
@@ -852,6 +964,8 @@ export async function publishCandidate(
     !exactOid(repository.objectFormat, input.candidate)
   )
     return effect("refused", "GIT_BAD_INPUT");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
   const remoteVerified = await verifySinglePushRemote(
     runner,
     repository,
@@ -863,8 +977,6 @@ export async function publishCandidate(
     input.remote,
     `${input.candidate}:refs/heads/${input.remoteBranch}`,
   ]);
-  const failure = terminalFailure(pushed);
-  if (failure !== undefined) return failure;
   const remote = await remoteRefOid(
     runner,
     repository,
@@ -873,6 +985,8 @@ export async function publishCandidate(
   );
   if (remote.state === "found" && remote.oid === input.candidate)
     return effect("observed", "GIT_OK");
+  if (remote.state === "unreadable" || terminalFailure(pushed) !== undefined)
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
   return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
 }
 
@@ -897,6 +1011,8 @@ export async function integrateRemoteFastForward(
     !exactOid(repository.objectFormat, input.candidate)
   )
     return effect("refused", "GIT_BAD_INPUT");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
   const remoteVerified = await verifySinglePushRemote(
     runner,
     repository,
@@ -907,15 +1023,17 @@ export async function integrateRemoteFastForward(
   const before = await remoteRefOid(runner, repository, input.remote, ref);
   if (before.state === "unreadable")
     return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
-  if (before.state !== "found" || before.oid !== input.base)
-    return effect("refused", "GIT_MOVED_BASE");
-  const pushed = await run(runner, repository, [
-    "push",
-    input.remote,
-    `${input.candidate}:${ref}`,
-  ]);
-  const failure = terminalFailure(pushed);
-  if (failure !== undefined) return failure;
+  if (before.state === "found" && before.oid === input.candidate)
+    return effect("observed", "GIT_OK");
+  if (before.state === "missing")
+    return effect("refused", "GIT_REMOTE_MISSING");
+  if (before.oid !== input.base) return effect("refused", "GIT_MOVED_BASE");
+  const pushed = await guardedPush(runner, repository, {
+    base: input.base,
+    candidate: input.candidate,
+    ref,
+    remote: input.remote,
+  });
   const after = await remoteRefOid(runner, repository, input.remote, ref);
   if (after.state === "unreadable")
     return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
@@ -925,6 +1043,45 @@ export async function integrateRemoteFastForward(
     return effect("refused", "GIT_MOVED_BASE");
   if (pushed.exitCode !== 0) return effect("refused", "GIT_NOT_FAST_FORWARD");
   return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+}
+
+/** Read-only remote recovery for a persisted integration intent. */
+export async function discoverRemoteIntegration(
+  runner: GitRunner,
+  repository: GitRepository,
+  input: Readonly<{
+    candidate: string;
+    integrationBranch: string;
+    remote: string;
+  }>,
+): Promise<GitEffect> {
+  if (
+    !REMOTE.test(input.remote) ||
+    !safeRef(input.integrationBranch) ||
+    !exactOid(repository.objectFormat, input.candidate)
+  )
+    return effect("refused", "GIT_BAD_INPUT");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
+  const remoteVerified = await verifySinglePushRemote(
+    runner,
+    repository,
+    input.remote,
+  );
+  if (remoteVerified.state !== "observed") return remoteVerified;
+  const observed = await remoteRefOid(
+    runner,
+    repository,
+    input.remote,
+    `refs/heads/${input.integrationBranch}`,
+  );
+  if (observed.state === "unreadable")
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  if (observed.state === "missing")
+    return effect("refused", "GIT_REMOTE_MISSING");
+  return observed.oid === input.candidate
+    ? effect("observed", "GIT_OK")
+    : effect("refused", "GIT_MOVED_BASE");
 }
 
 /** Production runner for the adapter; tests normally inject a deterministic seam. */
