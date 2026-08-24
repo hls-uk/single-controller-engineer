@@ -15,7 +15,7 @@ await build({
   bundle: true,
   entryPoints: [resolve(repositoryRoot, "src/cli.ts")],
   format: "esm",
-  logLevel: "info",
+  logLevel: "silent",
   outfile: output,
   platform: "node",
   sourcemap: false,

@@ -1,11 +1,18 @@
 import assert from "node:assert/strict";
+import { readFile, stat } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import { commandNames } from "../../src/commands/index.js";
 import { canonicalJson, parseCliArguments, runCli } from "../../src/cli.js";
 
-test("every designed command is discovered and reports stable Phase 1 unavailability", async () => {
-  for (const command of commandNames) {
+import { run, unit } from "../protocol/fixtures.js";
+test("mutating and external commands report stable unavailability", async () => {
+  for (const command of commandNames.filter(
+    (item) => !["inspect", "status", "next"].includes(item),
+  )) {
     const argv = command === "feedback" ? [command, "prepare"] : [command];
     const execution = await runCli(argv);
     assert.equal(execution.exitCode, 69);
@@ -13,7 +20,7 @@ test("every designed command is discovered and reports stable Phase 1 unavailabi
       command,
       error: {
         code: "SCE_COMMAND_UNAVAILABLE",
-        message: `The ${command} command is not wired in Phase 1.`,
+        message: `The ${command} command is unavailable.`,
       },
       ok: false,
       schema: "sce.cli.response",
@@ -69,7 +76,12 @@ test("a runner receives a typed parsed request and can return a successful envel
     {
       runner(request) {
         received = request;
-        return { result: { legalActions: ["plan-wave"] }, status: "ok" };
+        return {
+          result: { legalActions: ["plan-wave"] },
+          schema: "sce.command.result",
+          status: "ok",
+          version: 1,
+        };
       },
     },
   );
@@ -101,7 +113,7 @@ test("feedback requires and validates its action", () => {
       "feedback requires one action: prepare, preview, submit, or flush.",
   });
   assert.throws(() => parseCliArguments(["feedback", "unknown"]), {
-    message: "Unknown feedback action: unknown",
+    message: "Unknown feedback action.",
   });
   assert.deepEqual(parseCliArguments(["feedback", "flush"]), {
     kind: "command",
@@ -167,4 +179,96 @@ test("canonical JSON sorts object keys while preserving array order", () => {
     canonicalJson({ z: ["b", "a"], a: { d: 1, c: 2 } }),
     '{"a":{"c":2,"d":1},"z":["b","a"]}',
   );
+});
+test("default runner deterministically inspects valid repository state", async () => {
+  const state = run();
+  const source = JSON.stringify({ run: state });
+  const inspect = await runCli(["inspect", "--request", source]);
+  assert.deepEqual(JSON.parse(inspect.stdout).result, {
+    integrationBranch: "main",
+    repositoryIdentity: "repo-1",
+    revision: 0,
+    state: "active",
+    unitCount: 1,
+  });
+  const status = await runCli(["status", "--request", source]);
+  assert.deepEqual(JSON.parse(status.stdout).result, {
+    activeModifyingUnitIds: [],
+    effectCount: 0,
+    revision: 0,
+    state: "active",
+  });
+  const next = await runCli(["next", "--request", source]);
+  assert.deepEqual(JSON.parse(next.stdout).result, {
+    legalActions: ["plan-wave"],
+    revision: 0,
+  });
+  assert.equal(inspect.exitCode, 0);
+  assert.equal(status.exitCode, 0);
+  assert.equal(next.exitCode, 0);
+});
+test("malformed, oversize, and invalid state requests fail closed", async () => {
+  const tooLarge = `{\"payload\":\"${"x".repeat(128 * 1024)}\"}`;
+  for (const [source, code] of [
+    [
+      JSON.stringify({ run: run(), unknown: true }),
+      "SCE_INVALID_STATE_REQUEST",
+    ],
+    ["{", "SCE_INVALID_JSON"],
+    [tooLarge, "SCE_REQUEST_TOO_LARGE"],
+    ['{"run":{}}', "SCE_INVALID_STATE_REQUEST"],
+  ] as const) {
+    const execution = await runCli(["next", "--request", source]);
+    assert.equal(JSON.parse(execution.stdout).error.code, code);
+  }
+});
+test("invalid runner results are rejected without leaking fields", async () => {
+  const execution = await runCli(["inspect"], {
+    runner() {
+      return { status: "ok", result: {}, leaked: "canary secret" } as never;
+    },
+  });
+  assert.equal(
+    JSON.parse(execution.stdout).error.code,
+    "SCE_INVALID_RUNNER_RESULT",
+  );
+  assert.doesNotMatch(execution.stdout, /canary secret/u);
+});
+test("next action is determined only by validated protocol state", async () => {
+  const state = run([unit("unit-1", "candidate_committed")]);
+  const execution = await runCli([
+    "next",
+    "--request",
+    JSON.stringify({ run: state }),
+  ]);
+  assert.equal(execution.exitCode, 0);
+  assert.deepEqual(JSON.parse(execution.stdout).result, {
+    legalActions: ["qualify"],
+    revision: 0,
+  });
+});
+test("vendored CLI bundle is reproducible and executable", async () => {
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+  const build = () =>
+    spawnSync(process.execPath, ["scripts/build.mjs"], {
+      cwd: root,
+      encoding: "utf8",
+    });
+  const output = resolve(
+    root,
+    "skills/single-controller-engineer/scripts/sce.mjs",
+  );
+  assert.equal(build().status, 0);
+  const first = await readFile(output);
+  assert.equal(build().status, 0);
+  assert.deepEqual(await readFile(output), first);
+  const execution = spawnSync(process.execPath, [output, "--version"], {
+    encoding: "utf8",
+  });
+  assert.equal(execution.status, 0);
+  assert.equal(
+    execution.stdout,
+    '{"ok":true,"result":{"version":"0.1.0"},"schema":"sce.cli.response","version":1}\n',
+  );
+  assert.ok((await stat(output)).mode & 0o111);
 });

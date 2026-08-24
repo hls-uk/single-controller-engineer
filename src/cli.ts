@@ -8,7 +8,11 @@ import {
   feedbackActions,
   isCommandName,
   isFeedbackAction,
-  unavailableCommandRunner,
+  MAX_CLI_REQUEST_BYTES,
+  stateOnlyCommandRunner,
+  validateCommandPayload,
+  validateCommandRequest,
+  validateCommandRunnerResult,
 } from "./commands/index.js";
 import type {
   CommandName,
@@ -112,10 +116,10 @@ export function parseCliArguments(argv: readonly string[]): ParsedInvocation {
     return { kind: "version" };
   }
   if (first.startsWith("-")) {
-    throw new CliError("SCE_UNKNOWN_OPTION", `Unknown option: ${first}`);
+    throw new CliError("SCE_UNKNOWN_OPTION", "Unknown option.");
   }
   if (!isCommandName(first)) {
-    throw new CliError("SCE_UNKNOWN_COMMAND", `Unknown command: ${first}`);
+    throw new CliError("SCE_UNKNOWN_COMMAND", "Unknown command.");
   }
 
   return parseCommand(first, argv.slice(1));
@@ -145,7 +149,7 @@ function parseCommand(
         continue;
       }
       if (!knownOptions.has(option)) {
-        throw new CliError("SCE_UNKNOWN_OPTION", `Unknown option: ${option}`);
+        throw new CliError("SCE_UNKNOWN_OPTION", "Unknown option.");
       }
       if (option === "--json" || option === "--help") {
         if (inlineValue !== undefined) {
@@ -182,16 +186,19 @@ function parseCommand(
   }
 
   const feedbackAction = parsePositionals(command, positionals);
-  return {
-    kind: "command",
-    request: {
-      command,
-      ...(feedbackAction === undefined ? {} : { feedbackAction }),
-      options: parseOptions(values),
-      schema: REQUEST_SCHEMA,
-      version: SCHEMA_VERSION,
-    },
+  const request: CommandRequest = {
+    command,
+    ...(feedbackAction === undefined ? {} : { feedbackAction }),
+    options: parseOptions(values),
+    schema: REQUEST_SCHEMA,
+    version: SCHEMA_VERSION,
   };
+  if (!validateCommandRequest(request))
+    throw new CliError(
+      "SCE_INVALID_REQUEST",
+      "The command request is invalid.",
+    );
+  return { kind: "command", request };
 }
 
 function splitOption(token: string): readonly [string, string | undefined] {
@@ -221,10 +228,7 @@ function parsePositionals(
 ) {
   if (command !== "feedback") {
     if (positionals.length > 0) {
-      throw new CliError(
-        "SCE_UNEXPECTED_ARGUMENT",
-        `Unexpected argument: ${positionals[0]}`,
-      );
+      throw new CliError("SCE_UNEXPECTED_ARGUMENT", "Unexpected argument.");
     }
     return undefined;
   }
@@ -235,17 +239,11 @@ function parsePositionals(
     );
   }
   if (positionals.length > 1) {
-    throw new CliError(
-      "SCE_UNEXPECTED_ARGUMENT",
-      `Unexpected argument: ${positionals[1]}`,
-    );
+    throw new CliError("SCE_UNEXPECTED_ARGUMENT", "Unexpected argument.");
   }
   const action = positionals[0];
   if (action === undefined || !isFeedbackAction(action)) {
-    throw new CliError(
-      "SCE_INVALID_ARGUMENT",
-      `Unknown feedback action: ${action ?? ""}`,
-    );
+    throw new CliError("SCE_INVALID_ARGUMENT", "Unknown feedback action.");
   }
   return action;
 }
@@ -304,23 +302,23 @@ function parseNonEmpty(value: string, option: string): string {
 }
 
 function parseRequest(value: string): JsonObject {
+  if (new TextEncoder().encode(value).byteLength > MAX_CLI_REQUEST_BYTES)
+    throw new CliError(
+      "SCE_REQUEST_TOO_LARGE",
+      "--request exceeds the 128 KiB limit.",
+    );
   let parsed: unknown;
   try {
     parsed = JSON.parse(value) as unknown;
   } catch {
     throw new CliError("SCE_INVALID_JSON", "--request must be valid JSON.");
   }
-  if (!isJsonObject(parsed)) {
+  if (!validateCommandPayload(parsed))
     throw new CliError(
       "SCE_INVALID_OPTION_VALUE",
-      "--request must be a JSON object.",
+      "--request must be a bounded JSON object.",
     );
-  }
   return parsed;
-}
-
-function isJsonObject(value: unknown): value is JsonObject {
-  return value !== null && !Array.isArray(value) && typeof value === "object";
 }
 
 export async function runCli(
@@ -338,7 +336,7 @@ export async function runCli(
       return success({ version: dependencies.version ?? CLI_VERSION });
     }
 
-    const runner = dependencies.runner ?? unavailableCommandRunner;
+    const runner = dependencies.runner ?? stateOnlyCommandRunner;
     let outcome;
     try {
       outcome = await runner(invocation.request);
@@ -350,12 +348,27 @@ export async function runCli(
         invocation.request.command,
       );
     }
+    if (!validateCommandRunnerResult(outcome)) {
+      return failure(
+        "SCE_INVALID_RUNNER_RESULT",
+        "The command runner returned an invalid result.",
+        EXIT_SOFTWARE,
+        invocation.request.command,
+      );
+    }
     if (outcome.status === "unavailable") {
       return failure(
         "SCE_COMMAND_UNAVAILABLE",
-        outcome.message ??
-          `The ${invocation.request.command} command is unavailable.`,
+        `The ${invocation.request.command} command is unavailable.`,
         EXIT_UNAVAILABLE,
+        invocation.request.command,
+      );
+    }
+    if (outcome.status === "invalid") {
+      return failure(
+        outcome.code,
+        "The request does not contain a valid repository run.",
+        EXIT_USAGE,
         invocation.request.command,
       );
     }
