@@ -1,0 +1,45 @@
+{
+  "name": "@hls-uk/single-controller-engineer",
+  "version": "0.1.0",
+  "description": "Deterministic protocol engine and agent skills for single-controller software delivery with Beads.",
+  "type": "module",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hls-uk/single-controller-engineer.git"
+  },
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "bin": {
+    "sce": "skills/single-controller-engineer/scripts/sce.mjs"
+  },
+  "files": [
+    "README.md",
+    "skills/single-controller-engineer",
+    "skills/single-controller-feedback"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "npm run check:format && npm run typecheck && npm test && npm run build",
+    "check:format": "prettier --check .",
+    "format": "prettier --write .",
+    "test": "tsx --test test/**/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "0.34.52",
+    "ajv": "8.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "esbuild": "0.28.2",
+    "fast-check": "4.9.0",
+    "prettier": "3.9.6",
+    "tsx": "4.23.12",
+    "typescript": "7.0.2"
+  }
+}

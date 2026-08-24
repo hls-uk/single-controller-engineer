@@ -1,0 +1,9 @@
+node_modules/
+skills/single-controller-engineer/scripts/sce.mjs
+.agents/
+.beads/
+.claude/
+.codex/
+AGENTS.md
+CLAUDE.md
+wiki/
