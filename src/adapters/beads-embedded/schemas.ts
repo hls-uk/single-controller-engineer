@@ -56,6 +56,23 @@ export type EmbeddedReadback = Readonly<{
   root: RootProjection;
 }>;
 
+/**
+ * Immutable, non-secret composition identity. This is supplied once by the
+ * concrete process so the adapter can bind preflight provenance before it
+ * permits any semantic operation.
+ */
+export type EmbeddedProcessIdentity = Readonly<{
+  database: string;
+  databaseDirectory: string;
+  prefix: string;
+  remote?: Readonly<{
+    name: string;
+    ref: string;
+    url: string;
+  }>;
+  storePath: string;
+}>;
+
 export type CrashDiscovery = Readonly<{
   /** Exact local Dolt head, and remote head after a push, never a boolean. */
   head?: string;
@@ -92,6 +109,7 @@ export type EmbeddedResponse =
   | Readonly<{ kind: "discover"; value: CrashDiscovery }>;
 
 export interface EmbeddedProcessPort {
+  readonly identity: EmbeddedProcessIdentity;
   execute(request: EmbeddedRequest): Promise<EmbeddedResponse>;
 }
 

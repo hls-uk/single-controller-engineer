@@ -15,6 +15,7 @@ import {
   EMBEDDED_ADAPTER_VERSION,
   type CrashPoint,
   type EmbeddedMode,
+  type EmbeddedProcessIdentity,
   type EmbeddedProcessPort,
   type EmbeddedReadback,
   type EmbeddedResponse,
@@ -44,6 +45,7 @@ export type {
 
 export type WorkerTrackerBaseline = Readonly<{
   head?: string;
+  remoteHead?: string;
   slot: MergeSlotObservation;
   workingSet: "clean";
 }>;
@@ -69,10 +71,34 @@ function same(left: unknown, right: unknown): boolean {
   return canonicalJson(left as JsonValue) === canonicalJson(right as JsonValue);
 }
 
-function checkedPreflight(preflight: PreflightEnvelope): boolean {
+function checkedPreflight(
+  preflight: PreflightEnvelope,
+  identity: EmbeddedProcessIdentity,
+  mode: EmbeddedMode,
+  prefix: string,
+): boolean {
+  if (preflight.payload.status !== "ready") return false;
+  const beads = preflight.payload.beads;
+  const expectedDirectory = `${identity.storePath}/${identity.database}`;
+  if (
+    beads.mode !== "embedded" ||
+    beads.database !== identity.database ||
+    beads.prefix !== prefix ||
+    identity.prefix !== prefix ||
+    beads.storePath !== identity.storePath ||
+    identity.databaseDirectory !== expectedDirectory
+  )
+    return false;
+  if (mode === "local-only")
+    return (
+      beads.syncRemote === undefined &&
+      beads.syncRef === undefined &&
+      identity.remote === undefined
+    );
   return (
-    preflight.payload.status === "ready" &&
-    preflight.payload.beads.mode === "embedded"
+    identity.remote !== undefined &&
+    beads.syncRemote === identity.remote.url &&
+    beads.syncRef === identity.remote.ref
   );
 }
 
@@ -95,14 +121,12 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     this.prefix = options.prefix;
     this.process = options.process;
     this.scope = options.scope;
-    this.usable =
-      checkedPreflight(options.preflight) &&
-      options.preflight.payload.status === "ready" &&
-      (options.mode === "local-only"
-        ? options.preflight.payload.beads.syncRemote === undefined &&
-          options.preflight.payload.beads.syncRef === undefined
-        : options.preflight.payload.beads.syncRemote !== undefined &&
-          options.preflight.payload.beads.syncRef !== undefined);
+    this.usable = checkedPreflight(
+      options.preflight,
+      options.process.identity,
+      options.mode,
+      options.prefix,
+    );
   }
 
   /** Acquires only the pre-existing built-in merge slot, with exact readback. */
@@ -162,6 +186,39 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
   public async compareAndSet(batch: MutationBatch): Promise<RunStoreResult> {
     if (!this.usable || !validateMutationBatch(batch).ok)
       return { status: "quarantined" };
+    const recovery = await this.state();
+    if (recovery === undefined || !recovery.reachable)
+      return { status: "unavailable" };
+    if (recovery.workingSet === "pending") {
+      const discovered = await this.discover("before_commit", batch);
+      if (discovered.status !== "observed") return { status: "ambiguous" };
+      // A replacement process must not commit/push a previously written batch
+      // after its controller lost or released the built-in slot. This check is
+      // deliberately before `durableCheckpoint`, which otherwise can commit.
+      const slot = await this.slot("check");
+      if (
+        slot === undefined ||
+        slot.status !== "acquired" ||
+        slot.actor !== batch.expectedHolder ||
+        slot.holder !== batch.expectedHolder
+      )
+        return { status: "holder_mismatch" };
+      const durable = await this.durableCheckpoint(batch);
+      if (durable.code !== "applied") return this.storeFailure(durable.code);
+      const readback = await this.readback(batch);
+      return readback === undefined ||
+        !same(readback.root, batch.next.root) ||
+        !same(readback.children, batch.next.children)
+        ? { status: "quarantined" }
+        : {
+            affectedRowCount: 1 + batch.changedRows.length,
+            checkpoint: batch.checkpoint,
+            children: [...readback.children],
+            root: readback.root,
+            status: "applied",
+          };
+    }
+    if (recovery.workingSet !== "clean") return { status: "ambiguous" };
     const prepared = await this.prepareSharedState();
     if (prepared.code !== "applied") return this.storeFailure(prepared.code);
     const slot = await this.slot("check");
@@ -206,15 +263,20 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
   /** Records a clean baseline before a cooperative worker/reviewer session. */
   public async workerBaseline(): Promise<WorkerTrackerBaseline | undefined> {
     const state = await this.state();
-    const slot = await this.slot("check");
     if (
       state === undefined ||
       state.workingSet !== "clean" ||
-      slot === undefined
+      (this.mode === "git-sync" &&
+        (state.head === undefined ||
+          state.remoteHead === undefined ||
+          state.head !== state.remoteHead))
     )
       return undefined;
+    const slot = await this.slot("check");
+    if (slot === undefined) return undefined;
     return {
       ...(state.head === undefined ? {} : { head: state.head }),
+      ...(this.mode === "git-sync" ? { remoteHead: state.remoteHead } : {}),
       slot,
       workingSet: "clean",
     };
@@ -229,6 +291,7 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     if (state === undefined || slot === undefined) return result("ambiguous");
     return state.workingSet === "clean" &&
       state.head === baseline.head &&
+      state.remoteHead === baseline.remoteHead &&
       same(slot, baseline.slot)
       ? result("applied")
       : result("worker_mutation");

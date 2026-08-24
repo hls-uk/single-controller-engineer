@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute } from "node:path";
 
 import {
@@ -21,6 +22,27 @@ import type { ProjectionPersistencePort } from "./pinned-bd-process.js";
 
 const MAX_OUTPUT_BYTES = 262_144;
 const TIMEOUT_MS = 15_000;
+const PINNED_DOLT_VERSION = "2.2.1";
+type Executable = Readonly<{
+  dev: number;
+  ino: number;
+  mtimeMs: number;
+  path: string;
+  size: number;
+}>;
+function sameExecutable(
+  left: Executable | undefined,
+  right: Executable,
+): boolean {
+  return (
+    left !== undefined &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mtimeMs === right.mtimeMs &&
+    left.path === right.path &&
+    left.size === right.size
+  );
+}
 
 export interface DoltProjectionOptions {
   /** Canonical `<bd dolt show.data_dir>/<database>` directory. */
@@ -29,7 +51,6 @@ export interface DoltProjectionOptions {
   readonly childIssueId: (unitId: string) => string | undefined;
   /** Absolute controller-approved executable; no PATH lookup is performed. */
   readonly doltExecutable: string;
-  readonly doltVersion: string;
 }
 
 export const PROJECTION_INITIALIZATION_AUTHORITY =
@@ -85,15 +106,18 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
   private readonly rootIssueId: string;
   private readonly childIssueId: (unitId: string) => string | undefined;
   private readonly doltExecutable: string;
-  private readonly doltVersion: string;
   private versionCheck: Promise<boolean> | undefined;
+  private versionExecutable: Executable | undefined;
 
   public constructor(options: DoltProjectionOptions) {
-    this.directory = options.databaseDirectory;
+    try {
+      this.directory = realpathSync.native(options.databaseDirectory);
+    } catch {
+      this.directory = "";
+    }
     this.rootIssueId = options.rootIssueId;
     this.childIssueId = options.childIssueId;
     this.doltExecutable = options.doltExecutable;
-    this.doltVersion = options.doltVersion;
   }
 
   public async mutate(batch: MutationBatch): Promise<EmbeddedResponse> {
@@ -356,30 +380,27 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
   }
 
   private async sql(query: string): Promise<string | undefined> {
-    if (!(await this.pinnedVersion())) return undefined;
+    const executable = this.executable();
+    if (executable === undefined || !(await this.pinnedVersion(executable)))
+      return undefined;
     return new Promise((resolve) => {
       let output = "";
       let bytes = 0;
       let settled = false;
-      if (!this.safeExecutable()) return resolve(undefined);
-      const child = spawn(
-        this.doltExecutable,
-        ["sql", "-r", "json", "-q", query],
-        {
-          cwd: this.directory,
-          env: {
-            LANG: "C",
-            LC_ALL: "C",
-            PATH: `${dirname(this.doltExecutable)}:/usr/bin:/bin`,
-            TMPDIR: process.env.TMPDIR ?? "/private/tmp",
-            DARWIN_USER_TEMP_DIR:
-              process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
-            TZ: "UTC",
-          },
-          shell: false,
-          stdio: ["ignore", "pipe", "ignore"],
+      const child = spawn(executable.path, ["sql", "-r", "json", "-q", query], {
+        cwd: this.directory,
+        env: {
+          LANG: "C",
+          LC_ALL: "C",
+          PATH: `${dirname(this.doltExecutable)}:/usr/bin:/bin`,
+          TMPDIR: process.env.TMPDIR ?? "/private/tmp",
+          DARWIN_USER_TEMP_DIR:
+            process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
+          TZ: "UTC",
         },
-      );
+        shell: false,
+        stdio: ["ignore", "pipe", "ignore"],
+      });
       const timer = setTimeout(() => child.kill("SIGKILL"), TIMEOUT_MS);
       child.stdout.on("data", (chunk: Buffer) => {
         bytes += chunk.byteLength;
@@ -411,20 +432,38 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
       : undefined;
   }
 
-  private safeExecutable(): boolean {
-    return (
-      isAbsolute(this.doltExecutable) &&
-      !this.doltExecutable.includes("\u0000") &&
-      /^\d+\.\d+\.\d+$/u.test(this.doltVersion)
-    );
+  private executable(): Executable | undefined {
+    if (
+      !isAbsolute(this.doltExecutable) ||
+      this.doltExecutable.includes("\u0000")
+    )
+      return undefined;
+    try {
+      const path = realpathSync.native(this.doltExecutable);
+      const stat = statSync(path, { throwIfNoEntry: false });
+      return stat === undefined || !stat.isFile()
+        ? undefined
+        : {
+            dev: stat.dev,
+            ino: stat.ino,
+            mtimeMs: stat.mtimeMs,
+            path,
+            size: stat.size,
+          };
+    } catch {
+      return undefined;
+    }
   }
 
-  private pinnedVersion(): Promise<boolean> {
+  private pinnedVersion(executable: Executable): Promise<boolean> {
+    if (!sameExecutable(this.versionExecutable, executable)) {
+      this.versionCheck = undefined;
+      this.versionExecutable = executable;
+    }
     this.versionCheck ??= new Promise((resolve) => {
-      if (!this.safeExecutable()) return resolve(false);
       let output = "";
       let settled = false;
-      const child = spawn(this.doltExecutable, ["version"], {
+      const child = spawn(executable.path, ["version"], {
         cwd: this.directory,
         env: {
           DARWIN_USER_TEMP_DIR:
@@ -457,7 +496,8 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
           settled = true;
           resolve(
             code === 0 &&
-              output.split("\n", 1)[0] === `dolt version ${this.doltVersion}`,
+              output.split("\n", 1)[0] ===
+                `dolt version ${PINNED_DOLT_VERSION}`,
           );
         }
       });

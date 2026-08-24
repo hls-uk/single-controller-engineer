@@ -48,8 +48,11 @@ async function json(cwd: string, args: readonly string[]) {
 
 class RecordingProcess implements EmbeddedProcessPort {
   public readonly requests: EmbeddedRequest[] = [];
+  public readonly identity;
 
-  public constructor(private readonly delegate: EmbeddedProcessPort) {}
+  public constructor(private readonly delegate: EmbeddedProcessPort) {
+    this.identity = delegate.identity;
+  }
 
   public async execute(request: EmbeddedRequest): Promise<EmbeddedResponse> {
     this.requests.push(request);
@@ -186,7 +189,6 @@ test("pinned bd local embedded slot and Dolt working-set fixture", async () => {
       childIssueId: () => undefined,
       databaseDirectory: database,
       doltExecutable: "/opt/homebrew/bin/dolt",
-      doltVersion: "2.2.1",
       rootIssueId: "sce-root",
     });
     assert.equal(
@@ -202,7 +204,6 @@ test("pinned bd local embedded slot and Dolt working-set fixture", async () => {
       childIssueId: () => undefined,
       databaseDirectory: database,
       doltExecutable: "/opt/homebrew/bin/dolt",
-      doltVersion: "2.2.1",
       rootIssueId: "sce-root",
     });
     assert.equal(
@@ -223,7 +224,6 @@ test("pinned bd local embedded slot and Dolt working-set fixture", async () => {
       cwd: root,
       databaseDirectory: database,
       doltExecutable: "/opt/homebrew/bin/dolt",
-      doltVersion: "2.2.1",
       prefix: "sce",
       projections: restarted,
       scope,
@@ -358,7 +358,6 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
       childIssueId: () => undefined,
       databaseDirectory: firstDatabase,
       doltExecutable: "/opt/homebrew/bin/dolt",
-      doltVersion: "2.2.1",
       rootIssueId: "sce-root",
     });
     assert.equal(
@@ -426,7 +425,7 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
           provenance: "embedded_config" as const,
           storePath: join(cwd, ".beads", "embeddeddolt"),
           syncRef: "refs/dolt/data",
-          syncRemote: `file://${remote}`,
+          syncRemote: `git+file://${remote}`,
           toolVersion: "1.1.0" as const,
         },
         git: {
@@ -450,10 +449,13 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
         cwd,
         databaseDirectory: database,
         doltExecutable: "/opt/homebrew/bin/dolt",
-        doltVersion: "2.2.1",
         prefix: "sce",
         projections,
-        remote: { name: "origin", url: `git+file://${remote}` },
+        remote: {
+          name: "origin",
+          ref: "refs/dolt/data",
+          url: `git+file://${remote}`,
+        },
         scope,
       });
     const firstProcess = processFor(first, firstDatabase, firstPersistence);
@@ -479,13 +481,50 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
     assert.equal(acquiredState.value.remoteHead, acquiredState.value.head);
     assert.equal(acquiredSlot.kind, "slot");
     assert.equal(acquiredSlot.value.holder, initial.controller.holder);
-    assert.equal((await firstAdapter.compareAndSet(batch)).status, "applied");
+    // Crash boundary: the exact batch is written and committed, but the
+    // controller process dies before push. A fresh process may only use the
+    // journal batch plus local/remote projection discovery to complete it.
+    assert.equal((await firstPersistence.mutate(batch)).value, "applied");
+    assert.equal(
+      (await firstProcess.execute({ kind: "commit" })).value,
+      "applied",
+    );
+    const beforePushPersistence = new DoltProjectionPersistence({
+      childIssueId: () => undefined,
+      databaseDirectory: firstDatabase,
+      doltExecutable: "/opt/homebrew/bin/dolt",
+      rootIssueId: "sce-root",
+    });
+    const beforePushProcess = processFor(
+      first,
+      firstDatabase,
+      beforePushPersistence,
+    );
+    const beforePushDiscovery = await beforePushProcess.execute({
+      batch,
+      kind: "discover",
+      point: "before_push",
+    });
+    assert.equal(beforePushDiscovery.kind, "discover");
+    assert.equal(beforePushDiscovery.value.status, "observed");
+    assert.ok(beforePushDiscovery.value.head);
+    const recoveredBeforePush = new EmbeddedBeadsAdapter({
+      holder: initial.controller.holder,
+      mode: "git-sync",
+      prefix: "sce",
+      preflight: preflight(first),
+      process: beforePushProcess,
+      scope,
+    });
+    assert.equal(
+      (await recoveredBeforePush.compareAndSet(batch)).status,
+      "applied",
+    );
 
     const restartedPersistence = new DoltProjectionPersistence({
       childIssueId: () => undefined,
       databaseDirectory: firstDatabase,
       doltExecutable: "/opt/homebrew/bin/dolt",
-      doltVersion: "2.2.1",
       rootIssueId: "sce-root",
     });
     const restartedProcess = processFor(
@@ -506,7 +545,6 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
       childIssueId: () => undefined,
       databaseDirectory: secondDatabase,
       doltExecutable: "/opt/homebrew/bin/dolt",
-      doltVersion: "2.2.1",
       rootIssueId: "sce-root",
     });
     const secondProcess = processFor(second, secondDatabase, secondPersistence);
@@ -577,7 +615,6 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
       childIssueId: () => undefined,
       databaseDirectory: secondDatabase,
       doltExecutable: "/opt/homebrew/bin/dolt",
-      doltVersion: "2.2.1",
       rootIssueId: "sce-other",
     });
     assert.equal(
@@ -610,6 +647,9 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
     assert.equal(releasedState.value.remoteHead, releasedState.value.head);
     assert.equal(releasedSlot.kind, "slot");
     assert.equal(releasedSlot.value.status, "available");
+    const remoteWorkerBaseline = await restartAdapter.workerBaseline();
+    assert.ok(remoteWorkerBaseline);
+    assert.ok(remoteWorkerBaseline.remoteHead);
     assert.equal(
       (await secondProcess.execute({ kind: "pull" })).value,
       "applied",
@@ -621,6 +661,26 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
     });
     assert.equal(availableSlot.kind, "slot");
     assert.equal(availableSlot.value.status, "available");
+
+    // A different clone advances only the remote. The first process fetches
+    // during its state read and must refuse to bless a worker baseline whose
+    // remote head moved while its local checkout stayed untouched.
+    await run(second, "bd", [
+      "create",
+      "--id",
+      "sce-worker-remote",
+      "worker remote movement",
+      "--json",
+    ]);
+    await run(second, "bd", ["dolt", "push", "--json"]);
+    assert.equal(
+      (await restartAdapter.verifyWorkerBaseline(remoteWorkerBaseline)).code,
+      "worker_mutation",
+    );
+    assert.equal(
+      (await restartedProcess.execute({ kind: "pull" })).value,
+      "applied",
+    );
 
     await run(second, "bd", ["create", "--id", "sce-race-b", "race", "--json"]);
     await run(first, "bd", ["create", "--id", "sce-race-a", "race", "--json"]);

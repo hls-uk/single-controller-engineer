@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { dirname, isAbsolute } from "node:path";
+import { realpathSync, statSync } from "node:fs";
+import { basename, dirname, isAbsolute } from "node:path";
 
 import {
   MERGE_SLOT_LABEL,
@@ -16,6 +17,7 @@ import type { EmbeddedResult } from "./schemas.js";
 import type {
   CrashDiscovery,
   EmbeddedProcessPort,
+  EmbeddedProcessIdentity,
   EmbeddedReadback,
   EmbeddedRequest,
   EmbeddedResponse,
@@ -24,6 +26,7 @@ import type {
 
 const MAX_OUTPUT_BYTES = 65_536;
 const PINNED_BD_VERSION = "1.1.0";
+const PINNED_DOLT_VERSION = "2.2.1";
 const PROCESS_TIMEOUT_MS = 15_000;
 
 export interface ProjectionPersistencePort {
@@ -49,9 +52,8 @@ export interface PinnedBdProcessOptions {
   /** Canonical `<data_dir>/<database>` proved by preflight/composition. */
   readonly databaseDirectory: string;
   readonly doltExecutable: string;
-  readonly doltVersion: string;
   /** Exact already-configured Dolt remote identity; never created by adapter. */
-  readonly remote?: Readonly<{ name: string; url: string }>;
+  readonly remote?: Readonly<{ name: string; ref: string; url: string }>;
   readonly prefix: string;
   readonly projections: ProjectionPersistencePort;
   readonly scope: FencingScope;
@@ -62,6 +64,28 @@ type Capture = Readonly<{
   exceeded: boolean;
   stdout: string;
 }>;
+
+type Executable = Readonly<{
+  dev: number;
+  ino: number;
+  mtimeMs: number;
+  path: string;
+  size: number;
+}>;
+
+function sameExecutable(
+  left: Executable | undefined,
+  right: Executable,
+): boolean {
+  return (
+    left !== undefined &&
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.mtimeMs === right.mtimeMs &&
+    left.path === right.path &&
+    left.size === right.size
+  );
+}
 
 function safeString(value: unknown, max = 160): string | undefined {
   return typeof value === "string" &&
@@ -191,6 +215,7 @@ type SlotDocument = Readonly<{
  */
 function parseSlotDocument(
   source: string,
+  expectedId: string,
   expectedScope: FencingScope,
 ): SlotDocument | undefined {
   let parsed: unknown;
@@ -213,7 +238,7 @@ function parseSlotDocument(
     raw === undefined || !Array.isArray(raw.labels) ? undefined : raw.labels;
   if (
     raw === undefined ||
-    raw.id === undefined ||
+    raw.id !== expectedId ||
     raw.title !== MERGE_SLOT_TITLE ||
     !Array.isArray(labels) ||
     labels.length !== 1 ||
@@ -245,28 +270,42 @@ function parseSlotDocument(
  * has no atomic generic "write these arbitrary metadata rows" command.
  */
 export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
+  public readonly identity: EmbeddedProcessIdentity;
   private readonly bdExecutable: string;
   private readonly cwd: string;
   private readonly databaseDirectory: string;
   private readonly doltExecutable: string;
-  private readonly doltVersion: string;
   private bdVersionCheck: Promise<Capture | undefined> | undefined;
+  private bdVersionExecutable: Executable | undefined;
   private doltVersionCheck: Promise<Capture | undefined> | undefined;
+  private doltVersionExecutable: Executable | undefined;
   private readonly prefix: string;
   private readonly projections: ProjectionPersistencePort;
-  private readonly remote: Readonly<{ name: string; url: string }> | undefined;
+  private readonly remote:
+    Readonly<{ name: string; ref: string; url: string }> | undefined;
   private readonly scope: FencingScope;
 
   public constructor(options: PinnedBdProcessOptions) {
     this.bdExecutable = options.bdExecutable;
     this.cwd = options.cwd;
-    this.databaseDirectory = options.databaseDirectory;
+    this.databaseDirectory = this.canonicalDirectory(options.databaseDirectory);
     this.doltExecutable = options.doltExecutable;
-    this.doltVersion = options.doltVersion;
     this.prefix = options.prefix;
     this.projections = options.projections;
     this.remote = options.remote;
     this.scope = options.scope;
+    const storePath =
+      this.databaseDirectory === ""
+        ? ""
+        : this.canonicalDirectory(dirname(this.databaseDirectory));
+    this.identity = {
+      database:
+        this.databaseDirectory === "" ? "" : basename(this.databaseDirectory),
+      databaseDirectory: this.databaseDirectory,
+      prefix: this.prefix,
+      ...(this.remote === undefined ? {} : { remote: this.remote }),
+      storePath,
+    };
   }
 
   /** Authorized bootstrap only; normal acquire/check/release never touches it. */
@@ -308,7 +347,11 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
     return after !== undefined &&
       after.code === 0 &&
       !after.exceeded &&
-      parseSlotDocument(after.stdout, this.scope) !== undefined
+      parseSlotDocument(
+        after.stdout,
+        `${this.prefix}-merge-slot`,
+        this.scope,
+      ) !== undefined
       ? this.result("applied")
       : this.result("ambiguous");
   }
@@ -340,7 +383,16 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         const cwd =
           shown === undefined
             ? undefined
-            : `${shown.dataDir}/${shown.database}`;
+            : this.canonicalDirectory(`${shown.dataDir}/${shown.database}`);
+        if (cwd === undefined || cwd !== this.databaseDirectory)
+          return {
+            kind: "state",
+            value: {
+              autoCommit: "off",
+              reachable: false,
+              workingSet: "unknown",
+            },
+          };
         const head = cwd === undefined ? undefined : await this.doltHead(cwd);
         const workingSet =
           cwd === undefined ? undefined : await this.doltWorkingSet(cwd);
@@ -396,7 +448,11 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         const slot =
           show === undefined || show.code !== 0 || show.exceeded
             ? undefined
-            : parseSlotDocument(show.stdout, this.scope);
+            : parseSlotDocument(
+                show.stdout,
+                `${this.prefix}-merge-slot`,
+                this.scope,
+              );
         if (slot === undefined)
           throw new Error("pinned bd slot readback failed");
         const withoutHash = {
@@ -492,8 +548,13 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
   }
 
   private async run(argv: readonly string[]): Promise<Capture | undefined> {
-    if (!this.safeExecutable(this.bdExecutable)) return undefined;
-    this.bdVersionCheck ??= this.runOnce(["--version"]);
+    const executable = this.executable(this.bdExecutable);
+    if (executable === undefined) return undefined;
+    if (!sameExecutable(this.bdVersionExecutable, executable)) {
+      this.bdVersionCheck = undefined;
+      this.bdVersionExecutable = executable;
+    }
+    this.bdVersionCheck ??= this.runOnce(executable.path, ["--version"]);
     const version = await this.bdVersionCheck;
     if (
       version === undefined ||
@@ -504,16 +565,19 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       ).test(version.stdout)
     )
       return undefined;
-    return this.runOnce(argv);
+    return this.runOnce(executable.path, argv);
   }
 
-  private async runOnce(argv: readonly string[]): Promise<Capture | undefined> {
+  private async runOnce(
+    executable: string,
+    argv: readonly string[],
+  ): Promise<Capture | undefined> {
     return new Promise((resolve) => {
       let stdout = "";
       let bytes = 0;
       let exceeded = false;
       let settled = false;
-      const child = spawn(this.bdExecutable, argv, {
+      const child = spawn(executable, argv, {
         cwd: this.cwd,
         env: {
           LANG: "C",
@@ -686,25 +750,55 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
     cwd: string,
     argv: readonly string[],
   ): Promise<Capture | undefined> {
-    if (!this.safeExecutable(this.doltExecutable)) return undefined;
-    this.doltVersionCheck ??= this.runDoltOnce(cwd, ["version"]);
+    const executable = this.executable(this.doltExecutable);
+    if (executable === undefined) return undefined;
+    if (!sameExecutable(this.doltVersionExecutable, executable)) {
+      this.doltVersionCheck = undefined;
+      this.doltVersionExecutable = executable;
+    }
+    this.doltVersionCheck ??= this.runDoltOnce(executable.path, cwd, [
+      "version",
+    ]);
     const version = await this.doltVersionCheck;
     if (
       version === undefined ||
       version.code !== 0 ||
-      version.stdout.split("\n", 1)[0] !== `dolt version ${this.doltVersion}`
+      version.stdout.split("\n", 1)[0] !== `dolt version ${PINNED_DOLT_VERSION}`
     )
       return undefined;
-    return this.runDoltOnce(cwd, argv);
+    return this.runDoltOnce(executable.path, cwd, argv);
   }
 
-  private safeExecutable(value: string): boolean {
-    return (
-      isAbsolute(value) && value.length <= 4096 && !value.includes("\u0000")
-    );
+  private executable(value: string): Executable | undefined {
+    if (!isAbsolute(value) || value.length > 4096 || value.includes("\u0000"))
+      return undefined;
+    try {
+      const path = realpathSync.native(value);
+      const stat = statSync(path, { throwIfNoEntry: false });
+      return stat === undefined || !stat.isFile()
+        ? undefined
+        : {
+            dev: stat.dev,
+            ino: stat.ino,
+            mtimeMs: stat.mtimeMs,
+            path,
+            size: stat.size,
+          };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private canonicalDirectory(value: string): string {
+    try {
+      return realpathSync.native(value);
+    } catch {
+      return "";
+    }
   }
 
   private async runDoltOnce(
+    executable: string,
     cwd: string,
     argv: readonly string[],
   ): Promise<Capture | undefined> {
@@ -713,7 +807,7 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       let bytes = 0;
       let exceeded = false;
       let settled = false;
-      const child = spawn(this.doltExecutable, argv, {
+      const child = spawn(executable, argv, {
         cwd,
         env: {
           LANG: "C",

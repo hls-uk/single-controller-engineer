@@ -15,6 +15,7 @@ import {
 import type { PreflightEnvelope } from "../../../src/preflight/index.js";
 import {
   EmbeddedBeadsAdapter,
+  type EmbeddedProcessIdentity,
   type EmbeddedProcessPort,
   type EmbeddedRequest,
   type EmbeddedResponse,
@@ -30,8 +31,11 @@ const scope: FencingScope = {
   integrationBranch: "main",
 };
 const holder = "run-1/incarnation-1";
+type ReadyPreflight = Omit<PreflightEnvelope, "payload"> & {
+  readonly payload: Extract<PreflightEnvelope["payload"], { status: "ready" }>;
+};
 
-function preflight(sync: boolean): PreflightEnvelope {
+function preflight(sync: boolean): ReadyPreflight {
   return {
     payload: {
       beads: {
@@ -65,7 +69,7 @@ function slot(
   slotHolder?: string,
 ): MergeSlotObservation {
   const value = {
-    actor: holder,
+    actor: slotHolder ?? holder,
     ...(slotHolder === undefined ? {} : { holder: slotHolder }),
     label: MERGE_SLOT_LABEL,
     scope,
@@ -78,9 +82,34 @@ function slot(
   return { ...value, readbackHash: deriveSlotReadbackHash(value) };
 }
 
+function processIdentity(sync: boolean): EmbeddedProcessIdentity {
+  return {
+    database: "sce",
+    databaseDirectory: "/workspace/repo/.beads/dolt/sce",
+    prefix: "sce",
+    ...(sync
+      ? {
+          remote: {
+            name: "origin",
+            ref: "refs/dolt/data",
+            url: "github.test/org/repo",
+          },
+        }
+      : {}),
+    storePath: "/workspace/repo/.beads/dolt",
+  };
+}
+
 class ScriptedPort implements EmbeddedProcessPort {
   public readonly requests: EmbeddedRequest[] = [];
-  public constructor(private readonly responses: readonly EmbeddedResponse[]) {}
+  public identity: EmbeddedProcessIdentity;
+
+  public constructor(
+    private readonly responses: readonly EmbeddedResponse[],
+    identity = processIdentity(false),
+  ) {
+    this.identity = identity;
+  }
   public async execute(request: EmbeddedRequest): Promise<EmbeddedResponse> {
     this.requests.push(request);
     const next = this.responses[this.requests.length - 1];
@@ -90,6 +119,8 @@ class ScriptedPort implements EmbeddedProcessPort {
 }
 
 function adapter(port: EmbeddedProcessPort, mode: "local-only" | "git-sync") {
+  if (port instanceof ScriptedPort)
+    port.identity = processIdentity(mode === "git-sync");
   return new EmbeddedBeadsAdapter({
     holder,
     mode,
@@ -295,6 +326,10 @@ function postPushPort(
       kind: "state",
       value: { autoCommit: "on", head, reachable: true, workingSet: "clean" },
     },
+    {
+      kind: "state",
+      value: { autoCommit: "on", head, reachable: true, workingSet: "clean" },
+    },
     { kind: "pull", value: "applied" },
     {
       kind: "state",
@@ -412,6 +447,159 @@ test("worker tracker detection blocks qualification instead of repairing movemen
     (await runtime.verifyWorkerBaseline(baseline)).code,
     "worker_mutation",
   );
+});
+
+test("worker baseline detects remote-only movement in git-sync mode", async () => {
+  const head = "c".repeat(40);
+  const port = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head,
+        reachable: true,
+        remoteHead: head,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("acquired", holder) },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head,
+        reachable: true,
+        remoteHead: "d".repeat(40),
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("acquired", holder) },
+  ]);
+  const runtime = adapter(port, "git-sync");
+  const baseline = await runtime.workerBaseline();
+  assert.ok(baseline);
+  assert.equal(
+    (await runtime.verifyWorkerBaseline(baseline)).code,
+    "worker_mutation",
+  );
+});
+
+test("git-sync worker baseline refuses a missing or moved authoritative remote head", async () => {
+  const head = "c".repeat(40);
+  for (const state of [
+    {
+      autoCommit: "on" as const,
+      head,
+      reachable: true,
+      workingSet: "clean" as const,
+    },
+    {
+      autoCommit: "on" as const,
+      head,
+      reachable: true,
+      remoteHead: "d".repeat(40),
+      workingSet: "clean" as const,
+    },
+  ]) {
+    const port = new ScriptedPort([{ kind: "state", value: state }]);
+    assert.equal(await adapter(port, "git-sync").workerBaseline(), undefined);
+    assert.deepEqual(
+      port.requests.map((request) => request.kind),
+      ["state"],
+    );
+  }
+});
+
+test("pending exact-batch recovery rechecks the durable controller holder before commit", async () => {
+  const batch = journalBatch();
+  for (const slotReadback of [
+    slot("acquired", "run-2/incarnation-1"),
+    slot("available"),
+  ]) {
+    const port = new ScriptedPort([
+      {
+        kind: "state",
+        value: {
+          autoCommit: "batch",
+          head: "e".repeat(40),
+          reachable: true,
+          workingSet: "pending",
+        },
+      },
+      { kind: "discover", value: { status: "observed" } },
+      { kind: "slot", value: slotReadback },
+    ]);
+    assert.equal(
+      (await adapter(port, "local-only").compareAndSet(batch)).status,
+      "holder_mismatch",
+    );
+    assert.deepEqual(
+      port.requests.map((request) => request.kind),
+      ["state", "discover", "slot"],
+    );
+  }
+});
+
+test("adapter binds preflight identity to the concrete process before any command", async () => {
+  const local = preflight(false);
+  const sync = preflight(true);
+  const wrongStore: PreflightEnvelope = {
+    ...local,
+    payload: {
+      ...local.payload,
+      beads: {
+        ...local.payload.beads,
+        storePath: "/workspace/other/.beads/dolt",
+      },
+    },
+  };
+  const wrongDatabase: PreflightEnvelope = {
+    ...local,
+    payload: {
+      ...local.payload,
+      beads: { ...local.payload.beads, database: "other" },
+    },
+  };
+  const wrongPrefix: PreflightEnvelope = {
+    ...local,
+    payload: {
+      ...local.payload,
+      beads: { ...local.payload.beads, prefix: "other" },
+    },
+  };
+  const wrongRemote: PreflightEnvelope = {
+    ...sync,
+    payload: {
+      ...sync.payload,
+      beads: { ...sync.payload.beads, syncRemote: "github.test/other/repo" },
+    },
+  };
+  const wrongRef: PreflightEnvelope = {
+    ...sync,
+    payload: {
+      ...sync.payload,
+      beads: { ...sync.payload.beads, syncRef: "refs/dolt/other" },
+    },
+  };
+  for (const [candidate, mode, identity] of [
+    [wrongStore, "local-only", processIdentity(false)],
+    [wrongDatabase, "local-only", processIdentity(false)],
+    [wrongPrefix, "local-only", processIdentity(false)],
+    [wrongRemote, "git-sync", processIdentity(true)],
+    [wrongRef, "git-sync", processIdentity(true)],
+  ] as const) {
+    const port = new ScriptedPort([], identity);
+    const runtime = new EmbeddedBeadsAdapter({
+      holder,
+      mode,
+      prefix: "sce",
+      preflight: candidate,
+      process: port,
+      scope,
+    });
+    assert.equal((await runtime.acquire()).code, "quarantined");
+    assert.deepEqual(port.requests, []);
+  }
 });
 
 for (const autoCommit of ["off", "on", "batch"] as const)
