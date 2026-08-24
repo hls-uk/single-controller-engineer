@@ -37,12 +37,15 @@ export function legalActions(
 
   return sortActions(
     Object.values(state.units)
+      .filter((unit) => state.wave.unitIds.includes(unit.id))
       .flatMap((unit) => actionsForUnit(state, unit))
       .filter(
         (action) =>
           (action.mode !== "emit" ||
             action.effectKind === undefined ||
-            effectAllowed(state, action.effectKind)) &&
+            (effectAllowed(state, action.effectKind) &&
+              (action.unitId === undefined ||
+                !hasUnresolvedUnitEffect(state, action.unitId)))) &&
           (action.mode !== "record" || pendingUnitEffect(state, action)),
       ),
   );
@@ -195,7 +198,10 @@ function lifecycleActions(
     case "approved":
       return isCurrentApproval(unit) &&
         state.qualificationOwnerUnitId === unit.id
-        ? [unitAction(unit, "publish_intent", "emit", "publish")]
+        ? state.authorityProfile === "local-change-only" &&
+          state.integrationProfile === "local-ff"
+          ? [unitAction(unit, "integrate_intent", "emit", "integrate")]
+          : [unitAction(unit, "publish_intent", "emit", "publish")]
         : [];
     case "publish_intent":
       return [unitAction(unit, "publish_observed", "record", "publish")];
@@ -212,6 +218,7 @@ function lifecycleActions(
         ? [unitAction(unit, "integrate_observed", "record", "integrate")]
         : [];
     case "landed":
+    case "handoff":
     case "cancelled":
     case "parked":
     case "failed":
@@ -278,7 +285,8 @@ function unitAction(
 function repairIsEligible(state: RepositoryRun, unit: Unit): boolean {
   return (
     unit.repairContext !== undefined &&
-    unit.repairContext.headOid === unit.candidateHead &&
+    (unit.repairContext.headOid === undefined ||
+      unit.repairContext.headOid === unit.candidateHead) &&
     unit.repairCount < 16 &&
     state.activeModifyingUnitIds.length < 3
   );
@@ -342,8 +350,19 @@ function pendingUnitEffect(
       (effect) =>
         effect.unitId === action.unitId &&
         effect.kind === action.effectKind &&
-        effect.status === "intended",
+        (effect.status === "intended" || effect.status === "ambiguous"),
     )
+  );
+}
+
+function hasUnresolvedUnitEffect(
+  state: RepositoryRun,
+  unitId: string,
+): boolean {
+  return state.effectJournal.some(
+    (effect) =>
+      effect.unitId === unitId &&
+      (effect.status === "intended" || effect.status === "ambiguous"),
   );
 }
 

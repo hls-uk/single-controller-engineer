@@ -4,6 +4,7 @@ import {
   JudgmentSchema,
   ProtocolEventSchema,
   RepositoryRunEnvelopeSchema,
+  RuntimeEffectSchema,
   parseEnvelope,
   validate,
 } from "../../src/protocol/schemas.js";
@@ -12,6 +13,8 @@ import {
   runInvariantErrors,
 } from "../../src/protocol/reducer.js";
 import { HASH, OID_A, OID_B, OID_C, run, unit } from "./fixtures.js";
+
+const OID_64 = "e".repeat(64);
 
 test("strict schemas reject unknown properties, coercion, and incomplete effect observations", () => {
   assert.equal(
@@ -106,6 +109,56 @@ test("Git object observations reject abbreviated OIDs", () => {
       treeOid: OID_C,
     }).ok,
     false,
+  );
+});
+
+test("runtime effects are strict executable discriminants, not opaque hashes", () => {
+  const effect = {
+    kind: "dispatch",
+    effectId: "dispatch-1",
+    unitId: "unit-1",
+    idempotencyKey: "dispatch-key",
+    paramsHash: HASH,
+    schemaVersion: 1,
+    params: {
+      branchRef: "sce/unit-1",
+      worktreePath: "/tmp/unit-1",
+      requestedModel: "workhorse-1",
+      promptHash: HASH,
+    },
+  };
+  assert.equal(validate(RuntimeEffectSchema, effect).ok, true);
+  assert.equal(
+    validate(RuntimeEffectSchema, { ...effect, params: { paramsHash: HASH } })
+      .ok,
+    false,
+  );
+});
+
+test("repair-context OIDs obey the selected repository object format", () => {
+  const sha256Context = {
+    ...run([
+      {
+        ...unit("unit-1", "repair_required"),
+        baseOid: OID_64,
+        repairContext: {
+          baseOid: OID_A,
+          headOid: OID_B,
+          treeOid: OID_C,
+          responseHash: HASH,
+          rationale: "repair",
+          findings: [
+            { id: "finding-1", severity: "blocking" as const, detail: "fix" },
+          ],
+        },
+      },
+    ]),
+    gitObjectFormat: "sha256" as const,
+  };
+  assert.ok(
+    runInvariantErrors(sha256Context).some((error) =>
+      error.includes("OID incompatible"),
+    ),
   );
 });
 

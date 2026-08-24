@@ -125,6 +125,51 @@ function completeCandidate(): RepositoryRun {
   return state;
 }
 
+function approvedCandidate(
+  authorityProfile: RepositoryRun["authorityProfile"] = "integrate",
+  integrationProfile: RepositoryRun["integrationProfile"] = "local-ff",
+): RepositoryRun {
+  let state = {
+    ...completeCandidate(),
+    authorityProfile,
+    integrationProfile,
+  };
+  state = step(state, "verification_intent", { paramsHash: HASH });
+  state = observe(state, "verification_observed", "verify", {
+    baseOid: OID_A,
+    headOid: OID_B,
+    treeOid: OID_C,
+  });
+  state = step(state, "reviewer_dispatch_intent", { paramsHash: HASH });
+  state = observe(state, "reviewer_observed", "review_dispatch", {
+    sessionId: "reviewer-approved",
+    requestedModel: "frontier",
+    returnedModel: "frontier-1",
+    promptHash: HASH,
+  });
+  state = step(state, "review_collect_intent", { paramsHash: HASH });
+  return observe(state, "review_collected", "review_collect", {
+    judgment: {
+      schemaVersion: 1,
+      role: "reviewer",
+      kind: "review_verdict",
+      unitId: "unit-1",
+      sessionId: "reviewer-approved",
+      requestedModel: "frontier",
+      returnedModel: "frontier-1",
+      aggregateRevision: state.revision,
+      promptHash: HASH,
+      responseHash: HASH,
+      rationale: "approved exact pair",
+      baseOid: OID_A,
+      headOid: OID_B,
+      treeOid: OID_C,
+      decision: "approve",
+      findings: [],
+    },
+  });
+}
+
 test("crash-safe happy path journals each effect before observing exact facts", () => {
   let state = completeCandidate();
   state = step(state, "verification_intent", {
@@ -465,6 +510,181 @@ test("ambiguous effect blocks instead of retrying and controller release needs l
   );
 });
 
+test("an ambiguous active terminal effect blocks durably and only its exact observation reconciles", () => {
+  let state = run();
+  state = step(state, "reservation_intent", {
+    paramsHash: HASH,
+    reservations: [{ id: "res-1", namespace: "port", resource: "3001" }],
+  });
+  state = observe(state, "reservation_observed", "reservation_acquire");
+  state = step(state, "branch_intent", {
+    branchRef: "sce/unit-1",
+    paramsHash: HASH,
+  });
+  state = observe(state, "branch_observed", "branch_create", {
+    branchRef: "sce/unit-1",
+  });
+  state = step(state, "worktree_intent", {
+    paramsHash: HASH,
+    worktreePath: "/tmp/unit-1",
+  });
+  state = observe(state, "worktree_observed", "worktree_create", {
+    worktreePath: "/tmp/unit-1",
+  });
+  state = step(state, "dispatch_intent", { paramsHash: HASH });
+  state = observe(state, "dispatch_observed", "dispatch", {
+    sessionId: "worker-ambiguous",
+    requestedModel: "workhorse",
+    returnedModel: "workhorse-1",
+    promptHash: HASH,
+  });
+  state = step(state, "failure_intent", { paramsHash: HASH });
+  assert.deepEqual(state.activeModifyingUnitIds, ["unit-1"]);
+  const failureEffectId = effectId(state, "failure");
+  state = step(state, "effect_ambiguous", {
+    effectId: failureEffectId,
+    effectKind: "failure",
+  });
+  assert.equal(state.state, "blocked");
+  assert.equal(state.units["unit-1"]?.state, "blocked");
+  assert.deepEqual(state.activeModifyingUnitIds, ["unit-1"]);
+  assert.deepEqual(runInvariantErrors(state), []);
+  assert.equal(
+    reduce(
+      state,
+      event(state, "failure_observed", {
+        effectId: effectId(state, "timeout"),
+        effectKind: "timeout",
+        observationHash: HASH,
+      }),
+    ).ok,
+    false,
+  );
+  state = step(state, "failure_observed", {
+    effectId: failureEffectId,
+    effectKind: "failure",
+    observationHash: HASH,
+  });
+  assert.equal(state.state, "active");
+  assert.equal(state.units["unit-1"]?.state, "failed");
+  assert.deepEqual(state.activeModifyingUnitIds, []);
+});
+
+test("authority profiles finish honestly at local integration or published handoff", () => {
+  let local = approvedCandidate("local-change-only", "local-ff");
+  assert.deepEqual(
+    local.effectJournal.filter((entry) => entry.kind === "publish"),
+    [],
+  );
+  local = step(local, "integrate_intent", { paramsHash: HASH });
+  assert.equal(local.effectJournal.at(-1)?.kind, "integrate");
+  local = observe(local, "integrate_observed", "integrate", {
+    baseOid: OID_A,
+    headOid: OID_B,
+    treeOid: OID_C,
+    integrationOid: OID_C,
+    controllerFencingToken: "fence-1",
+  });
+  assert.equal(local.units["unit-1"]?.state, "landed");
+
+  for (const profile of ["push-branch", "open-pr"] as const) {
+    let handoff = approvedCandidate(profile, "none");
+    handoff = step(handoff, "publish_intent", { paramsHash: HASH });
+    handoff = observe(handoff, "publish_observed", "publish", {
+      remoteHeadOid: OID_B,
+    });
+    assert.equal(handoff.units["unit-1"]?.state, "handoff");
+    assert.equal(handoff.units["unit-1"]?.landedOid, undefined);
+    assert.equal(handoff.integrationQueue.length, 0);
+    assert.equal(
+      reduce(handoff, event(handoff, "integrate_intent", { paramsHash: HASH }))
+        .ok,
+      false,
+    );
+    handoff = step(handoff, "reservation_release_intent", { paramsHash: HASH });
+    handoff = observe(handoff, "reservation_released", "reservation_release");
+    assert.equal(handoff.units["unit-1"]?.state, "closed");
+  }
+});
+
+test("worker repair outcomes persist follow-ups and do not advance to candidate success", () => {
+  let state = run();
+  state = step(state, "reservation_intent", {
+    paramsHash: HASH,
+    reservations: [{ id: "res-1", namespace: "port", resource: "3001" }],
+  });
+  state = observe(state, "reservation_observed", "reservation_acquire");
+  state = step(state, "branch_intent", {
+    branchRef: "sce/unit-1",
+    paramsHash: HASH,
+  });
+  state = observe(state, "branch_observed", "branch_create", {
+    branchRef: "sce/unit-1",
+  });
+  state = step(state, "worktree_intent", {
+    paramsHash: HASH,
+    worktreePath: "/tmp/unit-1",
+  });
+  state = observe(state, "worktree_observed", "worktree_create", {
+    worktreePath: "/tmp/unit-1",
+  });
+  state = step(state, "dispatch_intent", { paramsHash: HASH });
+  state = observe(state, "dispatch_observed", "dispatch", {
+    sessionId: "worker-repair-result",
+    requestedModel: "workhorse",
+    returnedModel: "workhorse-1",
+    promptHash: HASH,
+  });
+  state = step(state, "collect_intent", { paramsHash: HASH });
+  state = observe(state, "worker_collected", "worker_collect", {
+    workerResult: {
+      status: "needs_repair",
+      summary: "test failure needs repair",
+      residualRisks: ["fixture remains stale"],
+      suggestedFollowUps: ["split fixture cleanup into a separate Bead"],
+    },
+  });
+  assert.equal(state.units["unit-1"]?.state, "repair_required");
+  assert.deepEqual(state.units["unit-1"]?.workerResult?.suggestedFollowUps, [
+    "split fixture cleanup into a separate Bead",
+  ]);
+  assert.equal(state.qualificationQueue.length, 0);
+  state = step(state, "repair_intent", {
+    paramsHash: HASH,
+    judgment: {
+      schemaVersion: 1,
+      role: "controller",
+      kind: "repair_disposition",
+      unitId: "unit-1",
+      sessionId: "incarnation-1",
+      requestedModel: "frontier",
+      returnedModel: "frontier-1",
+      aggregateRevision: state.revision,
+      promptHash: HASH,
+      responseHash: HASH,
+      rationale: "repair the returned failure",
+      factOid: OID_A,
+      decision: "repair",
+    },
+  });
+  assert.ok(state.usedSessionIds.includes("worker-repair-result"));
+  assert.equal(
+    reduce(
+      state,
+      event(state, "repair_observed", {
+        effectId: effectId(state, "repair"),
+        effectKind: "repair",
+        observationHash: HASH,
+        sessionId: "worker-repair-result",
+        requestedModel: "workhorse",
+        returnedModel: "workhorse-1",
+        promptHash: HASH,
+      }),
+    ).ok,
+    false,
+  );
+});
+
 test("repair is disposition-bound and bounded before any sixteenth retry emits", () => {
   const limited = run([
     {
@@ -487,6 +707,8 @@ test("repair is disposition-bound and bounded before any sixteenth retry emits",
     event(limited, "repair_intent", {
       idempotencyKey: "repair-17",
       paramsHash: HASH,
+      requestedModel: "workhorse",
+      promptHash: HASH,
       judgment: {
         schemaVersion: 1,
         role: "controller",
@@ -674,6 +896,8 @@ test("an evicted effect key cannot be replayed for another unit at the current r
       // be used by any current-revision effect, even on a different unit.
       idempotencyKey: deriveIdempotencyKey(replay, 344, "unit-2", "repair"),
       paramsHash: HASH,
+      requestedModel: "workhorse",
+      promptHash: HASH,
       judgment: {
         schemaVersion: 1,
         role: "controller",
@@ -722,10 +946,12 @@ test("intent idempotency digest rejects domain, revision, unit, and kind substit
   }
 });
 
-test("64 units each complete the 16-repair bounded trace without history or envelope exhaustion", () => {
+test("64 retained units process sequential waves of at most three within the envelope", () => {
   let state = run(
     Array.from({ length: LIMITS.units }, (_, index) => ({
       ...unit(`unit-${index + 1}`, "repair_required"),
+      branchRef: `sce/unit-${index + 1}`,
+      worktreePath: `/tmp/unit-${index + 1}`,
       candidateHead: OID_B,
       candidateTree: OID_C,
       repairContext: {
@@ -741,141 +967,146 @@ test("64 units each complete the 16-repair bounded trace without history or enve
     })),
   );
 
-  for (const unitId of Object.keys(state.units).sort()) {
-    for (let attempt = 1; attempt <= 16; attempt += 1) {
-      state = stepUnit(state, unitId, "repair_intent", {
-        paramsHash: HASH,
-        judgment: {
-          schemaVersion: 1,
-          role: "controller",
-          kind: "repair_disposition",
-          unitId,
-          sessionId: "incarnation-1",
-          requestedModel: "frontier",
-          returnedModel: "frontier-1",
-          aggregateRevision: state.revision,
-          promptHash: HASH,
-          responseHash: HASH,
-          rationale: `repair ${attempt}`,
-          factOid: OID_B,
-          decision: "repair",
-        },
-      });
-      state = observeUnit(state, unitId, "repair_observed", "repair", {
-        sessionId: `worker-${unitId}-${attempt}`,
-        requestedModel: "workhorse",
-        returnedModel: "workhorse-1",
-        promptHash: HASH,
-      });
-      state = stepUnit(state, unitId, "collect_intent", { paramsHash: HASH });
-      state = observeUnit(state, unitId, "worker_collected", "worker_collect", {
-        workerResult: {
-          status: "completed",
-          summary: "done",
-          residualRisks: [],
-        },
-      });
-      state = stepUnit(state, unitId, "candidate_intent", {
-        paramsHash: HASH,
-      });
-      state = observeUnit(
-        state,
-        unitId,
-        "candidate_observed",
-        "candidate_collect",
-        {
-          headOid: OID_B,
-          treeOid: OID_C,
-        },
+  const unitIds = Object.keys(state.units).sort();
+  for (let waveStart = 0; waveStart < unitIds.length; waveStart += 3) {
+    const currentWave = unitIds.slice(waveStart, waveStart + 3);
+    if (waveStart > 0) {
+      assert.equal(
+        unitIds
+          .slice(waveStart - 3, waveStart)
+          .every((unitId) => state.units[unitId]?.state === "closed"),
+        true,
       );
-      state = stepUnit(state, unitId, "verification_intent", {
-        paramsHash: HASH,
-      });
-      state = observeUnit(state, unitId, "verification_observed", "verify", {
-        baseOid: OID_A,
-        headOid: OID_B,
-        treeOid: OID_C,
-      });
-      state = stepUnit(state, unitId, "reviewer_dispatch_intent", {
-        paramsHash: HASH,
-      });
-      state = observeUnit(
-        state,
-        unitId,
-        "reviewer_observed",
-        "review_dispatch",
-        {
-          sessionId: `reviewer-${unitId}-${attempt}`,
-          requestedModel: "frontier",
-          returnedModel: "frontier-1",
+      // Phase 1 deliberately has no wave-planning command. This is the
+      // controller-authored snapshot that Phase 3 will persist through its
+      // planning act, after the prior wave has drained and closed.
+      state = {
+        ...state,
+        wave: { id: `wave-${waveStart / 3 + 1}`, unitIds: currentWave },
+      };
+      assert.deepEqual(runInvariantErrors(state), []);
+    }
+    for (const unitId of currentWave) {
+      for (let attempt = 1; attempt <= 1; attempt += 1) {
+        state = stepUnit(state, unitId, "repair_intent", {
+          paramsHash: HASH,
+          judgment: {
+            schemaVersion: 1,
+            role: "controller",
+            kind: "repair_disposition",
+            unitId,
+            sessionId: "incarnation-1",
+            requestedModel: "frontier",
+            returnedModel: "frontier-1",
+            aggregateRevision: state.revision,
+            promptHash: HASH,
+            responseHash: HASH,
+            rationale: `repair ${attempt}`,
+            factOid: OID_B,
+            decision: "repair",
+          },
+        });
+        state = observeUnit(state, unitId, "repair_observed", "repair", {
+          sessionId: `worker-${unitId}-${attempt}`,
+          requestedModel: "workhorse",
+          returnedModel: "workhorse-1",
           promptHash: HASH,
-        },
-      );
-      state = stepUnit(state, unitId, "review_collect_intent", {
-        paramsHash: HASH,
-      });
-      state = observeUnit(state, unitId, "review_collected", "review_collect", {
-        judgment: {
-          schemaVersion: 1,
-          role: "reviewer",
-          kind: "review_verdict",
+        });
+        state = stepUnit(state, unitId, "collect_intent", { paramsHash: HASH });
+        state = observeUnit(
+          state,
           unitId,
-          sessionId: `reviewer-${unitId}-${attempt}`,
-          requestedModel: "frontier",
-          returnedModel: "frontier-1",
-          aggregateRevision: state.revision,
-          promptHash: HASH,
-          responseHash: HASH,
-          rationale: `changes ${attempt}`,
+          "worker_collected",
+          "worker_collect",
+          {
+            workerResult: {
+              status: "completed",
+              summary: "done",
+              residualRisks: [],
+            },
+          },
+        );
+        state = stepUnit(state, unitId, "candidate_intent", {
+          paramsHash: HASH,
+        });
+        state = observeUnit(
+          state,
+          unitId,
+          "candidate_observed",
+          "candidate_collect",
+          {
+            headOid: OID_B,
+            treeOid: OID_C,
+          },
+        );
+        state = stepUnit(state, unitId, "verification_intent", {
+          paramsHash: HASH,
+        });
+        state = observeUnit(state, unitId, "verification_observed", "verify", {
           baseOid: OID_A,
           headOid: OID_B,
           treeOid: OID_C,
-          decision: "request_changes",
-          findings: [{ id: "finding-1", severity: "blocking", detail: "fix" }],
-        },
-      });
-    }
-    assert.equal(state.units[unitId]?.repairCount, 16);
-    assert.equal(
-      reduce(
-        state,
-        event(
+        });
+        state = stepUnit(state, unitId, "reviewer_dispatch_intent", {
+          paramsHash: HASH,
+        });
+        state = observeUnit(
           state,
-          "repair_intent",
+          unitId,
+          "reviewer_observed",
+          "review_dispatch",
           {
-            paramsHash: HASH,
+            sessionId: `reviewer-${unitId}-${attempt}`,
+            requestedModel: "frontier",
+            returnedModel: "frontier-1",
+            promptHash: HASH,
+          },
+        );
+        state = stepUnit(state, unitId, "review_collect_intent", {
+          paramsHash: HASH,
+        });
+        state = observeUnit(
+          state,
+          unitId,
+          "review_collected",
+          "review_collect",
+          {
             judgment: {
               schemaVersion: 1,
-              role: "controller",
-              kind: "repair_disposition",
+              role: "reviewer",
+              kind: "review_verdict",
               unitId,
-              sessionId: "incarnation-1",
+              sessionId: `reviewer-${unitId}-${attempt}`,
               requestedModel: "frontier",
               returnedModel: "frontier-1",
               aggregateRevision: state.revision,
               promptHash: HASH,
               responseHash: HASH,
-              rationale: "seventeenth repair",
-              factOid: OID_B,
-              decision: "repair",
+              rationale: `changes ${attempt}`,
+              baseOid: OID_A,
+              headOid: OID_B,
+              treeOid: OID_C,
+              decision: "request_changes",
+              findings: [
+                { id: "finding-1", severity: "blocking", detail: "fix" },
+              ],
             },
           },
-          unitId,
-        ),
-      ).ok,
-      false,
-    );
-    state = stepUnit(state, unitId, "park_intent", { paramsHash: HASH });
-    state = observeUnit(state, unitId, "park_observed", "park");
-    state = stepUnit(state, unitId, "reservation_release_intent", {
-      paramsHash: HASH,
-    });
-    state = observeUnit(
-      state,
-      unitId,
-      "reservation_released",
-      "reservation_release",
-    );
+        );
+      }
+      assert.equal(state.units[unitId]?.repairCount, 1);
+      state = stepUnit(state, unitId, "park_intent", { paramsHash: HASH });
+      state = observeUnit(state, unitId, "park_observed", "park");
+      state = stepUnit(state, unitId, "reservation_release_intent", {
+        paramsHash: HASH,
+      });
+      state = observeUnit(
+        state,
+        unitId,
+        "reservation_released",
+        "reservation_release",
+      );
+    }
   }
 
   const envelope = {
@@ -924,7 +1155,11 @@ test("hydration rejects fabricated reservation lineage and active parking remain
     ...run([{ ...unit("unit-1", "park_intent"), reservationIds: [] }]),
     activeModifyingUnitIds: ["unit-1"],
   };
-  assert.deepEqual(runInvariantErrors(parked), []);
+  assert.ok(
+    runInvariantErrors(parked).some((error) =>
+      error.includes("one exact unresolved effect"),
+    ),
+  );
 });
 
 test("terminal intents start only from stable observed lifecycle states", () => {

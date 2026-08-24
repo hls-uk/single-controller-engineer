@@ -136,6 +136,8 @@ test("legal actions are pure, ownership-aware, and acquisition emits once", () =
     effectId: "acquire-1:controller_acquire",
     effectKind: "controller_acquire",
     observationHash: HASH,
+    holder: "run-1/incarnation-1",
+    controllerFencingToken: "fence-1",
   });
   assert.equal(reconciled.ok, true);
   if (reconciled.ok) assert.equal(reconciled.nextState.state, "active");
@@ -147,6 +149,8 @@ test("record actions are withheld until their exact intended effect is durable",
     units: {
       "unit-1": {
         ...run().units["unit-1"]!,
+        branchRef: "sce/unit-1",
+        worktreePath: "/tmp/unit-1",
         state: "reservation_intent" as const,
       },
     },
@@ -320,6 +324,8 @@ test("terminal, repair, cap, ownership, and order guards are represented", () =>
     units: {
       "unit-1": {
         ...run().units["unit-1"]!,
+        branchRef: "sce/unit-1",
+        worktreePath: "/tmp/unit-1",
         candidateHead: OID_B,
         candidateTree: OID_C,
         repairContext: {
@@ -389,12 +395,7 @@ test("terminal, repair, cap, ownership, and order guards are represented", () =>
     unit("unit-3"),
     unit("unit-4"),
   ]);
-  for (const [index, id] of [
-    "unit-1",
-    "unit-2",
-    "unit-3",
-    "unit-4",
-  ].entries()) {
+  for (const [index, id] of ["unit-1", "unit-2", "unit-3"].entries()) {
     capped = toWorktree(capped, id, index);
   }
   for (const id of ["unit-1", "unit-2", "unit-3"]) {
@@ -402,6 +403,32 @@ test("terminal, repair, cap, ownership, and order guards are represented", () =>
   }
   assert.equal(
     actionTypes(capped, "unit-4").includes("dispatch_intent"),
+    false,
+  );
+});
+
+test("a persisted wave caps membership at three and excludes non-members from mutation", () => {
+  const state = run([
+    unit("unit-1"),
+    unit("unit-2"),
+    unit("unit-3"),
+    unit("unit-4"),
+  ]);
+  assert.deepEqual(state.wave.unitIds, ["unit-1", "unit-2", "unit-3"]);
+  assert.equal(actionTypes(state, "unit-4").length, 0);
+  assert.equal(
+    reduce(
+      state,
+      event(
+        state,
+        "reservation_intent",
+        {
+          paramsHash: HASH,
+          reservations: [{ id: "res-4", namespace: "port", resource: "3004" }],
+        },
+        "unit-4",
+      ),
+    ).ok,
     false,
   );
 });

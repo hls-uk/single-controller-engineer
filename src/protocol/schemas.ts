@@ -11,6 +11,7 @@ export const LIMITS = {
   envelopeBytes: 131_072,
   effectJournal: 256,
   eventHistory: 256,
+  sessionHistory: 256,
   units: 64,
   reservations: 128,
   text: 8_192,
@@ -146,6 +147,7 @@ export const UnitStateSchema = Type.Union([
   Type.Literal("published"),
   Type.Literal("integrate_intent"),
   Type.Literal("landed"),
+  Type.Literal("handoff"),
   Type.Literal("reservation_release_intent"),
   Type.Literal("repair_required"),
   Type.Literal("repair_intent"),
@@ -163,8 +165,11 @@ export const UnitStateSchema = Type.Union([
 export type UnitState = Static<typeof UnitStateSchema>;
 const RepairContextSchema = strictObject({
   baseOid: oid(),
-  headOid: oid(),
-  treeOid: oid(),
+  // A worker can request a repair before a clean candidate exists. Review and
+  // runtime contexts carry the exact candidate pair; all present OIDs are
+  // checked again against the repository object format during hydration.
+  headOid: Type.Optional(oid()),
+  treeOid: Type.Optional(oid()),
   responseHash: hash(),
   rationale: text(),
   findings: Type.Array(
@@ -192,6 +197,7 @@ export const UnitSchema = strictObject({
   }),
   candidateHead: Type.Optional(oid()),
   candidateTree: Type.Optional(oid()),
+  publishedHeadOid: Type.Optional(oid()),
   workerSessionId: Type.Optional(identifier()),
   workerRequestedModel: Type.Optional(text()),
   workerReturnedModel: Type.Optional(text()),
@@ -204,11 +210,26 @@ export const UnitSchema = strictObject({
   verificationHeadOid: Type.Optional(oid()),
   verificationTree: Type.Optional(oid()),
   verificationEvidenceHash: Type.Optional(hash()),
+  verificationCommands: Type.Optional(
+    Type.Array(text(), { minItems: 1, maxItems: 32 }),
+  ),
   reviewBaseOid: Type.Optional(oid()),
   reviewHeadOid: Type.Optional(oid()),
   reviewTree: Type.Optional(oid()),
   approvalResponseHash: Type.Optional(hash()),
   landedOid: Type.Optional(oid()),
+  workerResult: Type.Optional(
+    strictObject({
+      status: Type.Union([
+        Type.Literal("completed"),
+        Type.Literal("needs_repair"),
+        Type.Literal("failed"),
+      ]),
+      summary: text(),
+      residualRisks: Type.Array(text(), { maxItems: 32 }),
+      suggestedFollowUps: Type.Array(text(), { maxItems: 32 }),
+    }),
+  ),
   repairCount: Type.Integer({ minimum: 0, maximum: 16 }),
   repairContext: Type.Optional(RepairContextSchema),
 });
@@ -245,7 +266,7 @@ export type GitObjectFormat = Static<typeof GitObjectFormatSchema>;
 export const WaveSchema = strictObject({
   id: identifier(),
   unitIds: Type.Array(identifier(), {
-    maxItems: LIMITS.units,
+    maxItems: 3,
     uniqueItems: true,
   }),
 });
@@ -318,6 +339,10 @@ export const RepositoryRunSchema = strictObject({
     maxItems: LIMITS.eventHistory,
     uniqueItems: true,
   }),
+  usedSessionIds: Type.Array(identifier(), {
+    maxItems: LIMITS.sessionHistory,
+    uniqueItems: true,
+  }),
   journalCheckpoint: JournalCheckpointSchema,
 });
 export type RepositoryRun = Static<typeof RepositoryRunSchema>;
@@ -351,6 +376,7 @@ const WorkerResultSchema = strictObject({
   ]),
   summary: text(),
   residualRisks: Type.Array(text(), { maxItems: 32 }),
+  suggestedFollowUps: Type.Array(text(), { maxItems: 32 }),
 });
 export type WorkerResult = Static<typeof WorkerResultSchema>;
 const FindingSchema = strictObject({
@@ -438,6 +464,8 @@ export const ProtocolEventSchema = Type.Union([
     ...controllerEventBase,
     type: Type.Literal("controller_acquired"),
     ...observedEffect,
+    holder: controllerHolder(),
+    controllerFencingToken: identifier(),
   }),
   strictObject({
     ...controllerEventBase,
@@ -495,6 +523,8 @@ export const ProtocolEventSchema = Type.Union([
     ...eventBase,
     type: Type.Literal("dispatch_intent"),
     ...effectIntent,
+    requestedModel: text(),
+    promptHash: hash(),
   }),
   strictObject({
     ...eventBase,
@@ -529,6 +559,7 @@ export const ProtocolEventSchema = Type.Union([
     ...eventBase,
     type: Type.Literal("verification_intent"),
     ...effectIntent,
+    commands: Type.Array(text(), { minItems: 1, maxItems: 32 }),
   }),
   strictObject({
     ...eventBase,
@@ -542,6 +573,8 @@ export const ProtocolEventSchema = Type.Union([
     ...eventBase,
     type: Type.Literal("reviewer_dispatch_intent"),
     ...effectIntent,
+    requestedModel: text(),
+    promptHash: hash(),
   }),
   strictObject({
     ...eventBase,
@@ -601,6 +634,8 @@ export const ProtocolEventSchema = Type.Union([
     type: Type.Literal("repair_intent"),
     ...effectIntent,
     judgment: ControllerJudgmentSchema,
+    requestedModel: text(),
+    promptHash: hash(),
   }),
   strictObject({
     ...eventBase,
@@ -660,39 +695,181 @@ export const ProtocolEventSchema = Type.Union([
 ]);
 export type ProtocolEvent = Static<typeof ProtocolEventSchema>;
 
-const runtimeKinds = [
-  "controller_acquire",
-  "reservation_acquire",
-  "branch_create",
-  "worktree_create",
-  "dispatch",
-  "worker_collect",
-  "candidate_collect",
-  "verify",
-  "review_dispatch",
-  "review_collect",
-  "publish",
-  "integrate",
-  "reservation_release",
-  "repair",
-  "failure",
-  "timeout",
-  "park",
-  "cancel",
-  "controller_release",
-] as const;
-export const RuntimeEffectSchema = Type.Union(
-  runtimeKinds.map((kind) =>
+const runtimeEffectBase = {
+  effectId: effectIdentifier(),
+  unitId: nullableIdentifier(),
+  idempotencyKey: idempotencyKey(),
+  // Kept as the journal audit binding. Adapters execute the typed params
+  // below, never this opaque digest.
+  paramsHash: hash(),
+  schemaVersion: Type.Literal(SCHEMA_VERSION),
+};
+const RuntimeReservationRequestSchema = strictObject({
+  id: identifier(),
+  namespace: identifier(),
+  resource: identifier(),
+});
+const WorkerBindingSchema = strictObject({
+  branchRef: identifier(),
+  worktreePath: text(),
+  requestedModel: text(),
+  promptHash: hash(),
+});
+const CandidateBindingSchema = strictObject({
+  baseOid: oid(),
+  headOid: oid(),
+  treeOid: oid(),
+});
+
+/**
+ * Runtime effects are executable, discriminated inputs. Their parameter
+ * fields are persisted through the intent transition and bound again by the
+ * corresponding observation; paramsHash is an audit digest, not authority.
+ */
+export const RuntimeEffectSchema = Type.Union([
+  strictObject({
+    ...runtimeEffectBase,
+    kind: Type.Literal("controller_acquire"),
+    unitId: Type.Null(),
+    params: strictObject({
+      holder: controllerHolder(),
+      controllerFencingToken: identifier(),
+      requestedModel: text(),
+      returnedModel: text(),
+      promptHash: hash(),
+    }),
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    kind: Type.Literal("reservation_acquire"),
+    unitId: identifier(),
+    params: strictObject({
+      reservations: Type.Array(RuntimeReservationRequestSchema, {
+        minItems: 1,
+        maxItems: LIMITS.reservations,
+        uniqueItems: true,
+      }),
+    }),
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    kind: Type.Literal("branch_create"),
+    unitId: identifier(),
+    params: strictObject({ baseOid: oid(), branchRef: identifier() }),
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    kind: Type.Literal("worktree_create"),
+    unitId: identifier(),
+    params: strictObject({ branchRef: identifier(), worktreePath: text() }),
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    kind: Type.Literal("dispatch"),
+    unitId: identifier(),
+    params: WorkerBindingSchema,
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    kind: Type.Literal("worker_collect"),
+    unitId: identifier(),
+    params: strictObject({ sessionId: identifier() }),
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    kind: Type.Literal("candidate_collect"),
+    unitId: identifier(),
+    params: strictObject({ branchRef: identifier(), worktreePath: text() }),
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    kind: Type.Literal("verify"),
+    unitId: identifier(),
+    params: strictObject({
+      candidate: CandidateBindingSchema,
+      commands: Type.Array(text(), { minItems: 1, maxItems: 32 }),
+    }),
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    kind: Type.Literal("review_dispatch"),
+    unitId: identifier(),
+    params: strictObject({
+      candidate: CandidateBindingSchema,
+      requestedModel: text(),
+      promptHash: hash(),
+    }),
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    kind: Type.Literal("review_collect"),
+    unitId: identifier(),
+    params: strictObject({
+      sessionId: identifier(),
+      candidate: CandidateBindingSchema,
+    }),
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    kind: Type.Literal("publish"),
+    unitId: identifier(),
+    params: strictObject({
+      branchRef: identifier(),
+      candidate: CandidateBindingSchema,
+      authorityProfile: AuthorityProfileSchema,
+    }),
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    kind: Type.Literal("integrate"),
+    unitId: identifier(),
+    params: strictObject({
+      integrationBranch: identifier(),
+      integrationProfile: IntegrationProfileSchema,
+      controllerFencingToken: identifier(),
+      candidate: CandidateBindingSchema,
+    }),
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    kind: Type.Literal("reservation_release"),
+    unitId: identifier(),
+    params: strictObject({
+      reservationIds: Type.Array(identifier(), {
+        maxItems: LIMITS.reservations,
+        uniqueItems: true,
+      }),
+    }),
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    kind: Type.Literal("repair"),
+    unitId: identifier(),
+    params: strictObject({
+      ...WorkerBindingSchema.properties,
+      repairBaseOid: oid(),
+      repairHeadOid: Type.Optional(oid()),
+      repairTreeOid: Type.Optional(oid()),
+    }),
+  }),
+  ...(["failure", "timeout", "park", "cancel"] as const).map((kind) =>
     strictObject({
+      ...runtimeEffectBase,
       kind: Type.Literal(kind),
-      effectId: effectIdentifier(),
-      unitId: nullableIdentifier(),
-      idempotencyKey: idempotencyKey(),
-      paramsHash: hash(),
-      schemaVersion: Type.Literal(SCHEMA_VERSION),
+      unitId: identifier(),
+      params: strictObject({ activeSessionId: Type.Optional(identifier()) }),
     }),
   ),
-);
+  strictObject({
+    ...runtimeEffectBase,
+    kind: Type.Literal("controller_release"),
+    unitId: Type.Null(),
+    params: strictObject({
+      holder: controllerHolder(),
+      controllerFencingToken: identifier(),
+    }),
+  }),
+]);
 export type RuntimeEffect = Static<typeof RuntimeEffectSchema>;
 export const RepositoryRunEnvelopeSchema = strictObject({
   schema: Type.Literal("sce.repository-run"),

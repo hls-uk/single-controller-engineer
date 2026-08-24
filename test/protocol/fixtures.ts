@@ -43,12 +43,19 @@ export function run(units: readonly Unit[] = [unit("unit-1")]): RepositoryRun {
     units: Object.fromEntries(units.map((item) => [item.id, item])),
     reservations: {},
     activeModifyingUnitIds: [],
-    wave: { id: "wave-1", unitIds: units.map((item) => item.id).sort() },
+    wave: {
+      id: "wave-1",
+      unitIds: units
+        .map((item) => item.id)
+        .sort()
+        .slice(0, 3),
+    },
     qualificationQueue: [],
     integrationQueue: [],
     effectJournal: [],
     processedEventIds: [],
     processedIdempotencyKeys: [],
+    usedSessionIds: [],
     journalCheckpoint: {
       revision: 0,
       compactedEffects: 0,
@@ -88,12 +95,36 @@ export function event(
   };
   const kind = kinds[type];
   const effectUnitId = type.startsWith("controller_") ? null : unitId;
+  const normalizedFields =
+    type === "worker_collected" &&
+    typeof fields.workerResult === "object" &&
+    fields.workerResult !== null
+      ? {
+          ...fields,
+          workerResult: {
+            ...(fields.workerResult as Record<string, unknown>),
+            suggestedFollowUps:
+              (fields.workerResult as Record<string, unknown>)
+                .suggestedFollowUps ?? [],
+          },
+        }
+      : fields;
   return {
     eventId: `event-${state.revision + 1}`,
     expectedRevision: state.revision,
     unitId,
     type,
-    ...fields,
+    ...(type === "dispatch_intent"
+      ? { requestedModel: "workhorse", promptHash: HASH }
+      : {}),
+    ...(type === "verification_intent" ? { commands: ["npm test"] } : {}),
+    ...(type === "reviewer_dispatch_intent"
+      ? { requestedModel: "frontier", promptHash: HASH }
+      : {}),
+    ...(type === "repair_intent"
+      ? { requestedModel: "workhorse", promptHash: HASH }
+      : {}),
+    ...normalizedFields,
     ...(kind === undefined
       ? {}
       : {

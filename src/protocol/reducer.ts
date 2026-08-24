@@ -8,6 +8,7 @@ import {
   type RepositoryRun,
   RepositoryRunSchema,
   type RuntimeEffect,
+  RuntimeEffectSchema,
   type Unit,
   type UnitState,
   validate,
@@ -92,8 +93,14 @@ export function reduce(
     event.type === "controller_released"
   )
     return reduceController(state, event);
-  if (state.state === "blocked" || state.state === "released")
+  if (state.state === "released")
     return reject("illegal_transition", `aggregate is ${state.state}`);
+  if (state.state === "blocked") {
+    const recovered = recoverAmbiguousUnitObservation(state, event);
+    if (recovered === undefined)
+      return reject("illegal_transition", "aggregate is blocked");
+    return reduce(recovered, event);
+  }
   if (event.type === "effect_ambiguous" && event.unitId === null) {
     const entry = state.effectJournal.find(
       (item) => item.effectId === event.effectId,
@@ -134,7 +141,14 @@ export function reduce(
     return reject("illegal_transition", "unit event requires a unit id");
   const unit = state.units[event.unitId];
   if (unit === undefined) return reject("illegal_transition", "unknown unit");
+  if (!state.wave.unitIds.includes(unit.id))
+    return reject("illegal_transition", "unit is not in the current wave");
   const emittedKind = effectKindForIntent(event.type);
+  if (emittedKind !== undefined && hasUnresolvedUnitEffect(state, unit.id))
+    return reject(
+      "illegal_transition",
+      "unit already has an unresolved intended or ambiguous effect",
+    );
   if (emittedKind !== undefined && !effectAllowed(state, emittedKind))
     return reject(
       "illegal_transition",
@@ -257,13 +271,30 @@ export function reduce(
         "dispatch_intent",
         event,
         "dispatch",
+        {
+          workerRequestedModel: event.requestedModel,
+          workerPromptHash: event.promptHash,
+        },
       );
       break;
     case "dispatch_observed":
-      if (unit.state !== "dispatch_intent") return illegal(unit, event.type);
+      if (
+        unit.state !== "dispatch_intent" ||
+        event.requestedModel !== unit.workerRequestedModel ||
+        event.promptHash !== unit.workerPromptHash ||
+        !sessionIsFresh(state, event.sessionId)
+      )
+        return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "dispatch"))
         return badObservation();
-      result = observe(state, unit, "dispatched", event, workerSession(event));
+      result = observe(
+        state,
+        unit,
+        "dispatched",
+        event,
+        workerSession(event),
+        recordSession(state, event.sessionId),
+      );
       break;
     case "collect_intent":
       if (unit.state !== "dispatched") return illegal(unit, event.type);
@@ -278,18 +309,42 @@ export function reduce(
           "illegal_transition",
           "worker failure must use the failure intent/observation pair",
         );
-      result = observe(
-        state,
-        unit,
-        "collected",
-        event,
-        {},
-        {
-          activeModifyingUnitIds: state.activeModifyingUnitIds.filter(
-            (id) => id !== unit.id,
-          ),
-        },
-      );
+      result =
+        event.workerResult.status === "needs_repair"
+          ? observe(
+              state,
+              unit,
+              "repair_required",
+              event,
+              {
+                workerResult: event.workerResult,
+                repairContext: {
+                  baseOid: unit.baseOid,
+                  responseHash: event.observationHash,
+                  rationale: event.workerResult.summary,
+                  findings: [
+                    {
+                      id: "worker-needs-repair",
+                      severity: "blocking",
+                      detail: event.workerResult.summary,
+                    },
+                  ],
+                },
+              },
+              clearUnitOwners(state, unit.id),
+            )
+          : observe(
+              state,
+              unit,
+              "collected",
+              event,
+              { workerResult: event.workerResult },
+              {
+                activeModifyingUnitIds: state.activeModifyingUnitIds.filter(
+                  (id) => id !== unit.id,
+                ),
+              },
+            );
       break;
     case "candidate_intent":
       if (unit.state !== "collected") return illegal(unit, event.type);
@@ -335,6 +390,10 @@ export function reduce(
         );
       result = intent(state, unit, "verification_intent", event, "verify", {
         qualificationOwnerUnitId: unit.id,
+        units: replaceUnit(state, {
+          ...unit,
+          verificationCommands: [...event.commands],
+        }),
       });
       break;
     case "verification_observed":
@@ -368,13 +427,23 @@ export function reduce(
         "reviewer_dispatch_intent",
         event,
         "review_dispatch",
-        { currentReviewerUnitId: unit.id },
+        {
+          currentReviewerUnitId: unit.id,
+          units: replaceUnit(state, {
+            ...unit,
+            reviewerRequestedModel: event.requestedModel,
+            reviewPromptHash: event.promptHash,
+          }),
+        },
       );
       break;
     case "reviewer_observed":
       if (
         unit.state !== "reviewer_dispatch_intent" ||
-        state.currentReviewerUnitId !== unit.id
+        state.currentReviewerUnitId !== unit.id ||
+        event.requestedModel !== unit.reviewerRequestedModel ||
+        event.promptHash !== unit.reviewPromptHash ||
+        !sessionIsFresh(state, event.sessionId)
       )
         return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "review_dispatch"))
@@ -385,6 +454,7 @@ export function reduce(
         "reviewer_dispatched",
         event,
         reviewerSession(event),
+        recordSession(state, event.sessionId),
       );
       break;
     case "review_collect_intent":
@@ -479,11 +549,18 @@ export function reduce(
         return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "publish"))
         return badObservation();
-      result = observe(state, unit, "published", event);
+      result = observe(
+        state,
+        unit,
+        isPublicationHandoff(state) ? "handoff" : "published",
+        event,
+        { publishedHeadOid: event.remoteHeadOid },
+        isPublicationHandoff(state) ? clearUnitOwners(state, unit.id) : {},
+      );
       break;
     case "integrate_intent":
       if (
-        unit.state !== "published" ||
+        !canIntegrateFrom(state, unit) ||
         !hasCurrentApproval(unit) ||
         state.qualificationOwnerUnitId !== unit.id ||
         (state.integrationOwnerUnitId !== undefined &&
@@ -531,9 +608,14 @@ export function reduce(
       break;
     case "reservation_release_intent":
       if (
-        !["landed", "cancelled", "parked", "failed", "timed_out"].includes(
-          unit.state,
-        )
+        ![
+          "landed",
+          "handoff",
+          "cancelled",
+          "parked",
+          "failed",
+          "timed_out",
+        ].includes(unit.state)
       )
         return illegal(unit, event.type);
       result = intent(
@@ -580,16 +662,32 @@ export function reduce(
         );
       if (unit.repairCount >= 16 || state.activeModifyingUnitIds.length >= 3)
         return reject("invariant", "all three modifying slots are occupied");
-      result = modifyingIntent(state, unit, "repair_intent", event, "repair");
+      result = modifyingIntent(state, unit, "repair_intent", event, "repair", {
+        workerRequestedModel: event.requestedModel,
+        workerPromptHash: event.promptHash,
+      });
       break;
     case "repair_observed":
-      if (unit.state !== "repair_intent") return illegal(unit, event.type);
+      if (
+        unit.state !== "repair_intent" ||
+        event.requestedModel !== unit.workerRequestedModel ||
+        event.promptHash !== unit.workerPromptHash ||
+        !sessionIsFresh(state, event.sessionId)
+      )
+        return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "repair"))
         return badObservation();
-      result = observe(state, unit, "dispatched", event, {
-        ...workerSession(event),
-        repairCount: unit.repairCount + 1,
-      });
+      result = observe(
+        state,
+        unit,
+        "dispatched",
+        event,
+        {
+          ...workerSession(event),
+          repairCount: unit.repairCount + 1,
+        },
+        recordSession(state, event.sessionId),
+      );
       break;
     case "failure_intent":
       if (!canEnterTerminalIntent(unit.state)) return illegal(unit, event.type);
@@ -781,6 +879,130 @@ function effectAllowed(state: RepositoryRun, kind: EffectKind): boolean {
   );
 }
 
+function isPublicationHandoff(state: RepositoryRun): boolean {
+  return (
+    state.authorityProfile === "push-branch" ||
+    state.authorityProfile === "open-pr"
+  );
+}
+function canIntegrateFrom(state: RepositoryRun, unit: Unit): boolean {
+  return (
+    unit.state === "published" ||
+    (unit.state === "approved" &&
+      state.authorityProfile === "local-change-only" &&
+      state.integrationProfile === "local-ff")
+  );
+}
+function sessionIsFresh(state: RepositoryRun, sessionId: string): boolean {
+  return (
+    state.usedSessionIds.length < LIMITS.sessionHistory &&
+    !state.usedSessionIds.includes(sessionId)
+  );
+}
+function recordSession(
+  state: RepositoryRun,
+  sessionId: string,
+): Pick<RepositoryRun, "usedSessionIds"> {
+  return { usedSessionIds: [...state.usedSessionIds, sessionId] };
+}
+function hasUnresolvedUnitEffect(
+  state: RepositoryRun,
+  unitId: string,
+): boolean {
+  return state.effectJournal.some(
+    (effect) =>
+      effect.unitId === unitId &&
+      (effect.status === "intended" || effect.status === "ambiguous"),
+  );
+}
+function intentStateForEffect(kind: EffectKind): UnitState | undefined {
+  const states: Partial<Record<EffectKind, UnitState>> = {
+    reservation_acquire: "reservation_intent",
+    branch_create: "branch_intent",
+    worktree_create: "worktree_intent",
+    dispatch: "dispatch_intent",
+    worker_collect: "collect_intent",
+    candidate_collect: "candidate_intent",
+    verify: "verification_intent",
+    review_dispatch: "reviewer_dispatch_intent",
+    review_collect: "review_collect_intent",
+    publish: "publish_intent",
+    integrate: "integrate_intent",
+    reservation_release: "reservation_release_intent",
+    repair: "repair_intent",
+    failure: "failure_intent",
+    timeout: "timeout_intent",
+    park: "park_intent",
+    cancel: "cancel_intent",
+  };
+  return states[kind];
+}
+function effectMatchesObservation(
+  type: ProtocolEvent["type"],
+  kind: EffectKind,
+): boolean {
+  const observations: Partial<Record<EffectKind, ProtocolEvent["type"]>> = {
+    reservation_acquire: "reservation_observed",
+    branch_create: "branch_observed",
+    worktree_create: "worktree_observed",
+    dispatch: "dispatch_observed",
+    worker_collect: "worker_collected",
+    candidate_collect: "candidate_observed",
+    verify: "verification_observed",
+    review_dispatch: "reviewer_observed",
+    review_collect: "review_collected",
+    publish: "publish_observed",
+    integrate: "integrate_observed",
+    reservation_release: "reservation_released",
+    repair: "repair_observed",
+    failure: "failure_observed",
+    timeout: "timeout_observed",
+    park: "park_observed",
+    cancel: "cancel_observed",
+  };
+  return observations[kind] === type;
+}
+function recoverAmbiguousUnitObservation(
+  state: RepositoryRun,
+  event: ProtocolEvent,
+): RepositoryRun | undefined {
+  if (
+    !("unitId" in event) ||
+    event.unitId === null ||
+    event.type === "effect_ambiguous" ||
+    !("effectId" in event) ||
+    !("effectKind" in event)
+  )
+    return undefined;
+  const unit = state.units[event.unitId];
+  const entry = state.effectJournal.find(
+    (effect) =>
+      effect.effectId === event.effectId &&
+      effect.unitId === event.unitId &&
+      effect.kind === event.effectKind &&
+      effect.status === "ambiguous",
+  );
+  const recoveredState = intentStateForEffect(event.effectKind);
+  if (
+    unit === undefined ||
+    unit.state !== "blocked" ||
+    entry === undefined ||
+    recoveredState === undefined ||
+    !effectMatchesObservation(event.type, event.effectKind)
+  )
+    return undefined;
+  return {
+    ...state,
+    state: "active",
+    units: replaceUnit(state, { ...unit, state: recoveredState }),
+    effectJournal: state.effectJournal.map((effect) =>
+      effect.effectId === entry.effectId
+        ? { ...effect, status: "intended" as const }
+        : effect,
+    ),
+  };
+}
+
 function reduceController(
   state: RepositoryRun,
   event: Extract<ProtocolEvent, { type: `controller_${string}` }>,
@@ -808,6 +1030,8 @@ function reduceController(
       if (
         (state.state !== "initializing" && state.state !== "blocked") ||
         state.controller.state !== "acquire_intent" ||
+        event.holder !== state.controller.holder ||
+        event.controllerFencingToken !== state.controllerFencingToken ||
         !matchesRecoverableEffect(state, event, null, "controller_acquire")
       )
         return badObservation();
@@ -878,9 +1102,13 @@ function modifyingIntent(
   next: UnitState,
   event: IntentEvent,
   kind: Extract<EffectKind, "dispatch" | "repair">,
+  unitChanges: Partial<Unit> = {},
 ): Step {
   return intent(state, unit, next, event, kind, {
     activeModifyingUnitIds: [...state.activeModifyingUnitIds, unit.id],
+    ...(Object.keys(unitChanges).length === 0
+      ? {}
+      : { units: replaceUnit(state, { ...unit, ...unitChanges }) }),
   });
 }
 function terminalIntent(
@@ -945,11 +1173,163 @@ function appendIntent(
     idempotencyKey: event.idempotencyKey,
     paramsHash: event.paramsHash,
     schemaVersion: SCHEMA_VERSION,
+    params: runtimeEffectParams(state, unitId, kind),
   } as ProtocolEffect;
+  const validEffect = validate<RuntimeEffect>(RuntimeEffectSchema, effect);
+  if (!validEffect.ok)
+    throw new Error(
+      `runtime effect construction failed: ${validEffect.errors.join("; ")}`,
+    );
   return {
     state: { ...compacted, effectJournal: [...compacted.effectJournal, entry] },
     effects: [effect],
   };
+}
+function runtimeEffectParams(
+  state: RepositoryRun,
+  unitId: string | null,
+  kind: EffectKind,
+): unknown {
+  if (kind === "controller_acquire")
+    return {
+      holder: state.controller.holder,
+      controllerFencingToken: state.controllerFencingToken,
+      requestedModel: state.controller.requestedModel,
+      returnedModel: state.controller.returnedModel,
+      promptHash: state.controller.promptHash,
+    };
+  if (kind === "controller_release")
+    return {
+      holder: state.controller.holder,
+      controllerFencingToken: state.controllerFencingToken,
+    };
+  if (unitId === null) throw new Error(`${kind} requires a unit`);
+  const unit = state.units[unitId];
+  if (unit === undefined) throw new Error(`${kind} has an unknown unit`);
+  const worker = () => ({
+    branchRef: required(unit.branchRef, "branch ref", kind),
+    worktreePath: required(unit.worktreePath, "worktree path", kind),
+    requestedModel: required(unit.workerRequestedModel, "worker model", kind),
+    promptHash: required(unit.workerPromptHash, "worker prompt", kind),
+  });
+  const candidate = () => ({
+    baseOid: required(
+      unit.verificationBaseOid ?? unit.baseOid,
+      "candidate base",
+      kind,
+    ),
+    headOid: required(unit.candidateHead, "candidate head", kind),
+    treeOid: required(unit.candidateTree, "candidate tree", kind),
+  });
+  switch (kind) {
+    case "reservation_acquire":
+      return {
+        reservations: unit.reservationIds.map((id) => {
+          const reservation = state.reservations[id];
+          if (reservation === undefined)
+            throw new Error(
+              `reservation acquire has unknown reservation ${id}`,
+            );
+          return {
+            id: reservation.id,
+            namespace: reservation.namespace,
+            resource: reservation.resource,
+          };
+        }),
+      };
+    case "branch_create":
+      return {
+        baseOid: unit.baseOid,
+        branchRef: required(unit.branchRef, "branch ref", kind),
+      };
+    case "worktree_create":
+      return {
+        branchRef: required(unit.branchRef, "branch ref", kind),
+        worktreePath: required(unit.worktreePath, "worktree path", kind),
+      };
+    case "dispatch":
+      return worker();
+    case "worker_collect":
+      return {
+        sessionId: required(unit.workerSessionId, "worker session", kind),
+      };
+    case "candidate_collect":
+      return {
+        branchRef: required(unit.branchRef, "branch ref", kind),
+        worktreePath: required(unit.worktreePath, "worktree path", kind),
+      };
+    case "verify":
+      return {
+        candidate: {
+          baseOid: unit.baseOid,
+          headOid: required(unit.candidateHead, "candidate head", kind),
+          treeOid: required(unit.candidateTree, "candidate tree", kind),
+        },
+        commands: required(
+          unit.verificationCommands,
+          "verification commands",
+          kind,
+        ),
+      };
+    case "review_dispatch":
+      return {
+        candidate: candidate(),
+        requestedModel: required(
+          unit.reviewerRequestedModel,
+          "reviewer model",
+          kind,
+        ),
+        promptHash: required(unit.reviewPromptHash, "reviewer prompt", kind),
+      };
+    case "review_collect":
+      return {
+        sessionId: required(unit.reviewerSessionId, "reviewer session", kind),
+        candidate: candidate(),
+      };
+    case "publish":
+      return {
+        branchRef: required(unit.branchRef, "branch ref", kind),
+        candidate: candidate(),
+        authorityProfile: state.authorityProfile,
+      };
+    case "integrate":
+      return {
+        integrationBranch: state.integrationBranch,
+        integrationProfile: state.integrationProfile,
+        controllerFencingToken: state.controllerFencingToken,
+        candidate: candidate(),
+      };
+    case "reservation_release":
+      return { reservationIds: [...unit.reservationIds] };
+    case "repair": {
+      const context = required(unit.repairContext, "repair context", kind);
+      return {
+        ...worker(),
+        repairBaseOid: context.baseOid,
+        ...(context.headOid === undefined
+          ? {}
+          : { repairHeadOid: context.headOid }),
+        ...(context.treeOid === undefined
+          ? {}
+          : { repairTreeOid: context.treeOid }),
+      };
+    }
+    case "failure":
+    case "timeout":
+    case "park":
+    case "cancel":
+      return {
+        ...(unit.workerSessionId === undefined
+          ? {}
+          : { activeSessionId: unit.workerSessionId }),
+      };
+    default:
+      return exhaustive(kind);
+  }
+}
+function required<T>(value: T | undefined, name: string, kind: EffectKind): T {
+  if (value === undefined) throw new Error(`${kind} lacks ${name}`);
+  return value;
 }
 function compactJournal(state: RepositoryRun): RepositoryRun {
   const anchored = new Set(
@@ -1159,8 +1539,8 @@ function validRepairJudgment(
     judgment.requestedModel === state.controller.requestedModel &&
     judgment.returnedModel === state.controller.returnedModel &&
     judgment.promptHash === state.controller.promptHash &&
-    judgment.factOid === context.headOid &&
-    context.headOid === unit.candidateHead &&
+    judgment.factOid === (context.headOid ?? context.baseOid) &&
+    (context.headOid === undefined || context.headOid === unit.candidateHead) &&
     judgment.decision === "repair"
   );
 }
@@ -1302,9 +1682,17 @@ function commit(
 }
 
 export function runInvariantErrors(state: RepositoryRun): readonly string[] {
-  const errors: string[] = [],
-    effectIds = new Set<string>(),
-    idempotency = new Set<string>();
+  const errors: string[] = [];
+  const effectIds = new Set<string>();
+  const idempotency = new Set<string>();
+  const waveIds = new Set(state.wave.unitIds);
+  const unresolvedByUnit = new Map<string, EffectJournalEntry[]>();
+  const addUnresolved = (entry: EffectJournalEntry) => {
+    if (entry.unitId === null) return;
+    const entries = unresolvedByUnit.get(entry.unitId) ?? [];
+    entries.push(entry);
+    unresolvedByUnit.set(entry.unitId, entries);
+  };
   if (
     new TextEncoder().encode(
       JSON.stringify({
@@ -1327,28 +1715,38 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     errors.push(
       "non-integrating authority cannot claim a remote integration profile",
     );
+  if (state.wave.unitIds.length > 3)
+    errors.push("wave exceeds the three-unit implementation cap");
   for (const queue of [
     state.wave.unitIds,
     state.qualificationQueue,
     state.integrationQueue,
-  ]) {
+    state.activeModifyingUnitIds,
+  ])
     if (
       new Set(queue).size !== queue.length ||
       queue.some((id) => state.units[id] === undefined)
     )
       errors.push("queue contains duplicate or unknown unit");
-    if (
-      queue !== state.wave.unitIds &&
-      queue.join("\u0000") !== [...queue].sort().join("\u0000")
-    )
+  for (const queue of [state.qualificationQueue, state.integrationQueue]) {
+    if (queue.join("\u0000") !== [...queue].sort().join("\u0000"))
       errors.push("queue order is not deterministic");
+    if (queue.some((id) => !waveIds.has(id)))
+      errors.push("queue contains a unit outside the current wave");
   }
   const oidLength = state.gitObjectFormat === "sha1" ? 40 : 64;
-  for (const unit of Object.values(state.units))
+  const checkOid = (unit: Unit, value: string | undefined) => {
+    if (value !== undefined && value.length !== oidLength)
+      errors.push(
+        `unit ${unit.id} has an OID incompatible with repository object format`,
+      );
+  };
+  for (const unit of Object.values(state.units)) {
     for (const value of [
       unit.baseOid,
       unit.candidateHead,
       unit.candidateTree,
+      unit.publishedHeadOid,
       unit.verificationBaseOid,
       unit.verificationHeadOid,
       unit.verificationTree,
@@ -1356,12 +1754,60 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
       unit.reviewHeadOid,
       unit.reviewTree,
       unit.landedOid,
+      unit.repairContext?.baseOid,
+      unit.repairContext?.headOid,
+      unit.repairContext?.treeOid,
     ])
-      if (value !== undefined && value.length !== oidLength)
-        errors.push(
-          `unit ${unit.id} has an OID incompatible with repository object format`,
-        );
-  const sessions = new Set<string>();
+      checkOid(unit, value);
+    if (
+      unit.repairContext?.headOid === undefined &&
+      unit.repairContext?.treeOid !== undefined
+    )
+      errors.push(`repair context ${unit.id} has a tree without a head`);
+  }
+  if (
+    state.usedSessionIds.length > LIMITS.sessionHistory ||
+    new Set(state.usedSessionIds).size !== state.usedSessionIds.length
+  )
+    errors.push("used session identity history is invalid");
+  for (const effect of state.effectJournal) {
+    if (effectIds.has(effect.effectId))
+      errors.push(`duplicate effect id ${effect.effectId}`);
+    effectIds.add(effect.effectId);
+    if (idempotency.has(effect.idempotencyKey))
+      errors.push(`duplicate idempotency key ${effect.idempotencyKey}`);
+    idempotency.add(effect.idempotencyKey);
+    if (effect.unitId !== null && state.units[effect.unitId] === undefined)
+      errors.push(`effect ${effect.effectId} has unknown unit`);
+    if (effect.status === "intended" && effect.observationHash !== undefined)
+      errors.push(`intended effect ${effect.effectId} has an observation`);
+    if (effect.status === "observed" && effect.observationHash === undefined)
+      errors.push(`observed effect ${effect.effectId} has no observation`);
+    if (effect.status === "intended" || effect.status === "ambiguous")
+      addUnresolved(effect);
+  }
+  // The map is filled explicitly because a unit's durable phase determines
+  // exactly one unresolved external act; this rejects both orphaned and
+  // stacked intents on hydration.
+  const intentByState: Partial<Record<UnitState, EffectKind>> = {
+    reservation_intent: "reservation_acquire",
+    branch_intent: "branch_create",
+    worktree_intent: "worktree_create",
+    dispatch_intent: "dispatch",
+    collect_intent: "worker_collect",
+    candidate_intent: "candidate_collect",
+    verification_intent: "verify",
+    reviewer_dispatch_intent: "review_dispatch",
+    review_collect_intent: "review_collect",
+    publish_intent: "publish",
+    integrate_intent: "integrate",
+    reservation_release_intent: "reservation_release",
+    repair_intent: "repair",
+    failure_intent: "failure",
+    timeout_intent: "timeout",
+    park_intent: "park",
+    cancel_intent: "cancel",
+  };
   const requiredActiveStates = new Set<UnitState>([
     "dispatch_intent",
     "dispatched",
@@ -1375,9 +1821,12 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     "cancel_intent",
     "park_intent",
   ]);
-  for (const id of state.activeModifyingUnitIds)
+  for (const id of state.activeModifyingUnitIds) {
     if (state.units[id] === undefined)
       errors.push(`active modifying unit ${id} is unknown`);
+    else if (!waveIds.has(id))
+      errors.push(`active modifying unit ${id} is outside the current wave`);
+  }
   for (const [id, unit] of Object.entries(state.units)) {
     if (id !== unit.id)
       errors.push(`unit map key ${id} does not match unit id ${unit.id}`);
@@ -1388,36 +1837,52 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
       )
     )
       errors.push(`unit ${id} claims an invalid reservation`);
-    const intended = (kind: EffectKind) =>
-      state.effectJournal.some(
-        (effect) =>
-          effect.unitId === id &&
-          effect.kind === kind &&
-          effect.status === "intended",
-      );
-    const observed = (kind: EffectKind) =>
-      state.effectJournal.some(
-        (effect) =>
-          effect.unitId === id &&
-          effect.kind === kind &&
-          effect.status === "observed",
-      );
-    if (unit.state === "reservation_intent" && !intended("reservation_acquire"))
-      errors.push(`reservation intent ${id} lacks journal lineage`);
+    const unresolved = unresolvedByUnit.get(id) ?? [];
+    const expectedKind = intentByState[unit.state];
+    if (unit.state === "blocked") {
+      if (
+        unresolved.length !== 1 ||
+        unresolved[0]?.status !== "ambiguous" ||
+        intentStateForEffect(unresolved[0]?.kind ?? "dispatch") === undefined
+      )
+        errors.push(`blocked unit ${id} lacks one exact ambiguous effect`);
+    } else if (expectedKind !== undefined) {
+      if (
+        unresolved.length !== 1 ||
+        unresolved[0]?.kind !== expectedKind ||
+        unresolved[0]?.status !== "intended"
+      )
+        errors.push(`intent state ${id} lacks one exact unresolved effect`);
+    } else if (unresolved.length !== 0)
+      errors.push(`stable unit ${id} has an orphan unresolved effect`);
     if (
-      [
-        "resources_reserved",
-        "branch_intent",
-        "branch_observed",
-        "worktree_intent",
-        "worktree_observed",
-      ].includes(unit.state) &&
+      unit.reservationIds.length > 0 &&
+      unit.state !== "reservation_intent" &&
+      unit.state !== "reservation_release_intent" &&
+      unit.state !== "blocked" &&
+      unit.state !== "closed" &&
       !unit.reservationIds.every(
         (reservationId) =>
           state.reservations[reservationId]?.state === "reserved",
       )
     )
       errors.push(`reserved lifecycle ${id} lacks acquired reservations`);
+    if (
+      unit.state === "reservation_release_intent" &&
+      !unit.reservationIds.every(
+        (reservationId) =>
+          state.reservations[reservationId]?.state === "release_intent",
+      )
+    )
+      errors.push(`reservation cleanup ${id} lacks release intent`);
+    if (
+      unit.state === "closed" &&
+      !unit.reservationIds.every(
+        (reservationId) =>
+          state.reservations[reservationId]?.state === "released",
+      )
+    )
+      errors.push(`closed unit ${id} retains a non-released reservation`);
     if (
       [
         "branch_intent",
@@ -1428,22 +1893,17 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
       unit.branchRef === undefined
     )
       errors.push(`branch lifecycle ${id} lacks branch ref`);
-    if (unit.state === "branch_intent" && !intended("branch_create"))
-      errors.push(`branch intent ${id} lacks journal lineage`);
     if (
       ["worktree_intent", "worktree_observed"].includes(unit.state) &&
       unit.worktreePath === undefined
     )
       errors.push(`worktree lifecycle ${id} lacks worktree path`);
-    if (unit.state === "worktree_intent" && !intended("worktree_create"))
-      errors.push(`worktree intent ${id} lacks journal lineage`);
     if (
       [
         "dispatched",
         "collect_intent",
         "collected",
         "candidate_intent",
-        "candidate_committed",
       ].includes(unit.state) &&
       (unit.workerSessionId === undefined ||
         unit.workerPromptHash === undefined ||
@@ -1451,12 +1911,6 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
         unit.workerReturnedModel === undefined)
     )
       errors.push(`worker lifecycle ${id} lacks bound session`);
-    if (unit.state === "dispatch_intent" && !intended("dispatch"))
-      errors.push(`dispatch intent ${id} lacks journal lineage`);
-    if (unit.state === "collect_intent" && !intended("worker_collect"))
-      errors.push(`collect intent ${id} lacks journal lineage`);
-    if (unit.state === "candidate_intent" && !intended("candidate_collect"))
-      errors.push(`candidate intent ${id} lacks journal lineage`);
     if (
       [
         "candidate_committed",
@@ -1470,12 +1924,11 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
         "published",
         "integrate_intent",
         "landed",
+        "handoff",
       ].includes(unit.state) &&
       (unit.candidateHead === undefined || unit.candidateTree === undefined)
     )
       errors.push(`candidate lifecycle ${id} lacks exact objects`);
-    if (unit.state === "verification_intent" && !intended("verify"))
-      errors.push(`verification intent ${id} lacks journal lineage`);
     if (
       [
         "qualified",
@@ -1487,6 +1940,7 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
         "published",
         "integrate_intent",
         "landed",
+        "handoff",
       ].includes(unit.state) &&
       (unit.verificationBaseOid === undefined ||
         unit.verificationHeadOid === undefined ||
@@ -1495,10 +1949,11 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     )
       errors.push(`qualification lifecycle ${id} lacks verification evidence`);
     if (
-      unit.state === "reviewer_dispatch_intent" &&
-      !intended("review_dispatch")
+      unit.state === "verification_intent" &&
+      (unit.verificationCommands === undefined ||
+        unit.verificationCommands.length === 0)
     )
-      errors.push(`review dispatch intent ${id} lacks journal lineage`);
+      errors.push(`verification intent ${id} lacks commands`);
     if (
       ["reviewer_dispatched", "review_collect_intent"].includes(unit.state) &&
       (unit.reviewerSessionId === undefined ||
@@ -1507,8 +1962,6 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
         unit.reviewerReturnedModel === undefined)
     )
       errors.push(`review lifecycle ${id} lacks bound session`);
-    if (unit.state === "review_collect_intent" && !intended("review_collect"))
-      errors.push(`review collect intent ${id} lacks journal lineage`);
     if (
       [
         "approved",
@@ -1516,6 +1969,7 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
         "published",
         "integrate_intent",
         "landed",
+        "handoff",
       ].includes(unit.state) &&
       (unit.reviewBaseOid === undefined ||
         unit.reviewHeadOid === undefined ||
@@ -1523,29 +1977,34 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
         unit.approvalResponseHash === undefined)
     )
       errors.push(`approval lifecycle ${id} lacks exact verdict`);
-    if (unit.state === "publish_intent" && !intended("publish"))
-      errors.push(`publish intent ${id} lacks journal lineage`);
-    if (unit.state === "integrate_intent" && !intended("integrate"))
-      errors.push(`integration intent ${id} lacks journal lineage`);
+    if (
+      ["published", "handoff"].includes(unit.state) &&
+      unit.publishedHeadOid === undefined
+    )
+      errors.push(`published unit ${id} lacks remote-head readback`);
     if (unit.state === "landed" && unit.landedOid === undefined)
       errors.push(`landed ${id} lacks integration readback`);
     if (unit.state === "repair_required" && unit.repairContext === undefined)
-      errors.push(`repair-required ${id} lacks retained review findings`);
-    const isActive = state.activeModifyingUnitIds.includes(id);
+      errors.push(`repair-required ${id} lacks retained repair context`);
     for (const session of [unit.workerSessionId, unit.reviewerSessionId])
-      if (session !== undefined) {
-        if (sessions.has(session)) errors.push(`reused session ${session}`);
-        sessions.add(session);
-      }
+      if (session !== undefined && !state.usedSessionIds.includes(session))
+        errors.push(`session ${session} is not retained in durable history`);
+    const isActive = state.activeModifyingUnitIds.includes(id);
+    const ambiguousKind =
+      unresolved[0]?.status === "ambiguous" ? unresolved[0].kind : undefined;
     const allowedActive =
       optionallyActiveStates.has(unit.state) ||
       (unit.state === "blocked" &&
-        state.effectJournal.some(
-          (effect) =>
-            effect.unitId === id &&
-            effect.status === "ambiguous" &&
-            ["dispatch", "repair", "worker_collect"].includes(effect.kind),
-        ));
+        ambiguousKind !== undefined &&
+        [
+          "dispatch",
+          "repair",
+          "worker_collect",
+          "failure",
+          "timeout",
+          "park",
+          "cancel",
+        ].includes(ambiguousKind));
     if (
       (requiredActiveStates.has(unit.state) && !isActive) ||
       (isActive && !allowedActive)
@@ -1557,60 +2016,83 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
       errors.push(`reservation map key ${id} does not match reservation id`);
     if (state.units[reservation.unitId] === undefined)
       errors.push(`reservation ${id} has unknown owner`);
+    const effectId =
+      reservation.state === "released"
+        ? reservation.releaseEffectId
+        : reservation.acquireEffectId;
+    const kind =
+      reservation.state === "released"
+        ? "reservation_release"
+        : "reservation_acquire";
     if (
-      reservation.state === "reserved" &&
-      reservation.acquireEffectId === undefined
-    )
-      errors.push(`reserved ${id} has no acquisition readback`);
-    if (
-      reservation.state === "reserved" &&
-      !state.effectJournal.some(
-        (effect) =>
-          effect.effectId === reservation.acquireEffectId &&
-          effect.unitId === reservation.unitId &&
-          effect.kind === "reservation_acquire" &&
-          effect.status === "observed",
-      )
+      ["reserved", "released"].includes(reservation.state) &&
+      (effectId === undefined ||
+        !state.effectJournal.some(
+          (effect) =>
+            effect.effectId === effectId &&
+            effect.unitId === reservation.unitId &&
+            effect.kind === kind &&
+            effect.status === "observed",
+        ))
     )
       errors.push(`reserved ${id} has no exact acquisition journal lineage`);
-    if (
-      reservation.state === "released" &&
-      reservation.releaseEffectId === undefined
-    )
-      errors.push(`released ${id} has no release readback`);
-    if (
-      reservation.state === "released" &&
-      !state.effectJournal.some(
-        (effect) =>
-          effect.effectId === reservation.releaseEffectId &&
-          effect.unitId === reservation.unitId &&
-          effect.kind === "reservation_release" &&
-          effect.status === "observed",
-      )
-    )
-      errors.push(`released ${id} has no exact release journal lineage`);
   }
-  for (const effect of state.effectJournal) {
-    if (effectIds.has(effect.effectId))
-      errors.push(`duplicate effect id ${effect.effectId}`);
-    effectIds.add(effect.effectId);
-    if (idempotency.has(effect.idempotencyKey))
-      errors.push(`duplicate idempotency key ${effect.idempotencyKey}`);
-    idempotency.add(effect.idempotencyKey);
-    if (effect.unitId !== null && state.units[effect.unitId] === undefined)
-      errors.push(`effect ${effect.effectId} has unknown unit`);
-    if (effect.status === "intended" && effect.observationHash !== undefined)
-      errors.push(`intended effect ${effect.effectId} has an observation`);
-    if (
-      (effect.status === "observed" || effect.status === "ambiguous") &&
-      effect.status === "observed" &&
-      effect.observationHash === undefined
-    )
-      errors.push(
-        `${effect.status} effect ${effect.effectId} has no observation`,
-      );
-  }
-  const qualificationStates = new Set<UnitState>([
+  const controllerUnresolved = state.effectJournal.filter(
+    (effect) =>
+      effect.unitId === null &&
+      (effect.status === "intended" || effect.status === "ambiguous"),
+  );
+  const expectedControllerKind =
+    state.controller.state === "acquire_intent"
+      ? "controller_acquire"
+      : state.controller.state === "release_intent"
+        ? "controller_release"
+        : undefined;
+  if (
+    (expectedControllerKind === undefined &&
+      controllerUnresolved.length !== 0) ||
+    (expectedControllerKind !== undefined &&
+      (controllerUnresolved.length !== 1 ||
+        controllerUnresolved[0]?.kind !== expectedControllerKind))
+  )
+    errors.push("controller has an orphan or multiple unresolved effects");
+  const qualificationQueueStates = new Set<UnitState>([
+    "candidate_committed",
+    "verification_intent",
+    "qualified",
+    "reviewer_dispatch_intent",
+    "reviewer_dispatched",
+    "review_collect_intent",
+    "approved",
+    "publish_intent",
+    "published",
+    "integrate_intent",
+  ]);
+  const integrationQueueStates = new Set<UnitState>([
+    "approved",
+    "publish_intent",
+    "published",
+    "integrate_intent",
+  ]);
+  const expectedQualificationQueue = Object.values(state.units)
+    .filter((unit) => qualificationQueueStates.has(unit.state))
+    .map((unit) => unit.id)
+    .sort();
+  const expectedIntegrationQueue = Object.values(state.units)
+    .filter((unit) => integrationQueueStates.has(unit.state))
+    .map((unit) => unit.id)
+    .sort();
+  if (
+    state.qualificationQueue.join("\u0000") !==
+    expectedQualificationQueue.join("\u0000")
+  )
+    errors.push("qualification queue disagrees with unit state");
+  if (
+    state.integrationQueue.join("\u0000") !==
+    expectedIntegrationQueue.join("\u0000")
+  )
+    errors.push("integration queue disagrees with unit state");
+  const qualificationOwnerStates = new Set<UnitState>([
     "verification_intent",
     "qualified",
     "reviewer_dispatch_intent",
@@ -1623,14 +2105,14 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
   ]);
   if (
     state.qualificationOwnerUnitId !== undefined &&
-    !qualificationStates.has(
+    !qualificationOwnerStates.has(
       state.units[state.qualificationOwnerUnitId]?.state ?? "planned",
     )
   )
     errors.push("qualification owner is not qualifying");
   for (const unit of Object.values(state.units))
     if (
-      qualificationStates.has(unit.state) &&
+      qualificationOwnerStates.has(unit.state) &&
       state.qualificationOwnerUnitId !== unit.id
     )
       errors.push(`qualifying unit ${unit.id} lacks owner converse`);
@@ -1666,6 +2148,12 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     state.qualificationOwnerUnitId !== state.currentReviewerUnitId
   )
     errors.push("reviewer is not owned by qualification");
+  if (
+    state.state === "blocked" &&
+    controllerUnresolved.every((entry) => entry.status !== "ambiguous") &&
+    !Object.values(state.units).some((unit) => unit.state === "blocked")
+  )
+    errors.push("blocked aggregate lacks ambiguous durable evidence");
   if (state.state === "active" && state.controller.state !== "acquired")
     errors.push("active aggregate lacks controller ownership");
   if (state.state === "released" && state.controller.state !== "released")
