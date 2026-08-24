@@ -12,7 +12,6 @@ const output = resolve(
 
 await mkdir(dirname(output), { recursive: true });
 await build({
-  banner: { js: "#!/usr/bin/env node" },
   bundle: true,
   entryPoints: [resolve(repositoryRoot, "src/cli.ts")],
   format: "esm",

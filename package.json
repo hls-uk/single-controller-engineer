@@ -27,7 +27,7 @@
     "check": "npm run check:format && npm run typecheck && npm test && npm run build",
     "check:format": "prettier --check .",
     "format": "prettier --write .",
-    "test": "tsx --test test/**/*.test.ts",
+    "test": "node --import tsx --test test/**/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
