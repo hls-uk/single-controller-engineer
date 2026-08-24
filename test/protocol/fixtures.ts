@@ -7,7 +7,6 @@ import {
   deriveIdempotencyKey,
   deriveParamsHash,
   deriveRepairContextHash,
-  deriveSessionFilterHash,
 } from "../../src/protocol/reducer.js";
 
 export const OID_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -33,7 +32,8 @@ export function run(units: readonly Unit[] = [unit("unit-1")]): RepositoryRun {
     repositoryIdentity: "repo-1",
     integrationBranch: "main",
     authorityProfile: "integrate",
-    integrationProfile: "local-ff",
+    completionBoundary: "remote-integration",
+    integrationProfile: "remote-ff",
     gitObjectFormat: "sha1",
     controllerFencingToken: "fence-1",
     controller: {
@@ -61,8 +61,8 @@ export function run(units: readonly Unit[] = [unit("unit-1")]): RepositoryRun {
     processedEventIds: [],
     processedIdempotencyKeys: [],
     usedSessionCount: 0,
-    usedSessionFilter: "",
-    usedSessionFilterHash: deriveSessionFilterHash("", 0),
+    usedSessionFingerprints: "",
+    closedUnitEvidence: "",
     journalCheckpoint: {
       revision: 0,
       compactedEffects: 0,

@@ -1,6 +1,7 @@
 import {
   LIMITS,
   SCHEMA_VERSION,
+  ClosedUnitEvidenceFactSchema,
   type EffectJournalEntry,
   type EffectKind,
   type ProtocolEvent,
@@ -9,11 +10,14 @@ import {
   RepositoryRunSchema,
   type RuntimeEffect,
   RuntimeEffectSchema,
+  type ClosedUnitEvidenceFact,
   type Unit,
+  UnitSchema,
   type UnitState,
   validate,
 } from "./schemas.js";
-import { canonicalJson } from "./canonical.js";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
+import { canonicalJson, type JsonValue } from "./canonical.js";
 import { sha256 } from "./evidence.js";
 import { canEnterTerminalIntent } from "./guards.js";
 
@@ -270,11 +274,12 @@ function reduceInternal(
       );
       break;
     case "dispatch_observed":
+      const dispatchedSession = freshSessionUpdate(state, event.sessionId);
       if (
         unit.state !== "dispatch_intent" ||
         event.requestedModel !== unit.workerRequestedModel ||
         event.promptHash !== unit.workerPromptHash ||
-        !sessionIsFresh(state, event.sessionId)
+        dispatchedSession === undefined
       )
         return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "dispatch"))
@@ -285,7 +290,7 @@ function reduceInternal(
         "dispatched",
         event,
         workerSession(event),
-        recordSession(state, event.sessionId),
+        dispatchedSession,
       );
       break;
     case "collect_intent":
@@ -448,12 +453,13 @@ function reduceInternal(
       );
       break;
     case "reviewer_observed":
+      const reviewerSessionUpdate = freshSessionUpdate(state, event.sessionId);
       if (
         unit.state !== "reviewer_dispatch_intent" ||
         state.currentReviewerUnitId !== unit.id ||
         event.requestedModel !== unit.reviewerRequestedModel ||
         event.promptHash !== unit.reviewPromptHash ||
-        !sessionIsFresh(state, event.sessionId)
+        reviewerSessionUpdate === undefined
       )
         return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "review_dispatch"))
@@ -464,7 +470,7 @@ function reduceInternal(
         "reviewer_dispatched",
         event,
         reviewerSession(event),
-        recordSession(state, event.sessionId),
+        reviewerSessionUpdate,
       );
       break;
     case "review_collect_intent":
@@ -546,7 +552,8 @@ function reduceInternal(
     case "publish_intent":
       if (
         !isCurrentApproval(unit) ||
-        state.qualificationOwnerUnitId !== unit.id
+        state.qualificationOwnerUnitId !== unit.id ||
+        publicationKind(state) === undefined
       )
         return illegal(unit, event.type);
       result = intent(state, unit, "publish_intent", event, "publish");
@@ -561,7 +568,7 @@ function reduceInternal(
         return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "publish"))
         return badObservation();
-      if (state.authorityProfile === "open-pr") {
+      if (publicationKind(state) === "open_pr") {
         if (
           event.publication.kind !== "open_pr" ||
           event.publication.pullRequest.baseRef !== state.integrationBranch ||
@@ -574,7 +581,7 @@ function reduceInternal(
       } else if (event.publication.kind !== "push_branch")
         return reject(
           "illegal_transition",
-          "non-open-pr publication must record a push-branch readback",
+          "branch publication must record a push-branch readback",
         );
       const publishedHeadOid =
         event.publication.kind === "open_pr"
@@ -681,7 +688,9 @@ function reduceInternal(
             "released",
             event.effectId,
           ),
+          closedUnitEvidence: recordClosedUnitEvidence(state, unit),
         },
+        compactClosedUnit(unit),
       );
       break;
     case "repair_intent":
@@ -709,11 +718,12 @@ function reduceInternal(
       });
       break;
     case "repair_observed":
+      const repairedSession = freshSessionUpdate(state, event.sessionId);
       if (
         unit.state !== "repair_intent" ||
         event.requestedModel !== unit.workerRequestedModel ||
         event.promptHash !== unit.workerPromptHash ||
-        !sessionIsFresh(state, event.sessionId)
+        repairedSession === undefined
       )
         return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "repair"))
@@ -727,7 +737,7 @@ function reduceInternal(
           ...workerSession(event),
           repairCount: unit.repairCount + 1,
         },
-        recordSession(state, event.sessionId),
+        repairedSession,
       );
       break;
     case "failure_intent":
@@ -911,78 +921,107 @@ export function deriveRepairContextHash(
 function effectAllowed(state: RepositoryRun, kind: EffectKind): boolean {
   if (kind === "publish")
     return (
-      state.authorityProfile === "push-branch" ||
-      state.authorityProfile === "open-pr" ||
-      state.authorityProfile === "integrate"
+      (state.completionBoundary === "branch-handoff" &&
+        state.authorityProfile !== "local-change-only") ||
+      (state.completionBoundary === "pr-handoff" &&
+        ["open-pr", "integrate"].includes(state.authorityProfile)) ||
+      (state.completionBoundary === "remote-integration" &&
+        state.authorityProfile === "integrate")
     );
   if (kind !== "integrate") return true;
   return (
-    (state.authorityProfile === "integrate" ||
-      (state.authorityProfile === "local-change-only" &&
-        state.integrationProfile === "local-ff")) &&
-    state.integrationProfile !== "none"
+    state.completionBoundary === "local-integration" ||
+    (state.completionBoundary === "remote-integration" &&
+      state.authorityProfile === "integrate")
   );
 }
 
 function isPublicationHandoff(state: RepositoryRun): boolean {
   return (
-    state.authorityProfile === "push-branch" ||
-    state.authorityProfile === "open-pr"
+    state.completionBoundary === "branch-handoff" ||
+    state.completionBoundary === "pr-handoff"
   );
 }
 function canIntegrateFrom(state: RepositoryRun, unit: Unit): boolean {
   return (
-    unit.state === "published" ||
-    (unit.state === "approved" &&
-      state.authorityProfile === "local-change-only" &&
-      state.integrationProfile === "local-ff")
+    integrationIsRequested(state) &&
+    (state.completionBoundary === "local-integration"
+      ? unit.state === "approved"
+      : unit.state === "published")
   );
 }
-function sessionIsFresh(state: RepositoryRun, sessionId: string): boolean {
+
+function integrationIsRequested(state: RepositoryRun): boolean {
   return (
-    state.usedSessionCount < LIMITS.sessionHistory &&
-    !hasUsedSession(state, sessionId) &&
-    !controllerIdentityMatches(state, sessionId) &&
-    !Object.values(state.units).some(
+    state.completionBoundary === "local-integration" ||
+    state.completionBoundary === "remote-integration"
+  );
+}
+
+function completionConfigurationError(
+  state: RepositoryRun,
+): string | undefined {
+  switch (state.completionBoundary) {
+    case "local-integration":
+      return state.integrationProfile === "local-ff"
+        ? undefined
+        : "local integration requires the local-ff integration profile";
+    case "branch-handoff":
+      return state.integrationProfile === "none" &&
+        state.authorityProfile !== "local-change-only"
+        ? undefined
+        : "branch handoff requires push-capable authority and integration profile none";
+    case "pr-handoff":
+      return state.integrationProfile === "none" &&
+        ["open-pr", "integrate"].includes(state.authorityProfile)
+        ? undefined
+        : "pr handoff requires open-pr-capable authority and integration profile none";
+    case "remote-integration":
+      return state.authorityProfile === "integrate" &&
+        ["remote-ff", "github-merge-group"].includes(state.integrationProfile)
+        ? undefined
+        : "remote integration requires integrate authority and a remote integration profile";
+  }
+}
+
+function publicationKind(
+  state: RepositoryRun,
+): "push_branch" | "open_pr" | undefined {
+  if (state.completionBoundary === "local-integration") return undefined;
+  if (state.completionBoundary === "pr-handoff") return "open_pr";
+  return "push_branch";
+}
+
+function freshSessionUpdate(
+  state: RepositoryRun,
+  sessionId: string,
+):
+  | Pick<RepositoryRun, "usedSessionFingerprints" | "usedSessionCount">
+  | undefined {
+  if (
+    state.usedSessionCount >= LIMITS.sessionHistory ||
+    controllerIdentityMatches(state, sessionId) ||
+    Object.values(state.units).some(
       (unit) =>
         unit.workerSessionId === sessionId ||
         unit.reviewerSessionId === sessionId,
     )
-  );
-}
-function recordSession(
-  state: RepositoryRun,
-  sessionId: string,
-): Pick<
-  RepositoryRun,
-  "usedSessionCount" | "usedSessionFilter" | "usedSessionFilterHash"
-> {
-  const filter = sessionFilter(state.usedSessionFilter);
-  for (const index of sessionFilterIndexes(sessionId))
-    filter[index >>> 3] = (filter[index >>> 3] ?? 0) | (1 << (index & 7));
-  const usedSessionCount = state.usedSessionCount + 1;
-  const usedSessionFilter = filter.toString("base64");
+  )
+    return undefined;
+  const fingerprints = decodeSessionFingerprints(state.usedSessionFingerprints);
+  if (fingerprints === undefined) return undefined;
+  const fingerprint = sessionFingerprint(sessionId);
+  const index = fingerprintIndex(fingerprints, fingerprint);
+  if (index.found) return undefined;
+  const next = Buffer.concat([
+    fingerprints.subarray(0, index.offset),
+    fingerprint,
+    fingerprints.subarray(index.offset),
+  ]);
   return {
-    usedSessionCount,
-    usedSessionFilter,
-    usedSessionFilterHash: deriveSessionFilterHash(
-      usedSessionFilter,
-      usedSessionCount,
-    ),
+    usedSessionFingerprints: next.toString("base64"),
+    usedSessionCount: state.usedSessionCount + 1,
   };
-}
-
-export function deriveSessionFilterHash(
-  usedSessionFilter: string,
-  usedSessionCount: number,
-): string {
-  return sha256(
-    canonicalJson({
-      domain: "sce.protocol.session-filter.v1",
-      usedSessionCount,
-      usedSessionFilter,
-    }),
-  );
 }
 
 function controllerIdentityMatches(
@@ -997,33 +1036,80 @@ function controllerIdentityMatches(
 }
 
 export function hasUsedSession(
-  state: Pick<RepositoryRun, "usedSessionFilter">,
+  state: Pick<RepositoryRun, "usedSessionFingerprints">,
   sessionId: string,
 ): boolean {
-  if (state.usedSessionFilter.length === 0) return false;
-  const filter = sessionFilter(state.usedSessionFilter);
-  return sessionFilterIndexes(sessionId).every(
-    (index) => ((filter[index >>> 3] ?? 0) & (1 << (index & 7))) !== 0,
-  );
+  const fingerprints = decodeSessionFingerprints(state.usedSessionFingerprints);
+  // A malformed persisted ledger must never create a false-negative reuse
+  // path. Reducer hydration independently rejects it with an invariant error.
+  if (fingerprints === undefined) return true;
+  return fingerprintIndex(fingerprints, sessionFingerprint(sessionId)).found;
 }
 
-function sessionFilter(encoded: string): Buffer {
-  return encoded.length === 0
-    ? Buffer.alloc(LIMITS.sessionFilterBytes)
-    : Buffer.from(encoded, "base64");
+export function sessionFingerprintCount(encoded: string): number {
+  const fingerprints = decodeSessionFingerprints(encoded);
+  return fingerprints === undefined
+    ? Number.POSITIVE_INFINITY
+    : fingerprints.length / LIMITS.sessionFingerprintBytes;
 }
 
-function sessionFilterIndexes(sessionId: string): readonly number[] {
-  const digest = sha256(
+export function deriveSessionFingerprint(sessionId: string): string {
+  return sha256(
     canonicalJson({ domain: "sce.protocol.session.v1", sessionId }),
   );
-  const first = Number.parseInt(digest.slice(0, 8), 16);
-  const step = (Number.parseInt(digest.slice(8, 16), 16) | 1) >>> 0;
-  const bitCount = LIMITS.sessionFilterBytes * 8;
-  return Array.from(
-    { length: LIMITS.sessionFilterHashes },
-    (_, index) => (first + index * step) % bitCount,
-  );
+}
+
+function sessionFingerprint(sessionId: string): Buffer {
+  return Buffer.from(deriveSessionFingerprint(sessionId), "hex");
+}
+
+function decodeSessionFingerprints(encoded: string): Buffer | undefined {
+  if (encoded === "") return Buffer.alloc(0);
+  let fingerprints: Buffer;
+  try {
+    fingerprints = Buffer.from(encoded, "base64");
+  } catch {
+    return undefined;
+  }
+  if (
+    fingerprints.toString("base64") !== encoded ||
+    fingerprints.length % LIMITS.sessionFingerprintBytes !== 0 ||
+    fingerprints.length > LIMITS.sessionHistory * LIMITS.sessionFingerprintBytes
+  )
+    return undefined;
+  for (
+    let offset = LIMITS.sessionFingerprintBytes;
+    offset < fingerprints.length;
+    offset += LIMITS.sessionFingerprintBytes
+  )
+    if (
+      Buffer.compare(
+        fingerprints.subarray(offset - LIMITS.sessionFingerprintBytes, offset),
+        fingerprints.subarray(offset, offset + LIMITS.sessionFingerprintBytes),
+      ) >= 0
+    )
+      return undefined;
+  return fingerprints;
+}
+
+function fingerprintIndex(
+  fingerprints: Buffer,
+  fingerprint: Buffer,
+): { readonly found: boolean; readonly offset: number } {
+  let low = 0;
+  let high = fingerprints.length / LIMITS.sessionFingerprintBytes;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const offset = middle * LIMITS.sessionFingerprintBytes;
+    const comparison = Buffer.compare(
+      fingerprints.subarray(offset, offset + LIMITS.sessionFingerprintBytes),
+      fingerprint,
+    );
+    if (comparison === 0) return { found: true, offset };
+    if (comparison < 0) low = middle + 1;
+    else high = middle;
+  }
+  return { found: false, offset: low * LIMITS.sessionFingerprintBytes };
 }
 function hasUnresolvedUnitEffect(
   state: RepositoryRun,
@@ -1489,11 +1575,13 @@ function runtimeEffectParams(
         branchRef: required(unit.branchRef, "branch ref", kind),
         candidate: candidate(),
         authorityProfile: state.authorityProfile,
+        completionBoundary: state.completionBoundary,
       };
     case "integrate":
       return {
         integrationBranch: state.integrationBranch,
         integrationProfile: state.integrationProfile,
+        completionBoundary: state.completionBoundary,
         controllerFencingToken: state.controllerFencingToken,
         candidate: candidate(),
       };
@@ -1543,6 +1631,92 @@ function required<T>(value: T | undefined, name: string, kind: EffectKind): T {
   if (value === undefined) throw new Error(`${kind} lacks ${name}`);
   return value;
 }
+
+/**
+ * Closed units cannot execute another lifecycle transition. Keep their live
+ * shape small, but retain every former optional fact in one canonical,
+ * compressed aggregate ledger for audit and hydration checks.
+ */
+function compactClosedUnit(unit: Unit): Unit {
+  return {
+    id: unit.id,
+    revision: unit.revision,
+    state: "closed",
+    baseOid: unit.baseOid,
+    reservationIds: [],
+    repairCount: unit.repairCount,
+  };
+}
+
+function recordClosedUnitEvidence(state: RepositoryRun, unit: Unit): string {
+  const evidence = decodeClosedUnitEvidence(state.closedUnitEvidence);
+  if (evidence === undefined)
+    throw new Error("closed unit evidence ledger is malformed");
+  const {
+    id: _id,
+    revision: _revision,
+    state: _state,
+    baseOid: _baseOid,
+    ...facts
+  } = unit;
+  return encodeClosedUnitEvidence({
+    ...evidence,
+    [unit.id]: facts as ClosedUnitEvidenceFact,
+  });
+}
+
+function encodeClosedUnitEvidence(
+  evidence: Readonly<Record<string, ClosedUnitEvidenceFact>>,
+): string {
+  return deflateRawSync(Buffer.from(canonicalJson(evidence), "utf8"), {
+    level: 9,
+  }).toString("base64");
+}
+
+function decodeClosedUnitEvidence(
+  encoded: string,
+): Record<string, ClosedUnitEvidenceFact> | undefined {
+  if (encoded === "") return {};
+  let compressed: Buffer;
+  let decoded: Buffer;
+  try {
+    compressed = Buffer.from(encoded, "base64");
+    if (compressed.toString("base64") !== encoded) return undefined;
+    decoded = inflateRawSync(compressed, {
+      maxOutputLength: LIMITS.envelopeBytes,
+    });
+  } catch {
+    return undefined;
+  }
+  if (decoded.length > LIMITS.envelopeBytes) return undefined;
+  const text = decoded.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(decoded)) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (
+    parsed === null ||
+    Array.isArray(parsed) ||
+    typeof parsed !== "object" ||
+    canonicalJson(parsed as JsonValue) !== text
+  )
+    return undefined;
+  if (
+    !Object.entries(parsed).every(
+      ([id, facts]) =>
+        /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u.test(id) &&
+        validate<ClosedUnitEvidenceFact>(ClosedUnitEvidenceFactSchema, facts)
+          .ok,
+    )
+  )
+    return undefined;
+  const evidence = parsed as Record<string, ClosedUnitEvidenceFact>;
+  return encodeClosedUnitEvidence(evidence) === encoded ? evidence : undefined;
+}
+
 function compactJournal(state: RepositoryRun): RepositoryRun {
   const anchored = new Set(
     Object.values(state.reservations)
@@ -1592,10 +1766,10 @@ function observe(
   event: ObservedEvent,
   unitChanges: Partial<Unit> = {},
   aggregateChanges: AggregateChanges = {},
+  replacementUnit?: Unit,
 ): Step {
   const nextUnit = {
-    ...unit,
-    ...unitChanges,
+    ...(replacementUnit ?? { ...unit, ...unitChanges }),
     state: next,
     revision: unit.revision + 1,
   };
@@ -1939,13 +2113,8 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     `${state.controller.runId}/${state.controller.incarnationId}`
   )
     errors.push("controller holder does not bind immutable run incarnation");
-  if (
-    state.authorityProfile !== "integrate" &&
-    ["remote-ff", "github-merge-group"].includes(state.integrationProfile)
-  )
-    errors.push(
-      "non-integrating authority cannot claim a remote integration profile",
-    );
+  const completionError = completionConfigurationError(state);
+  if (completionError !== undefined) errors.push(completionError);
   if (state.wave.unitIds.length > 3)
     errors.push("wave exceeds the three-unit implementation cap");
   for (const queue of [
@@ -1998,25 +2167,66 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     )
       errors.push(`repair context ${unit.id} has a tree without a head`);
   }
-  const packedSessions = Buffer.from(state.usedSessionFilter, "base64");
-  if (
-    (state.usedSessionCount === 0 && state.usedSessionFilter !== "") ||
-    (state.usedSessionCount > 0 &&
-      (packedSessions.length !== LIMITS.sessionFilterBytes ||
-        packedSessions.toString("base64") !== state.usedSessionFilter))
+  const sessionFingerprints = decodeSessionFingerprints(
+    state.usedSessionFingerprints,
+  );
+  if (sessionFingerprints === undefined)
+    errors.push("used session fingerprint ledger is invalid");
+  else if (
+    sessionFingerprints.length / LIMITS.sessionFingerprintBytes !==
+    state.usedSessionCount
   )
-    errors.push("used session identity history is invalid");
-  if (
-    state.usedSessionFilterHash !==
-    deriveSessionFilterHash(state.usedSessionFilter, state.usedSessionCount)
-  )
-    errors.push("used session identity history integrity hash is invalid");
-  if (
-    state.usedSessionCount > 0 &&
-    packedSessions.length === LIMITS.sessionFilterBytes &&
-    packedSessions.every((value) => value === 0)
-  )
-    errors.push("used session identity history has no set bits for its count");
+    errors.push("used session fingerprint count does not match ledger");
+  const closedEvidence = decodeClosedUnitEvidence(state.closedUnitEvidence);
+  if (closedEvidence === undefined)
+    errors.push("closed unit evidence ledger is invalid");
+  const closedUnitIds = Object.values(state.units)
+    .filter((unit) => unit.state === "closed")
+    .map((unit) => unit.id)
+    .sort();
+  const evidenceUnitIds = Object.keys(closedEvidence ?? {}).sort();
+  if (closedUnitIds.join("\u0000") !== evidenceUnitIds.join("\u0000"))
+    errors.push("closed unit evidence membership is not exact");
+  for (const unit of Object.values(state.units)) {
+    if (unit.state !== "closed") continue;
+    const facts = closedEvidence?.[unit.id];
+    const preserved =
+      facts === undefined ? undefined : ({ ...unit, ...facts } as Unit);
+    if (
+      facts === undefined ||
+      preserved === undefined ||
+      !validate<Unit>(UnitSchema, preserved).ok
+    )
+      errors.push(`closed unit ${unit.id} has invalid preserved evidence`);
+    else
+      for (const value of [
+        preserved.candidateHead,
+        preserved.candidateTree,
+        preserved.publishedHeadOid,
+        preserved.verificationBaseOid,
+        preserved.verificationHeadOid,
+        preserved.verificationTree,
+        preserved.reviewBaseOid,
+        preserved.reviewHeadOid,
+        preserved.reviewTree,
+        preserved.landedOid,
+        preserved.openPullRequest?.baseOid,
+        preserved.openPullRequest?.remoteHeadOid,
+        preserved.repairContext?.baseOid,
+        preserved.repairContext?.headOid,
+        preserved.repairContext?.treeOid,
+      ])
+        checkOid(unit, value);
+    if (
+      preserved !== undefined &&
+      !preserved.reservationIds.every(
+        (reservationId) =>
+          state.reservations[reservationId]?.unitId === unit.id &&
+          state.reservations[reservationId]?.state === "released",
+      )
+    )
+      errors.push(`closed unit ${unit.id} lacks released reservation lineage`);
+  }
   const hasAmbiguousEffect = state.effectJournal.some(
     (effect) => effect.status === "ambiguous",
   );
@@ -2265,7 +2475,7 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     )
       errors.push(`published unit ${id} lacks remote-head readback`);
     if (
-      state.authorityProfile === "open-pr" &&
+      state.completionBoundary === "pr-handoff" &&
       unit.state === "handoff" &&
       (unit.openPullRequest === undefined ||
         unit.openPullRequest.baseRef !== state.integrationBranch ||
@@ -2278,7 +2488,7 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
       );
     if (
       unit.openPullRequest !== undefined &&
-      state.authorityProfile !== "open-pr"
+      state.completionBoundary !== "pr-handoff"
     )
       errors.push(
         `unit ${id} retains pull-request evidence outside open-pr authority`,

@@ -244,8 +244,7 @@ function lifecycleActions(
     case "approved":
       return isCurrentApproval(unit) &&
         state.qualificationOwnerUnitId === unit.id
-        ? state.authorityProfile === "local-change-only" &&
-          state.integrationProfile === "local-ff"
+        ? state.completionBoundary === "local-integration"
           ? [unitAction(unit, "integrate_intent", "emit", "integrate")]
           : [unitAction(unit, "publish_intent", "emit", "publish")]
         : [];
@@ -253,6 +252,7 @@ function lifecycleActions(
       return [unitAction(unit, "publish_observed", "record", "publish")];
     case "published":
       return hasCurrentApproval(unit) &&
+        state.completionBoundary === "remote-integration" &&
         state.qualificationOwnerUnitId === unit.id &&
         (state.integrationOwnerUnitId === undefined ||
           state.integrationOwnerUnitId === unit.id) &&
@@ -375,15 +375,19 @@ function canReleaseController(state: RepositoryRun): boolean {
 
 function effectAllowed(state: RepositoryRun, kind: EffectKind): boolean {
   if (kind === "publish")
-    return ["push-branch", "open-pr", "integrate"].includes(
-      state.authorityProfile,
+    return (
+      (state.completionBoundary === "branch-handoff" &&
+        state.authorityProfile !== "local-change-only") ||
+      (state.completionBoundary === "pr-handoff" &&
+        ["open-pr", "integrate"].includes(state.authorityProfile)) ||
+      (state.completionBoundary === "remote-integration" &&
+        state.authorityProfile === "integrate")
     );
   if (kind !== "integrate") return true;
   return (
-    (state.authorityProfile === "integrate" ||
-      (state.authorityProfile === "local-change-only" &&
-        state.integrationProfile === "local-ff")) &&
-    state.integrationProfile !== "none"
+    state.completionBoundary === "local-integration" ||
+    (state.completionBoundary === "remote-integration" &&
+      state.authorityProfile === "integrate")
   );
 }
 

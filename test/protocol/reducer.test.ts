@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { deflateRawSync, inflateRawSync } from "node:zlib";
 import fc from "fast-check";
+import { legalActions } from "../../src/protocol/actions.js";
 import {
   deriveIdempotencyKey,
   deriveParamsHash,
-  deriveSessionFilterHash,
+  deriveSessionFingerprint,
   hasUsedSession,
   reduce,
   runInvariantErrors,
+  sessionFingerprintCount,
 } from "../../src/protocol/reducer.js";
 import { canEnterTerminalIntent } from "../../src/protocol/guards.js";
 import type {
@@ -18,9 +21,11 @@ import type {
 import {
   LIMITS,
   ProtocolEventSchema,
+  RepositoryRunSchema,
   RepositoryRunEnvelopeSchema,
   validate,
 } from "../../src/protocol/schemas.js";
+import { canonicalJson } from "../../src/protocol/canonical.js";
 import {
   HASH,
   OID_A,
@@ -126,11 +131,20 @@ function completeCandidate(): RepositoryRun {
 
 function approvedCandidate(
   authorityProfile: RepositoryRun["authorityProfile"] = "integrate",
-  integrationProfile: RepositoryRun["integrationProfile"] = "local-ff",
+  integrationProfile: RepositoryRun["integrationProfile"] = "remote-ff",
+  completionBoundary: RepositoryRun["completionBoundary"] = integrationProfile ===
+  "local-ff"
+    ? "local-integration"
+    : integrationProfile === "none"
+      ? authorityProfile === "open-pr"
+        ? "pr-handoff"
+        : "branch-handoff"
+      : "remote-integration",
 ): RepositoryRun {
   let state = {
     ...completeCandidate(),
     authorityProfile,
+    completionBoundary,
     integrationProfile,
   };
   state = step(state, "verification_intent", {});
@@ -167,6 +181,16 @@ function approvedCandidate(
       findings: [],
     },
   });
+}
+
+function sessionLedger(...sessionIds: readonly string[]): string {
+  return Buffer.concat(
+    sessionIds
+      .map((sessionId) =>
+        Buffer.from(deriveSessionFingerprint(sessionId), "hex"),
+      )
+      .sort(Buffer.compare),
+  ).toString("base64");
 }
 
 test("crash-safe happy path journals each effect before observing exact facts", () => {
@@ -794,6 +818,120 @@ test("authority profiles finish honestly at local integration or published hando
   }
 });
 
+test("completion boundaries are monotone under broader authority grants", () => {
+  const localProfiles: readonly RepositoryRun["authorityProfile"][] = [
+    "local-change-only",
+    "push-branch",
+    "open-pr",
+    "integrate",
+  ];
+  for (const authorityProfile of localProfiles) {
+    const state = approvedCandidate(
+      authorityProfile,
+      "local-ff",
+      "local-integration",
+    );
+    assert.equal(
+      legalActions(state).some((action) => action.type === "integrate_intent"),
+      true,
+    );
+  }
+
+  const branchProfiles: readonly RepositoryRun["authorityProfile"][] = [
+    "push-branch",
+    "open-pr",
+    "integrate",
+  ];
+  for (const authorityProfile of branchProfiles) {
+    let state = approvedCandidate(authorityProfile, "none", "branch-handoff");
+    assert.equal(
+      legalActions(state).some((action) => action.type === "publish_intent"),
+      true,
+    );
+    state = step(state, "publish_intent", {});
+    state = observe(state, "publish_observed", "publish", {
+      publication: { kind: "push_branch", remoteHeadOid: OID_B },
+    });
+    assert.equal(state.units["unit-1"]?.state, "handoff");
+    assert.equal(
+      legalActions(state).some((action) => action.type === "integrate_intent"),
+      false,
+    );
+  }
+
+  for (const authorityProfile of ["open-pr", "integrate"] as const) {
+    let state = approvedCandidate(authorityProfile, "none", "pr-handoff");
+    assert.equal(
+      legalActions(state).some((action) => action.type === "publish_intent"),
+      true,
+    );
+    state = step(state, "publish_intent", {});
+    state = observe(state, "publish_observed", "publish", {
+      publication: {
+        kind: "open_pr",
+        pullRequest: {
+          providerPrId: "pr-1",
+          state: "open",
+          baseRef: "main",
+          baseOid: OID_A,
+          remoteHeadOid: OID_B,
+        },
+      },
+    });
+    assert.equal(state.units["unit-1"]?.state, "handoff");
+  }
+
+  for (const integrationProfile of [
+    "remote-ff",
+    "github-merge-group",
+  ] as const) {
+    let state = approvedCandidate(
+      "integrate",
+      integrationProfile,
+      "remote-integration",
+    );
+    assert.equal(
+      legalActions(state).some((action) => action.type === "publish_intent"),
+      true,
+    );
+    state = step(state, "publish_intent", {});
+    state = observe(state, "publish_observed", "publish", {
+      publication: { kind: "push_branch", remoteHeadOid: OID_B },
+    });
+    assert.equal(
+      legalActions(state).some((action) => action.type === "integrate_intent"),
+      true,
+    );
+  }
+
+  for (const invalid of [
+    {
+      authorityProfile: "local-change-only",
+      completionBoundary: "branch-handoff",
+      integrationProfile: "none",
+    },
+    {
+      authorityProfile: "push-branch",
+      completionBoundary: "pr-handoff",
+      integrationProfile: "none",
+    },
+    {
+      authorityProfile: "integrate",
+      completionBoundary: "remote-integration",
+      integrationProfile: "none",
+    },
+    {
+      authorityProfile: "open-pr",
+      completionBoundary: "remote-integration",
+      integrationProfile: "remote-ff",
+    },
+  ] as const) {
+    const state = { ...run(), ...invalid };
+    assert.ok(runInvariantErrors(state).length > 0);
+    assert.deepEqual(legalActions(state), []);
+  }
+});
+
 test("worker repair outcomes persist follow-ups and do not advance to candidate success", () => {
   let state = run();
   state = step(state, "reservation_intent", {
@@ -870,6 +1008,106 @@ test("worker repair outcomes persist follow-ups and do not advance to candidate 
   });
   assert.equal(hasUsedSession(state, "worker-repair-result"), true);
   assert.equal(hasUsedSession(state, "never-dispatched-session"), false);
+  assert.equal(
+    reduce(
+      state,
+      event(state, "repair_observed", {
+        effectId: effectId(state, "repair"),
+        effectKind: "repair",
+        observationHash: HASH,
+        sessionId: "worker-repair-result",
+        requestedModel: "workhorse",
+        returnedModel: "workhorse-1",
+        promptHash: HASH,
+      }),
+    ).ok,
+    false,
+  );
+
+  // This is the real overwrite path: the old worker session leaves the live
+  // unit when a repair worker takes over, but must remain retained exactly.
+  state = observe(state, "repair_observed", "repair", {
+    sessionId: "worker-repair-current",
+    requestedModel: "workhorse",
+    returnedModel: "workhorse-1",
+    promptHash: HASH,
+  });
+  assert.equal(state.units["unit-1"]?.workerSessionId, "worker-repair-current");
+  assert.equal(state.usedSessionCount, 2);
+  assert.ok(
+    runInvariantErrors({
+      ...state,
+      usedSessionFingerprints: sessionLedger("worker-repair-current"),
+    }).some((error) => error.includes("used session fingerprint count")),
+  );
+
+  state = step(state, "collect_intent", {});
+  state = observe(state, "worker_collected", "worker_collect", {
+    workerResult: {
+      status: "completed",
+      summary: "repaired",
+      residualRisks: [],
+    },
+  });
+  state = step(state, "candidate_intent", {});
+  state = observe(state, "candidate_observed", "candidate_collect", {
+    headOid: OID_B,
+    treeOid: OID_C,
+  });
+  state = step(state, "verification_intent", {});
+  state = observe(state, "verification_observed", "verify", {
+    baseOid: OID_A,
+    headOid: OID_B,
+    treeOid: OID_C,
+  });
+  state = step(state, "reviewer_dispatch_intent", {});
+  state = observe(state, "reviewer_observed", "review_dispatch", {
+    sessionId: "reviewer-after-repair",
+    requestedModel: "frontier",
+    returnedModel: "frontier-1",
+    promptHash: HASH,
+  });
+  state = step(state, "review_collect_intent", {});
+  state = observe(state, "review_collected", "review_collect", {
+    judgment: {
+      schemaVersion: 1,
+      role: "reviewer",
+      kind: "review_verdict",
+      unitId: "unit-1",
+      sessionId: "reviewer-after-repair",
+      requestedModel: "frontier",
+      returnedModel: "frontier-1",
+      aggregateRevision: state.revision,
+      promptHash: HASH,
+      responseHash: HASH,
+      rationale: "one more repair",
+      baseOid: OID_A,
+      headOid: OID_B,
+      treeOid: OID_C,
+      decision: "request_changes",
+      findings: [{ id: "finding-1", severity: "blocking", detail: "fix" }],
+    },
+  });
+  state = step(state, "repair_intent", {
+    judgment: {
+      schemaVersion: 1,
+      role: "controller",
+      kind: "repair_disposition",
+      unitId: "unit-1",
+      sessionId: "incarnation-1",
+      requestedModel: "frontier",
+      returnedModel: "frontier-1",
+      aggregateRevision: state.revision,
+      promptHash: HASH,
+      responseHash: HASH,
+      rationale: "repair again",
+      factOid: OID_B,
+      decision: "repair",
+      ...repairEvidence(state),
+    },
+  });
+  assert.equal(state.units["unit-1"]?.workerSessionId, "worker-repair-current");
+  assert.equal(state.usedSessionCount, 3);
   assert.equal(
     reduce(
       state,
@@ -1401,10 +1639,14 @@ test("64 retained units complete 16 repairs in waves of at most three within the
   assert.ok(state.journalCheckpoint.compactedEffects > 0);
   assert.ok(state.journalCheckpoint.compactedEvents > 0);
   assert.ok(state.journalCheckpoint.compactedIdempotencyKeys > 0);
+  assert.equal(
+    sessionFingerprintCount(state.usedSessionFingerprints),
+    LIMITS.units * 16 * 2,
+  );
   assert.equal(state.usedSessionCount, LIMITS.units * 16 * 2);
   assert.equal(
-    Buffer.from(state.usedSessionFilter, "base64").length,
-    LIMITS.sessionFilterBytes,
+    Buffer.from(state.usedSessionFingerprints, "base64").length,
+    LIMITS.units * 16 * 2 * LIMITS.sessionFingerprintBytes,
   );
   for (const unitId of unitIds)
     for (let attempt = 1; attempt <= 16; attempt += 1) {
@@ -1452,29 +1694,147 @@ test("hydration rejects fabricated reservation lineage and active parking remain
       error.includes("one exact unresolved effect"),
     ),
   );
-  const corruptSessionFilter = {
+  const corruptSessionFingerprints = {
     ...run(),
-    usedSessionCount: 1,
-    usedSessionFilter: "AA==",
+    usedSessionFingerprints: "AA==",
   };
   assert.ok(
-    runInvariantErrors(corruptSessionFilter).some((error) =>
-      error.includes("used session identity history"),
+    runInvariantErrors(corruptSessionFingerprints).some((error) =>
+      error.includes("used session fingerprint ledger"),
     ),
   );
-  const zeroSessionBitmap = Buffer.alloc(LIMITS.sessionFilterBytes).toString(
-    "base64",
-  );
-  const countWithoutBits = {
+  const nonCanonicalSessionFingerprints = {
     ...run(),
-    usedSessionCount: 1,
-    usedSessionFilter: zeroSessionBitmap,
-    usedSessionFilterHash: deriveSessionFilterHash(zeroSessionBitmap, 1),
+    usedSessionFingerprints: "AAAA",
   };
   assert.ok(
-    runInvariantErrors(countWithoutBits).some((error) =>
-      error.includes("no set bits"),
+    runInvariantErrors(nonCanonicalSessionFingerprints).some((error) =>
+      error.includes("used session fingerprint ledger"),
     ),
+  );
+});
+
+test("session fingerprint ledgers retain exact history and reject forged Bloom-era state", () => {
+  const sessions = ["worker-old", "worker-new", "reviewer-old"] as const;
+  const state = {
+    ...run(),
+    usedSessionCount: sessions.length,
+    usedSessionFingerprints: sessionLedger(...sessions),
+  };
+  assert.deepEqual(runInvariantErrors(state), []);
+  assert.equal(
+    sessionFingerprintCount(state.usedSessionFingerprints),
+    sessions.length,
+  );
+  for (const sessionId of sessions)
+    assert.equal(hasUsedSession(state, sessionId), true);
+  assert.equal(hasUsedSession(state, "fresh-session"), false);
+
+  const duplicated = Buffer.concat([
+    Buffer.from(deriveSessionFingerprint("worker-old"), "hex"),
+    Buffer.from(deriveSessionFingerprint("worker-old"), "hex"),
+  ]).toString("base64");
+  assert.ok(
+    runInvariantErrors({
+      ...run(),
+      usedSessionCount: 2,
+      usedSessionFingerprints: duplicated,
+    }).some((error) => error.includes("used session fingerprint ledger")),
+  );
+  assert.ok(
+    runInvariantErrors({
+      ...run(),
+      usedSessionCount: sessions.length,
+      usedSessionFingerprints: sessionLedger(...sessions)
+        .split("")
+        .reverse()
+        .join(""),
+    }).some((error) => error.includes("used session fingerprint ledger")),
+  );
+
+  // The former independently forgeable count/filter/hash triplet is not part
+  // of the schema, so this exact historical-reuse counterexample now fails
+  // before a reducer can treat its nonzero count as meaningful history.
+  const bloomEraForgery = {
+    ...run(),
+    usedSessionFilter: Buffer.alloc(8_192, 1).toString("base64"),
+    usedSessionFilterHash: HASH,
+  };
+  assert.equal(validate(RepositoryRunSchema, bloomEraForgery).ok, false);
+});
+
+test("closed evidence is canonical, bounded, and retains released reservation lineage", () => {
+  let state = approvedCandidate("integrate", "remote-ff", "remote-integration");
+  state = step(state, "publish_intent", {});
+  state = observe(state, "publish_observed", "publish", {
+    publication: { kind: "push_branch", remoteHeadOid: OID_B },
+  });
+  state = step(state, "integrate_intent", {});
+  state = observe(state, "integrate_observed", "integrate", {
+    baseOid: OID_A,
+    headOid: OID_B,
+    treeOid: OID_C,
+    integrationOid: OID_C,
+    controllerFencingToken: "fence-1",
+  });
+  state = step(state, "reservation_release_intent", {});
+  state = observe(state, "reservation_released", "reservation_release");
+  assert.deepEqual(runInvariantErrors(state), []);
+  assert.notEqual(state.closedUnitEvidence, "");
+
+  const missingReleasedReservation = { ...state, reservations: {} };
+  assert.ok(
+    runInvariantErrors(missingReleasedReservation).some((error) =>
+      error.includes("released reservation lineage"),
+    ),
+  );
+  assert.ok(
+    runInvariantErrors({
+      ...state,
+      closedUnitEvidence: state.closedUnitEvidence.slice(0, -1),
+    }).some((error) => error.includes("closed unit evidence ledger")),
+  );
+
+  const decoded = inflateRawSync(
+    Buffer.from(state.closedUnitEvidence, "base64"),
+  ).toString("utf8");
+  const nonCanonical = deflateRawSync(Buffer.from(decoded, "utf8"), {
+    level: 0,
+  }).toString("base64");
+  assert.notEqual(nonCanonical, state.closedUnitEvidence);
+  assert.ok(
+    runInvariantErrors({ ...state, closedUnitEvidence: nonCanonical }).some(
+      (error) => error.includes("closed unit evidence ledger"),
+    ),
+  );
+
+  const oversized = deflateRawSync(
+    Buffer.alloc(LIMITS.envelopeBytes + 1, 0),
+  ).toString("base64");
+  assert.ok(
+    runInvariantErrors({ ...state, closedUnitEvidence: oversized }).some(
+      (error) => error.includes("closed unit evidence ledger"),
+    ),
+  );
+  const unknownFacts = JSON.parse(decoded) as Record<
+    string,
+    Record<string, unknown>
+  >;
+  unknownFacts["unit-1"] = { ...unknownFacts["unit-1"], secret: "nope" };
+  const unknownFactLedger = deflateRawSync(
+    Buffer.from(
+      canonicalJson(
+        unknownFacts as unknown as import("../../src/protocol/canonical.js").JsonValue,
+      ),
+      "utf8",
+    ),
+    { level: 9 },
+  ).toString("base64");
+  assert.ok(
+    runInvariantErrors({
+      ...state,
+      closedUnitEvidence: unknownFactLedger,
+    }).some((error) => error.includes("closed unit evidence ledger")),
   );
 });
 

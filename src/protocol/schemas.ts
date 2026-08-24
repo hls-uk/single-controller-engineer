@@ -14,8 +14,7 @@ export const LIMITS = {
   // 64 units can each retain an initial worker/reviewer pair plus all 16
   // bounded repair pairs without permitting historical session reuse.
   sessionHistory: 2_176,
-  sessionFilterBytes: 8_192,
-  sessionFilterHashes: 12,
+  sessionFingerprintBytes: 32,
   units: 64,
   reservations: 128,
   text: 8_192,
@@ -249,6 +248,61 @@ export const UnitSchema = strictObject({
 });
 export type Unit = Static<typeof UnitSchema>;
 
+/**
+ * Exact non-core facts retained after a unit closes. These are stored in the
+ * aggregate's canonical compressed closed-unit ledger; unknown fields are
+ * rejected before hydration can use the record.
+ */
+export const ClosedUnitEvidenceFactSchema = strictObject({
+  branchRef: Type.Optional(identifier()),
+  worktreePath: Type.Optional(text()),
+  reservationIds: Type.Array(identifier(), {
+    maxItems: LIMITS.reservations,
+    uniqueItems: true,
+  }),
+  candidateHead: Type.Optional(oid()),
+  candidateTree: Type.Optional(oid()),
+  publishedHeadOid: Type.Optional(oid()),
+  openPullRequest: Type.Optional(PullRequestObservationSchema),
+  workerSessionId: Type.Optional(identifier()),
+  workerRequestedModel: Type.Optional(text()),
+  workerReturnedModel: Type.Optional(text()),
+  workerPromptHash: Type.Optional(hash()),
+  reviewerSessionId: Type.Optional(identifier()),
+  reviewerRequestedModel: Type.Optional(text()),
+  reviewerReturnedModel: Type.Optional(text()),
+  reviewPromptHash: Type.Optional(hash()),
+  verificationBaseOid: Type.Optional(oid()),
+  verificationHeadOid: Type.Optional(oid()),
+  verificationTree: Type.Optional(oid()),
+  verificationEvidenceHash: Type.Optional(hash()),
+  verificationCommands: Type.Optional(
+    Type.Array(text(), { minItems: 1, maxItems: 32 }),
+  ),
+  reviewBaseOid: Type.Optional(oid()),
+  reviewHeadOid: Type.Optional(oid()),
+  reviewTree: Type.Optional(oid()),
+  approvalResponseHash: Type.Optional(hash()),
+  landedOid: Type.Optional(oid()),
+  workerResult: Type.Optional(
+    strictObject({
+      status: Type.Union([
+        Type.Literal("completed"),
+        Type.Literal("needs_repair"),
+        Type.Literal("failed"),
+      ]),
+      summary: text(),
+      residualRisks: Type.Array(text(), { maxItems: 32 }),
+      suggestedFollowUps: Type.Array(text(), { maxItems: 32 }),
+    }),
+  ),
+  repairCount: Type.Integer({ minimum: 0, maximum: 16 }),
+  repairContext: Type.Optional(RepairContextSchema),
+});
+export type ClosedUnitEvidenceFact = Static<
+  typeof ClosedUnitEvidenceFactSchema
+>;
+
 export const AggregateStateSchema = Type.Union([
   Type.Literal("initializing"),
   Type.Literal("active"),
@@ -265,6 +319,14 @@ export const AuthorityProfileSchema = Type.Union([
   Type.Literal("integrate"),
 ]);
 export type AuthorityProfile = Static<typeof AuthorityProfileSchema>;
+/** The successful stopping point requested for this run, independent of grant. */
+export const CompletionBoundarySchema = Type.Union([
+  Type.Literal("local-integration"),
+  Type.Literal("branch-handoff"),
+  Type.Literal("pr-handoff"),
+  Type.Literal("remote-integration"),
+]);
+export type CompletionBoundary = Static<typeof CompletionBoundarySchema>;
 export const IntegrationProfileSchema = Type.Union([
   Type.Literal("none"),
   Type.Literal("local-ff"),
@@ -314,6 +376,7 @@ export const RepositoryRunSchema = strictObject({
   repositoryIdentity: identifier(),
   integrationBranch: identifier(),
   authorityProfile: AuthorityProfileSchema,
+  completionBoundary: CompletionBoundarySchema,
   integrationProfile: IntegrationProfileSchema,
   gitObjectFormat: GitObjectFormatSchema,
   controllerFencingToken: identifier(),
@@ -353,21 +416,26 @@ export const RepositoryRunSchema = strictObject({
     maxItems: LIMITS.eventHistory,
     uniqueItems: true,
   }),
-  // A domain-separated deterministic Bloom filter has no false negatives:
-  // historical reuse is always rejected, while a rare false positive only
-  // fails safe by requiring another fresh harness identity. Raw identifiers
-  // are not retained in the aggregate.
-  usedSessionFilter: Type.String({
-    maxLength: Math.ceil(LIMITS.sessionFilterBytes / 3) * 4,
-    pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
-  }),
+  // Concatenated, sorted, full SHA-256 session fingerprints. The count is a
+  // monotonic high-water cross-check for the exact ledger.
+  // It is never an independently meaningful membership structure.
   usedSessionCount: Type.Integer({
     minimum: 0,
     maximum: LIMITS.sessionHistory,
   }),
-  // Detects snapshot corruption of the bounded Bloom bitmap and its count.
-  // It is an integrity binding, not an attempt to reconstruct historical IDs.
-  usedSessionFilterHash: hash(),
+  usedSessionFingerprints: Type.String({
+    maxLength:
+      Math.ceil((LIMITS.sessionHistory * LIMITS.sessionFingerprintBytes) / 3) *
+      4,
+    pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+  }),
+  // Canonical deflate-raw JSON ledger of exact facts for closed units. The
+  // live unit object stays compact after cleanup while exact OIDs/hashes are
+  // retained for audit and hydration validation.
+  closedUnitEvidence: Type.String({
+    maxLength: LIMITS.envelopeBytes,
+    pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+  }),
   journalCheckpoint: JournalCheckpointSchema,
 });
 export type RepositoryRun = Static<typeof RepositoryRunSchema>;
@@ -863,6 +931,7 @@ export const RuntimeEffectSchema = Type.Union([
       branchRef: identifier(),
       candidate: CandidateBindingSchema,
       authorityProfile: AuthorityProfileSchema,
+      completionBoundary: CompletionBoundarySchema,
     }),
   }),
   strictObject({
@@ -872,6 +941,7 @@ export const RuntimeEffectSchema = Type.Union([
     params: strictObject({
       integrationBranch: identifier(),
       integrationProfile: IntegrationProfileSchema,
+      completionBoundary: CompletionBoundarySchema,
       controllerFencingToken: identifier(),
       candidate: CandidateBindingSchema,
     }),
