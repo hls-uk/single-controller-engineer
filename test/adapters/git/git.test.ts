@@ -728,6 +728,20 @@ test("crash-after-act readback positively discovers every Git mutation boundary"
     ).state,
     "observed",
   );
+  assert.deepEqual(
+    await integrateRemoteFastForward(
+      scripted(
+        ...identityResults(),
+        ok("https://example.invalid/repo.git\n"),
+        ok(`${base}\trefs/heads/main\n`),
+        crashed,
+        ok(`${base}\trefs/heads/main\n`),
+      ),
+      repository(),
+      { base, candidate, integrationBranch: "main", remote: "origin" },
+    ),
+    { code: "GIT_UNRESOLVED_EFFECT", state: "ambiguous" },
+  );
 });
 
 test("real SHA-256 repository is accepted when this Git supports it", async (t) => {

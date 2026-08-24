@@ -1041,6 +1041,8 @@ export async function integrateRemoteFastForward(
     return effect("observed", "GIT_OK");
   if (after.state === "found" && after.oid !== input.base)
     return effect("refused", "GIT_MOVED_BASE");
+  if (after.state === "missing" || terminalFailure(pushed) !== undefined)
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
   if (pushed.exitCode !== 0) return effect("refused", "GIT_NOT_FAST_FORWARD");
   return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
 }
