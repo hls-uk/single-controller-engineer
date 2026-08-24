@@ -11,7 +11,11 @@ export const LIMITS = {
   envelopeBytes: 131_072,
   effectJournal: 256,
   eventHistory: 256,
-  sessionHistory: 256,
+  // 64 units can each retain an initial worker/reviewer pair plus all 16
+  // bounded repair pairs without permitting historical session reuse.
+  sessionHistory: 2_176,
+  sessionFilterBytes: 8_192,
+  sessionFilterHashes: 12,
   units: 64,
   reservations: 128,
   text: 8_192,
@@ -339,9 +343,17 @@ export const RepositoryRunSchema = strictObject({
     maxItems: LIMITS.eventHistory,
     uniqueItems: true,
   }),
-  usedSessionIds: Type.Array(identifier(), {
-    maxItems: LIMITS.sessionHistory,
-    uniqueItems: true,
+  // A domain-separated deterministic Bloom filter has no false negatives:
+  // historical reuse is always rejected, while a rare false positive only
+  // fails safe by requiring another fresh harness identity. Raw identifiers
+  // are not retained in the aggregate.
+  usedSessionFilter: Type.String({
+    maxLength: Math.ceil(LIMITS.sessionFilterBytes / 3) * 4,
+    pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+  }),
+  usedSessionCount: Type.Integer({
+    minimum: 0,
+    maximum: LIMITS.sessionHistory,
   }),
   journalCheckpoint: JournalCheckpointSchema,
 });

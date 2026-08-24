@@ -55,7 +55,8 @@ export function run(units: readonly Unit[] = [unit("unit-1")]): RepositoryRun {
     effectJournal: [],
     processedEventIds: [],
     processedIdempotencyKeys: [],
-    usedSessionIds: [],
+    usedSessionCount: 0,
+    usedSessionFilter: "",
     journalCheckpoint: {
       revision: 0,
       compactedEffects: 0,

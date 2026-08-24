@@ -304,17 +304,12 @@ export function reduce(
       if (unit.state !== "collect_intent") return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "worker_collect"))
         return badObservation();
-      if (event.workerResult.status === "failed")
-        return reject(
-          "illegal_transition",
-          "worker failure must use the failure intent/observation pair",
-        );
       result =
-        event.workerResult.status === "needs_repair"
+        event.workerResult.status === "failed"
           ? observe(
               state,
               unit,
-              "repair_required",
+              "failed",
               event,
               {
                 workerResult: event.workerResult,
@@ -324,7 +319,7 @@ export function reduce(
                   rationale: event.workerResult.summary,
                   findings: [
                     {
-                      id: "worker-needs-repair",
+                      id: "worker-failed",
                       severity: "blocking",
                       detail: event.workerResult.summary,
                     },
@@ -333,18 +328,41 @@ export function reduce(
               },
               clearUnitOwners(state, unit.id),
             )
-          : observe(
-              state,
-              unit,
-              "collected",
-              event,
-              { workerResult: event.workerResult },
-              {
-                activeModifyingUnitIds: state.activeModifyingUnitIds.filter(
-                  (id) => id !== unit.id,
-                ),
-              },
-            );
+          : event.workerResult.status === "needs_repair"
+            ? observe(
+                state,
+                unit,
+                "repair_required",
+                event,
+                {
+                  workerResult: event.workerResult,
+                  repairContext: {
+                    baseOid: unit.baseOid,
+                    responseHash: event.observationHash,
+                    rationale: event.workerResult.summary,
+                    findings: [
+                      {
+                        id: "worker-needs-repair",
+                        severity: "blocking",
+                        detail: event.workerResult.summary,
+                      },
+                    ],
+                  },
+                },
+                clearUnitOwners(state, unit.id),
+              )
+            : observe(
+                state,
+                unit,
+                "collected",
+                event,
+                { workerResult: event.workerResult },
+                {
+                  activeModifyingUnitIds: state.activeModifyingUnitIds.filter(
+                    (id) => id !== unit.id,
+                  ),
+                },
+              );
       break;
     case "candidate_intent":
       if (unit.state !== "collected") return illegal(unit, event.type);
@@ -895,15 +913,51 @@ function canIntegrateFrom(state: RepositoryRun, unit: Unit): boolean {
 }
 function sessionIsFresh(state: RepositoryRun, sessionId: string): boolean {
   return (
-    state.usedSessionIds.length < LIMITS.sessionHistory &&
-    !state.usedSessionIds.includes(sessionId)
+    state.usedSessionCount < LIMITS.sessionHistory &&
+    !hasUsedSession(state, sessionId)
   );
 }
 function recordSession(
   state: RepositoryRun,
   sessionId: string,
-): Pick<RepositoryRun, "usedSessionIds"> {
-  return { usedSessionIds: [...state.usedSessionIds, sessionId] };
+): Pick<RepositoryRun, "usedSessionCount" | "usedSessionFilter"> {
+  const filter = sessionFilter(state.usedSessionFilter);
+  for (const index of sessionFilterIndexes(sessionId))
+    filter[index >>> 3] = (filter[index >>> 3] ?? 0) | (1 << (index & 7));
+  return {
+    usedSessionCount: state.usedSessionCount + 1,
+    usedSessionFilter: filter.toString("base64"),
+  };
+}
+
+export function hasUsedSession(
+  state: Pick<RepositoryRun, "usedSessionFilter">,
+  sessionId: string,
+): boolean {
+  if (state.usedSessionFilter.length === 0) return false;
+  const filter = sessionFilter(state.usedSessionFilter);
+  return sessionFilterIndexes(sessionId).every(
+    (index) => ((filter[index >>> 3] ?? 0) & (1 << (index & 7))) !== 0,
+  );
+}
+
+function sessionFilter(encoded: string): Buffer {
+  return encoded.length === 0
+    ? Buffer.alloc(LIMITS.sessionFilterBytes)
+    : Buffer.from(encoded, "base64");
+}
+
+function sessionFilterIndexes(sessionId: string): readonly number[] {
+  const digest = sha256(
+    canonicalJson({ domain: "sce.protocol.session.v1", sessionId }),
+  );
+  const first = Number.parseInt(digest.slice(0, 8), 16);
+  const step = (Number.parseInt(digest.slice(8, 16), 16) | 1) >>> 0;
+  const bitCount = LIMITS.sessionFilterBytes * 8;
+  return Array.from(
+    { length: LIMITS.sessionFilterHashes },
+    (_, index) => (first + index * step) % bitCount,
+  );
 }
 function hasUnresolvedUnitEffect(
   state: RepositoryRun,
@@ -996,11 +1050,14 @@ function recoverAmbiguousUnitObservation(
     state: "active",
     units: replaceUnit(state, { ...unit, state: recoveredState }),
     effectJournal: state.effectJournal.map((effect) =>
-      effect.effectId === entry.effectId
-        ? { ...effect, status: "intended" as const }
-        : effect,
+      effect.effectId === entry.effectId ? restoreIntended(effect) : effect,
     ),
   };
+}
+
+function restoreIntended(entry: EffectJournalEntry): EffectJournalEntry {
+  const { observationHash: _ambiguousObservation, ...intended } = entry;
+  return { ...intended, status: "intended" };
 }
 
 function reduceController(
@@ -1765,9 +1822,12 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     )
       errors.push(`repair context ${unit.id} has a tree without a head`);
   }
+  const packedSessions = Buffer.from(state.usedSessionFilter, "base64");
   if (
-    state.usedSessionIds.length > LIMITS.sessionHistory ||
-    new Set(state.usedSessionIds).size !== state.usedSessionIds.length
+    (state.usedSessionCount === 0 && state.usedSessionFilter !== "") ||
+    (state.usedSessionCount > 0 &&
+      (packedSessions.length !== LIMITS.sessionFilterBytes ||
+        packedSessions.toString("base64") !== state.usedSessionFilter))
   )
     errors.push("used session identity history is invalid");
   for (const effect of state.effectJournal) {
@@ -1987,7 +2047,7 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     if (unit.state === "repair_required" && unit.repairContext === undefined)
       errors.push(`repair-required ${id} lacks retained repair context`);
     for (const session of [unit.workerSessionId, unit.reviewerSessionId])
-      if (session !== undefined && !state.usedSessionIds.includes(session))
+      if (session !== undefined && !hasUsedSession(state, session))
         errors.push(`session ${session} is not retained in durable history`);
     const isActive = state.activeModifyingUnitIds.includes(id);
     const ambiguousKind =

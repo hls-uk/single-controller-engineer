@@ -3,6 +3,7 @@ import test from "node:test";
 import fc from "fast-check";
 import {
   deriveIdempotencyKey,
+  hasUsedSession,
   reduce,
   runInvariantErrors,
 } from "../../src/protocol/reducer.js";
@@ -544,6 +545,7 @@ test("an ambiguous active terminal effect blocks durably and only its exact obse
   state = step(state, "effect_ambiguous", {
     effectId: failureEffectId,
     effectKind: "failure",
+    observationHash: HASH,
   });
   assert.equal(state.state, "blocked");
   assert.equal(state.units["unit-1"]?.state, "blocked");
@@ -636,6 +638,7 @@ test("worker repair outcomes persist follow-ups and do not advance to candidate 
     promptHash: HASH,
   });
   state = step(state, "collect_intent", { paramsHash: HASH });
+  const collecting = state;
   state = observe(state, "worker_collected", "worker_collect", {
     workerResult: {
       status: "needs_repair",
@@ -649,6 +652,22 @@ test("worker repair outcomes persist follow-ups and do not advance to candidate 
     "split fixture cleanup into a separate Bead",
   ]);
   assert.equal(state.qualificationQueue.length, 0);
+  const failed = observe(collecting, "worker_collected", "worker_collect", {
+    workerResult: {
+      status: "failed",
+      summary: "worker process exited without a candidate",
+      residualRisks: ["candidate state is unknown"],
+      suggestedFollowUps: ["inspect the preserved worktree"],
+    },
+  });
+  assert.equal(failed.units["unit-1"]?.state, "failed");
+  assert.equal(failed.units["unit-1"]?.workerResult?.status, "failed");
+  assert.equal(
+    failed.units["unit-1"]?.repairContext?.rationale,
+    "worker process exited without a candidate",
+  );
+  assert.deepEqual(failed.activeModifyingUnitIds, []);
+  assert.deepEqual(runInvariantErrors(failed), []);
   state = step(state, "repair_intent", {
     paramsHash: HASH,
     judgment: {
@@ -667,7 +686,8 @@ test("worker repair outcomes persist follow-ups and do not advance to candidate 
       decision: "repair",
     },
   });
-  assert.ok(state.usedSessionIds.includes("worker-repair-result"));
+  assert.equal(hasUsedSession(state, "worker-repair-result"), true);
+  assert.equal(hasUsedSession(state, "never-dispatched-session"), false);
   assert.equal(
     reduce(
       state,
@@ -946,7 +966,7 @@ test("intent idempotency digest rejects domain, revision, unit, and kind substit
   }
 });
 
-test("64 retained units process sequential waves of at most three within the envelope", () => {
+test("64 retained units complete 16 repairs in waves of at most three within the envelope", () => {
   let state = run(
     Array.from({ length: LIMITS.units }, (_, index) => ({
       ...unit(`unit-${index + 1}`, "repair_required"),
@@ -987,7 +1007,7 @@ test("64 retained units process sequential waves of at most three within the env
       assert.deepEqual(runInvariantErrors(state), []);
     }
     for (const unitId of currentWave) {
-      for (let attempt = 1; attempt <= 1; attempt += 1) {
+      for (let attempt = 1; attempt <= 16; attempt += 1) {
         state = stepUnit(state, unitId, "repair_intent", {
           paramsHash: HASH,
           judgment: {
@@ -1094,7 +1114,36 @@ test("64 retained units process sequential waves of at most three within the env
           },
         );
       }
-      assert.equal(state.units[unitId]?.repairCount, 1);
+      assert.equal(state.units[unitId]?.repairCount, 16);
+      assert.equal(
+        reduce(
+          state,
+          event(
+            state,
+            "repair_intent",
+            {
+              paramsHash: HASH,
+              judgment: {
+                schemaVersion: 1,
+                role: "controller",
+                kind: "repair_disposition",
+                unitId,
+                sessionId: "incarnation-1",
+                requestedModel: "frontier",
+                returnedModel: "frontier-1",
+                aggregateRevision: state.revision,
+                promptHash: HASH,
+                responseHash: HASH,
+                rationale: "seventeenth repair",
+                factOid: OID_B,
+                decision: "repair",
+              },
+            },
+            unitId,
+          ),
+        ).ok,
+        false,
+      );
       state = stepUnit(state, unitId, "park_intent", { paramsHash: HASH });
       state = observeUnit(state, unitId, "park_observed", "park");
       state = stepUnit(state, unitId, "reservation_release_intent", {
@@ -1123,6 +1172,20 @@ test("64 retained units process sequential waves of at most three within the env
   assert.ok(state.journalCheckpoint.compactedEffects > 0);
   assert.ok(state.journalCheckpoint.compactedEvents > 0);
   assert.ok(state.journalCheckpoint.compactedIdempotencyKeys > 0);
+  assert.equal(state.usedSessionCount, LIMITS.units * 16 * 2);
+  assert.equal(
+    Buffer.from(state.usedSessionFilter, "base64").length,
+    LIMITS.sessionFilterBytes,
+  );
+  for (const unitId of unitIds)
+    for (let attempt = 1; attempt <= 16; attempt += 1) {
+      assert.equal(hasUsedSession(state, `worker-${unitId}-${attempt}`), true);
+      assert.equal(
+        hasUsedSession(state, `reviewer-${unitId}-${attempt}`),
+        true,
+      );
+    }
+  assert.equal(hasUsedSession(state, "fresh-after-bounded-trace"), false);
   const envelopeBytes = Buffer.byteLength(JSON.stringify(envelope), "utf8");
   assert.ok(
     envelopeBytes <= LIMITS.envelopeBytes,
@@ -1158,6 +1221,16 @@ test("hydration rejects fabricated reservation lineage and active parking remain
   assert.ok(
     runInvariantErrors(parked).some((error) =>
       error.includes("one exact unresolved effect"),
+    ),
+  );
+  const corruptSessionFilter = {
+    ...run(),
+    usedSessionCount: 1,
+    usedSessionFilter: "AA==",
+  };
+  assert.ok(
+    runInvariantErrors(corruptSessionFilter).some((error) =>
+      error.includes("used session identity history"),
     ),
   );
 });
