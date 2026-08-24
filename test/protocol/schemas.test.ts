@@ -33,7 +33,6 @@ test("strict schemas reject unknown properties, coercion, and incomplete effect 
       unitId: "unit-1",
       type: "dispatch_intent",
       idempotencyKey: "key-1",
-      paramsHash: HASH,
     }).ok,
     false,
   );
@@ -203,7 +202,6 @@ test("idempotency digest stays bounded while 160-character IDs remain valid", ()
       unitId,
       type: "reservation_release_intent",
       idempotencyKey: key,
-      paramsHash: HASH,
     }).ok,
     true,
   );

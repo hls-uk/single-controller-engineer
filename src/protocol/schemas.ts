@@ -188,6 +188,15 @@ const RepairContextSchema = strictObject({
     { minItems: 1, maxItems: LIMITS.findings },
   ),
 });
+const PullRequestObservationSchema = strictObject({
+  providerPrId: identifier(),
+  // Provider URLs are retained only when the consuming policy permits them.
+  url: Type.Optional(text()),
+  state: Type.Literal("open"),
+  baseRef: identifier(),
+  baseOid: oid(),
+  remoteHeadOid: oid(),
+});
 export const UnitSchema = strictObject({
   id: identifier(),
   revision: revision(),
@@ -202,6 +211,7 @@ export const UnitSchema = strictObject({
   candidateHead: Type.Optional(oid()),
   candidateTree: Type.Optional(oid()),
   publishedHeadOid: Type.Optional(oid()),
+  openPullRequest: Type.Optional(PullRequestObservationSchema),
   workerSessionId: Type.Optional(identifier()),
   workerRequestedModel: Type.Optional(text()),
   workerReturnedModel: Type.Optional(text()),
@@ -355,6 +365,9 @@ export const RepositoryRunSchema = strictObject({
     minimum: 0,
     maximum: LIMITS.sessionHistory,
   }),
+  // Detects snapshot corruption of the bounded Bloom bitmap and its count.
+  // It is an integrity binding, not an attempt to reconstruct historical IDs.
+  usedSessionFilterHash: hash(),
   journalCheckpoint: JournalCheckpointSchema,
 });
 export type RepositoryRun = Static<typeof RepositoryRunSchema>;
@@ -368,7 +381,7 @@ const controllerEventBase = {
   eventId: identifier(),
   expectedRevision: revision(),
 };
-const effectIntent = { idempotencyKey: idempotencyKey(), paramsHash: hash() };
+const effectIntent = { idempotencyKey: idempotencyKey() };
 const observedEffect = {
   effectId: effectIdentifier(),
   effectKind: EffectKindSchema,
@@ -417,7 +430,6 @@ const ControllerJudgmentSchema = strictObject({
     Type.Literal("conflict_classification"),
     Type.Literal("additional_tests"),
     Type.Literal("qualitative_acceptance"),
-    Type.Literal("repair_disposition"),
   ]),
   unitId: identifier(),
   factOid: oid(),
@@ -428,6 +440,18 @@ const ControllerJudgmentSchema = strictObject({
     Type.Literal("park"),
     Type.Literal("cancel"),
   ]),
+});
+const RepairDispositionJudgmentSchema = strictObject({
+  ...judgmentBase,
+  role: Type.Literal("controller"),
+  kind: Type.Literal("repair_disposition"),
+  unitId: identifier(),
+  factOid: oid(),
+  decision: Type.Literal("repair"),
+  // Binds the disposition to the evidence currently retained by the unit,
+  // rather than to an earlier controller prompt.
+  currentEvidenceHash: hash(),
+  findingsContextHash: hash(),
 });
 const WorkerJudgmentSchema = strictObject({
   ...judgmentBase,
@@ -460,6 +484,7 @@ const ReviewerJudgmentSchema = strictObject({
 });
 export const JudgmentSchema = Type.Union([
   ControllerJudgmentSchema,
+  RepairDispositionJudgmentSchema,
   WorkerJudgmentSchema,
   ReviewerJudgmentSchema,
 ]);
@@ -614,7 +639,16 @@ export const ProtocolEventSchema = Type.Union([
     ...eventBase,
     type: Type.Literal("publish_observed"),
     ...observedEffect,
-    remoteHeadOid: oid(),
+    publication: Type.Union([
+      strictObject({
+        kind: Type.Literal("push_branch"),
+        remoteHeadOid: oid(),
+      }),
+      strictObject({
+        kind: Type.Literal("open_pr"),
+        pullRequest: PullRequestObservationSchema,
+      }),
+    ]),
   }),
   strictObject({
     ...eventBase,
@@ -645,7 +679,7 @@ export const ProtocolEventSchema = Type.Union([
     ...eventBase,
     type: Type.Literal("repair_intent"),
     ...effectIntent,
-    judgment: ControllerJudgmentSchema,
+    judgment: RepairDispositionJudgmentSchema,
     requestedModel: text(),
     promptHash: hash(),
   }),
@@ -711,8 +745,8 @@ const runtimeEffectBase = {
   effectId: effectIdentifier(),
   unitId: nullableIdentifier(),
   idempotencyKey: idempotencyKey(),
-  // Kept as the journal audit binding. Adapters execute the typed params
-  // below, never this opaque digest.
+  // The reducer derives this domain-separated digest from the typed params
+  // below; adapters execute the typed params, never the opaque digest.
   paramsHash: hash(),
   schemaVersion: Type.Literal(SCHEMA_VERSION),
 };
@@ -736,7 +770,7 @@ const CandidateBindingSchema = strictObject({
 /**
  * Runtime effects are executable, discriminated inputs. Their parameter
  * fields are persisted through the intent transition and bound again by the
- * corresponding observation; paramsHash is an audit digest, not authority.
+ * corresponding observation. paramsHash is reducer-derived audit evidence.
  */
 export const RuntimeEffectSchema = Type.Union([
   strictObject({
@@ -869,7 +903,14 @@ export const RuntimeEffectSchema = Type.Union([
       ...runtimeEffectBase,
       kind: Type.Literal(kind),
       unitId: identifier(),
-      params: strictObject({ activeSessionId: Type.Optional(identifier()) }),
+      params: Type.Union([
+        strictObject({ role: Type.Literal("none") }),
+        strictObject({ role: Type.Literal("worker"), sessionId: identifier() }),
+        strictObject({
+          role: Type.Literal("reviewer"),
+          sessionId: identifier(),
+        }),
+      ]),
     }),
   ),
   strictObject({

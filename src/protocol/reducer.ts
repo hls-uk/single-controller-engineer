@@ -562,17 +562,43 @@ export function reduce(
     case "publish_observed":
       if (
         unit.state !== "publish_intent" ||
-        unit.candidateHead !== event.remoteHeadOid
+        (event.publication.kind === "push_branch"
+          ? unit.candidateHead !== event.publication.remoteHeadOid
+          : unit.candidateHead !== event.publication.pullRequest.remoteHeadOid)
       )
         return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "publish"))
         return badObservation();
+      if (state.authorityProfile === "open-pr") {
+        if (
+          event.publication.kind !== "open_pr" ||
+          event.publication.pullRequest.baseRef !== state.integrationBranch ||
+          event.publication.pullRequest.baseOid !== unit.reviewBaseOid
+        )
+          return reject(
+            "illegal_transition",
+            "open-pr publication lacks the reviewed open pull-request identity and base",
+          );
+      } else if (event.publication.kind !== "push_branch")
+        return reject(
+          "illegal_transition",
+          "non-open-pr publication must record a push-branch readback",
+        );
+      const publishedHeadOid =
+        event.publication.kind === "open_pr"
+          ? event.publication.pullRequest.remoteHeadOid
+          : event.publication.remoteHeadOid;
       result = observe(
         state,
         unit,
         isPublicationHandoff(state) ? "handoff" : "published",
         event,
-        { publishedHeadOid: event.remoteHeadOid },
+        {
+          publishedHeadOid,
+          ...(event.publication.kind === "open_pr"
+            ? { openPullRequest: event.publication.pullRequest }
+            : {}),
+        },
         isPublicationHandoff(state) ? clearUnitOwners(state, unit.id) : {},
       );
       break;
@@ -677,6 +703,11 @@ export function reduce(
         return reject(
           "illegal_transition",
           "repair judgment is not bound to this unit and revision",
+        );
+      if (unit.branchRef === undefined || unit.worktreePath === undefined)
+        return reject(
+          "illegal_transition",
+          "repair requires the retained branch and worktree bindings",
         );
       if (unit.repairCount >= 16 || state.activeModifyingUnitIds.length >= 3)
         return reject("invariant", "all three modifying slots are occupied");
@@ -827,10 +858,7 @@ type Step = {
   readonly state: RepositoryRun;
   readonly effects: readonly ProtocolEffect[];
 };
-type IntentEvent = Extract<
-  ProtocolEvent,
-  { idempotencyKey: string; paramsHash: string }
->;
+type IntentEvent = Extract<ProtocolEvent, { idempotencyKey: string }>;
 type ObservedEvent = Extract<
   ProtocolEvent,
   { effectId: string; effectKind: EffectKind; observationHash: string }
@@ -881,6 +909,45 @@ export function deriveIdempotencyKey(
     }),
   )}`;
 }
+
+/**
+ * Audit-bind an executable effect's exact typed parameters. Intent callers do
+ * not supply this value: it is derived only after the reducer has produced the
+ * effect that an adapter may execute.
+ */
+export function deriveParamsHash(
+  kind: EffectKind,
+  params: RuntimeEffect["params"],
+): string {
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.effect-params.v1",
+      effectKind: kind,
+      params,
+      schemaVersion: SCHEMA_VERSION,
+    }),
+  );
+}
+
+export function deriveRepairContextHash(
+  context: NonNullable<Unit["repairContext"]>,
+): string {
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.repair-context.v1",
+      baseOid: context.baseOid,
+      ...(context.headOid === undefined ? {} : { headOid: context.headOid }),
+      ...(context.treeOid === undefined ? {} : { treeOid: context.treeOid }),
+      responseHash: context.responseHash,
+      rationale: context.rationale,
+      findings: context.findings.map((finding) => ({
+        id: finding.id,
+        severity: finding.severity,
+        detail: finding.detail,
+      })),
+    }),
+  );
+}
 function effectAllowed(state: RepositoryRun, kind: EffectKind): boolean {
   if (kind === "publish")
     return (
@@ -914,20 +981,59 @@ function canIntegrateFrom(state: RepositoryRun, unit: Unit): boolean {
 function sessionIsFresh(state: RepositoryRun, sessionId: string): boolean {
   return (
     state.usedSessionCount < LIMITS.sessionHistory &&
-    !hasUsedSession(state, sessionId)
+    !hasUsedSession(state, sessionId) &&
+    !controllerIdentityMatches(state, sessionId) &&
+    !Object.values(state.units).some(
+      (unit) =>
+        unit.workerSessionId === sessionId ||
+        unit.reviewerSessionId === sessionId,
+    )
   );
 }
 function recordSession(
   state: RepositoryRun,
   sessionId: string,
-): Pick<RepositoryRun, "usedSessionCount" | "usedSessionFilter"> {
+): Pick<
+  RepositoryRun,
+  "usedSessionCount" | "usedSessionFilter" | "usedSessionFilterHash"
+> {
   const filter = sessionFilter(state.usedSessionFilter);
   for (const index of sessionFilterIndexes(sessionId))
     filter[index >>> 3] = (filter[index >>> 3] ?? 0) | (1 << (index & 7));
+  const usedSessionCount = state.usedSessionCount + 1;
+  const usedSessionFilter = filter.toString("base64");
   return {
-    usedSessionCount: state.usedSessionCount + 1,
-    usedSessionFilter: filter.toString("base64"),
+    usedSessionCount,
+    usedSessionFilter,
+    usedSessionFilterHash: deriveSessionFilterHash(
+      usedSessionFilter,
+      usedSessionCount,
+    ),
   };
+}
+
+export function deriveSessionFilterHash(
+  usedSessionFilter: string,
+  usedSessionCount: number,
+): string {
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.session-filter.v1",
+      usedSessionCount,
+      usedSessionFilter,
+    }),
+  );
+}
+
+function controllerIdentityMatches(
+  state: Pick<RepositoryRun, "controller">,
+  sessionId: string,
+): boolean {
+  return [
+    state.controller.runId,
+    state.controller.incarnationId,
+    state.controller.holder,
+  ].includes(sessionId);
 }
 
 export function hasUsedSession(
@@ -1175,11 +1281,17 @@ function terminalIntent(
   event: IntentEvent,
   kind: Extract<EffectKind, "failure" | "timeout" | "park" | "cancel">,
 ): Step {
-  const owners = clearUnitOwners(state, unit.id);
+  const retainsQualification =
+    state.qualificationOwnerUnitId === unit.id ||
+    state.currentReviewerUnitId === unit.id;
   return intent(state, unit, next, event, kind, {
-    ...owners,
-    // A modifying worker holds its slot through the terminal observation.
+    // An active worker or reviewer remains owned until the exact terminal
+    // observation confirms that its role/session target was handled.
     activeModifyingUnitIds: state.activeModifyingUnitIds,
+    qualificationQueue: retainsQualification
+      ? state.qualificationQueue
+      : state.qualificationQueue.filter((id) => id !== unit.id),
+    integrationQueue: state.integrationQueue.filter((id) => id !== unit.id),
   });
 }
 function intent(
@@ -1214,24 +1326,30 @@ function appendIntent(
 ): Step {
   const compacted = compactJournal(state);
   const effectId = `${event.eventId}:${kind}`;
-  const entry: EffectJournalEntry = {
-    effectId,
+  const params = runtimeEffectParams(
+    compacted,
     unitId,
-    idempotencyKey: event.idempotencyKey,
     kind,
-    paramsHash: event.paramsHash,
-    status: "intended",
-    schemaVersion: SCHEMA_VERSION,
-  };
+  ) as RuntimeEffect["params"];
+  const paramsHash = deriveParamsHash(kind, params);
   const effect: ProtocolEffect = {
     kind,
     effectId,
     unitId,
     idempotencyKey: event.idempotencyKey,
-    paramsHash: event.paramsHash,
+    paramsHash,
     schemaVersion: SCHEMA_VERSION,
-    params: runtimeEffectParams(state, unitId, kind),
+    params,
   } as ProtocolEffect;
+  const entry: EffectJournalEntry = {
+    effectId,
+    unitId,
+    idempotencyKey: event.idempotencyKey,
+    kind,
+    paramsHash,
+    status: "intended",
+    schemaVersion: SCHEMA_VERSION,
+  };
   const validEffect = validate<RuntimeEffect>(RuntimeEffectSchema, effect);
   if (!validEffect.ok)
     throw new Error(
@@ -1375,14 +1493,28 @@ function runtimeEffectParams(
     case "timeout":
     case "park":
     case "cancel":
-      return {
-        ...(unit.workerSessionId === undefined
-          ? {}
-          : { activeSessionId: unit.workerSessionId }),
-      };
+      return terminalEffectParams(state, unit, kind);
     default:
       return exhaustive(kind);
   }
+}
+
+function terminalEffectParams(
+  state: RepositoryRun,
+  unit: Unit,
+  kind: Extract<EffectKind, "failure" | "timeout" | "park" | "cancel">,
+): RuntimeEffect["params"] {
+  if (state.currentReviewerUnitId === unit.id)
+    return {
+      role: "reviewer",
+      sessionId: required(unit.reviewerSessionId, "reviewer session", kind),
+    };
+  if (state.activeModifyingUnitIds.includes(unit.id))
+    return {
+      role: "worker",
+      sessionId: required(unit.workerSessionId, "worker session", kind),
+    };
+  return { role: "none" };
 }
 function required<T>(value: T | undefined, name: string, kind: EffectKind): T {
   if (value === undefined) throw new Error(`${kind} lacks ${name}`);
@@ -1595,8 +1727,9 @@ function validRepairJudgment(
     judgment.sessionId === state.controller.incarnationId &&
     judgment.requestedModel === state.controller.requestedModel &&
     judgment.returnedModel === state.controller.returnedModel &&
-    judgment.promptHash === state.controller.promptHash &&
     judgment.factOid === (context.headOid ?? context.baseOid) &&
+    judgment.currentEvidenceHash === context.responseHash &&
+    judgment.findingsContextHash === deriveRepairContextHash(context) &&
     (context.headOid === undefined || context.headOid === unit.candidateHead) &&
     judgment.decision === "repair"
   );
@@ -1811,6 +1944,8 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
       unit.reviewHeadOid,
       unit.reviewTree,
       unit.landedOid,
+      unit.openPullRequest?.baseOid,
+      unit.openPullRequest?.remoteHeadOid,
       unit.repairContext?.baseOid,
       unit.repairContext?.headOid,
       unit.repairContext?.treeOid,
@@ -1830,6 +1965,17 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
         packedSessions.toString("base64") !== state.usedSessionFilter))
   )
     errors.push("used session identity history is invalid");
+  if (
+    state.usedSessionFilterHash !==
+    deriveSessionFilterHash(state.usedSessionFilter, state.usedSessionCount)
+  )
+    errors.push("used session identity history integrity hash is invalid");
+  if (
+    state.usedSessionCount > 0 &&
+    packedSessions.length === LIMITS.sessionFilterBytes &&
+    packedSessions.every((value) => value === 0)
+  )
+    errors.push("used session identity history has no set bits for its count");
   for (const effect of state.effectJournal) {
     if (effectIds.has(effect.effectId))
       errors.push(`duplicate effect id ${effect.effectId}`);
@@ -1845,6 +1991,29 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
       errors.push(`observed effect ${effect.effectId} has no observation`);
     if (effect.status === "intended" || effect.status === "ambiguous")
       addUnresolved(effect);
+    if (
+      effect.unitId !== null &&
+      (effect.status === "intended" || effect.status === "ambiguous") &&
+      !waveIds.has(effect.unitId)
+    )
+      errors.push(
+        `unresolved effect ${effect.effectId} is outside the current wave`,
+      );
+    if (effect.status === "intended" || effect.status === "ambiguous") {
+      try {
+        const expectedParams = runtimeEffectParams(
+          state,
+          effect.unitId,
+          effect.kind,
+        ) as RuntimeEffect["params"];
+        if (effect.paramsHash !== deriveParamsHash(effect.kind, expectedParams))
+          errors.push(`effect ${effect.effectId} has an invalid params hash`);
+      } catch {
+        errors.push(
+          `effect ${effect.effectId} lacks reconstructable parameters`,
+        );
+      }
+    }
   }
   // The map is filled explicitly because a unit's durable phase determines
   // exactly one unresolved external act; this rejects both orphaned and
@@ -1887,6 +2056,7 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     else if (!waveIds.has(id))
       errors.push(`active modifying unit ${id} is outside the current wave`);
   }
+  const assignedSessions = new Map<string, string>();
   for (const [id, unit] of Object.entries(state.units)) {
     if (id !== unit.id)
       errors.push(`unit map key ${id} does not match unit id ${unit.id}`);
@@ -1898,6 +2068,10 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     )
       errors.push(`unit ${id} claims an invalid reservation`);
     const unresolved = unresolvedByUnit.get(id) ?? [];
+    if (unresolved.length > 0 && !waveIds.has(id))
+      errors.push(
+        `unit ${id} has unresolved evidence outside the current wave`,
+      );
     const expectedKind = intentByState[unit.state];
     if (unit.state === "blocked") {
       if (
@@ -2042,13 +2216,50 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
       unit.publishedHeadOid === undefined
     )
       errors.push(`published unit ${id} lacks remote-head readback`);
+    if (
+      state.authorityProfile === "open-pr" &&
+      unit.state === "handoff" &&
+      (unit.openPullRequest === undefined ||
+        unit.openPullRequest.baseRef !== state.integrationBranch ||
+        unit.openPullRequest.baseOid !== unit.reviewBaseOid ||
+        unit.openPullRequest.remoteHeadOid !== unit.publishedHeadOid ||
+        unit.openPullRequest.remoteHeadOid !== unit.candidateHead)
+    )
+      errors.push(
+        `open-pr handoff ${id} lacks exact open pull-request evidence`,
+      );
+    if (
+      unit.openPullRequest !== undefined &&
+      state.authorityProfile !== "open-pr"
+    )
+      errors.push(
+        `unit ${id} retains pull-request evidence outside open-pr authority`,
+      );
     if (unit.state === "landed" && unit.landedOid === undefined)
       errors.push(`landed ${id} lacks integration readback`);
     if (unit.state === "repair_required" && unit.repairContext === undefined)
       errors.push(`repair-required ${id} lacks retained repair context`);
-    for (const session of [unit.workerSessionId, unit.reviewerSessionId])
-      if (session !== undefined && !hasUsedSession(state, session))
+    if (
+      unit.workerSessionId !== undefined &&
+      unit.workerSessionId === unit.reviewerSessionId
+    )
+      errors.push(`unit ${id} reuses one session for worker and reviewer`);
+    for (const [role, session] of [
+      ["worker", unit.workerSessionId],
+      ["reviewer", unit.reviewerSessionId],
+    ] as const) {
+      if (session === undefined) continue;
+      if (!hasUsedSession(state, session))
         errors.push(`session ${session} is not retained in durable history`);
+      if (controllerIdentityMatches(state, session))
+        errors.push(`session ${session} aliases controller identity`);
+      const prior = assignedSessions.get(session);
+      if (prior !== undefined)
+        errors.push(
+          `session ${session} is shared by ${prior} and ${id}/${role}`,
+        );
+      else assignedSessions.set(session, `${id}/${role}`);
+    }
     const isActive = state.activeModifyingUnitIds.includes(id);
     const ambiguousKind =
       unresolved[0]?.status === "ambiguous" ? unresolved[0].kind : undefined;
@@ -2135,7 +2346,17 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     "integrate_intent",
   ]);
   const expectedQualificationQueue = Object.values(state.units)
-    .filter((unit) => qualificationQueueStates.has(unit.state))
+    .filter(
+      (unit) =>
+        qualificationQueueStates.has(unit.state) ||
+        (state.qualificationOwnerUnitId === unit.id &&
+          [
+            "failure_intent",
+            "timeout_intent",
+            "park_intent",
+            "cancel_intent",
+          ].includes(unit.state)),
+    )
     .map((unit) => unit.id)
     .sort();
   const expectedIntegrationQueue = Object.values(state.units)
@@ -2163,9 +2384,18 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     "published",
     "integrate_intent",
   ]);
+  const qualificationOwnerAllowedStates = new Set<UnitState>([
+    ...qualificationOwnerStates,
+    // A terminal act begun while qualification/review owns the unit retains
+    // that owner until its exact observation is recorded.
+    "failure_intent",
+    "timeout_intent",
+    "park_intent",
+    "cancel_intent",
+  ]);
   if (
     state.qualificationOwnerUnitId !== undefined &&
-    !qualificationOwnerStates.has(
+    !qualificationOwnerAllowedStates.has(
       state.units[state.qualificationOwnerUnitId]?.state ?? "planned",
     )
   )
@@ -2186,6 +2416,14 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     state.units[state.integrationOwnerUnitId]?.state !== "integrate_intent"
   )
     errors.push("integration owner is not integrating");
+  for (const unit of Object.values(state.units))
+    if (
+      unit.state === "integrate_intent" &&
+      state.integrationOwnerUnitId !== unit.id
+    )
+      errors.push(
+        `integrating unit ${unit.id} lacks integration owner converse`,
+      );
   if (
     state.integrationOwnerUnitId !== undefined &&
     state.integrationQueue[0] !== state.integrationOwnerUnitId
@@ -2196,13 +2434,26 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     "reviewer_dispatched",
     "review_collect_intent",
   ]);
+  const reviewerOwnerStates = new Set<UnitState>([
+    ...reviewerStates,
+    "failure_intent",
+    "timeout_intent",
+    "park_intent",
+    "cancel_intent",
+  ]);
   if (
     state.currentReviewerUnitId !== undefined &&
-    !reviewerStates.has(
+    !reviewerOwnerStates.has(
       state.units[state.currentReviewerUnitId]?.state ?? "planned",
     )
   )
     errors.push("current reviewer is not active");
+  for (const unit of Object.values(state.units))
+    if (
+      reviewerStates.has(unit.state) &&
+      state.currentReviewerUnitId !== unit.id
+    )
+      errors.push(`reviewer unit ${unit.id} lacks current reviewer converse`);
   if (
     state.currentReviewerUnitId !== undefined &&
     state.qualificationOwnerUnitId !== state.currentReviewerUnitId

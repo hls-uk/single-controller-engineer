@@ -327,6 +327,8 @@ function unitAction(
 function repairIsEligible(state: RepositoryRun, unit: Unit): boolean {
   return (
     unit.repairContext !== undefined &&
+    unit.branchRef !== undefined &&
+    unit.worktreePath !== undefined &&
     (unit.repairContext.headOid === undefined ||
       unit.repairContext.headOid === unit.candidateHead) &&
     unit.repairCount < 16 &&

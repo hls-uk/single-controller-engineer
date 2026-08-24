@@ -3,7 +3,12 @@ import type {
   RepositoryRun,
   Unit,
 } from "../../src/protocol/schemas.js";
-import { deriveIdempotencyKey } from "../../src/protocol/reducer.js";
+import {
+  deriveIdempotencyKey,
+  deriveParamsHash,
+  deriveRepairContextHash,
+  deriveSessionFilterHash,
+} from "../../src/protocol/reducer.js";
 
 export const OID_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 export const OID_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
@@ -57,6 +62,7 @@ export function run(units: readonly Unit[] = [unit("unit-1")]): RepositoryRun {
     processedIdempotencyKeys: [],
     usedSessionCount: 0,
     usedSessionFilter: "",
+    usedSessionFilterHash: deriveSessionFilterHash("", 0),
     journalCheckpoint: {
       revision: 0,
       compactedEffects: 0,
@@ -148,5 +154,33 @@ export function transition(
 ): RepositoryRun {
   const result = reduce(state, input);
   if (!result.ok) throw new Error(`${result.code}: ${result.reason}`);
+  for (const effect of result.effects) {
+    if (effect.paramsHash !== deriveParamsHash(effect.kind, effect.params))
+      throw new Error(`effect ${effect.effectId} has an unbound params hash`);
+    if (
+      result.nextState.effectJournal.find(
+        (entry) => entry.effectId === effect.effectId,
+      )?.paramsHash !== effect.paramsHash
+    )
+      throw new Error(
+        `journal ${effect.effectId} disagrees with effect params`,
+      );
+  }
   return result.nextState;
+}
+
+export function repairEvidence(
+  state: RepositoryRun,
+  unitId = "unit-1",
+): Pick<
+  Extract<ProtocolEvent, { type: "repair_intent" }>["judgment"],
+  "currentEvidenceHash" | "findingsContextHash"
+> {
+  const context = state.units[unitId]?.repairContext;
+  if (context === undefined)
+    throw new Error(`missing repair context for ${unitId}`);
+  return {
+    currentEvidenceHash: context.responseHash,
+    findingsContextHash: deriveRepairContextHash(context),
+  };
 }

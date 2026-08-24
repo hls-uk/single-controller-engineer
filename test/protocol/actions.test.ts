@@ -12,6 +12,7 @@ import {
   OID_B,
   OID_C,
   event,
+  repairEvidence,
   run,
   transition,
   unit,
@@ -85,7 +86,6 @@ test("legal actions are pure, ownership-aware, and acquisition emits once", () =
       null,
       "controller_acquire",
     ),
-    paramsHash: HASH,
   });
   assert.equal(first.ok, true);
   if (!first.ok) return;
@@ -108,7 +108,6 @@ test("legal actions are pure, ownership-aware, and acquisition emits once", () =
         null,
         "controller_acquire",
       ),
-      paramsHash: HASH,
     }).ok,
     false,
   );
@@ -158,7 +157,6 @@ test("record actions are withheld until their exact intended effect is durable",
   assert.deepEqual(legalActions(unresolved), []);
 
   const intended = step(run(), "reservation_intent", {
-    paramsHash: HASH,
     reservations: [{ id: "res-1", namespace: "port", resource: "3001" }],
   });
   const ambiguous = reduce(intended, {
@@ -192,7 +190,6 @@ test("every normal lifecycle state exposes its reducer-legal progress descriptor
 
   expectProgress("reservation_intent");
   state = step(state, "reservation_intent", {
-    paramsHash: HASH,
     reservations: [{ id: "res-1", namespace: "port", resource: "3001" }],
   });
   expectProgress("reservation_observed");
@@ -200,7 +197,6 @@ test("every normal lifecycle state exposes its reducer-legal progress descriptor
   expectProgress("branch_intent");
   state = step(state, "branch_intent", {
     branchRef: "sce/unit-1",
-    paramsHash: HASH,
   });
   expectProgress("branch_observed");
   state = observe(state, "branch_observed", "branch_create", {
@@ -208,7 +204,6 @@ test("every normal lifecycle state exposes its reducer-legal progress descriptor
   });
   expectProgress("worktree_intent");
   state = step(state, "worktree_intent", {
-    paramsHash: HASH,
     worktreePath: "/tmp/unit-1",
   });
   expectProgress("worktree_observed");
@@ -216,7 +211,7 @@ test("every normal lifecycle state exposes its reducer-legal progress descriptor
     worktreePath: "/tmp/unit-1",
   });
   expectProgress("dispatch_intent");
-  state = step(state, "dispatch_intent", { paramsHash: HASH });
+  state = step(state, "dispatch_intent", {});
   expectProgress("dispatch_observed");
   state = observe(state, "dispatch_observed", "dispatch", {
     promptHash: HASH,
@@ -225,20 +220,20 @@ test("every normal lifecycle state exposes its reducer-legal progress descriptor
     sessionId: "worker-1",
   });
   expectProgress("collect_intent");
-  state = step(state, "collect_intent", { paramsHash: HASH });
+  state = step(state, "collect_intent", {});
   expectProgress("worker_collected");
   state = observe(state, "worker_collected", "worker_collect", {
     workerResult: { residualRisks: [], status: "completed", summary: "done" },
   });
   expectProgress("candidate_intent");
-  state = step(state, "candidate_intent", { paramsHash: HASH });
+  state = step(state, "candidate_intent", {});
   expectProgress("candidate_observed");
   state = observe(state, "candidate_observed", "candidate_collect", {
     headOid: OID_B,
     treeOid: OID_C,
   });
   expectProgress("verification_intent");
-  state = step(state, "verification_intent", { paramsHash: HASH });
+  state = step(state, "verification_intent", {});
   expectProgress("verification_observed");
   state = observe(state, "verification_observed", "verify", {
     baseOid: OID_A,
@@ -246,7 +241,7 @@ test("every normal lifecycle state exposes its reducer-legal progress descriptor
     treeOid: OID_C,
   });
   expectProgress("reviewer_dispatch_intent");
-  state = step(state, "reviewer_dispatch_intent", { paramsHash: HASH });
+  state = step(state, "reviewer_dispatch_intent", {});
   expectProgress("reviewer_observed");
   state = observe(state, "reviewer_observed", "review_dispatch", {
     promptHash: HASH,
@@ -255,7 +250,7 @@ test("every normal lifecycle state exposes its reducer-legal progress descriptor
     sessionId: "reviewer-1",
   });
   expectProgress("review_collect_intent");
-  state = step(state, "review_collect_intent", { paramsHash: HASH });
+  state = step(state, "review_collect_intent", {});
   expectProgress("review_collected");
   state = observe(state, "review_collected", "review_collect", {
     judgment: {
@@ -278,13 +273,13 @@ test("every normal lifecycle state exposes its reducer-legal progress descriptor
     },
   });
   expectProgress("publish_intent");
-  state = step(state, "publish_intent", { paramsHash: HASH });
+  state = step(state, "publish_intent", {});
   expectProgress("publish_observed");
   state = observe(state, "publish_observed", "publish", {
-    remoteHeadOid: OID_B,
+    publication: { kind: "push_branch", remoteHeadOid: OID_B },
   });
   expectProgress("integrate_intent");
-  state = step(state, "integrate_intent", { paramsHash: HASH });
+  state = step(state, "integrate_intent", {});
   expectProgress("integrate_observed");
   state = observe(state, "integrate_observed", "integrate", {
     baseOid: OID_A,
@@ -294,7 +289,7 @@ test("every normal lifecycle state exposes its reducer-legal progress descriptor
     treeOid: OID_C,
   });
   expectProgress("reservation_release_intent");
-  state = step(state, "reservation_release_intent", { paramsHash: HASH });
+  state = step(state, "reservation_release_intent", {});
   expectProgress("reservation_released");
   state = observe(state, "reservation_released", "reservation_release");
   assert.deepEqual(legalActions(state), [
@@ -321,10 +316,9 @@ test("terminal, repair, cap, ownership, and order guards are represented", () =>
     ],
   );
 
-  const failing = step(run(), "failure_intent", { paramsHash: HASH });
+  const failing = step(run(), "failure_intent", {});
   assert.deepEqual(actionTypes(failing), ["failure_observed"]);
   const reserving = step(run(), "reservation_intent", {
-    paramsHash: HASH,
     reservations: [{ id: "res-1", namespace: "port", resource: "3001" }],
   });
   assert.deepEqual(actionTypes(reserving), ["reservation_observed"]);
@@ -385,8 +379,8 @@ test("terminal, repair, cap, ownership, and order guards are represented", () =>
       sessionId: "incarnation-1",
       unitId: "unit-1",
       decision: "repair",
+      ...repairEvidence(failed),
     },
-    paramsHash: HASH,
   });
   assert.deepEqual(
     legalActions(repairing).find((action) => action.type === "repair_observed"),
@@ -408,7 +402,7 @@ test("terminal, repair, cap, ownership, and order guards are represented", () =>
     capped = toWorktree(capped, id, index);
   }
   for (const id of ["unit-1", "unit-2", "unit-3"]) {
-    capped = step(capped, "dispatch_intent", { paramsHash: HASH }, id);
+    capped = step(capped, "dispatch_intent", {}, id);
   }
   assert.equal(
     actionTypes(capped, "unit-4").includes("dispatch_intent"),
@@ -432,7 +426,6 @@ test("a persisted wave caps membership at three and excludes non-members from mu
         state,
         "reservation_intent",
         {
-          paramsHash: HASH,
           reservations: [{ id: "res-4", namespace: "port", resource: "3004" }],
         },
         "unit-4",
@@ -451,7 +444,6 @@ function toWorktree(
     state,
     "reservation_intent",
     {
-      paramsHash: HASH,
       reservations: [
         {
           id: `res-${index}`,
@@ -469,12 +461,7 @@ function toWorktree(
     {},
     unitId,
   );
-  next = step(
-    next,
-    "branch_intent",
-    { branchRef: `sce/${unitId}`, paramsHash: HASH },
-    unitId,
-  );
+  next = step(next, "branch_intent", { branchRef: `sce/${unitId}` }, unitId);
   next = observe(
     next,
     "branch_observed",
@@ -485,7 +472,7 @@ function toWorktree(
   next = step(
     next,
     "worktree_intent",
-    { paramsHash: HASH, worktreePath: `/tmp/${unitId}` },
+    { worktreePath: `/tmp/${unitId}` },
     unitId,
   );
   return observe(
