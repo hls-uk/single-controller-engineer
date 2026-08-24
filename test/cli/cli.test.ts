@@ -220,6 +220,25 @@ test("default runner deterministically inspects valid repository state", async (
   assert.equal(next.exitCode, 0);
 });
 
+test("CLI state requests reject text that only exceeds the UTF-8 byte bound", async () => {
+  const oversized = {
+    ...run(),
+    units: {
+      "unit-1": {
+        ...run().units["unit-1"]!,
+        worktreePath: "🙂".repeat(2_049),
+      },
+    },
+  };
+  const execution = await runCli([
+    "inspect",
+    "--request",
+    JSON.stringify({ run: oversized }),
+  ]);
+  assert.equal(execution.exitCode, 64);
+  assert.equal(JSON.parse(execution.stdout).error.code, "SCE_INVALID_REQUEST");
+});
+
 test("read commands expose the exact bounded ambiguity recovery", async () => {
   let state = run();
   state = transition(

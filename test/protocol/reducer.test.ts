@@ -9,6 +9,8 @@ import {
   deriveIntentCommitment,
   deriveJournalCommitment,
   deriveParamsHash,
+  deriveRepairJudgmentPromptHash,
+  deriveRepairJudgmentResponseHash,
   deriveSessionFingerprint,
   deriveSessionLineageRoot,
   hasUsedSession,
@@ -1001,10 +1003,7 @@ test("completion boundaries are monotone under broader authority grants", () => 
     assert.equal(state.units["unit-1"]?.state, "handoff");
   }
 
-  for (const integrationProfile of [
-    "remote-ff",
-    "github-merge-group",
-  ] as const) {
+  for (const integrationProfile of ["remote-ff"] as const) {
     let state = approvedCandidate(
       "integrate",
       integrationProfile,
@@ -1385,6 +1384,83 @@ test("repair disposition binds current context without reusing the initial promp
     reduce(repairable, event(repairable, "repair_intent", { judgment })).ok,
     true,
   );
+  const validEvent = event(repairable, "repair_intent", { judgment });
+  if (validEvent.type !== "repair_intent") throw new Error("missing repair");
+  assert.equal(
+    validEvent.judgment.promptHash,
+    deriveRepairJudgmentPromptHash(
+      repairable,
+      repairable.units["unit-1"]!,
+      validEvent.judgment,
+    ),
+  );
+  assert.equal(
+    validEvent.judgment.responseHash,
+    deriveRepairJudgmentResponseHash(validEvent.judgment),
+  );
+  for (const output of [
+    { ...validEvent.judgment, rationale: "different controller rationale" },
+    { ...validEvent.judgment, decision: "cancel" },
+  ] as const) {
+    const outputJudgment = output as Extract<
+      ProtocolEvent,
+      { type: "repair_intent" }
+    >["judgment"];
+    assert.equal(
+      deriveRepairJudgmentPromptHash(
+        repairable,
+        repairable.units["unit-1"]!,
+        outputJudgment,
+      ),
+      validEvent.judgment.promptHash,
+    );
+    assert.notEqual(
+      deriveRepairJudgmentResponseHash(outputJudgment),
+      validEvent.judgment.responseHash,
+    );
+  }
+  for (const input of [
+    { ...validEvent.judgment, factOid: OID_A },
+    { ...validEvent.judgment, currentEvidenceHash: "f".repeat(64) },
+    { ...validEvent.judgment, findingsContextHash: "f".repeat(64) },
+  ])
+    assert.notEqual(
+      deriveRepairJudgmentPromptHash(
+        repairable,
+        repairable.units["unit-1"]!,
+        input,
+      ),
+      validEvent.judgment.promptHash,
+    );
+  assert.notEqual(validEvent.promptHash, validEvent.judgment.promptHash);
+  assert.notEqual(
+    deriveRepairJudgmentPromptHash(
+      { ...repairable, integrationBranch: "different-branch" },
+      repairable.units["unit-1"]!,
+      validEvent.judgment,
+    ),
+    validEvent.judgment.promptHash,
+  );
+  assert.equal(
+    reduce({ ...repairable, integrationBranch: "different-branch" }, validEvent)
+      .ok,
+    false,
+  );
+  assert.equal(
+    reduce(repairable, {
+      ...validEvent,
+      promptHash: "c".repeat(64),
+    }).ok,
+    true,
+  );
+  for (const field of ["promptHash", "responseHash"] as const)
+    assert.equal(
+      reduce(repairable, {
+        ...validEvent,
+        judgment: { ...validEvent.judgment, [field]: "f".repeat(64) },
+      }).ok,
+      false,
+    );
   assert.equal(
     reduce(
       repairable,
@@ -2020,14 +2096,45 @@ test("closed evidence is canonical, bounded, and retains released reservation li
       closedUnitEvidence: missingReleasedReservationLedger,
     }).some((error) => error.includes("reservation")),
   );
-  const nonCanonical = deflateRawSync(Buffer.from(decoded, "utf8"), {
+  const alternateCompression = deflateRawSync(Buffer.from(decoded, "utf8"), {
     level: 0,
   }).toString("base64");
-  assert.notEqual(nonCanonical, state.closedUnitEvidence);
+  assert.notEqual(alternateCompression, state.closedUnitEvidence);
+  assert.equal(
+    deriveClosedUnitEvidenceCommitment(alternateCompression),
+    state.closedUnitEvidenceCommitment,
+  );
+  assert.deepEqual(
+    runInvariantErrors({
+      ...state,
+      closedUnitEvidence: alternateCompression,
+      closedUnitEvidenceCommitment:
+        deriveClosedUnitEvidenceCommitment(alternateCompression),
+    }),
+    [],
+  );
+
+  // zlib level 0 golden vector for canonical `{"u":{},"v":1}`. This is
+  // semantically the same empty ledger as the canonical empty-string form.
+  const alternateEmptyGolden = "AQ4A8f97InUiOnt9LCJ2IjoxfQ==";
+  assert.deepEqual(
+    runInvariantErrors({
+      ...run(),
+      closedUnitEvidence: alternateEmptyGolden,
+      closedUnitEvidenceCommitment:
+        deriveClosedUnitEvidenceCommitment(alternateEmptyGolden),
+    }),
+    [],
+  );
+  const trailingCompressedInput = Buffer.concat([
+    Buffer.from(state.closedUnitEvidence, "base64"),
+    Buffer.from([0]),
+  ]).toString("base64");
   assert.ok(
-    runInvariantErrors({ ...state, closedUnitEvidence: nonCanonical }).some(
-      (error) => error.includes("closed unit evidence ledger"),
-    ),
+    runInvariantErrors({
+      ...state,
+      closedUnitEvidence: trailingCompressedInput,
+    }).some((error) => error.includes("closed unit evidence ledger")),
   );
 
   const oversized = deflateRawSync(

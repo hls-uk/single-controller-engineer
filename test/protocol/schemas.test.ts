@@ -49,6 +49,68 @@ test("strict schemas reject unknown properties, coercion, and incomplete effect 
   );
 });
 
+test("text fields enforce both character and UTF-8 byte limits", () => {
+  const atByteLimit = "🙂".repeat(2_048);
+  const overByteLimit = "🙂".repeat(2_049);
+  assert.equal(
+    validate(RepositoryRunEnvelopeSchema, {
+      schema: "sce.repository-run",
+      version: 1,
+      payload: {
+        ...run(),
+        units: {
+          "unit-1": { ...run().units["unit-1"]!, worktreePath: atByteLimit },
+        },
+      },
+    }).ok,
+    true,
+  );
+  assert.equal(
+    validate(RepositoryRunEnvelopeSchema, {
+      schema: "sce.repository-run",
+      version: 1,
+      payload: {
+        ...run(),
+        units: {
+          "unit-1": {
+            ...run().units["unit-1"]!,
+            worktreePath: overByteLimit,
+          },
+        },
+      },
+    }).ok,
+    false,
+  );
+  const dispatch = {
+    eventId: "dispatch-1",
+    expectedRevision: 0,
+    unitId: "unit-1",
+    type: "dispatch_intent" as const,
+    idempotencyKey: "dispatch-key",
+    promptHash: HASH,
+    requestedModel: atByteLimit,
+  };
+  assert.equal(validate(ProtocolEventSchema, dispatch).ok, true);
+  assert.equal(
+    validate(ProtocolEventSchema, {
+      ...dispatch,
+      requestedModel: overByteLimit,
+    }).ok,
+    false,
+  );
+});
+
+test("merge-group integration is not advertised without Phase 2 evidence", () => {
+  assert.equal(
+    validate(RepositoryRunEnvelopeSchema, {
+      schema: "sce.repository-run",
+      version: 1,
+      payload: { ...run(), integrationProfile: "github-merge-group" },
+    }).ok,
+    false,
+  );
+});
+
 test("closed judgment variants enforce reviewer role and exact fact bindings", () => {
   const review = {
     schemaVersion: 1,

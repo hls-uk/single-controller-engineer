@@ -20,6 +20,7 @@ export const LIMITS = {
   text: 8_192,
   findings: 64,
 } as const;
+const utf8 = new TextEncoder();
 const identifier = () =>
   Type.String({
     minLength: 1,
@@ -60,7 +61,11 @@ const oid = () =>
 const hash = () =>
   Type.String({ minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" });
 const text = (minLength = 1) =>
-  Type.String({ minLength, maxLength: LIMITS.text });
+  Type.String({
+    minLength,
+    maxLength: LIMITS.text,
+    maxUtf8Bytes: LIMITS.text,
+  });
 const nullableIdentifier = () => Type.Union([identifier(), Type.Null()]);
 export function strictObject<T extends TProperties>(
   properties: T,
@@ -426,7 +431,6 @@ export const IntegrationProfileSchema = Type.Union([
   Type.Literal("none"),
   Type.Literal("local-ff"),
   Type.Literal("remote-ff"),
-  Type.Literal("github-merge-group"),
 ]);
 export type IntegrationProfile = Static<typeof IntegrationProfileSchema>;
 export const GitObjectFormatSchema = Type.Union([
@@ -1124,6 +1128,14 @@ const ajv = new Ajv({
   useDefaults: false,
   strict: true,
 });
+ajv.addKeyword({
+  keyword: "maxUtf8Bytes",
+  type: "string",
+  schemaType: "number",
+  validate: (limit: number, value: string) =>
+    utf8.encode(value).byteLength <= limit,
+  errors: false,
+});
 export interface ValidationResult<T> {
   readonly ok: boolean;
   readonly value?: T;
@@ -1141,7 +1153,7 @@ export function parseEnvelope<T>(
   schema: TSchema,
   source: string,
 ): ValidationResult<T> {
-  if (new TextEncoder().encode(source).byteLength > LIMITS.envelopeBytes)
+  if (utf8.encode(source).byteLength > LIMITS.envelopeBytes)
     return { ok: false, errors: ["envelope exceeds byte limit"] };
   try {
     return validate<T>(schema, JSON.parse(source) as unknown);

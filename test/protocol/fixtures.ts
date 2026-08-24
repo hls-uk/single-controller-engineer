@@ -7,6 +7,8 @@ import {
   deriveIdempotencyKey,
   deriveParamsHash,
   deriveRepairContextHash,
+  deriveRepairJudgmentPromptHash,
+  deriveRepairJudgmentResponseHash,
 } from "../../src/protocol/reducer.js";
 
 export const OID_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -123,6 +125,32 @@ export function event(
           },
         }
       : fields;
+  const repairJudgment =
+    type === "repair_intent" &&
+    typeof normalizedFields.judgment === "object" &&
+    normalizedFields.judgment !== null &&
+    state.units[unitId] !== undefined
+      ? (() => {
+          const judgment = normalizedFields.judgment as Extract<
+            ProtocolEvent,
+            { type: "repair_intent" }
+          >["judgment"];
+          const promptHash = deriveRepairJudgmentPromptHash(
+            state,
+            state.units[unitId]!,
+            judgment,
+          );
+          const promptBoundJudgment = { ...judgment, promptHash };
+          return {
+            ...normalizedFields,
+            judgment: {
+              ...promptBoundJudgment,
+              responseHash:
+                deriveRepairJudgmentResponseHash(promptBoundJudgment),
+            },
+          };
+        })()
+      : normalizedFields;
   return {
     eventId: `event-${state.revision + 1}`,
     expectedRevision: state.revision,
@@ -138,7 +166,7 @@ export function event(
     ...(type === "repair_intent"
       ? { requestedModel: "workhorse", promptHash: HASH }
       : {}),
-    ...normalizedFields,
+    ...repairJudgment,
     ...(kind === undefined
       ? {}
       : {

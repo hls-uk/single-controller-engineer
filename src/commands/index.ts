@@ -207,6 +207,15 @@ const ajv = new Ajv({
   useDefaults: false,
   strict: true,
 });
+const utf8 = new TextEncoder();
+ajv.addKeyword({
+  keyword: "maxUtf8Bytes",
+  type: "string",
+  schemaType: "number",
+  validate: (limit: number, value: string) =>
+    utf8.encode(value).byteLength <= limit,
+  errors: false,
+});
 const requestValidator = ajv.compile(
   CommandRequestSchema,
 ) as ValidateFunction<CommandRequest>;

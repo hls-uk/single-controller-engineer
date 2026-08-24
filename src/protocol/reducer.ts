@@ -21,6 +21,8 @@ import { canonicalJson, type JsonValue } from "./canonical.js";
 import { sha256 } from "./evidence.js";
 import { canEnterTerminalIntent } from "./guards.js";
 
+const utf8 = new TextEncoder();
+
 export type ProtocolEffect = RuntimeEffect;
 export type Reduction =
   | {
@@ -1002,14 +1004,10 @@ export function deriveJournalCommitment(
 }
 
 export function deriveClosedUnitEvidenceCommitment(encoded: string): string {
-  return encoded === ""
-    ? "0".repeat(64)
-    : sha256(
-        canonicalJson({
-          domain: "sce.protocol.closed-evidence.v1",
-          closedUnitEvidence: encoded,
-        }),
-      );
+  return (
+    decodeClosedUnitEvidenceDetails(encoded)?.commitment ??
+    invalidClosedUnitEvidenceCommitment()
+  );
 }
 
 export function deriveRepairContextHash(
@@ -1028,6 +1026,103 @@ export function deriveRepairContextHash(
         severity: finding.severity,
         detail: finding.detail,
       })),
+    }),
+  );
+}
+
+type RepairJudgment = NonNullable<
+  Extract<ProtocolEvent, { type: "repair_intent" }>["judgment"]
+>;
+
+/** Exact exchange fields the controller knew before producing a disposition. */
+function repairJudgmentPromptContent(judgment: RepairJudgment) {
+  return {
+    schemaVersion: judgment.schemaVersion,
+    role: judgment.role,
+    kind: judgment.kind,
+    unitId: judgment.unitId,
+    sessionId: judgment.sessionId,
+    requestedModel: judgment.requestedModel,
+    returnedModel: judgment.returnedModel,
+    aggregateRevision: judgment.aggregateRevision,
+    factOid: judgment.factOid,
+    currentEvidenceHash: judgment.currentEvidenceHash,
+    findingsContextHash: judgment.findingsContextHash,
+  };
+}
+
+/**
+ * The response closes over the exact generated prompt, then adds only the
+ * controller's output. `responseHash` itself is intentionally excluded.
+ */
+function repairJudgmentResponseContent(judgment: RepairJudgment) {
+  return {
+    ...repairJudgmentPromptContent(judgment),
+    promptHash: judgment.promptHash,
+    rationale: judgment.rationale,
+    decision: judgment.decision,
+  };
+}
+
+/**
+ * A judgment should bind the controller's whole current view, but never make
+ * the compressed representation of closed evidence significant. Its semantic
+ * commitment is already part of the aggregate and survives a valid alternate
+ * deflate encoding.
+ */
+function repairJudgmentAggregatePacket(state: RepositoryRun) {
+  const { closedUnitEvidence: _compressedClosedEvidence, ...aggregate } = state;
+  return aggregate;
+}
+
+/** Exact controller response content, bound to its generated prompt hash. */
+export function deriveRepairJudgmentResponseHash(
+  judgment: RepairJudgment,
+): string {
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.repair-judgment-response.v1",
+      judgment: repairJudgmentResponseContent(judgment),
+    }),
+  );
+}
+
+/**
+ * Controller prompt packet for a repair disposition. It binds the current
+ * aggregate, retained unit/context, controller identity, and both model pairs.
+ */
+export function deriveRepairJudgmentPromptHash(
+  state: RepositoryRun,
+  unit: Unit,
+  judgment: RepairJudgment,
+): string {
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.repair-judgment-prompt.v1",
+      aggregate: repairJudgmentAggregatePacket(state),
+      controller: state.controller,
+      unit: {
+        id: unit.id,
+        ordinal: unit.ordinal,
+        revision: unit.revision,
+        state: unit.state,
+        baseOid: unit.baseOid,
+        ...(unit.branchRef === undefined ? {} : { branchRef: unit.branchRef }),
+        ...(unit.worktreePath === undefined
+          ? {}
+          : { worktreePath: unit.worktreePath }),
+        ...(unit.candidateHead === undefined
+          ? {}
+          : { candidateHead: unit.candidateHead }),
+        ...(unit.candidateTree === undefined
+          ? {}
+          : { candidateTree: unit.candidateTree }),
+        repairCount: unit.repairCount,
+        ...(unit.repairContext === undefined
+          ? {}
+          : { repairContext: unit.repairContext }),
+      },
+      judgment: repairJudgmentPromptContent(judgment),
     }),
   );
 }
@@ -1091,7 +1186,7 @@ function completionConfigurationError(
         : "pr handoff requires open-pr-capable authority and integration profile none";
     case "remote-integration":
       return state.authorityProfile === "integrate" &&
-        ["remote-ff", "github-merge-group"].includes(state.integrationProfile)
+        state.integrationProfile === "remote-ff"
         ? undefined
         : "remote integration requires integrate authority and a remote integration profile";
   }
@@ -2119,6 +2214,28 @@ type DenseClosureLedger = {
   readonly u: Record<string, unknown>;
 };
 
+type ClosedUnitEvidenceDetails = {
+  readonly dense: DenseClosureLedger;
+  readonly evidence: Readonly<Record<string, ClosureEvidence>>;
+  readonly commitment: string;
+};
+
+function invalidClosedUnitEvidenceCommitment(): string {
+  return sha256(
+    canonicalJson({ domain: "sce.protocol.closed-evidence.invalid.v1" }),
+  );
+}
+
+function closedUnitEvidenceCommitment(dense: DenseClosureLedger): string {
+  if (Object.keys(dense.u).length === 0) return "0".repeat(64);
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.closed-evidence.v1",
+      evidence: dense,
+    } as unknown as JsonValue),
+  );
+}
+
 function denseJournal(entry: EffectJournalEntry): readonly unknown[] {
   return [
     entry.effectId,
@@ -2541,6 +2658,7 @@ function expandDenseClosure(value: unknown): ClosureEvidence | undefined {
 function encodeClosedUnitEvidence(
   evidence: Readonly<Record<string, ClosureEvidence>>,
 ): string {
+  if (Object.keys(evidence).length === 0) return "";
   const dense = denseClosureLedger(evidence);
   return deflateRawSync(
     Buffer.from(canonicalJson(dense as unknown as JsonValue), "utf8"),
@@ -2550,18 +2668,31 @@ function encodeClosedUnitEvidence(
   ).toString("base64");
 }
 
-function decodeClosedUnitEvidence(
+function decodeClosedUnitEvidenceDetails(
   encoded: string,
-): Record<string, ClosureEvidence> | undefined {
-  if (encoded === "") return {};
+): ClosedUnitEvidenceDetails | undefined {
+  if (encoded === "") {
+    const dense: DenseClosureLedger = { v: 1, u: {} };
+    return {
+      dense,
+      evidence: {},
+      commitment: closedUnitEvidenceCommitment(dense),
+    };
+  }
   let compressed: Buffer;
   let decoded: Buffer;
   try {
     compressed = Buffer.from(encoded, "base64");
     if (compressed.toString("base64") !== encoded) return undefined;
-    decoded = inflateRawSync(compressed, {
+    const inflated = inflateRawSync(compressed, {
+      info: true,
       maxOutputLength: LIMITS.envelopeBytes,
-    });
+    }) as unknown as {
+      readonly buffer: Buffer;
+      readonly engine: { readonly bytesWritten: number };
+    };
+    if (inflated.engine.bytesWritten !== compressed.length) return undefined;
+    decoded = inflated.buffer;
   } catch {
     return undefined;
   }
@@ -2581,15 +2712,16 @@ function decodeClosedUnitEvidence(
     canonicalJson(parsed as JsonValue) !== text
   )
     return undefined;
-  const dense = parsed as Partial<DenseClosureLedger>;
+  const parsedDense = parsed as Partial<DenseClosureLedger>;
   if (
-    Object.keys(dense).length !== 2 ||
-    dense.v !== 1 ||
-    dense.u === null ||
-    Array.isArray(dense.u) ||
-    typeof dense.u !== "object"
+    Object.keys(parsedDense).length !== 2 ||
+    parsedDense.v !== 1 ||
+    parsedDense.u === null ||
+    Array.isArray(parsedDense.u) ||
+    typeof parsedDense.u !== "object"
   )
     return undefined;
+  const dense: DenseClosureLedger = { v: 1, u: parsedDense.u };
   const evidence: Record<string, ClosureEvidence> = {};
   for (const [id, compact] of Object.entries(dense.u)) {
     const facts = expandDenseClosure(compact);
@@ -2601,7 +2733,17 @@ function decodeClosedUnitEvidence(
       return undefined;
     evidence[id] = facts;
   }
-  return encodeClosedUnitEvidence(evidence) === encoded ? evidence : undefined;
+  return {
+    dense,
+    evidence,
+    commitment: closedUnitEvidenceCommitment(dense),
+  };
+}
+
+function decodeClosedUnitEvidence(
+  encoded: string,
+): Readonly<Record<string, ClosureEvidence>> | undefined {
+  return decodeClosedUnitEvidenceDetails(encoded)?.evidence;
 }
 
 function updateClosureReleaseEvidence(
@@ -2915,6 +3057,9 @@ function validRepairJudgment(
     judgment.factOid === (context.headOid ?? context.baseOid) &&
     judgment.currentEvidenceHash === context.responseHash &&
     judgment.findingsContextHash === deriveRepairContextHash(context) &&
+    judgment.promptHash ===
+      deriveRepairJudgmentPromptHash(state, unit, judgment) &&
+    judgment.responseHash === deriveRepairJudgmentResponseHash(judgment) &&
     (context.headOid === undefined || context.headOid === unit.candidateHead) &&
     judgment.decision === "repair"
   );
@@ -3046,11 +3191,14 @@ function commit(
         compactedIdempotencyKeys,
     },
   };
+  const closedEvidenceDetails = decodeClosedUnitEvidenceDetails(
+    uncommittedState.closedUnitEvidence,
+  );
   const nextState = {
     ...uncommittedState,
-    closedUnitEvidenceCommitment: deriveClosedUnitEvidenceCommitment(
-      uncommittedState.closedUnitEvidence,
-    ),
+    closedUnitEvidenceCommitment:
+      closedEvidenceDetails?.commitment ??
+      invalidClosedUnitEvidenceCommitment(),
     journalCommitment: deriveJournalCommitment(
       uncommittedState.journalCheckpoint.commitment,
       uncommittedState.effectJournal,
@@ -3058,13 +3206,26 @@ function commit(
   };
   const schema = validate<RepositoryRun>(RepositoryRunSchema, nextState);
   if (!schema.ok) return reject("invariant", schema.errors.join("; "));
-  const errors = runInvariantErrors(nextState);
+  const errors = runInvariantErrorsWithClosedEvidence(
+    nextState,
+    closedEvidenceDetails,
+  );
   return errors.length
     ? reject("invariant", errors.join("; "))
     : { ok: true, nextState, effects };
 }
 
 export function runInvariantErrors(state: RepositoryRun): readonly string[] {
+  return runInvariantErrorsWithClosedEvidence(
+    state,
+    decodeClosedUnitEvidenceDetails(state.closedUnitEvidence),
+  );
+}
+
+function runInvariantErrorsWithClosedEvidence(
+  state: RepositoryRun,
+  closedEvidenceDetails: ClosedUnitEvidenceDetails | undefined,
+): readonly string[] {
   const errors: string[] = [];
   const effectIds = new Set<string>();
   const idempotency = new Set<string>();
@@ -3077,7 +3238,7 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     unresolvedByUnit.set(entry.unitId, entries);
   };
   if (
-    new TextEncoder().encode(
+    utf8.encode(
       JSON.stringify({
         schema: "sce.repository-run",
         version: SCHEMA_VERSION,
@@ -3167,12 +3328,11 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
     deriveSessionLineageRoot(state.sessionLineage, state.usedSessionCount)
   )
     errors.push("session lineage root does not match ledger");
-  const closedEvidence = decodeClosedUnitEvidence(state.closedUnitEvidence);
-  if (closedEvidence === undefined)
+  const closedEvidence = closedEvidenceDetails?.evidence;
+  if (closedEvidenceDetails === undefined)
     errors.push("closed unit evidence ledger is invalid");
   else if (
-    state.closedUnitEvidenceCommitment !==
-    deriveClosedUnitEvidenceCommitment(state.closedUnitEvidence)
+    state.closedUnitEvidenceCommitment !== closedEvidenceDetails.commitment
   )
     errors.push("closed unit evidence commitment does not match ledger");
   const liveTerminalStates = new Set<UnitState>([
