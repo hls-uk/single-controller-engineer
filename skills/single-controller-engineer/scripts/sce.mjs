@@ -9499,6 +9499,7 @@ var LIMITS = {
   text: 8192,
   findings: 64
 };
+var utf8 = new TextEncoder();
 var identifier = () => Type.String({
   minLength: 1,
   maxLength: 160,
@@ -9529,7 +9530,11 @@ var oid = () => Type.String({
   pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
 });
 var hash = () => Type.String({ minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" });
-var text = (minLength = 1) => Type.String({ minLength, maxLength: LIMITS.text });
+var text = (minLength = 1) => Type.String({
+  minLength,
+  maxLength: LIMITS.text,
+  maxUtf8Bytes: LIMITS.text
+});
 var nullableIdentifier = () => Type.Union([identifier(), Type.Null()]);
 function strictObject(properties) {
   return Type.Object(properties, { additionalProperties: false });
@@ -9869,8 +9874,7 @@ var CompletionBoundarySchema = Type.Union([
 var IntegrationProfileSchema = Type.Union([
   Type.Literal("none"),
   Type.Literal("local-ff"),
-  Type.Literal("remote-ff"),
-  Type.Literal("github-merge-group")
+  Type.Literal("remote-ff")
 ]);
 var GitObjectFormatSchema = Type.Union([
   Type.Literal("sha1"),
@@ -10542,6 +10546,13 @@ var ajv = new import_ajv.Ajv({
   useDefaults: false,
   strict: true
 });
+ajv.addKeyword({
+  keyword: "maxUtf8Bytes",
+  type: "string",
+  schemaType: "number",
+  validate: (limit, value) => utf8.encode(value).byteLength <= limit,
+  errors: false
+});
 function validate(schema, input) {
   const validator = ajv.compile(schema);
   if (validator(input)) return { ok: true, value: input, errors: [] };
@@ -10652,6 +10663,7 @@ function canEnterTerminalIntent(state) {
 }
 
 // src/protocol/reducer.ts
+var utf82 = new TextEncoder();
 function deriveParamsHash(kind, params) {
   return sha256(
     canonicalJson({
@@ -10701,14 +10713,6 @@ function deriveJournalCommitment(checkpointCommitment, entries) {
     checkpointCommitment
   );
 }
-function deriveClosedUnitEvidenceCommitment(encoded) {
-  return encoded === "" ? "0".repeat(64) : sha256(
-    canonicalJson({
-      domain: "sce.protocol.closed-evidence.v1",
-      closedUnitEvidence: encoded
-    })
-  );
-}
 function completionConfigurationError(state) {
   switch (state.completionBoundary) {
     case "local-integration":
@@ -10718,7 +10722,7 @@ function completionConfigurationError(state) {
     case "pr-handoff":
       return state.integrationProfile === "none" && ["open-pr", "integrate"].includes(state.authorityProfile) ? void 0 : "pr handoff requires open-pr-capable authority and integration profile none";
     case "remote-integration":
-      return state.authorityProfile === "integrate" && ["remote-ff", "github-merge-group"].includes(state.integrationProfile) ? void 0 : "remote integration requires integrate authority and a remote integration profile";
+      return state.authorityProfile === "integrate" && state.integrationProfile === "remote-ff" ? void 0 : "remote integration requires integrate authority and a remote integration profile";
   }
 }
 function controllerIdentityMatches(state, sessionId) {
@@ -10974,120 +10978,14 @@ function required(value, name, kind) {
   if (value === void 0) throw new Error(`${kind} lacks ${name}`);
   return value;
 }
-function denseJournal(entry) {
-  return [
-    entry.effectId,
-    entry.unitId,
-    entry.idempotencyKey,
-    entry.kind,
-    entry.intentRevision,
-    entry.intentCommitment,
-    entry.paramsHash,
-    entry.status,
-    entry.observationHash ?? null,
-    entry.schemaVersion
-  ];
-}
-function denseBinding(binding) {
-  return binding === void 0 ? null : [
-    binding.sessionId,
-    binding.requestedModel,
-    binding.returnedModel,
-    binding.promptHash
-  ];
-}
-function denseClosureRecord(closure) {
-  const common = [
-    closure.outcome,
-    closure.unitId,
-    closure.unitOrdinal,
-    closure.baseOid,
-    closure.repairCount ?? null,
-    closure.branchRef ?? null,
-    closure.worktreePath ?? null,
-    denseBinding(closure.worker),
-    denseBinding(closure.reviewer),
-    closure.reservations.map((reservation) => [
-      reservation.id,
-      reservation.namespace,
-      reservation.resource,
-      denseJournal(reservation.acquire),
-      reservation.release === void 0 ? null : denseJournal(reservation.release)
-    ]),
-    denseJournal(closure.terminalEffect)
-  ];
-  if (closure.outcome === "landed" || closure.outcome === "branch_handoff" || closure.outcome === "pr_handoff") {
-    const success2 = [
-      [closure.candidate.headOid, closure.candidate.treeOid],
-      [
-        closure.verification.baseOid,
-        closure.verification.headOid,
-        closure.verification.treeOid,
-        closure.verification.evidenceHash,
-        closure.verification.commands
-      ],
-      [
-        closure.review.baseOid,
-        closure.review.headOid,
-        closure.review.treeOid,
-        closure.review.responseHash
-      ]
-    ];
-    if (closure.outcome === "landed")
-      return [...common, [closure.landedOid, ...success2]];
-    if (closure.outcome === "branch_handoff")
-      return [...common, [closure.publishedHeadOid, ...success2]];
-    return [
-      ...common,
-      [
-        closure.publishedHeadOid,
-        [
-          closure.pullRequest.providerPrId,
-          closure.pullRequest.url ?? null,
-          closure.pullRequest.state,
-          closure.pullRequest.baseRef,
-          closure.pullRequest.baseOid,
-          closure.pullRequest.remoteHeadOid
-        ],
-        ...success2
-      ]
-    ];
-  }
-  return [
-    ...common,
-    [
-      closure.workerResult === void 0 ? null : [
-        closure.workerResult.status,
-        closure.workerResult.summary,
-        closure.workerResult.residualRisks,
-        closure.workerResult.suggestedFollowUps
-      ],
-      closure.repairContext === void 0 ? null : [
-        closure.repairContext.baseOid,
-        closure.repairContext.headOid ?? null,
-        closure.repairContext.treeOid ?? null,
-        closure.repairContext.responseHash,
-        closure.repairContext.rationale,
-        closure.repairContext.findings.map((finding) => [
-          finding.id,
-          finding.severity,
-          finding.detail
-        ])
-      ],
-      closure.candidate === void 0 ? null : [closure.candidate.headOid, closure.candidate.treeOid]
-    ]
-  ];
-}
-function denseClosureLedger(evidence) {
-  return {
-    v: 1,
-    u: Object.fromEntries(
-      Object.entries(evidence).map(([id, closure]) => [
-        id,
-        denseClosureRecord(closure)
-      ])
-    )
-  };
+function closedUnitEvidenceCommitment(dense) {
+  if (Object.keys(dense.u).length === 0) return "0".repeat(64);
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.closed-evidence.v1",
+      evidence: dense
+    })
+  );
 }
 function tuple(value, length) {
   return Array.isArray(value) && value.length === length ? value : void 0;
@@ -11301,25 +11199,26 @@ function expandDenseClosure(value) {
     ...candidate === void 0 ? {} : { candidate: { headOid: candidate[0], treeOid: candidate[1] } }
   };
 }
-function encodeClosedUnitEvidence(evidence) {
-  const dense = denseClosureLedger(evidence);
-  return deflateRawSync(
-    Buffer.from(canonicalJson(dense), "utf8"),
-    {
-      level: 9
-    }
-  ).toString("base64");
-}
-function decodeClosedUnitEvidence(encoded) {
-  if (encoded === "") return {};
+function decodeClosedUnitEvidenceDetails(encoded) {
+  if (encoded === "") {
+    const dense2 = { v: 1, u: {} };
+    return {
+      dense: dense2,
+      evidence: {},
+      commitment: closedUnitEvidenceCommitment(dense2)
+    };
+  }
   let compressed;
   let decoded;
   try {
     compressed = Buffer.from(encoded, "base64");
     if (compressed.toString("base64") !== encoded) return void 0;
-    decoded = inflateRawSync(compressed, {
+    const inflated = inflateRawSync(compressed, {
+      info: true,
       maxOutputLength: LIMITS.envelopeBytes
     });
+    if (inflated.engine.bytesWritten !== compressed.length) return void 0;
+    decoded = inflated.buffer;
   } catch {
     return void 0;
   }
@@ -11334,9 +11233,10 @@ function decodeClosedUnitEvidence(encoded) {
   }
   if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object" || canonicalJson(parsed) !== text2)
     return void 0;
-  const dense = parsed;
-  if (Object.keys(dense).length !== 2 || dense.v !== 1 || dense.u === null || Array.isArray(dense.u) || typeof dense.u !== "object")
+  const parsedDense = parsed;
+  if (Object.keys(parsedDense).length !== 2 || parsedDense.v !== 1 || parsedDense.u === null || Array.isArray(parsedDense.u) || typeof parsedDense.u !== "object")
     return void 0;
+  const dense = { v: 1, u: parsedDense.u };
   const evidence = {};
   for (const [id, compact] of Object.entries(dense.u)) {
     const facts = expandDenseClosure(compact);
@@ -11344,9 +11244,19 @@ function decodeClosedUnitEvidence(encoded) {
       return void 0;
     evidence[id] = facts;
   }
-  return encodeClosedUnitEvidence(evidence) === encoded ? evidence : void 0;
+  return {
+    dense,
+    evidence,
+    commitment: closedUnitEvidenceCommitment(dense)
+  };
 }
 function runInvariantErrors(state) {
+  return runInvariantErrorsWithClosedEvidence(
+    state,
+    decodeClosedUnitEvidenceDetails(state.closedUnitEvidence)
+  );
+}
+function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
   const errors = [];
   const effectIds = /* @__PURE__ */ new Set();
   const idempotency = /* @__PURE__ */ new Set();
@@ -11358,7 +11268,7 @@ function runInvariantErrors(state) {
     entries.push(entry);
     unresolvedByUnit.set(entry.unitId, entries);
   };
-  if (new TextEncoder().encode(
+  if (utf82.encode(
     JSON.stringify({
       schema: "sce.repository-run",
       version: SCHEMA_VERSION,
@@ -11429,10 +11339,10 @@ function runInvariantErrors(state) {
     errors.push("session lineage count does not match ledger");
   else if (state.sessionLineageRoot !== deriveSessionLineageRoot(state.sessionLineage, state.usedSessionCount))
     errors.push("session lineage root does not match ledger");
-  const closedEvidence = decodeClosedUnitEvidence(state.closedUnitEvidence);
-  if (closedEvidence === void 0)
+  const closedEvidence = closedEvidenceDetails?.evidence;
+  if (closedEvidenceDetails === void 0)
     errors.push("closed unit evidence ledger is invalid");
-  else if (state.closedUnitEvidenceCommitment !== deriveClosedUnitEvidenceCommitment(state.closedUnitEvidence))
+  else if (state.closedUnitEvidenceCommitment !== closedEvidenceDetails.commitment)
     errors.push("closed unit evidence commitment does not match ledger");
   const liveTerminalStates = /* @__PURE__ */ new Set([
     "landed",
@@ -12304,6 +12214,14 @@ var ajv2 = new import_ajv2.Ajv({
   removeAdditional: false,
   useDefaults: false,
   strict: true
+});
+var utf83 = new TextEncoder();
+ajv2.addKeyword({
+  keyword: "maxUtf8Bytes",
+  type: "string",
+  schemaType: "number",
+  validate: (limit, value) => utf83.encode(value).byteLength <= limit,
+  errors: false
 });
 var requestValidator = ajv2.compile(
   CommandRequestSchema
