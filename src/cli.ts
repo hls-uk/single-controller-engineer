@@ -9,6 +9,7 @@ import {
   isCommandName,
   isFeedbackAction,
   MAX_CLI_REQUEST_BYTES,
+  MAX_CLI_RESPONSE_BYTES,
   stateOnlyCommandRunner,
   validateCommandPayload,
   validateCommandRequest,
@@ -186,7 +187,7 @@ function parseCommand(
   }
 
   const feedbackAction = parsePositionals(command, positionals);
-  const request: CommandRequest = {
+  const request: unknown = {
     command,
     ...(feedbackAction === undefined ? {} : { feedbackAction }),
     options: parseOptions(values),
@@ -427,7 +428,24 @@ function failure(
 }
 
 function execution(response: CliResponse, exitCode: number): CliExecution {
-  return { exitCode, response, stdout: `${canonicalJson(response)}\n` };
+  const stdout = `${canonicalJson(response)}\n`;
+  if (new TextEncoder().encode(stdout).byteLength <= MAX_CLI_RESPONSE_BYTES)
+    return { exitCode, response, stdout };
+
+  const boundedResponse: CliErrorResponse = {
+    error: {
+      code: "SCE_RESULT_TOO_LARGE",
+      message: "The command result exceeds the 128 KiB limit.",
+    },
+    ok: false,
+    schema: RESPONSE_SCHEMA,
+    version: SCHEMA_VERSION,
+  };
+  return {
+    exitCode: EXIT_SOFTWARE,
+    response: boundedResponse,
+    stdout: `${canonicalJson(boundedResponse)}\n`,
+  };
 }
 
 function helpResult(

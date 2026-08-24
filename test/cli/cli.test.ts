@@ -5,8 +5,13 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 
-import { commandNames } from "../../src/commands/index.js";
+import {
+  commandNames,
+  MAX_CLI_RESPONSE_BYTES,
+  validateCommandRequest,
+} from "../../src/commands/index.js";
 import { canonicalJson, parseCliArguments, runCli } from "../../src/cli.js";
+import { legalActions } from "../../src/protocol/actions.js";
 
 import { run, unit } from "../protocol/fixtures.js";
 test("mutating and external commands report stable unavailability", async () => {
@@ -63,6 +68,7 @@ test("command help exposes feedback's explicit subcommand surface", async () => 
 
 test("a runner receives a typed parsed request and can return a successful envelope", async () => {
   let received: unknown;
+  const state = run();
   const execution = await runCli(
     [
       "next",
@@ -71,7 +77,7 @@ test("a runner receives a typed parsed request and can return a successful envel
       "--idempotency-key",
       "dispatch-42",
       "--request",
-      '{"unit":"unit-1","wave":2}',
+      JSON.stringify({ run: state }),
     ],
     {
       runner(request) {
@@ -93,7 +99,7 @@ test("a runner receives a typed parsed request and can return a successful envel
       expectedRevision: 7,
       idempotencyKey: "dispatch-42",
       json: true,
-      request: { unit: "unit-1", wave: 2 },
+      request: { run: state },
     },
     schema: "sce.command.request",
     version: 1,
@@ -161,11 +167,14 @@ test("option values use strict, bounded formats", async () => {
 });
 
 test("runner failures cannot leak their thrown values", async () => {
-  const execution = await runCli(["inspect"], {
-    runner() {
-      throw new Error("canary secret");
+  const execution = await runCli(
+    ["inspect", "--request", JSON.stringify({ run: run() })],
+    {
+      runner() {
+        throw new Error("canary secret");
+      },
     },
-  });
+  );
   assert.equal(execution.exitCode, 70);
   assert.deepEqual(JSON.parse(execution.stdout).error, {
     code: "SCE_RUNNER_FAILURE",
@@ -200,7 +209,7 @@ test("default runner deterministically inspects valid repository state", async (
   });
   const next = await runCli(["next", "--request", source]);
   assert.deepEqual(JSON.parse(next.stdout).result, {
-    legalActions: ["plan-wave"],
+    legalActions: legalActions(state),
     revision: 0,
   });
   assert.equal(inspect.exitCode, 0);
@@ -210,32 +219,90 @@ test("default runner deterministically inspects valid repository state", async (
 test("malformed, oversize, and invalid state requests fail closed", async () => {
   const tooLarge = `{\"payload\":\"${"x".repeat(128 * 1024)}\"}`;
   for (const [source, code] of [
-    [
-      JSON.stringify({ run: run(), unknown: true }),
-      "SCE_INVALID_STATE_REQUEST",
-    ],
+    [JSON.stringify({ run: run(), unknown: true }), "SCE_INVALID_REQUEST"],
     ["{", "SCE_INVALID_JSON"],
     [tooLarge, "SCE_REQUEST_TOO_LARGE"],
-    ['{"run":{}}', "SCE_INVALID_STATE_REQUEST"],
+    ['{"run":{}}', "SCE_INVALID_REQUEST"],
   ] as const) {
     const execution = await runCli(["next", "--request", source]);
     assert.equal(JSON.parse(execution.stdout).error.code, code);
   }
 });
-test("invalid runner results are rejected without leaking fields", async () => {
-  const execution = await runCli(["inspect"], {
-    runner() {
-      return { status: "ok", result: {}, leaked: "canary secret" } as never;
+test("conditional command envelopes reject accidental fields and semantic state", async () => {
+  const state = run();
+  const header = { schema: "sce.command.request", version: 1 } as const;
+  assert.equal(
+    validateCommandRequest({
+      ...header,
+      command: "next",
+      options: { json: false, request: { run: state } },
+    }),
+    true,
+  );
+  for (const request of [
+    {
+      ...header,
+      command: "next",
+      options: { json: false },
     },
-  });
+    {
+      ...header,
+      command: "next",
+      feedbackAction: "prepare",
+      options: { json: false, request: { run: state } },
+    },
+    {
+      ...header,
+      command: "feedback",
+      options: { json: false },
+    },
+    {
+      ...header,
+      command: "feedback",
+      feedbackAction: "prepare",
+      options: { json: false, request: { run: state } },
+    },
+    {
+      ...header,
+      command: "publish",
+      options: { json: false, accidental: true },
+    },
+  ]) {
+    assert.equal(validateCommandRequest(request), false);
+  }
+
+  const semanticInvalid = {
+    ...state,
+    controller: { ...state.controller, holder: "not-the-run-holder" },
+  };
+  const execution = await runCli([
+    "next",
+    "--request",
+    JSON.stringify({ run: semanticInvalid }),
+  ]);
+  assert.equal(execution.exitCode, 64);
+  assert.equal(
+    JSON.parse(execution.stdout).error.code,
+    "SCE_INVALID_STATE_REQUEST",
+  );
+});
+test("invalid runner results are rejected without leaking fields", async () => {
+  const execution = await runCli(
+    ["inspect", "--request", JSON.stringify({ run: run() })],
+    {
+      runner() {
+        return { status: "ok", result: {}, leaked: "canary secret" } as never;
+      },
+    },
+  );
   assert.equal(
     JSON.parse(execution.stdout).error.code,
     "SCE_INVALID_RUNNER_RESULT",
   );
   assert.doesNotMatch(execution.stdout, /canary secret/u);
 });
-test("next action is determined only by validated protocol state", async () => {
-  const state = run([unit("unit-1", "candidate_committed")]);
+test("next action returns sorted protocol descriptors only for validated state", async () => {
+  const state = run([unit("unit-2"), unit("unit-1")]);
   const execution = await runCli([
     "next",
     "--request",
@@ -243,9 +310,37 @@ test("next action is determined only by validated protocol state", async () => {
   ]);
   assert.equal(execution.exitCode, 0);
   assert.deepEqual(JSON.parse(execution.stdout).result, {
-    legalActions: ["qualify"],
+    legalActions: legalActions(state),
     revision: 0,
   });
+});
+test("oversized runner output is replaced by a bounded sanitized envelope", async () => {
+  const largeResult = Object.fromEntries(
+    Array.from({ length: 256 }, (_, index) => [
+      `field-${index}`,
+      "x".repeat(8_192),
+    ]),
+  );
+  const execution = await runCli(
+    ["next", "--request", JSON.stringify({ run: run() })],
+    {
+      runner() {
+        return {
+          result: largeResult,
+          schema: "sce.command.result",
+          status: "ok",
+          version: 1,
+        };
+      },
+    },
+  );
+  assert.equal(execution.exitCode, 70);
+  assert.equal(JSON.parse(execution.stdout).error.code, "SCE_RESULT_TOO_LARGE");
+  assert.ok(
+    new TextEncoder().encode(execution.stdout).byteLength <=
+      MAX_CLI_RESPONSE_BYTES,
+  );
+  assert.doesNotMatch(execution.stdout, /xxxxxxxx/u);
 });
 test("vendored CLI bundle is reproducible and executable", async () => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");

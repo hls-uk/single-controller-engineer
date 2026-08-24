@@ -1,10 +1,13 @@
-import { Type, type TProperties } from "@sinclair/typebox";
+import { Type, type Static, type TProperties } from "@sinclair/typebox";
 import { Ajv, type ValidateFunction } from "ajv";
 
 import {
   RepositoryRunSchema,
+  validate,
   type RepositoryRun,
 } from "../protocol/schemas.js";
+import { legalActions } from "../protocol/actions.js";
+import { runInvariantErrors } from "../protocol/reducer.js";
 
 export const commandNames = [
   "inspect",
@@ -51,39 +54,8 @@ export interface CommandOptions {
   readonly request?: JsonObject;
 }
 
-export interface CommandRequest {
-  readonly command: CommandName;
-  readonly feedbackAction?: FeedbackAction;
-  readonly options: CommandOptions;
-  readonly schema: "sce.command.request";
-  readonly version: 1;
-}
-
-export type CommandRunnerResult =
-  | {
-      readonly result: JsonObject;
-      readonly schema: "sce.command.result";
-      readonly status: "ok";
-      readonly version: 1;
-    }
-  | {
-      readonly code: "SCE_INVALID_STATE_REQUEST";
-      readonly schema: "sce.command.result";
-      readonly status: "invalid";
-      readonly version: 1;
-    }
-  | {
-      readonly schema: "sce.command.result";
-      readonly status: "unavailable";
-      readonly version: 1;
-    };
-
-/** The only execution seam used by the CLI. */
-export type CommandRunner = (
-  request: CommandRequest,
-) => CommandRunnerResult | Promise<CommandRunnerResult>;
-
 export const MAX_CLI_REQUEST_BYTES = 128 * 1024;
+export const MAX_CLI_RESPONSE_BYTES = 128 * 1024;
 const MAX_JSON_ITEMS = 256;
 const MAX_TEXT = 8_192;
 
@@ -109,26 +81,6 @@ export const JsonObjectSchema = Type.Record(
   { maxProperties: MAX_JSON_ITEMS },
 );
 
-const CommandNameSchema = Type.Union([
-  Type.Literal("inspect"),
-  Type.Literal("acquire-controller"),
-  Type.Literal("next"),
-  Type.Literal("plan-wave"),
-  Type.Literal("prepare-wave"),
-  Type.Literal("dispatch-request"),
-  Type.Literal("record-dispatch"),
-  Type.Literal("collect-candidate"),
-  Type.Literal("qualify"),
-  Type.Literal("review-prepare"),
-  Type.Literal("review-record"),
-  Type.Literal("publish"),
-  Type.Literal("integrate"),
-  Type.Literal("gate-wave"),
-  Type.Literal("resume"),
-  Type.Literal("status"),
-  Type.Literal("release-controller"),
-  Type.Literal("feedback"),
-]);
 const FeedbackActionSchema = Type.Union([
   Type.Literal("prepare"),
   Type.Literal("preview"),
@@ -136,26 +88,74 @@ const FeedbackActionSchema = Type.Union([
   Type.Literal("flush"),
 ]);
 
-export const CommandRequestSchema = strictObject({
-  command: CommandNameSchema,
-  feedbackAction: Type.Optional(FeedbackActionSchema),
-  options: strictObject({
-    expectedRevision: Type.Optional(
-      Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
-    ),
-    idempotencyKey: Type.Optional(
-      Type.String({
-        minLength: 1,
-        maxLength: 160,
-        pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
-      }),
-    ),
-    json: Type.Boolean(),
-    request: Type.Optional(JsonObjectSchema),
-  }),
+const RequestMetadataSchema = {
+  expectedRevision: Type.Optional(
+    Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  ),
+  idempotencyKey: Type.Optional(
+    Type.String({
+      minLength: 1,
+      maxLength: 160,
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+    }),
+  ),
+  json: Type.Boolean(),
+};
+
+export const StateRequestSchema = strictObject({ run: RepositoryRunSchema });
+export type StateRequest = Static<typeof StateRequestSchema>;
+
+const StateOptionsSchema = strictObject({
+  ...RequestMetadataSchema,
+  request: StateRequestSchema,
+});
+const NoPayloadOptionsSchema = strictObject(RequestMetadataSchema);
+
+const StateCommandSchema = strictObject({
+  command: Type.Union([
+    Type.Literal("inspect"),
+    Type.Literal("next"),
+    Type.Literal("status"),
+  ]),
+  options: StateOptionsSchema,
   schema: Type.Literal("sce.command.request"),
   version: Type.Literal(1),
 });
+const FeedbackCommandSchema = strictObject({
+  command: Type.Literal("feedback"),
+  feedbackAction: FeedbackActionSchema,
+  options: NoPayloadOptionsSchema,
+  schema: Type.Literal("sce.command.request"),
+  version: Type.Literal(1),
+});
+const UnavailableCommandSchema = strictObject({
+  command: Type.Union([
+    Type.Literal("acquire-controller"),
+    Type.Literal("plan-wave"),
+    Type.Literal("prepare-wave"),
+    Type.Literal("dispatch-request"),
+    Type.Literal("record-dispatch"),
+    Type.Literal("collect-candidate"),
+    Type.Literal("qualify"),
+    Type.Literal("review-prepare"),
+    Type.Literal("review-record"),
+    Type.Literal("publish"),
+    Type.Literal("integrate"),
+    Type.Literal("gate-wave"),
+    Type.Literal("resume"),
+    Type.Literal("release-controller"),
+  ]),
+  options: NoPayloadOptionsSchema,
+  schema: Type.Literal("sce.command.request"),
+  version: Type.Literal(1),
+});
+
+export const CommandRequestSchema = Type.Union([
+  StateCommandSchema,
+  FeedbackCommandSchema,
+  UnavailableCommandSchema,
+]);
+export type CommandRequest = Static<typeof CommandRequestSchema>;
 
 export const CommandRunnerResultSchema = Type.Union([
   strictObject({
@@ -176,9 +176,29 @@ export const CommandRunnerResultSchema = Type.Union([
     version: Type.Literal(1),
   }),
 ]);
+export type CommandRunnerResult =
+  | {
+      readonly result: JsonObject;
+      readonly schema: "sce.command.result";
+      readonly status: "ok";
+      readonly version: 1;
+    }
+  | {
+      readonly code: "SCE_INVALID_STATE_REQUEST";
+      readonly schema: "sce.command.result";
+      readonly status: "invalid";
+      readonly version: 1;
+    }
+  | {
+      readonly schema: "sce.command.result";
+      readonly status: "unavailable";
+      readonly version: 1;
+    };
 
-const StateRequestSchema = strictObject({ run: RepositoryRunSchema });
-type StateRequest = { readonly run: RepositoryRun };
+/** The only execution seam used by the CLI. */
+export type CommandRunner = (
+  request: CommandRequest,
+) => CommandRunnerResult | Promise<CommandRunnerResult>;
 
 const ajv = new Ajv({
   allErrors: true,
@@ -193,9 +213,6 @@ const requestValidator = ajv.compile(
 const runnerResultValidator = ajv.compile(
   CommandRunnerResultSchema,
 ) as ValidateFunction<CommandRunnerResult>;
-const stateRequestValidator = ajv.compile(
-  StateRequestSchema,
-) as ValidateFunction<StateRequest>;
 
 export function validateCommandRequest(
   input: unknown,
@@ -219,16 +236,11 @@ export function validateCommandPayload(input: unknown): input is JsonObject {
 }
 export const stateOnlyCommandRunner: CommandRunner = (request) => {
   if (!validateCommandRequest(request)) return invalidStateRequest();
-  if (
-    request.command !== "inspect" &&
-    request.command !== "status" &&
-    request.command !== "next"
-  )
-    return unavailable();
-  if (!stateRequestValidator(request.options.request))
-    return invalidStateRequest();
-
+  if (!isStateCommandRequest(request)) return unavailable();
   const run = request.options.request.run;
+  const parsedRun = validate<RepositoryRun>(RepositoryRunSchema, run);
+  if (!parsedRun.ok || parsedRun.value === undefined)
+    return invalidStateRequest();
   if (request.command === "inspect") {
     return {
       schema: "sce.command.result",
@@ -256,13 +268,32 @@ export const stateOnlyCommandRunner: CommandRunner = (request) => {
       },
     };
   }
+  if (runInvariantErrors(run).length > 0) return invalidStateRequest();
   return {
     schema: "sce.command.result",
     version: 1,
     status: "ok",
-    result: { legalActions: nextActions(run), revision: run.revision },
+    result: {
+      legalActions: legalActions(run).map((action) => ({
+        ...action,
+      })) as JsonValue,
+      revision: run.revision,
+    },
   };
 };
+
+function isStateCommandRequest(
+  request: CommandRequest,
+): request is Extract<
+  CommandRequest,
+  { readonly command: "inspect" | "next" | "status" }
+> {
+  return (
+    request.command === "inspect" ||
+    request.command === "next" ||
+    request.command === "status"
+  );
+}
 
 function invalidStateRequest(): CommandRunnerResult {
   return {
@@ -287,16 +318,4 @@ export function isFeedbackAction(value: string): value is FeedbackAction {
 
 function isJsonObject(value: unknown): value is JsonObject {
   return value !== null && !Array.isArray(value) && typeof value === "object";
-}
-
-function nextActions(run: RepositoryRun): readonly string[] {
-  if (run.state === "blocked" || run.state === "released") return [];
-  if (run.effectJournal.some((entry) => entry.status !== "observed"))
-    return ["resume"];
-  const states = Object.values(run.units).map((unit) => unit.state);
-  if (states.includes("planned")) return ["plan-wave"];
-  if (states.includes("candidate_committed")) return ["qualify"];
-  if (states.includes("approved")) return ["publish"];
-  if (states.includes("published")) return ["integrate"];
-  return ["status"];
 }
