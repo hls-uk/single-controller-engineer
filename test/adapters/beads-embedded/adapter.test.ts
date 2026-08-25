@@ -1423,6 +1423,88 @@ test("lost-result slot replays prove the exact persisted transition without muta
   );
   assert.equal(forbidden(remoteRace), false);
 
+  // A different clone can have a clean local pull-merge head while the
+  // authoritative remote is the exact planned effect. The typed proof is the
+  // only authority that permits this replay; it still performs no mutation.
+  const syncAcquirePlanner = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: beforeHead,
+        reachable: true,
+        remoteHead: beforeHead,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("available") },
+    { kind: "slot", value: slot("available") },
+  ]);
+  const syncAcquireIntent = await adapter(
+    syncAcquirePlanner,
+    "git-sync",
+  ).prepareAcquireTransition();
+  assert.ok("idempotencyKey" in syncAcquireIntent);
+  const crossClone = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: afterHead,
+        reachable: true,
+        remoteHead: "c".repeat(40),
+        workingSet: "clean",
+      },
+    },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: afterHead,
+        reachable: true,
+        remoteHead: "c".repeat(40),
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("acquired", holder) },
+    {
+      kind: "remote_slot_transition",
+      value: {
+        effectHead: "c".repeat(40),
+        localHead: afterHead,
+        remoteHead: "c".repeat(40),
+        schema: "sce.beads-embedded.remote-slot-transition-proof",
+        status: "observed",
+        version: 1,
+      },
+    },
+    { kind: "slot", value: slot("acquired", holder) },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: afterHead,
+        reachable: true,
+        remoteHead: "c".repeat(40),
+        workingSet: "clean",
+      },
+    },
+  ]);
+  assert.equal(
+    (
+      await adapter(crossClone, "git-sync").acquire({
+        knownHolder: holder,
+        transition: syncAcquireIntent,
+      })
+    ).code,
+    "applied",
+  );
+  assert.equal(forbidden(crossClone), false);
+  assert.deepEqual(
+    crossClone.requests.map((request) => request.kind),
+    ["state", "state", "slot", "remote_slot_transition", "slot", "state"],
+  );
+
   const acquirePlanner = new ScriptedPort([
     {
       kind: "state",

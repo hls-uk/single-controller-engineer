@@ -33,6 +33,27 @@ export type SlotTransitionIntent = Readonly<{
 }>;
 
 /**
+ * Remote-authoritative proof for a replay in a different embedded clone.
+ * `effectHead` is the exact fetched remote commit whose sole parent is the
+ * transition's remote before-head; `localHead` is the clean clone merge which
+ * was separately restricted to bd's clone-local metadata update.
+ */
+export type RemoteSlotTransitionProof =
+  | Readonly<{
+      effectHead: string;
+      localHead: string;
+      remoteHead: string;
+      schema: "sce.beads-embedded.remote-slot-transition-proof";
+      status: "observed";
+      version: 1;
+    }>
+  | Readonly<{
+      schema: "sce.beads-embedded.remote-slot-transition-proof";
+      status: "absent" | "ambiguous";
+      version: 1;
+    }>;
+
+/**
  * The embedded adapter deliberately exposes semantic operations, not argv or
  * subprocess text.  The production process implementation is consequently
  * unable to widen the command allowlist without changing this contract.
@@ -60,6 +81,15 @@ export type EmbeddedRequest =
        */
       intent: SlotTransitionIntent;
       kind: "slot_transition";
+    }>
+  | Readonly<{
+      /**
+       * Proves a transition authored by another clone from the configured
+       * remote's exact parent→effect commit, then admits only bd's pinned
+       * clone-local merge metadata in this clone.
+       */
+      intent: SlotTransitionIntent;
+      kind: "remote_slot_transition";
     }>
   | Readonly<{ kind: "mutation"; batch: MutationBatch }>
   | Readonly<{ kind: "commit" }>
@@ -124,6 +154,10 @@ export type EmbeddedResponse =
   | Readonly<{
       kind: "slot_transition";
       value: "observed" | "absent" | "ambiguous";
+    }>
+  | Readonly<{
+      kind: "remote_slot_transition";
+      value: RemoteSlotTransitionProof;
     }>
   | Readonly<{
       kind: "mutation";

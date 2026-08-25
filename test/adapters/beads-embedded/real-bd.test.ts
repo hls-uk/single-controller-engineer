@@ -626,6 +626,73 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
     assert.equal(acquiredState.value.remoteHead, acquiredState.value.head);
     assert.equal(acquiredSlot.kind, "slot");
     assert.equal(acquiredSlot.value.holder, initial.controller.holder);
+    // A second clone imports the already-pushed acquire. Its local Dolt head
+    // is a clone-metadata merge rather than A's effect commit, so this fresh
+    // adapter must use the typed remote parent→effect proof and remain wholly
+    // read-only while replaying the persisted A intent.
+    const crossAcquireBase = processFor(
+      second,
+      secondDatabase,
+      new DoltProjectionPersistence({
+        childIssueId: () => undefined,
+        databaseDirectory: secondDatabase,
+        doltExecutable: "/opt/homebrew/bin/dolt",
+        rootIssueId: "sce-root",
+      }),
+    );
+    assert.equal(
+      (await crossAcquireBase.execute({ kind: "pull" })).value,
+      "applied",
+    );
+    const beforeCrossAcquireState = await crossAcquireBase.execute({
+      kind: "state",
+    });
+    const beforeCrossAcquireRemote = await crossAcquireBase.execute({
+      actor: initial.controller.holder,
+      kind: "slot",
+      action: "check",
+      source: "remote",
+    });
+    assert.equal(beforeCrossAcquireState.kind, "state");
+    assert.equal(beforeCrossAcquireRemote.kind, "slot");
+    const crossAcquirePort = new RecordingProcess(crossAcquireBase);
+    const crossAcquire = new EmbeddedBeadsAdapter({
+      holder: initial.controller.holder,
+      mode: "git-sync",
+      prefix: "sce",
+      preflight: preflight(second),
+      process: crossAcquirePort,
+      scope,
+    });
+    assert.equal(
+      (
+        await crossAcquire.acquire({
+          knownHolder: initial.controller.holder,
+          transition: firstAcquireIntent,
+        })
+      ).code,
+      "applied",
+    );
+    assert.equal(
+      crossAcquirePort.requests.some(
+        (request) =>
+          request.kind === "commit" ||
+          request.kind === "push" ||
+          (request.kind === "slot" && request.action !== "check"),
+      ),
+      false,
+    );
+    const afterCrossAcquireState = await crossAcquireBase.execute({
+      kind: "state",
+    });
+    const afterCrossAcquireRemote = await crossAcquireBase.execute({
+      actor: initial.controller.holder,
+      kind: "slot",
+      action: "check",
+      source: "remote",
+    });
+    assert.deepEqual(afterCrossAcquireState, beforeCrossAcquireState);
+    assert.deepEqual(afterCrossAcquireRemote, beforeCrossAcquireRemote);
     // Crash boundary: the exact batch is written and committed, but the
     // controller process dies before push. A fresh process may only use the
     // journal batch plus local/remote projection discovery to complete it.
@@ -909,6 +976,63 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
       (await secondProcess.execute({ kind: "pull" })).value,
       "applied",
     );
+    // Repeat the lost-result proof from clone B after A's release push. The
+    // same-project clone has its own metadata merge head, but no slot or Dolt
+    // mutation is allowed while it reconciles A's persisted release intent.
+    const crossReleaseBase = processFor(
+      second,
+      secondDatabase,
+      new DoltProjectionPersistence({
+        childIssueId: () => undefined,
+        databaseDirectory: secondDatabase,
+        doltExecutable: "/opt/homebrew/bin/dolt",
+        rootIssueId: "sce-root",
+      }),
+    );
+    const beforeCrossReleaseState = await crossReleaseBase.execute({
+      kind: "state",
+    });
+    const beforeCrossReleaseRemote = await crossReleaseBase.execute({
+      actor: initial.controller.holder,
+      kind: "slot",
+      action: "check",
+      source: "remote",
+    });
+    assert.equal(beforeCrossReleaseState.kind, "state");
+    assert.equal(beforeCrossReleaseRemote.kind, "slot");
+    const crossReleasePort = new RecordingProcess(crossReleaseBase);
+    const crossRelease = new EmbeddedBeadsAdapter({
+      holder: initial.controller.holder,
+      mode: "git-sync",
+      prefix: "sce",
+      preflight: preflight(second),
+      process: crossReleasePort,
+      scope,
+    });
+    assert.equal(
+      (await crossRelease.release({ transition: restartReleaseIntent })).code,
+      "applied",
+    );
+    assert.equal(
+      crossReleasePort.requests.some(
+        (request) =>
+          request.kind === "commit" ||
+          request.kind === "push" ||
+          (request.kind === "slot" && request.action !== "check"),
+      ),
+      false,
+    );
+    const afterCrossReleaseState = await crossReleaseBase.execute({
+      kind: "state",
+    });
+    const afterCrossReleaseRemote = await crossReleaseBase.execute({
+      actor: initial.controller.holder,
+      kind: "slot",
+      action: "check",
+      source: "remote",
+    });
+    assert.deepEqual(afterCrossReleaseState, beforeCrossReleaseState);
+    assert.deepEqual(afterCrossReleaseRemote, beforeCrossReleaseRemote);
     const availableSlot = await secondProcess.execute({
       actor: initial.controller.holder,
       kind: "slot",

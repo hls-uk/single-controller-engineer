@@ -9,6 +9,7 @@ import {
   deriveScopeCommitment,
   deriveSlotReadbackHash,
   type FencingScope,
+  type MergeSlotObservation,
   type MutationBatch,
   validateMutationBatch,
 } from "../../fencing/index.js";
@@ -23,6 +24,7 @@ import type {
   EmbeddedRequest,
   EmbeddedResponse,
   EmbeddedState,
+  RemoteSlotTransitionProof,
   SlotTransitionIntent,
 } from "./schemas.js";
 import { validateSlotTransitionIntent } from "./slot-transition.js";
@@ -238,6 +240,77 @@ function sqlWorkingSet(source: string): "clean" | "pending" | undefined {
         )
       ? "pending"
       : undefined;
+}
+
+/**
+ * The only clone-local merge delta emitted by a pinned bd 1.1.0 `dolt pull`.
+ * This is deliberately separate from exactSlotDelta: metadata is never
+ * tolerated in the authoritative remote parent→effect proof.
+ */
+export function isPinnedCloneMergeDelta(source: string): boolean {
+  const raw = json(source);
+  if (
+    raw === undefined ||
+    Object.keys(raw).length !== 1 ||
+    Object.keys(raw)[0] !== "tables"
+  )
+    return false;
+  const tables = raw?.tables;
+  if (!Array.isArray(tables) || tables.length !== 1) return false;
+  const table = object(tables[0]);
+  const diffs = table?.data_diff;
+  if (
+    table === undefined ||
+    Object.keys(table).length !== 2 ||
+    !Object.prototype.hasOwnProperty.call(table, "name") ||
+    !Object.prototype.hasOwnProperty.call(table, "data_diff") ||
+    table.name !== "metadata" ||
+    !Array.isArray(diffs) ||
+    diffs.length !== 2
+  )
+    return false;
+  const seen = new Set<string>();
+  for (const diff of diffs) {
+    const entry = object(diff);
+    const from = object(entry?.from_row);
+    const to = object(entry?.to_row);
+    if (
+      entry === undefined ||
+      Object.keys(entry).length !== 2 ||
+      !Object.prototype.hasOwnProperty.call(entry, "from_row") ||
+      !Object.prototype.hasOwnProperty.call(entry, "to_row") ||
+      from === undefined ||
+      to === undefined ||
+      Object.keys(from).length !== 2 ||
+      Object.keys(to).length !== 2 ||
+      Object.keys(from).some((key) => key !== "key" && key !== "value") ||
+      Object.keys(to).some((key) => key !== "key" && key !== "value") ||
+      from.key !== to.key ||
+      typeof from.key !== "string" ||
+      seen.has(from.key) ||
+      typeof from.value !== "string" ||
+      typeof to.value !== "string" ||
+      from.value === to.value
+    )
+      return false;
+    seen.add(from.key);
+    if (
+      (from.key === "clone_id" &&
+        (!/^[0-9a-f]{16}$/u.test(from.value) ||
+          !/^[0-9a-f]{16}$/u.test(to.value))) ||
+      (from.key === "last_import_time" &&
+        (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(
+          from.value,
+        ) ||
+          !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(
+            to.value,
+          )))
+    )
+      return false;
+  }
+  return (
+    seen.size === 2 && seen.has("clone_id") && seen.has("last_import_time")
+  );
 }
 
 type SlotDocument = Readonly<{
@@ -497,40 +570,10 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
           if (request.action !== "check" || this.remote === undefined)
             throw new Error("invalid remote slot request");
           const remoteRef = await this.fetchRemoteMain(this.remote);
-          const show =
-            remoteRef === undefined
-              ? undefined
-              : await this.runDolt(this.databaseDirectory, [
-                  "sql",
-                  "-r",
-                  "json",
-                  "-q",
-                  `SELECT id, title, status, metadata, external_ref, design FROM issues AS OF '${remoteRef}' WHERE id = '${this.prefix}-merge-slot'`,
-                ]);
-          const labels =
-            remoteRef === undefined
-              ? undefined
-              : await this.runDolt(this.databaseDirectory, [
-                  "sql",
-                  "-r",
-                  "json",
-                  "-q",
-                  `SELECT label FROM labels AS OF '${remoteRef}' WHERE issue_id = '${this.prefix}-merge-slot'`,
-                ]);
           const slot =
-            show === undefined ||
-            show.code !== 0 ||
-            show.exceeded ||
-            labels === undefined ||
-            labels.code !== 0 ||
-            labels.exceeded
+            remoteRef === undefined
               ? undefined
-              : parseRemoteSlotDocument(
-                  show.stdout,
-                  labels.stdout,
-                  `${this.prefix}-merge-slot`,
-                  this.scope,
-                );
+              : await this.remoteSlotAt(remoteRef, request.actor);
           if (slot === undefined)
             throw new Error("remote slot readback failed");
           return {
@@ -576,6 +619,11 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         return {
           kind: "slot_transition",
           value: await this.proveSlotTransition(request.intent),
+        };
+      case "remote_slot_transition":
+        return {
+          kind: "remote_slot_transition",
+          value: await this.proveRemoteSlotTransition(request.intent),
         };
       case "mutation":
         if (!validateMutationBatch(request.batch).ok)
@@ -880,6 +928,188 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       this.exactSlotDelta(diff.stdout, intent)
       ? "observed"
       : "ambiguous";
+  }
+
+  /** Exact remote-AS-OF readback bound to one bounded fetch reference. */
+  private async remoteSlotAt(
+    remoteRef: string,
+    actor: string,
+  ): Promise<MergeSlotObservation | undefined> {
+    const show = await this.runDolt(this.databaseDirectory, [
+      "sql",
+      "-r",
+      "json",
+      "-q",
+      `SELECT id, title, status, metadata, external_ref, design FROM issues AS OF '${remoteRef}' WHERE id = '${this.prefix}-merge-slot'`,
+    ]);
+    const labels = await this.runDolt(this.databaseDirectory, [
+      "sql",
+      "-r",
+      "json",
+      "-q",
+      `SELECT label FROM labels AS OF '${remoteRef}' WHERE issue_id = '${this.prefix}-merge-slot'`,
+    ]);
+    const slot =
+      show === undefined ||
+      show.code !== 0 ||
+      show.exceeded ||
+      labels === undefined ||
+      labels.code !== 0 ||
+      labels.exceeded
+        ? undefined
+        : parseRemoteSlotDocument(
+            show.stdout,
+            labels.stdout,
+            `${this.prefix}-merge-slot`,
+            this.scope,
+          );
+    return slot === undefined ? undefined : this.slotObservation(slot, actor);
+  }
+
+  private async doltRefHead(ref: string): Promise<string | undefined> {
+    const capture = await this.runDolt(this.databaseDirectory, [
+      "sql",
+      "-r",
+      "json",
+      "-q",
+      `SELECT DOLT_HASHOF('${ref}') AS head`,
+    ]);
+    return capture === undefined || capture.code !== 0 || capture.exceeded
+      ? undefined
+      : sqlHead(capture.stdout);
+  }
+
+  /** Strict immediate-parent list from the pinned Dolt system table. */
+  private async directParents(
+    commit: string,
+  ): Promise<readonly string[] | undefined> {
+    if (safeHead(commit) === undefined) return undefined;
+    const capture = await this.runDolt(this.databaseDirectory, [
+      "sql",
+      "-r",
+      "json",
+      "-q",
+      `SELECT parent_hash, parent_index FROM dolt_commit_ancestors WHERE commit_hash = '${commit}' ORDER BY parent_index`,
+    ]);
+    const rows =
+      capture === undefined || capture.code !== 0 || capture.exceeded
+        ? undefined
+        : sqlRows(capture.stdout);
+    if (rows === undefined || rows.length === 0 || rows.length > 2)
+      return undefined;
+    const values = rows.map((row, index) =>
+      Object.keys(row).length === 2 &&
+      Object.keys(row).every(
+        (key) => key === "parent_hash" || key === "parent_index",
+      ) &&
+      row.parent_index === index
+        ? safeHead(row.parent_hash)
+        : undefined,
+    );
+    return values.some((value) => value === undefined) ||
+      new Set(values).size !== values.length
+      ? undefined
+      : (values as readonly string[]);
+  }
+
+  private remoteProof(
+    status: "absent" | "ambiguous",
+  ): RemoteSlotTransitionProof {
+    return {
+      schema: "sce.beads-embedded.remote-slot-transition-proof",
+      status,
+      version: 1,
+    };
+  }
+
+  /**
+   * A clean different clone cannot prove the whole range from the origin
+   * controller's before-head to its merge head: bd adds clone-local metadata
+   * during pull. First prove the remote one-parent slot effect exactly, then
+   * admit only that pinned pull metadata in the local merge relation.
+   */
+  private async proveRemoteSlotTransition(
+    intent: SlotTransitionIntent,
+  ): Promise<RemoteSlotTransitionProof> {
+    if (
+      this.remote === undefined ||
+      !validateSlotTransitionIntent(
+        intent,
+        this.prefix,
+        this.scope,
+        "git-sync",
+      ) ||
+      intent.before.remoteHead === undefined
+    )
+      return this.remoteProof("ambiguous");
+    const localHead = await this.doltHead(this.databaseDirectory);
+    const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+    const remoteRef = await this.fetchRemoteMain(this.remote);
+    const remoteHead =
+      remoteRef === undefined ? undefined : await this.doltRefHead(remoteRef);
+    if (
+      localHead === undefined ||
+      workingSet !== "clean" ||
+      remoteRef === undefined ||
+      remoteHead === undefined ||
+      remoteHead === intent.before.remoteHead
+    )
+      return this.remoteProof("absent");
+    const effectParents = await this.directParents(remoteHead);
+    if (
+      effectParents === undefined ||
+      effectParents.length !== 1 ||
+      effectParents[0] !== intent.before.remoteHead
+    )
+      return this.remoteProof("ambiguous");
+    const effectDiff = await this.runDolt(this.databaseDirectory, [
+      "diff",
+      "--data",
+      "-r",
+      "json",
+      intent.before.remoteHead,
+      remoteHead,
+    ]);
+    const remoteSlot = await this.remoteSlotAt(remoteRef, intent.holder);
+    if (
+      effectDiff === undefined ||
+      effectDiff.code !== 0 ||
+      effectDiff.exceeded ||
+      !this.exactSlotDelta(effectDiff.stdout, intent) ||
+      remoteSlot === undefined ||
+      canonicalJson(remoteSlot as JsonValue) !==
+        canonicalJson(intent.after as JsonValue)
+    )
+      return this.remoteProof("ambiguous");
+    if (localHead !== remoteHead) {
+      const localParents = await this.directParents(localHead);
+      const localDiff = await this.runDolt(this.databaseDirectory, [
+        "diff",
+        "--data",
+        "-r",
+        "json",
+        remoteHead,
+        localHead,
+      ]);
+      if (
+        localParents === undefined ||
+        localParents.length !== 2 ||
+        localParents.filter((parent) => parent === remoteHead).length !== 1 ||
+        localDiff === undefined ||
+        localDiff.code !== 0 ||
+        localDiff.exceeded ||
+        !isPinnedCloneMergeDelta(localDiff.stdout)
+      )
+        return this.remoteProof("ambiguous");
+    }
+    return {
+      effectHead: remoteHead,
+      localHead,
+      remoteHead,
+      schema: "sce.beads-embedded.remote-slot-transition-proof",
+      status: "observed",
+      version: 1,
+    };
   }
 
   private async run(argv: readonly string[]): Promise<Capture | undefined> {

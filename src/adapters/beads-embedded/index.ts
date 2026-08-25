@@ -29,6 +29,7 @@ import {
   type EmbeddedResponse,
   type EmbeddedResult,
   type EmbeddedState,
+  type RemoteSlotTransitionProof,
   type SlotTransitionIntent,
 } from "./schemas.js";
 import {
@@ -44,6 +45,7 @@ export {
 } from "./slot-transition.js";
 export {
   PinnedBdEmbeddedProcess,
+  isPinnedCloneMergeDelta,
   parsePinnedBdState,
   SLOT_INITIALIZATION_AUTHORITY,
 } from "./pinned-bd-process.js";
@@ -681,16 +683,94 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     )
       return result("ambiguous");
     if (this.mode === "git-sync") {
-      const remote = await this.slot("check", "remote");
-      if (
-        state.remoteHead === undefined ||
-        state.remoteHead !== transition.before.remoteHead ||
-        remote === undefined ||
-        !same(remote, transition.before.slot)
-      )
-        return result("ambiguous");
+      if (state.remoteHead === transition.before.remoteHead) {
+        const remote = await this.slot("check", "remote");
+        if (remote === undefined || !same(remote, transition.before.slot))
+          return result("ambiguous");
+      } else if (state.workingSet === "clean") {
+        return this.reconcileRemoteSlotTransition(
+          kind,
+          transition,
+          state,
+          local,
+        );
+      } else return result("ambiguous");
     }
     return this.durableSlotTransition(transition);
+  }
+
+  /** Runtime-checks the semantic cross-clone proof returned by the process. */
+  private remoteTransitionProofMatches(
+    value: RemoteSlotTransitionProof,
+    state: EmbeddedState,
+  ): boolean {
+    const proof = object(value);
+    return (
+      proof !== undefined &&
+      Object.keys(proof).length === 6 &&
+      proof.schema === "sce.beads-embedded.remote-slot-transition-proof" &&
+      proof.status === "observed" &&
+      proof.version === 1 &&
+      head(proof.effectHead) &&
+      head(proof.localHead) &&
+      head(proof.remoteHead) &&
+      proof.effectHead === proof.remoteHead &&
+      proof.localHead === state.head &&
+      proof.remoteHead === state.remoteHead
+    );
+  }
+
+  /**
+   * Replays an already-pushed transition from another clone only after its
+   * remote parent→effect proof and this clone's pinned merge proof agree.
+   */
+  private async reconcileRemoteSlotTransition(
+    kind: "acquire" | "release",
+    transition: SlotTransitionIntent,
+    state: EmbeddedState,
+    local: MergeSlotObservation,
+  ): Promise<EmbeddedResult> {
+    if (
+      !validateSlotTransitionIntent(
+        transition,
+        this.prefix,
+        this.scope,
+        "git-sync",
+        this.holder,
+      ) ||
+      transition.kind !== kind ||
+      !state.reachable ||
+      state.workingSet !== "clean" ||
+      state.head === undefined ||
+      state.remoteHead === undefined ||
+      state.head === transition.before.head ||
+      state.remoteHead === transition.before.remoteHead ||
+      !same(local, transition.after)
+    )
+      return result("ambiguous");
+    const proof = await this.call({
+      kind: "remote_slot_transition",
+      intent: transition,
+    });
+    if (
+      proof?.kind !== "remote_slot_transition" ||
+      !this.remoteTransitionProofMatches(proof.value, state)
+    )
+      return result("ambiguous");
+    // This remote check fetches again. Its following state reread binds the
+    // remote slot observation to the same effect head and proves the replay
+    // itself made no local merge, commit, or working-set change.
+    const remote = await this.slot("check", "remote");
+    const final = await this.state();
+    return remote !== undefined &&
+      same(remote, transition.after) &&
+      final !== undefined &&
+      final.reachable &&
+      final.workingSet === "clean" &&
+      final.head === state.head &&
+      final.remoteHead === state.remoteHead
+      ? result("applied")
+      : result("ambiguous");
   }
 
   /**

@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import {
   DoltProjectionPersistence,
   EmbeddedBeadsAdapter,
+  isPinnedCloneMergeDelta,
   PinnedBdEmbeddedProcess,
   PROJECTION_INITIALIZATION_AUTHORITY,
 } from "../../../src/adapters/beads-embedded/index.js";
@@ -32,6 +33,124 @@ const scope = {
   gitRepositoryIdentity: "repo-1",
   integrationBranch: "main",
 };
+
+test("cross-clone proof admits only pinned bd pull metadata rows", () => {
+  const cloneDelta = {
+    tables: [
+      {
+        data_diff: [
+          {
+            from_row: { key: "clone_id", value: "0123456789abcdef" },
+            to_row: { key: "clone_id", value: "fedcba9876543210" },
+          },
+          {
+            from_row: {
+              key: "last_import_time",
+              value: "2026-08-25T02:37:07+01:00",
+            },
+            to_row: {
+              key: "last_import_time",
+              value: "2026-08-25T02:37:10+01:00",
+            },
+          },
+        ],
+        name: "metadata",
+      },
+    ],
+  };
+  assert.equal(isPinnedCloneMergeDelta(JSON.stringify(cloneDelta)), true);
+  const metadataTable = cloneDelta.tables[0];
+  if (metadataTable === undefined) throw new Error("unreachable");
+  for (const malformed of [
+    {
+      ...cloneDelta,
+      unexpected_root: true,
+    },
+    {
+      tables: [
+        {
+          ...metadataTable,
+          schema_diff: { from_schema: "metadata", to_schema: "metadata" },
+        },
+      ],
+    },
+    {
+      tables: [
+        {
+          ...metadataTable,
+          data_diff: [
+            {
+              ...metadataTable.data_diff[0],
+              unexpected_diff_key: true,
+            },
+            metadataTable.data_diff[1],
+          ],
+        },
+      ],
+    },
+    {
+      ...cloneDelta,
+      tables: [
+        {
+          ...metadataTable,
+          data_diff: [
+            ...metadataTable.data_diff,
+            {
+              from_row: { key: "other", value: "before" },
+              to_row: { key: "other", value: "after" },
+            },
+          ],
+        },
+      ],
+    },
+    {
+      tables: [
+        ...cloneDelta.tables,
+        {
+          data_diff: [
+            {
+              from_row: { id: "sce-unrelated", status: "open" },
+              to_row: { id: "sce-unrelated", status: "closed" },
+            },
+          ],
+          name: "issues",
+        },
+      ],
+    },
+    {
+      tables: [
+        ...cloneDelta.tables,
+        {
+          data_diff: [
+            {
+              from_row: {},
+              to_row: { event_type: "status_changed", issue_id: "sce-other" },
+            },
+          ],
+          name: "events",
+        },
+      ],
+    },
+    {
+      tables: [
+        {
+          ...metadataTable,
+          data_diff: [
+            {
+              from_row: { key: "clone_id", value: "0123456789abcdef" },
+              to_row: { key: "clone_id", value: "fedcba9876543210" },
+            },
+            {
+              from_row: { key: "clone_id", value: "aaaaaaaaaaaaaaaa" },
+              to_row: { key: "clone_id", value: "bbbbbbbbbbbbbbbb" },
+            },
+          ],
+        },
+      ],
+    },
+  ])
+    assert.equal(isPinnedCloneMergeDelta(JSON.stringify(malformed)), false);
+});
 
 async function run(cwd: string, command: string, args: readonly string[]) {
   return execute(command, args, {
