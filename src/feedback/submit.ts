@@ -106,7 +106,8 @@ export async function discoverExisting(
     : { status: "existing", issue: matches[0] };
 }
 
-export async function submitFeedback(
+/** Internal executor: FeedbackOutbox writes submit_intent before calling this. */
+export async function executeDurableIntent(
   packet: unknown,
   authority: unknown,
   transport: FeedbackGitHubTransport,
@@ -155,6 +156,7 @@ export interface DuplicateReconciliation {
   readonly canonical: GitHubIssue;
   readonly duplicates: readonly Readonly<{
     number: number;
+    /** DEC-20260825-006: target inventory authorizes only this existing label. */
     label: "duplicate";
     comment: string;
   }>[];
@@ -162,10 +164,12 @@ export interface DuplicateReconciliation {
 
 /** Target-workflow plan: deterministic, no fuzzy matching or client mutation. */
 export function reconcileExactDuplicates(
-  packet: FeedbackPacket,
+  packet: unknown,
   issues: readonly GitHubIssue[],
 ): DuplicateReconciliation | undefined {
-  const matches = exactMatches(packet, issues);
+  const valid = validateFeedbackPacket(packet);
+  if (valid === undefined) return undefined;
+  const matches = exactMatches(valid, issues);
   const canonical = matches[0];
   if (canonical === undefined) return undefined;
   return {

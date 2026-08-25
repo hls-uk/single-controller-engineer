@@ -15,6 +15,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { FeedbackAuthority } from "./authority.js";
 import { authorizes } from "./authority.js";
@@ -26,7 +27,7 @@ import {
 import { GitHubIssueSchema, isFeedbackSchema } from "./schemas.js";
 import {
   discoverExisting,
-  submitFeedback,
+  executeDurableIntent,
   type FeedbackGitHubTransport,
   type GitHubIssue,
   type SubmitResult,
@@ -298,7 +299,7 @@ export class FeedbackOutbox {
         authority.operationNonce,
       );
       if (intent.status !== "ok") return intent;
-      const result = await submitFeedback(
+      const result = await executeDurableIntent(
         intent.value.packet,
         authority,
         transport,
@@ -482,13 +483,11 @@ export class FeedbackOutbox {
       return { status: "quota" };
     const temporary = join(
       this.directory,
-      `.${envelope.packet.telemetry.fingerprint}.tmp`,
+      `.${envelope.packet.telemetry.fingerprint}.${randomUUID()}.tmp`,
     );
     let descriptor: number | undefined;
     try {
       if (constants.O_NOFOLLOW === undefined) return { status: "unavailable" };
-      if (!removeStaleTemporary(temporary, source))
-        return { status: "unavailable" };
       descriptor = openSync(
         temporary,
         constants.O_WRONLY |
@@ -605,30 +604,6 @@ function safeFile(path: string): string | undefined {
     return undefined;
   } finally {
     if (descriptor !== undefined) closeSync(descriptor);
-  }
-}
-
-/** A temp was never renamed into the envelope namespace, so a verified stale
- * temp is safe to remove after a crash. Symlinks or foreign modes fail closed. */
-function removeStaleTemporary(path: string, expectedSource: string): boolean {
-  try {
-    const stat = lstatSync(path);
-    if (
-      !stat.isFile() ||
-      stat.isSymbolicLink() ||
-      (stat.mode & 0o777) !== 0o600 ||
-      (typeof process.getuid === "function" && stat.uid !== process.getuid())
-    )
-      return false;
-    const source = safeFile(path);
-    if (source !== expectedSource || parseEnvelope(source) === undefined)
-      return false;
-    const current = lstatSync(path);
-    if (current.dev !== stat.dev || current.ino !== stat.ino) return false;
-    unlinkSync(path);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT";
   }
 }
 

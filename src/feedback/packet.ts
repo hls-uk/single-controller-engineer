@@ -25,6 +25,12 @@ export type FeedbackComponent =
 export type ModelTier = "frontier" | "workhorse";
 export type FeedbackProtocolState =
   "blocked" | "failed" | "preflight" | "recovery" | "verification";
+export type SupportedToolchain = "node-22";
+export type SceCapability =
+  | "feedback.outbox"
+  | "feedback.recovery"
+  | "feedback.submit"
+  | "feedback.transport";
 
 export interface FeedbackTarget {
   readonly host: "github.com";
@@ -52,11 +58,11 @@ export interface SafeTelemetryInput {
   readonly kind: FeedbackKind;
   readonly component: FeedbackComponent;
   readonly toolVersion: string;
-  readonly toolchain: string;
+  readonly toolchain: SupportedToolchain;
   readonly requestedModelTier: ModelTier;
   readonly protocolState: FeedbackProtocolState;
   readonly stableErrorCode: string;
-  readonly capabilityId: string;
+  readonly capabilityId: SceCapability;
 }
 
 export interface ReviewedNarrativeInput {
@@ -100,9 +106,6 @@ export interface FeedbackPreview {
 
 const SEMVER =
   /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\.[0-9]+)?(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
-const TOOLCHAIN = /^[A-Za-z0-9][A-Za-z0-9._ -]{0,79}$/u;
-const ERROR = /^[A-Z][A-Z0-9_]{0,79}$/u;
-const CAPABILITY = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u;
 const REPOSITORY_ID = /^[A-Za-z0-9_:-]{8,256}$/u;
 const KINDS = new Set<FeedbackKind>(["bug", "enhancement"]);
 const COMPONENTS = new Set<FeedbackComponent>([
@@ -239,9 +242,6 @@ export function prepareFeedback(
     stableErrorCode === undefined ||
     capabilityId === undefined ||
     !SEMVER.test(toolVersion) ||
-    !TOOLCHAIN.test(toolchain) ||
-    !ERROR.test(stableErrorCode) ||
-    !CAPABILITY.test(capabilityId) ||
     !KINDS.has(input.kind) ||
     !COMPONENTS.has(input.component) ||
     !TIERS.has(input.requestedModelTier) ||
@@ -256,11 +256,11 @@ export function prepareFeedback(
     kind: input.kind,
     component: input.component,
     toolVersion,
-    toolchain,
+    toolchain: toolchain as SupportedToolchain,
     requestedModelTier: input.requestedModelTier,
     protocolState: input.protocolState,
     stableErrorCode,
-    capabilityId,
+    capabilityId: capabilityId as SceCapability,
     toolMajorMinor,
   } as const;
   const telemetry: SafeTelemetry = {

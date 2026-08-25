@@ -20,7 +20,6 @@ import {
   prepareFeedback,
   previewFeedback,
   reconcileExactDuplicates,
-  submitFeedback,
   validateFeedbackPacket,
   type FeedbackGitHubTransport,
   type FeedbackPacket,
@@ -41,8 +40,8 @@ function packet(n = "CAPABILITY"): FeedbackPacket {
     toolchain: "node-22",
     requestedModelTier: "workhorse",
     protocolState: "failed",
-    stableErrorCode: "SCE_FAILURE",
-    capabilityId: `${n}-ID`,
+    stableErrorCode: `SCE_${n}`,
+    capabilityId: "feedback.submit",
   });
   return requireValue(value);
 }
@@ -58,6 +57,26 @@ function commonDirectory(): { readonly root: string; readonly common: string } {
   const common = join(root, "common");
   mkdirSync(common, { mode: 0o700 });
   return { root, common };
+}
+
+async function flushPacket(
+  value: FeedbackPacket,
+  authority: ReturnType<typeof authorityFor>,
+  transport: FeedbackGitHubTransport,
+) {
+  const fixture = commonDirectory();
+  try {
+    const opened = FeedbackOutbox.open(fixture.common);
+    if (opened.status !== "ok") throw new Error("outbox unavailable");
+    assert.equal(opened.value.enqueue(value).status, "ok");
+    return await opened.value.flush(
+      value.telemetry.fingerprint,
+      authority,
+      transport,
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
 }
 
 function fakeTransport(
@@ -98,7 +117,7 @@ test("safe packet only accepts allowlisted telemetry and fingerprints exact RFC8
     requestedModelTier: "workhorse",
     protocolState: "failed",
     stableErrorCode: "SCE_FAILURE",
-    capabilityId: "capability.one",
+    capabilityId: "feedback.transport",
   });
   const composed = prepareFeedback({
     kind: "bug",
@@ -108,7 +127,7 @@ test("safe packet only accepts allowlisted telemetry and fingerprints exact RFC8
     requestedModelTier: "workhorse",
     protocolState: "failed",
     stableErrorCode: "SCE_FAILURE",
-    capabilityId: "capability.one",
+    capabilityId: "feedback.transport",
   });
   const normalizedDecomposed = requireValue(decomposed);
   const normalizedComposed = requireValue(composed);
@@ -130,7 +149,7 @@ test("safe packet only accepts allowlisted telemetry and fingerprints exact RFC8
   );
   assert.equal(
     normalizedDecomposed.telemetry.fingerprint,
-    "5e5225fe6f337ae53ae074a4746e8a151a333e83923b78e99d69289dc786f833",
+    "1bbbb159166e3bd56be71560c02a4db18d39cd24ab70c6239bbcad2c960a8eec",
   );
   assert.deepEqual(
     requireValue(previewFeedback(normalizedDecomposed)).targetUrl,
@@ -140,14 +159,14 @@ test("safe packet only accepts allowlisted telemetry and fingerprints exact RFC8
     prepareFeedback({
       ...normalizedDecomposed.telemetry,
       capabilityId: "x\u202Ey",
-    }),
+    } as never),
     undefined,
   );
   assert.equal(
     prepareFeedback({
       ...normalizedDecomposed.telemetry,
       capabilityId: "SECRET=ghp_not_allowed",
-    }),
+    } as never),
     undefined,
   );
   assert.equal(
@@ -159,7 +178,7 @@ test("safe packet only accepts allowlisted telemetry and fingerprints exact RFC8
       requestedModelTier: "workhorse",
       protocolState: "failed",
       stableErrorCode: "SCE_FAILURE",
-      capabilityId: "safe",
+      capabilityId: "feedback.submit",
       source: "do not collect this",
     } as never),
     undefined,
@@ -173,6 +192,7 @@ test("safe packet only accepts allowlisted telemetry and fingerprints exact RFC8
     { capabilityId: "session_token_canary" },
     { toolchain: "https://user:password@example.test/repo.git" },
     { capabilityId: "xoxb-1234567890abcdef" },
+    { toolchain: "npm_private-token" },
   ])
     assert.equal(
       prepareFeedback({
@@ -183,9 +203,9 @@ test("safe packet only accepts allowlisted telemetry and fingerprints exact RFC8
         requestedModelTier: "workhorse",
         protocolState: "failed",
         stableErrorCode: "SCE_FAILURE",
-        capabilityId: "safe",
+        capabilityId: "feedback.submit",
         ...unsafe,
-      }),
+      } as never),
       undefined,
     );
 });
@@ -200,7 +220,7 @@ test("narrative is explicitly reviewed, bounded, and warning-bearing previews bl
       requestedModelTier: "frontier",
       protocolState: "preflight",
       stableErrorCode: "SCE_LIMITATION",
-      capabilityId: "feedback",
+      capabilityId: "feedback.transport",
     },
     { observed: "See https://example.test and /Users/alice/project/file.ts" },
   );
@@ -263,7 +283,7 @@ test("strict authority and GitHub readbacks reject forged repository, URL, pagin
     authorizes(value, { ...authority, extra: true } as never),
     false,
   );
-  const forged = await submitFeedback(value, authority, {
+  const forged = await flushPacket(value, authority, {
     async discoverExactMarker() {
       return {
         repositoryId: "R_kgDOUCvUmw",
@@ -290,7 +310,7 @@ test("strict authority and GitHub readbacks reject forged repository, URL, pagin
     },
   });
   assert.deepEqual(incomplete, { status: "invalid" });
-  const forgedCreate = await submitFeedback(value, authority, {
+  const forgedCreate = await flushPacket(value, authority, {
     async discoverExactMarker() {
       return {
         repositoryId: "R_kgDOUCvUmw",
@@ -350,20 +370,20 @@ test("all public authority and provider paths reconstruct packets before use", a
   assert.deepEqual(await discoverExisting(forged, transport), {
     status: "invalid",
   });
-  assert.deepEqual(
-    await submitFeedback(
-      forged,
-      authorityFor(value, "current_user", "current-nonce-0113"),
-      transport,
-    ),
-    { status: "ambiguous", code: "GITHUB_REJECTED" },
-  );
+  const fixture = commonDirectory();
+  try {
+    const opened = FeedbackOutbox.open(fixture.common);
+    assert.equal(opened.status, "ok");
+    assert.equal(opened.value.enqueue(forged).status, "invalid");
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
   assert.equal(calls, 0);
 });
 
 test("post-create readback must retain the exact authorized body", async () => {
   const value = packet("CREATE");
-  const result = await submitFeedback(
+  const result = await flushPacket(
     value,
     authorityFor(value, "current_user", "current-nonce-0120"),
     {
@@ -516,7 +536,7 @@ test("outbox rejects symlink/malformed existing data without chmod and recovers 
       `.${stale.telemetry.fingerprint}.tmp`,
     );
     writeFileSync(temp, "untrusted temporary", { mode: 0o600 });
-    assert.equal(recovered.value.enqueue(stale).status, "unavailable");
+    assert.equal(recovered.value.enqueue(stale).status, "ok");
     assert.equal(lstatSync(temp).isFile(), true);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
@@ -705,6 +725,60 @@ test("concurrent local flushes serialize one submit intent", async () => {
     assert.deepEqual(second, { status: "busy" });
     release?.();
     assert.equal((await first).status, "submitted");
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("the same authority cannot create twice through the durable outbox", async () => {
+  const fixture = commonDirectory();
+  try {
+    const opened = FeedbackOutbox.open(fixture.common);
+    assert.equal(opened.status, "ok");
+    const value = packet("ONCE");
+    assert.equal(opened.value.enqueue(value).status, "ok");
+    let creates = 0;
+    const transport: FeedbackGitHubTransport = {
+      async discoverExactMarker() {
+        return {
+          repositoryId: "R_kgDOUCvUmw",
+          paginationComplete: true,
+          issues: [],
+        };
+      },
+      async createIssue(request) {
+        creates += 1;
+        return {
+          repositoryId: "R_kgDOUCvUmw" as const,
+          number: 99,
+          url: "https://github.com/hls-uk/single-controller-engineer/issues/99",
+          body: request.body,
+          open: true,
+        };
+      },
+    };
+    const authority = authorityFor(value, "current_user", "current-nonce-0099");
+    assert.equal(
+      (
+        await opened.value.flush(
+          value.telemetry.fingerprint,
+          authority,
+          transport,
+        )
+      ).status,
+      "submitted",
+    );
+    assert.equal(
+      (
+        await opened.value.flush(
+          value.telemetry.fingerprint,
+          authority,
+          transport,
+        )
+      ).status,
+      "invalid",
+    );
+    assert.equal(creates, 1);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

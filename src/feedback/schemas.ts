@@ -30,6 +30,14 @@ export function strictObject<T extends TProperties>(properties: T) {
 const text = (limit: number) =>
   Type.String({ minLength: 1, maxLength: limit, maxUtf8Bytes: limit });
 
+export const SupportedToolchainSchema = Type.Literal("node-22");
+export const SceCapabilitySchema = Type.Union([
+  Type.Literal("feedback.outbox"),
+  Type.Literal("feedback.recovery"),
+  Type.Literal("feedback.submit"),
+  Type.Literal("feedback.transport"),
+]);
+
 export const FeedbackTargetSchema = strictObject({
   host: Type.Literal("github.com"),
   repositoryId: Type.Literal("R_kgDOUCvUmw"),
@@ -47,7 +55,7 @@ export const SafeTelemetryInputSchema = strictObject({
     Type.Literal("topology"),
   ]),
   toolVersion: text(80),
-  toolchain: text(80),
+  toolchain: SupportedToolchainSchema,
   requestedModelTier: Type.Union([
     Type.Literal("frontier"),
     Type.Literal("workhorse"),
@@ -59,8 +67,13 @@ export const SafeTelemetryInputSchema = strictObject({
     Type.Literal("recovery"),
     Type.Literal("verification"),
   ]),
-  stableErrorCode: text(80),
-  capabilityId: text(160),
+  stableErrorCode: Type.String({
+    minLength: 5,
+    maxLength: 80,
+    maxUtf8Bytes: 80,
+    pattern: "^SCE_[A-Z0-9_]{1,75}$",
+  }),
+  capabilityId: SceCapabilitySchema,
 });
 export type SafeTelemetryInputWire = Static<typeof SafeTelemetryInputSchema>;
 
