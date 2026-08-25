@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   createProductionRecoveryEffectAdapter,
+  createProductionRecoveryRunner,
   type ControllerTransitionRecoveryPort,
 } from "../../src/commands/production-recovery.js";
 import { createProductionRecoveryCommandRunner } from "../../src/commands/index.js";
@@ -31,6 +32,10 @@ const repository: GitRepository = {
   objectFormat: "sha1",
   remoteUrls: [],
 };
+
+function localRun(): RepositoryRun {
+  return { ...run(), repositoryIdentity: repository.identity };
+}
 
 function branchEffect(): ProtocolEffect {
   return {
@@ -93,7 +98,7 @@ test("branch reconciliation is read-only and classifies positive absence", async
     git: { repository, runner: runner(answers, calls) },
   });
 
-  assert.deepEqual(await adapter.reconcile(branchEffect(), run()), {
+  assert.deepEqual(await adapter.reconcile(branchEffect(), localRun()), {
     status: "absent",
   });
   assert.equal(
@@ -117,7 +122,7 @@ test("foreign and unreadable branch discoveries are privacy-safe ambiguity", asy
     `${OID_B}\n`;
   const foreignResult = await createProductionRecoveryEffectAdapter({
     git: { repository, runner: runner(foreign, []) },
-  }).reconcile(branchEffect(), run());
+  }).reconcile(branchEffect(), localRun());
   assert.deepEqual(foreignResult, { status: "ambiguous" });
 
   const unreadable: Record<string, string | undefined> = {};
@@ -129,7 +134,7 @@ test("foreign and unreadable branch discoveries are privacy-safe ambiguity", asy
         throw new Error("token=not-for-output");
       },
     },
-  }).reconcile(branchEffect(), run());
+  }).reconcile(branchEffect(), localRun());
   assert.deepEqual(result, { status: "ambiguous" });
   assert.equal(JSON.stringify(result).includes("token"), false);
 });
@@ -164,7 +169,7 @@ test("branch execution uses the exact persisted base and reads it back", async (
     },
   });
 
-  const result = await adapter.execute(branchEffect(), run());
+  const result = await adapter.execute(branchEffect(), localRun());
   assert.equal(result.status, "observed");
   assert.deepEqual(
     calls.filter((call) => call.startsWith("branch ")),
@@ -172,7 +177,7 @@ test("branch execution uses the exact persisted base and reads it back", async (
   );
 });
 
-test("controller topology is explicit and reconcile never executes its mutator", async () => {
+test("controller topology is exactly bound and reconcile never executes its mutator", async () => {
   let executions = 0;
   const topology: ControllerTransitionRecoveryPort = {
     async executeControllerTransition() {
@@ -193,7 +198,14 @@ test("controller topology is explicit and reconcile never executes its mutator",
       promptHash: HASH,
       requestedModel: "frontier",
       returnedModel: "frontier-1",
-      slotTransition: { bad: "not-used-by-port" },
+      slotTransition: {
+        holder: "run-1/incarnation-1",
+        scope: {
+          beadsStoreIdentity: "store-1",
+          gitRepositoryIdentity: repository.identity,
+          integrationBranch: "main",
+        },
+      },
     },
     paramsHash: HASH,
     schemaVersion: 1,
@@ -207,11 +219,34 @@ test("controller topology is explicit and reconcile never executes its mutator",
     topology,
   });
 
-  assert.deepEqual(await adapter.reconcile(effect, run()), {
+  assert.deepEqual(await adapter.reconcile(effect, localRun()), {
     status: "absent",
   });
   assert.equal(executions, 0);
-  assert.equal((await adapter.execute(effect, run())).status, "observed");
+  assert.equal((await adapter.execute(effect, localRun())).status, "observed");
+  assert.equal(executions, 1);
+
+  const mismatched = {
+    ...effect,
+    params: {
+      ...effect.params,
+      slotTransition: {
+        holder: "run-1/incarnation-1",
+        scope: {
+          gitRepositoryIdentity: "local:/foreign/.git",
+          beadsStoreIdentity: "store-1",
+          integrationBranch: "main",
+        },
+      },
+    },
+  } as unknown as ProtocolEffect;
+  assert.deepEqual(await adapter.reconcile(mismatched, localRun()), {
+    status: "ambiguous",
+  });
+  assert.equal(
+    (await adapter.execute(mismatched, localRun())).status,
+    "ambiguous",
+  );
   assert.equal(executions, 1);
 });
 
@@ -224,7 +259,7 @@ test("local integration recovery verifies repository identity and uses the canon
     git: { repository, runner: runner(answers, calls) },
   });
   assert.equal(
-    (await adapter.reconcile(localIntegrationEffect(), run())).status,
+    (await adapter.reconcile(localIntegrationEffect(), localRun())).status,
     "observed",
   );
   assert.ok(
@@ -239,13 +274,60 @@ test("local integration recovery verifies repository identity and uses the canon
   assert.deepEqual(
     await createProductionRecoveryEffectAdapter({
       git: { repository, runner: runner(mismatch, []) },
-    }).reconcile(localIntegrationEffect(), run()),
+    }).reconcile(localIntegrationEffect(), localRun()),
     { status: "ambiguous" },
   );
 });
 
+test("composition rejects an exact common-dir/scope/run mismatch before lock or store access", async () => {
+  let locks = 0;
+  let loads = 0;
+  let gitCalls = 0;
+  const runner = createProductionRecoveryRunner({
+    acquireOperationLock: async () => {
+      locks += 1;
+      return { status: "unavailable" as const };
+    },
+    git: {
+      repository,
+      runner: async () => {
+        gitCalls += 1;
+        return { exitCode: 1, signal: null, stdout: "" };
+      },
+    },
+    initialRun: localRun(),
+    nonce: "nonce-proof-mismatch",
+    preOwnership: {
+      async load() {
+        loads += 1;
+        return { status: "unavailable" as const };
+      },
+    } as never,
+    proveTopology: async () => ({
+      commonDir: "/foreign/.git",
+      holder: localRun().controller.holder,
+      scope: {
+        beadsStoreIdentity: localRun().storeIdentity,
+        gitRepositoryIdentity: "local:/foreign/.git",
+        integrationBranch: localRun().integrationBranch,
+      },
+    }),
+    store: {
+      async load() {
+        loads += 1;
+        return { status: "unavailable" as const };
+      },
+    } as never,
+  });
+
+  assert.deepEqual(await runner(), { status: "unavailable" });
+  assert.equal(locks, 0);
+  assert.equal(loads, 0);
+  assert.equal(gitCalls, 0);
+});
+
 test("production command composition resumes an authoritative branch intent through the CLI", async () => {
-  let state = run();
+  let state = localRun();
   state = transition(
     state,
     event(state, "reservation_intent", {
@@ -327,7 +409,7 @@ test("production command composition resumes an authoritative branch intent thro
         holder: "run-1/incarnation-1",
         scope: {
           beadsStoreIdentity: "store-1",
-          gitRepositoryIdentity: "repo-1",
+          gitRepositoryIdentity: repository.identity,
           integrationBranch: "main",
         },
       }),

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { realpathSync } from "node:fs";
+import { isAbsolute, normalize, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -15,6 +16,7 @@ import {
   validateCommandRequest,
   validateCommandRunnerResult,
 } from "./commands/index.js";
+import { createControllerConfigRunner } from "./controller-config.js";
 import type {
   CommandName,
   CommandOptions,
@@ -33,6 +35,7 @@ const EXIT_UNAVAILABLE = 69;
 const EXIT_SOFTWARE = 70;
 
 const knownOptions = new Set([
+  "--controller-config",
   "--expected-revision",
   "--help",
   "--idempotency-key",
@@ -80,6 +83,10 @@ export interface CliExecution {
 }
 
 export interface CliDependencies {
+  /** Test/host seam for an explicit controller configuration. */
+  readonly controllerConfigRunner?: (
+    path: string,
+  ) => Promise<CommandRunner | undefined>;
   readonly runner?: CommandRunner;
   readonly version?: string;
 }
@@ -87,7 +94,11 @@ export interface CliDependencies {
 type ParsedInvocation =
   | { readonly kind: "help"; readonly command?: CommandName }
   | { readonly kind: "version" }
-  | { readonly kind: "command"; readonly request: CommandRequest };
+  | {
+      readonly controllerConfig?: string;
+      readonly kind: "command";
+      readonly request: CommandRequest;
+    };
 
 export function parseCliArguments(argv: readonly string[]): ParsedInvocation {
   if (argv.length === 0) {
@@ -199,7 +210,14 @@ function parseCommand(
       "SCE_INVALID_REQUEST",
       "The command request is invalid.",
     );
-  return { kind: "command", request };
+  const controllerConfig = optionValue(values, "--controller-config");
+  return {
+    ...(controllerConfig === undefined
+      ? {}
+      : { controllerConfig: parseControllerConfigPath(controllerConfig) }),
+    kind: "command",
+    request,
+  };
 }
 
 function splitOption(token: string): readonly [string, string | undefined] {
@@ -265,6 +283,21 @@ function parseOptions(
     json: values.has("--json"),
     ...(request === undefined ? {} : { request: parseRequest(request) }),
   };
+}
+
+function parseControllerConfigPath(value: string): string {
+  if (!isAbsolute(value) || value.length > 4_096 || value.includes("\u0000"))
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      "--controller-config must be an absolute path.",
+    );
+  const path = normalize(resolve(value));
+  if (path === "/")
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      "--controller-config must be an absolute path.",
+    );
+  return path;
 }
 
 function optionValue(
@@ -337,7 +370,19 @@ export async function runCli(
       return success({ version: dependencies.version ?? CLI_VERSION });
     }
 
-    const runner = dependencies.runner ?? stateOnlyCommandRunner;
+    const runner =
+      invocation.controllerConfig === undefined
+        ? (dependencies.runner ?? stateOnlyCommandRunner)
+        : await (
+            dependencies.controllerConfigRunner ?? createControllerConfigRunner
+          )(invocation.controllerConfig);
+    if (runner === undefined)
+      return failure(
+        "SCE_CONTROLLER_CONFIG_UNAVAILABLE",
+        "The explicit controller configuration is unavailable.",
+        EXIT_UNAVAILABLE,
+        invocation.request.command,
+      );
     let outcome;
     try {
       outcome = await runner(invocation.request);
@@ -465,7 +510,7 @@ function helpResult(
       commands: [...commandNames],
       name: "sce",
       usage:
-        "sce <command> [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]",
+        "sce <command> [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]",
       version,
     };
   }
@@ -474,8 +519,8 @@ function helpResult(
     command,
     usage:
       command === "feedback"
-        ? "sce feedback <prepare|preview|submit|flush> [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]"
-        : `sce ${command} [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]`,
+        ? "sce feedback <prepare|preview|submit|flush> [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]"
+        : `sce ${command} [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]`,
   };
 }
 

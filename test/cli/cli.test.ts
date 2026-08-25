@@ -45,7 +45,7 @@ test("global help and version are JSON envelopes", async () => {
       commands: [...commandNames],
       name: "sce",
       usage:
-        "sce <command> [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]",
+        "sce <command> [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]",
       version: "0.1.0",
     },
     schema: "sce.cli.response",
@@ -64,8 +64,43 @@ test("command help exposes feedback's explicit subcommand surface", async () => 
     actions: ["prepare", "preview", "submit", "flush"],
     command: "feedback",
     usage:
-      "sce feedback <prepare|preview|submit|flush> [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]",
+      "sce feedback <prepare|preview|submit|flush> [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]",
   });
+});
+
+test("an explicit controller config replaces the unavailable default without fallback", async () => {
+  const state = run();
+  let path: string | undefined;
+  const configured = await runCli(
+    ["plan-wave", "--controller-config", "/tmp/sce.json"],
+    {
+      async controllerConfigRunner(input) {
+        path = input;
+        return createRecoveryCommandRunner(async () => ({
+          revision: state.revision,
+          run: state,
+          status: "idle",
+        }));
+      },
+    },
+  );
+  assert.equal(path, "/tmp/sce.json");
+  assert.equal(configured.exitCode, 0);
+  assert.deepEqual(JSON.parse(configured.stdout).result, {
+    revision: state.revision,
+    status: "idle",
+  });
+
+  const rejected = await runCli([
+    "plan-wave",
+    "--controller-config",
+    "/tmp/missing.json",
+  ]);
+  assert.equal(rejected.exitCode, 69);
+  assert.equal(
+    JSON.parse(rejected.stdout).error.code,
+    "SCE_CONTROLLER_CONFIG_UNAVAILABLE",
+  );
 });
 
 test("a runner receives a typed parsed request and can return a successful envelope", async () => {

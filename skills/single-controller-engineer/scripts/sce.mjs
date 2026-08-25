@@ -410,11 +410,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants);
+          this.rhs = optimizeExpr(this.rhs, names, constants2);
         return this;
       }
       get names() {
@@ -431,10 +431,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants);
+        this.rhs = optimizeExpr(this.rhs, names, constants2);
         return this;
       }
       get names() {
@@ -495,8 +495,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants) {
-        this.code = optimizeExpr(this.code, names, constants);
+      optimizeNames(names, constants2) {
+        this.code = optimizeExpr(this.code, names, constants2);
         return this;
       }
       get names() {
@@ -525,12 +525,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants))
+          if (n.optimizeNames(names, constants2))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -583,12 +583,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         var _a;
-        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants);
-        if (!(super.optimizeNames(names, constants) || this.else))
+        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants2);
+        if (!(super.optimizeNames(names, constants2) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants);
+        this.condition = optimizeExpr(this.condition, names, constants2);
         return this;
       }
       get names() {
@@ -611,10 +611,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants) {
-        if (!super.optimizeNames(names, constants))
+      optimizeNames(names, constants2) {
+        if (!super.optimizeNames(names, constants2))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants);
+        this.iteration = optimizeExpr(this.iteration, names, constants2);
         return this;
       }
       get names() {
@@ -650,10 +650,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants) {
-        if (!super.optimizeNames(names, constants))
+      optimizeNames(names, constants2) {
+        if (!super.optimizeNames(names, constants2))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants);
+        this.iterable = optimizeExpr(this.iterable, names, constants2);
         return this;
       }
       get names() {
@@ -695,11 +695,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants) {
+      optimizeNames(names, constants2) {
         var _a, _b;
-        super.optimizeNames(names, constants);
-        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants);
+        super.optimizeNames(names, constants2);
+        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants2);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants2);
         return this;
       }
       get names() {
@@ -1000,7 +1000,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants) {
+    function optimizeExpr(expr, names, constants2) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -1015,14 +1015,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants[n.str];
+        const c = constants2[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants2[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -1925,10 +1925,10 @@ var require_keyword = __commonJS({
       if (def.async && !schemaEnv.$async)
         throw new Error("async keyword in sync schema");
     }
-    function useKeyword(gen, keyword, result) {
-      if (result === void 0)
+    function useKeyword(gen, keyword, result2) {
+      if (result2 === void 0)
         throw new Error(`keyword "${keyword}" failed to compile`);
-      return gen.scopeValue("keyword", typeof result == "function" ? { ref: result } : { ref: result, code: (0, codegen_1.stringify)(result) });
+      return gen.scopeValue("keyword", typeof result2 == "function" ? { ref: result2 } : { ref: result2, code: (0, codegen_1.stringify)(result2) });
     }
     function validSchemaType(schema, schemaType, allowUndefined = false) {
       return !schemaType.length || schemaType.some((st) => st === "array" ? Array.isArray(schema) : st === "object" ? schema && typeof schema == "object" && !Array.isArray(schema) : typeof schema == st || allowUndefined && typeof schema == "undefined");
@@ -2044,7 +2044,7 @@ var require_subschema = __commonJS({
 var require_fast_deep_equal = __commonJS({
   "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/fast-deep-equal/index.js"(exports, module) {
     "use strict";
-    module.exports = function equal(a, b) {
+    module.exports = function equal2(a, b) {
       if (a === b) return true;
       if (a && b && typeof a == "object" && typeof b == "object") {
         if (a.constructor !== b.constructor) return false;
@@ -2053,7 +2053,7 @@ var require_fast_deep_equal = __commonJS({
           length = a.length;
           if (length != b.length) return false;
           for (i = length; i-- !== 0; )
-            if (!equal(a[i], b[i])) return false;
+            if (!equal2(a[i], b[i])) return false;
           return true;
         }
         if (a.constructor === RegExp) return a.source === b.source && a.flags === b.flags;
@@ -2066,7 +2066,7 @@ var require_fast_deep_equal = __commonJS({
           if (!Object.prototype.hasOwnProperty.call(b, keys[i])) return false;
         for (i = length; i-- !== 0; ) {
           var key = keys[i];
-          if (!equal(a[key], b[key])) return false;
+          if (!equal2(a[key], b[key])) return false;
         }
         return true;
       }
@@ -2170,7 +2170,7 @@ var require_resolve = __commonJS({
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.getSchemaRefs = exports.resolveUrl = exports.normalizeId = exports._getFullPath = exports.getFullPath = exports.inlineRef = void 0;
     var util_1 = require_util();
-    var equal = require_fast_deep_equal();
+    var equal2 = require_fast_deep_equal();
     var traverse = require_json_schema_traverse();
     var SIMPLE_INLINED = /* @__PURE__ */ new Set([
       "type",
@@ -2235,8 +2235,8 @@ var require_resolve = __commonJS({
       }
       return count;
     }
-    function getFullPath(resolver, id = "", normalize) {
-      if (normalize !== false)
+    function getFullPath(resolver, id = "", normalize5) {
+      if (normalize5 !== false)
         id = normalizeId(id);
       const p = resolver.parse(id);
       return _getFullPath(resolver, p);
@@ -2308,7 +2308,7 @@ var require_resolve = __commonJS({
       });
       return localRefs;
       function checkAmbiguosRef(sch1, sch2, ref) {
-        if (sch2 !== void 0 && !equal(sch1, sch2))
+        if (sch2 !== void 0 && !equal2(sch1, sch2))
           throw ambiguos(ref);
       }
       function ambiguos(ref) {
@@ -2897,9 +2897,9 @@ var require_compile = __commonJS({
       if (_sch)
         return _sch;
       const rootId = (0, resolve_1.getFullPath)(this.opts.uriResolver, sch.root.baseId);
-      const { es5, lines } = this.opts.code;
+      const { es5, lines: lines2 } = this.opts.code;
       const { ownProperties } = this.opts;
-      const gen = new codegen_1.CodeGen(this.scope, { es5, lines, ownProperties });
+      const gen = new codegen_1.CodeGen(this.scope, { es5, lines: lines2, ownProperties });
       let _ValidationError;
       if (sch.$async) {
         _ValidationError = gen.scopeValue("Error", {
@@ -2984,7 +2984,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve.call(this, root, ref);
+      let _sch = resolve5.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3011,7 +3011,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve(root, ref) {
+    function resolve5(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3189,9 +3189,9 @@ var require_utils = __commonJS({
         }
       }
       if (bestLength < 2) return hextets.join(":");
-      const head = hextets.slice(0, bestStart).join(":");
+      const head3 = hextets.slice(0, bestStart).join(":");
       const tail = hextets.slice(bestStart + bestLength).join(":");
-      return head + "::" + tail;
+      return head3 + "::" + tail;
     }
     function normalizeIPv6Address(input) {
       const compression = input.indexOf("::");
@@ -3351,9 +3351,9 @@ var require_utils = __commonJS({
       let output = "";
       for (let i = 0; i < input.length; i++) {
         if (input[i] === "%" && i + 2 < input.length) {
-          const hex = input.slice(i + 1, i + 3);
-          if (isHexPair(hex)) {
-            const normalizedHex = hex.toUpperCase();
+          const hex2 = input.slice(i + 1, i + 3);
+          if (isHexPair(hex2)) {
+            const normalizedHex = hex2.toUpperCase();
             const decoded = String.fromCharCode(parseInt(normalizedHex, 16));
             if (decodeUnreserved && isUnreserved(decoded)) {
               output += decoded;
@@ -3373,9 +3373,9 @@ var require_utils = __commonJS({
       for (let i = 0; i < input.length; i++) {
         const ch = input[i];
         if (ch === "%" && i + 2 < input.length) {
-          const hex = input.slice(i + 1, i + 3);
-          if (isHexPair(hex)) {
-            const normalizedHex = hex.toUpperCase();
+          const hex2 = input.slice(i + 1, i + 3);
+          if (isHexPair(hex2)) {
+            const normalizedHex = hex2.toUpperCase();
             const decoded = String.fromCharCode(parseInt(normalizedHex, 16));
             if (decoded !== "." && isUnreserved(decoded)) {
               output += decoded;
@@ -3415,9 +3415,9 @@ var require_utils = __commonJS({
       for (let i = 0; i < input.length; i++) {
         const ch = input[i];
         if (ch === "%" && i + 2 < input.length) {
-          const hex = input.slice(i + 1, i + 3);
-          if (isHexPair(hex)) {
-            output += "%" + hex.toUpperCase();
+          const hex2 = input.slice(i + 1, i + 3);
+          if (isHexPair(hex2)) {
+            output += "%" + hex2.toUpperCase();
             i += 2;
             continue;
           }
@@ -3453,9 +3453,9 @@ var require_utils = __commonJS({
       for (let i = 0; i < input.length; i++) {
         const ch = input[i];
         if (ch === "%" && i + 2 < input.length) {
-          const hex = input.slice(i + 1, i + 3);
-          if (isHexPair(hex)) {
-            output += "%" + hex.toUpperCase();
+          const hex2 = input.slice(i + 1, i + 3);
+          if (isHexPair(hex2)) {
+            output += "%" + hex2.toUpperCase();
             i += 2;
             continue;
           }
@@ -3500,9 +3500,9 @@ var require_utils = __commonJS({
       for (let i = 0; i < input.length; i++) {
         const ch = input[i];
         if (ch === "%" && i + 2 < input.length) {
-          const hex = input.slice(i + 1, i + 3);
-          if (isHexPair(hex)) {
-            const normalizedHex = hex.toUpperCase();
+          const hex2 = input.slice(i + 1, i + 3);
+          if (isHexPair(hex2)) {
+            const normalizedHex = hex2.toUpperCase();
             const decoded = String.fromCharCode(parseInt(normalizedHex, 16));
             if (isUnreserved(decoded)) {
               output += decoded;
@@ -3540,9 +3540,9 @@ var require_utils = __commonJS({
       let output = "";
       for (let i = 0; i < input.length; i++) {
         if (input[i] === "%" && i + 2 < input.length) {
-          const hex = input.slice(i + 1, i + 3);
-          if (isHexPair(hex)) {
-            output += "%" + hex.toUpperCase();
+          const hex2 = input.slice(i + 1, i + 3);
+          if (isHexPair(hex2)) {
+            output += "%" + hex2.toUpperCase();
             i += 2;
             continue;
           }
@@ -3826,7 +3826,7 @@ var require_fast_uri = __commonJS({
       }
       return decodedScheme;
     }
-    function normalize(uri, options) {
+    function normalize5(uri, options) {
       if (typeof uri === "string") {
         uri = /** @type {T} */
         normalizeString2(uri, options);
@@ -3836,7 +3836,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve(baseURI, relativeURI, options) {
+    function resolve5(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -3869,49 +3869,49 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative, options, skipNormalization) {
+    function resolveComponent(base, relative2, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse(serialize(base, options), options);
-        relative = parse(serialize(relative, options), options);
+        relative2 = parse(serialize(relative2, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative.scheme) {
-        target.scheme = relative.scheme;
-        target.userinfo = relative.userinfo;
-        target.host = relative.host;
-        target.port = relative.port;
-        target.path = removeDotSegments(relative.path || "");
-        target.query = relative.query;
+      if (!options.tolerant && relative2.scheme) {
+        target.scheme = relative2.scheme;
+        target.userinfo = relative2.userinfo;
+        target.host = relative2.host;
+        target.port = relative2.port;
+        target.path = removeDotSegments(relative2.path || "");
+        target.query = relative2.query;
       } else {
-        if (relative.userinfo !== void 0 || relative.host !== void 0 || relative.port !== void 0) {
-          target.userinfo = relative.userinfo;
-          target.host = relative.host;
-          target.port = relative.port;
-          target.path = removeDotSegments(relative.path || "");
-          target.query = relative.query;
+        if (relative2.userinfo !== void 0 || relative2.host !== void 0 || relative2.port !== void 0) {
+          target.userinfo = relative2.userinfo;
+          target.host = relative2.host;
+          target.port = relative2.port;
+          target.path = removeDotSegments(relative2.path || "");
+          target.query = relative2.query;
         } else {
-          if (!relative.path) {
+          if (!relative2.path) {
             target.path = base.path;
-            if (relative.query !== void 0) {
-              target.query = relative.query;
+            if (relative2.query !== void 0) {
+              target.query = relative2.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative.path[0] === "/") {
-              target.path = removeDotSegments(relative.path);
+            if (relative2.path[0] === "/") {
+              target.path = removeDotSegments(relative2.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative.path;
+                target.path = "/" + relative2.path;
               } else if (!base.path) {
-                target.path = relative.path;
+                target.path = relative2.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative2.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative.query;
+            target.query = relative2.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3919,10 +3919,10 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative.fragment;
+      target.fragment = relative2.fragment;
       return target;
     }
-    function equal(uriA, uriB, options) {
+    function equal2(uriA, uriB, options) {
       const normalizedA = normalizeComparableURI(uriA, options);
       const normalizedB = normalizeComparableURI(uriB, options);
       return normalizedA !== void 0 && normalizedB !== void 0 && normalizedA === normalizedB;
@@ -4197,10 +4197,10 @@ var require_fast_uri = __commonJS({
     }
     var fastUri = {
       SCHEMES,
-      normalize,
-      resolve,
+      normalize: normalize5,
+      resolve: resolve5,
       resolveComponent,
-      equal,
+      equal: equal2,
       serialize,
       parse
     };
@@ -4338,8 +4338,8 @@ var require_core = __commonJS({
         this._loading = {};
         this._cache = /* @__PURE__ */ new Map();
         opts = this.opts = { ...opts, ...requiredOptions(opts) };
-        const { es5, lines } = this.opts.code;
-        this.scope = new codegen_2.ValueScope({ scope: {}, prefixes: EXT_SCOPE_NAMES, es5, lines });
+        const { es5, lines: lines2 } = this.opts.code;
+        this.scope = new codegen_2.ValueScope({ scope: {}, prefixes: EXT_SCOPE_NAMES, es5, lines: lines2 });
         this.logger = getLogger(opts.logger);
         const formatOpt = opts.validateFormats;
         opts.validateFormats = false;
@@ -4613,7 +4613,7 @@ var require_core = __commonJS({
       errorsText(errors = this.errors, { separator = ", ", dataVar = "data" } = {}) {
         if (!errors || errors.length === 0)
           return "No errors";
-        return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text3, msg) => text3 + separator + msg);
+        return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text4, msg) => text4 + separator + msg);
       }
       $dataMetaSchema(metaSchema, keywordsJsonPointers) {
         const rules = this.RULES.all;
@@ -5290,9 +5290,9 @@ var require_equal = __commonJS({
   "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/runtime/equal.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    var equal = require_fast_deep_equal();
-    equal.code = 'require("ajv/dist/runtime/equal").default';
-    exports.default = equal;
+    var equal2 = require_fast_deep_equal();
+    equal2.code = 'require("ajv/dist/runtime/equal").default';
+    exports.default = equal2;
   }
 });
 
@@ -6871,7 +6871,8 @@ var require_ajv = __commonJS({
 });
 
 // src/cli.ts
-import { realpathSync } from "node:fs";
+import { realpathSync as realpathSync5 } from "node:fs";
+import { isAbsolute as isAbsolute7, normalize as normalize4, resolve as resolve4 } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/guard/value.mjs
@@ -6957,14 +6958,14 @@ function RegExpType(value) {
   return new RegExp(value.source, value.flags);
 }
 function ObjectType(value) {
-  const result = {};
+  const result2 = {};
   for (const key of Object.getOwnPropertyNames(value)) {
-    result[key] = Visit(value[key]);
+    result2[key] = Visit(value[key]);
   }
   for (const key of Object.getOwnPropertySymbols(value)) {
-    result[key] = Visit(value[key]);
+    result2[key] = Visit(value[key]);
   }
-  return result;
+  return result2;
 }
 function Visit(value) {
   return IsArray(value) ? ArrayType(value) : IsDate(value) ? DateType(value) : IsUint8Array(value) ? Uint8ArrayType(value) : IsRegExp(value) ? RegExpType(value) : IsObject(value) ? ObjectType(value) : value;
@@ -7038,14 +7039,14 @@ function ImmutableRegExp(value) {
   return value;
 }
 function ImmutableObject(value) {
-  const result = {};
+  const result2 = {};
   for (const key of Object.getOwnPropertyNames(value)) {
-    result[key] = Immutable(value[key]);
+    result2[key] = Immutable(value[key]);
   }
   for (const key of Object.getOwnPropertySymbols(value)) {
-    result[key] = Immutable(value[key]);
+    result2[key] = Immutable(value[key]);
   }
-  return globalThis.Object.freeze(result);
+  return globalThis.Object.freeze(result2);
 }
 function Immutable(value) {
   return IsArray(value) ? ImmutableArray(value) : IsDate(value) ? ImmutableDate(value) : IsUint8Array(value) ? ImmutableUint8Array(value) : IsRegExp(value) ? ImmutableRegExp(value) : IsObject(value) ? ImmutableObject(value) : value;
@@ -7053,14 +7054,14 @@ function Immutable(value) {
 
 // ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/create/type.mjs
 function CreateType(schema, options) {
-  const result = options !== void 0 ? { ...options, ...schema } : schema;
+  const result2 = options !== void 0 ? { ...options, ...schema } : schema;
   switch (TypeSystemPolicy.InstanceMode) {
     case "freeze":
-      return Immutable(result);
+      return Immutable(result2);
     case "clone":
-      return Clone(result);
+      return Clone(result2);
     default:
-      return result;
+      return result2;
   }
 }
 
@@ -7899,10 +7900,10 @@ function FromTemplateLiteral(templateLiteral) {
   return keys.map((key) => key.toString());
 }
 function FromUnion2(types) {
-  const result = [];
+  const result2 = [];
   for (const type of types)
-    result.push(...IndexPropertyKeys(type));
-  return result;
+    result2.push(...IndexPropertyKeys(type));
+  return result2;
 }
 function FromLiteral(literalValue) {
   return [literalValue.toString()];
@@ -7913,11 +7914,11 @@ function IndexPropertyKeys(type) {
 
 // ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/indexed/indexed-from-mapped-result.mjs
 function FromProperties(type, properties, options) {
-  const result = {};
+  const result2 = {};
   for (const K2 of Object.getOwnPropertyNames(properties)) {
-    result[K2] = Index(type, IndexPropertyKeys(properties[K2]), options);
+    result2[K2] = Index(type, IndexPropertyKeys(properties[K2]), options);
   }
-  return result;
+  return result2;
 }
 function FromMappedResult(type, mappedResult, options) {
   return FromProperties(type, mappedResult.properties, options);
@@ -7980,8 +7981,8 @@ function MappedIndexPropertyKey(type, key, options) {
   return { [key]: Index(type, [key], Clone(options)) };
 }
 function MappedIndexPropertyKeys(type, propertyKeys, options) {
-  return propertyKeys.reduce((result, left) => {
-    return { ...result, ...MappedIndexPropertyKey(type, left, options) };
+  return propertyKeys.reduce((result2, left) => {
+    return { ...result2, ...MappedIndexPropertyKey(type, left, options) };
   }, {});
 }
 function MappedIndexProperties(type, mappedKey, options) {
@@ -8207,10 +8208,10 @@ function Awaited(type, options) {
 
 // ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/keyof/keyof-property-keys.mjs
 function FromRest4(types) {
-  const result = [];
+  const result2 = [];
   for (const L of types)
-    result.push(KeyOfPropertyKeys(L));
-  return result;
+    result2.push(KeyOfPropertyKeys(L));
+  return result2;
 }
 function FromIntersect3(types) {
   const propertyKeysArray = FromRest4(types);
@@ -8254,8 +8255,8 @@ function FromRef2($ref) {
 function KeyOfFromType(type, options) {
   const propertyKeys = KeyOfPropertyKeys(type);
   const propertyKeyTypes = KeyOfPropertyKeysToRest(propertyKeys);
-  const result = UnionEvaluated(propertyKeyTypes);
-  return CreateType(result, options);
+  const result2 = UnionEvaluated(propertyKeyTypes);
+  return CreateType(result2, options);
 }
 function KeyOfPropertyKeysToRest(propertyKeys) {
   return propertyKeys.map((L) => L === "[number]" ? Number2() : Literal(L));
@@ -8266,10 +8267,10 @@ function KeyOf(type, options) {
 
 // ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/keyof/keyof-from-mapped-result.mjs
 function FromProperties6(properties, options) {
-  const result = {};
+  const result2 = {};
   for (const K2 of globalThis.Object.getOwnPropertyNames(properties))
-    result[K2] = KeyOf(properties[K2], Clone(options));
-  return result;
+    result2[K2] = KeyOf(properties[K2], Clone(options));
+  return result2;
 }
 function FromMappedResult5(mappedResult, options) {
   return FromProperties6(mappedResult.properties, options);
@@ -8383,8 +8384,8 @@ var ExtendsResult;
   ExtendsResult2[ExtendsResult2["True"] = 1] = "True";
   ExtendsResult2[ExtendsResult2["False"] = 2] = "False";
 })(ExtendsResult || (ExtendsResult = {}));
-function IntoBooleanResult(result) {
-  return result === ExtendsResult.False ? result : ExtendsResult.True;
+function IntoBooleanResult(result2) {
+  return result2 === ExtendsResult.False ? result2 : ExtendsResult.True;
 }
 function Throw(message) {
   throw new ExtendsResolverError(message);
@@ -8749,10 +8750,10 @@ function RecordCreateFromPattern(pattern, T, options) {
   return CreateType({ [Kind]: "Record", type: "object", patternProperties: { [pattern]: T } }, options);
 }
 function RecordCreateFromKeys(K, T, options) {
-  const result = {};
+  const result2 = {};
   for (const K2 of K)
-    result[K2] = T;
-  return Object2(result, { ...options, [Hint]: "Record" });
+    result2[K2] = T;
+  return Object2(result2, { ...options, [Hint]: "Record" });
 }
 function FromTemplateLiteralKey(K, T, options) {
   return IsTemplateLiteralFinite(K) ? RecordCreateFromKeys(IndexPropertyKeys(K), T, options) : RecordCreateFromPattern(K.pattern, T, options);
@@ -8788,8 +8789,8 @@ function FromNumberKey(_, type, options) {
 function Record(key, type, options = {}) {
   return IsUnion(key) ? FromUnionKey(key.anyOf, type, options) : IsTemplateLiteral(key) ? FromTemplateLiteralKey(key, type, options) : IsLiteral(key) ? FromLiteralKey(key.const, type, options) : IsBoolean2(key) ? FromBooleanKey(key, type, options) : IsInteger(key) ? FromIntegerKey(key, type, options) : IsNumber3(key) ? FromNumberKey(key, type, options) : IsRegExp2(key) ? FromRegExpKey(key, type, options) : IsString2(key) ? FromStringKey(key, type, options) : IsAny(key) ? FromAnyKey(key, type, options) : IsNever(key) ? FromNeverKey(key, type, options) : Never(options);
 }
-function RecordPattern(record) {
-  return globalThis.Object.getOwnPropertyNames(record.patternProperties)[0];
+function RecordPattern(record2) {
+  return globalThis.Object.getOwnPropertyNames(record2.patternProperties)[0];
 }
 function RecordKey2(type) {
   const pattern = RecordPattern(type);
@@ -8847,8 +8848,8 @@ function FromObject2(args, type) {
 function FromRecord2(args, type) {
   const mappedKey = FromType(args, RecordKey2(type));
   const mappedValue = FromType(args, RecordValue2(type));
-  const result = Record(mappedKey, mappedValue);
-  return { ...type, ...result };
+  const result2 = Record(mappedKey, mappedValue);
+  return { ...type, ...result2 };
 }
 function FromArgument(args, argument) {
   return argument.index in args ? args[argument.index] : Unknown();
@@ -8860,8 +8861,8 @@ function FromProperty2(args, type) {
   return isReadonly && isOptional ? ReadonlyOptional(mapped) : isReadonly && !isOptional ? Readonly(mapped) : !isReadonly && isOptional ? Optional(mapped) : mapped;
 }
 function FromProperties11(args, properties) {
-  return globalThis.Object.getOwnPropertyNames(properties).reduce((result, key) => {
-    return { ...result, [key]: FromProperty2(args, properties[key]) };
+  return globalThis.Object.getOwnPropertyNames(properties).reduce((result2, key) => {
+    return { ...result2, [key]: FromProperty2(args, properties[key]) };
   }, {});
 }
 function FromTypes(args, types) {
@@ -8886,10 +8887,10 @@ function MappedIntrinsicPropertyKey(K, M, options) {
   };
 }
 function MappedIntrinsicPropertyKeys(K, M, options) {
-  const result = K.reduce((Acc, L) => {
+  const result2 = K.reduce((Acc, L) => {
     return { ...Acc, ...MappedIntrinsicPropertyKey(L, M, options) };
   }, {});
-  return result;
+  return result2;
 }
 function MappedIntrinsicProperties(T, M, options) {
   return MappedIntrinsicPropertyKeys(T["keys"], M, options);
@@ -8966,10 +8967,10 @@ function Uppercase(T, options = {}) {
 
 // ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/omit/omit-from-mapped-result.mjs
 function FromProperties12(properties, propertyKeys, options) {
-  const result = {};
+  const result2 = {};
   for (const K2 of globalThis.Object.getOwnPropertyNames(properties))
-    result[K2] = Omit(properties[K2], propertyKeys, Clone(options));
-  return result;
+    result2[K2] = Omit(properties[K2], propertyKeys, Clone(options));
+  return result2;
 }
 function FromMappedResult9(mappedResult, propertyKeys, options) {
   return FromProperties12(mappedResult.properties, propertyKeys, options);
@@ -8999,8 +9000,8 @@ function FromObject3(type, propertyKeys, properties) {
   return Object2(mappedProperties, options);
 }
 function UnionFromPropertyKeys(propertyKeys) {
-  const result = propertyKeys.reduce((result2, key) => IsLiteralValue(key) ? [...result2, Literal(key)] : result2, []);
-  return Union(result);
+  const result2 = propertyKeys.reduce((result3, key) => IsLiteralValue(key) ? [...result3, Literal(key)] : result3, []);
+  return Union(result2);
 }
 function OmitResolve(type, propertyKeys) {
   return IsIntersect(type) ? Intersect(FromIntersect6(type.allOf, propertyKeys)) : IsUnion(type) ? Union(FromUnion8(type.anyOf, propertyKeys)) : IsObject3(type) ? FromObject3(type, propertyKeys, type.properties) : Object2({});
@@ -9032,10 +9033,10 @@ function OmitFromMappedKey(type, mappedKey, options) {
 
 // ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/pick/pick-from-mapped-result.mjs
 function FromProperties14(properties, propertyKeys, options) {
-  const result = {};
+  const result2 = {};
   for (const K2 of globalThis.Object.getOwnPropertyNames(properties))
-    result[K2] = Pick(properties[K2], propertyKeys, Clone(options));
-  return result;
+    result2[K2] = Pick(properties[K2], propertyKeys, Clone(options));
+  return result2;
 }
 function FromMappedResult10(mappedResult, propertyKeys, options) {
   return FromProperties14(mappedResult.properties, propertyKeys, options);
@@ -9053,11 +9054,11 @@ function FromUnion9(types, propertyKeys) {
   return types.map((type) => PickResolve(type, propertyKeys));
 }
 function FromProperties15(properties, propertyKeys) {
-  const result = {};
+  const result2 = {};
   for (const K2 of propertyKeys)
     if (K2 in properties)
-      result[K2] = properties[K2];
-  return result;
+      result2[K2] = properties[K2];
+  return result2;
 }
 function FromObject4(Type2, keys, properties) {
   const options = Discard(Type2, [TransformKind, "$id", "required", "properties"]);
@@ -9065,8 +9066,8 @@ function FromObject4(Type2, keys, properties) {
   return Object2(mappedProperties, options);
 }
 function UnionFromPropertyKeys2(propertyKeys) {
-  const result = propertyKeys.reduce((result2, key) => IsLiteralValue(key) ? [...result2, Literal(key)] : result2, []);
-  return Union(result);
+  const result2 = propertyKeys.reduce((result3, key) => IsLiteralValue(key) ? [...result3, Literal(key)] : result3, []);
+  return Union(result2);
 }
 function PickResolve(type, propertyKeys) {
   return IsIntersect(type) ? Intersect(FromIntersect7(type.allOf, propertyKeys)) : IsUnion(type) ? Union(FromUnion9(type.anyOf, propertyKeys)) : IsObject3(type) ? FromObject4(type, propertyKeys, type.properties) : Object2({});
@@ -9086,8 +9087,8 @@ function FromPropertyKey3(type, key, options) {
   };
 }
 function FromPropertyKeys3(type, propertyKeys, options) {
-  return propertyKeys.reduce((result, leftKey) => {
-    return { ...result, ...FromPropertyKey3(type, leftKey, options) };
+  return propertyKeys.reduce((result2, leftKey) => {
+    return { ...result2, ...FromPropertyKey3(type, leftKey, options) };
   }, {});
 }
 function FromMappedKey4(type, mappedKey, options) {
@@ -9263,15 +9264,15 @@ function FromIterator3(moduleProperties, type) {
   return Iterator(FromType2(moduleProperties, type));
 }
 function FromObject7(moduleProperties, properties) {
-  return Object2(globalThis.Object.keys(properties).reduce((result, key) => {
-    return { ...result, [key]: FromType2(moduleProperties, properties[key]) };
+  return Object2(globalThis.Object.keys(properties).reduce((result2, key) => {
+    return { ...result2, [key]: FromType2(moduleProperties, properties[key]) };
   }, {}));
 }
 function FromRecord3(moduleProperties, type) {
   const [value, pattern] = [FromType2(moduleProperties, RecordValue2(type)), RecordPattern(type)];
-  const result = CloneType(type);
-  result.patternProperties[pattern] = value;
-  return result;
+  const result2 = CloneType(type);
+  result2.patternProperties[pattern] = value;
+  return result2;
 }
 function FromTransform(moduleProperties, transform) {
   return IsRef(transform) ? { ...Dereference(moduleProperties, transform.$ref), [TransformKind]: transform[TransformKind] } : transform;
@@ -9301,8 +9302,8 @@ function ComputeType(moduleProperties, key) {
   return key in moduleProperties ? FromType2(moduleProperties, moduleProperties[key]) : Never();
 }
 function ComputeModuleProperties(moduleProperties) {
-  return globalThis.Object.getOwnPropertyNames(moduleProperties).reduce((result, key) => {
-    return { ...result, [key]: ComputeType(moduleProperties, key) };
+  return globalThis.Object.getOwnPropertyNames(moduleProperties).reduce((result2, key) => {
+    return { ...result2, [key]: ComputeType(moduleProperties, key) };
   }, {});
 }
 
@@ -9320,8 +9321,8 @@ var TModule = class {
   }
   // prettier-ignore
   WithIdentifiers($defs) {
-    return globalThis.Object.getOwnPropertyNames($defs).reduce((result, key) => {
-      return { ...result, [key]: { ...$defs[key], $id: key } };
+    return globalThis.Object.getOwnPropertyNames($defs).reduce((result2, key) => {
+      return { ...result2, [key]: { ...$defs[key], $id: key } };
     }, {});
   }
 };
@@ -10648,8 +10649,8 @@ function canonical(value, stringPolicy, path2) {
   }
   if (typeof value !== "object")
     throw new TypeError("canonical JSON only permits JSON values");
-  const object = value;
-  const entries = Object.keys(object).map((key) => ({
+  const object5 = value;
+  const entries = Object.keys(object5).map((key) => ({
     key,
     normalizedKey: normalizeString(key, stringPolicy([...path2, key], "key"))
   }));
@@ -10664,7 +10665,7 @@ function canonical(value, stringPolicy, path2) {
   }
   return `{${entries.map(
     ({ key, normalizedKey }) => `${JSON.stringify(normalizedKey)}:${canonical(
-      object[key],
+      object5[key],
       stringPolicy,
       [...path2, key]
     )}`
@@ -10723,6 +10724,723 @@ function canEnterTerminalIntent(state) {
 
 // src/protocol/reducer.ts
 var utf82 = new TextEncoder();
+function reduce(stateInput, eventInput) {
+  return reduceInternal(stateInput, eventInput);
+}
+function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = false) {
+  const parsedState = validate(RepositoryRunSchema, stateInput);
+  if (!parsedState.ok || parsedState.value === void 0)
+    return reject("invalid_state", parsedState.errors.join("; "));
+  const parsedEvent = validate(ProtocolEventSchema, eventInput);
+  if (!parsedEvent.ok || parsedEvent.value === void 0)
+    return reject("invalid_event", parsedEvent.errors.join("; "));
+  const state = parsedState.value;
+  const event = parsedEvent.value;
+  if (!reconcilingBlockedObservation) {
+    const errors = runInvariantErrors(state);
+    if (errors.length) return reject("invariant", errors.join("; "));
+  }
+  if (event.expectedRevision !== state.revision)
+    return reject(
+      "stale_revision",
+      "expected aggregate revision does not match"
+    );
+  if (state.processedEventIds.includes(event.eventId))
+    return reject("duplicate_event", "event id has already been applied");
+  if ("idempotencyKey" in event && state.processedIdempotencyKeys.includes(event.idempotencyKey))
+    return reject(
+      "duplicate_event",
+      "idempotency key has already been applied"
+    );
+  const declaredIntentKind = effectKindForIntent(event.type);
+  if (declaredIntentKind !== void 0 && "idempotencyKey" in event && event.idempotencyKey !== deriveIdempotencyKey(
+    state,
+    event.expectedRevision,
+    "unitId" in event ? event.unitId : null,
+    declaredIntentKind
+  ))
+    return reject(
+      "invalid_event",
+      "idempotency key is not deterministic for this run, revision, unit, and effect"
+    );
+  if (event.type === "controller_acquire_intent" || event.type === "controller_acquired" || event.type === "controller_release_intent" || event.type === "controller_released")
+    return reduceController(state, event);
+  if (state.state === "released")
+    return reject("illegal_transition", `aggregate is ${state.state}`);
+  if (event.type === "effect_ambiguous") {
+    const blocked = markEffectAmbiguous(state, event);
+    return blocked === void 0 ? badObservation() : commit(blocked, event, []);
+  }
+  if (state.state === "blocked" && !reconcilingBlockedObservation) {
+    const recovered = prepareBlockedUnitObservation(state, event);
+    if (recovered === void 0)
+      return reject("illegal_transition", "aggregate is blocked");
+    return reduceInternal(recovered, event, true);
+  }
+  if (state.controller.state !== "acquired")
+    return reject(
+      "illegal_transition",
+      "controller ownership has not been acquired"
+    );
+  if (event.unitId === null)
+    return reject("illegal_transition", "unit event requires a unit id");
+  const unit = state.units[event.unitId];
+  if (unit === void 0) return reject("illegal_transition", "unknown unit");
+  if (!state.wave.unitIds.includes(unit.id))
+    return reject("illegal_transition", "unit is not in the current wave");
+  const emittedKind = effectKindForIntent(event.type);
+  if (emittedKind !== void 0 && hasUnresolvedUnitEffect(state, unit.id))
+    return reject(
+      "illegal_transition",
+      "unit already has an unresolved intended or ambiguous effect"
+    );
+  if (emittedKind !== void 0 && !effectAllowed(state, emittedKind))
+    return reject(
+      "illegal_transition",
+      `authority profile forbids ${emittedKind}`
+    );
+  let result2;
+  switch (event.type) {
+    case "reservation_intent":
+      if (unit.state !== "planned") return illegal(unit, event.type);
+      if (event.reservations.some((r) => state.reservations[r.id] !== void 0))
+        return reject("invariant", "reservation id is already owned");
+      if (new Set(event.reservations.map((r) => `${r.namespace}/${r.resource}`)).size !== event.reservations.length)
+        return reject("invariant", "reservation request collides with itself");
+      if (Object.values(state.reservations).some(
+        (r) => r.state !== "released" && event.reservations.some(
+          (next) => next.namespace === r.namespace && next.resource === r.resource
+        )
+      ))
+        return reject("invariant", "reservation resource is already occupied");
+      result2 = intent(
+        state,
+        unit,
+        "reservation_intent",
+        event,
+        "reservation_acquire",
+        {
+          reservations: {
+            ...state.reservations,
+            ...Object.fromEntries(
+              event.reservations.map((r) => [
+                r.id,
+                { ...r, unitId: unit.id, state: "intended" }
+              ])
+            )
+          },
+          units: replaceUnit(state, {
+            ...unit,
+            reservationIds: event.reservations.map((r) => r.id)
+          })
+        }
+      );
+      break;
+    case "reservation_observed":
+      if (unit.state !== "reservation_intent") return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "reservation_acquire"))
+        return badObservation();
+      result2 = observe(
+        state,
+        unit,
+        "resources_reserved",
+        event,
+        {},
+        {
+          reservations: updateReservations(
+            state,
+            unit.id,
+            "reserved",
+            event.effectId
+          )
+        }
+      );
+      break;
+    case "branch_intent":
+      if (unit.state !== "resources_reserved") return illegal(unit, event.type);
+      result2 = intent(state, unit, "branch_intent", event, "branch_create", {
+        units: replaceUnit(state, { ...unit, branchRef: event.branchRef })
+      });
+      break;
+    case "branch_observed":
+      if (unit.state !== "branch_intent" || unit.branchRef !== event.branchRef)
+        return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "branch_create"))
+        return badObservation();
+      result2 = observe(state, unit, "branch_observed", event);
+      break;
+    case "worktree_intent":
+      if (unit.state !== "branch_observed") return illegal(unit, event.type);
+      result2 = intent(
+        state,
+        unit,
+        "worktree_intent",
+        event,
+        "worktree_create",
+        {
+          units: replaceUnit(state, {
+            ...unit,
+            worktreePath: event.worktreePath
+          })
+        }
+      );
+      break;
+    case "worktree_observed":
+      if (unit.state !== "worktree_intent" || unit.worktreePath !== event.worktreePath)
+        return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "worktree_create"))
+        return badObservation();
+      result2 = observe(state, unit, "worktree_observed", event);
+      break;
+    case "dispatch_intent":
+      if (unit.state !== "worktree_observed") return illegal(unit, event.type);
+      if (state.activeModifyingUnitIds.length >= 3)
+        return reject("invariant", "all three modifying slots are occupied");
+      result2 = modifyingIntent(
+        state,
+        unit,
+        "dispatch_intent",
+        event,
+        "dispatch",
+        {
+          workerRequestedModel: event.requestedModel,
+          workerPromptHash: event.promptHash
+        }
+      );
+      break;
+    case "dispatch_observed":
+      const dispatchedSession = freshSessionUpdate(
+        state,
+        event.sessionId,
+        unit,
+        "worker"
+      );
+      if (unit.state !== "dispatch_intent" || event.requestedModel !== unit.workerRequestedModel || event.promptHash !== unit.workerPromptHash || dispatchedSession === void 0)
+        return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "dispatch"))
+        return badObservation();
+      result2 = observe(
+        state,
+        unit,
+        "dispatched",
+        event,
+        workerSession(event),
+        dispatchedSession
+      );
+      break;
+    case "collect_intent":
+      if (unit.state !== "dispatched") return illegal(unit, event.type);
+      result2 = intent(state, unit, "collect_intent", event, "worker_collect");
+      break;
+    case "worker_collected":
+      if (unit.state !== "collect_intent") return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "worker_collect"))
+        return badObservation();
+      result2 = event.workerResult.status === "failed" ? observe(
+        state,
+        unit,
+        "failed",
+        event,
+        {
+          workerResult: event.workerResult,
+          repairContext: {
+            baseOid: unit.baseOid,
+            responseHash: event.observationHash,
+            rationale: event.workerResult.summary,
+            findings: [
+              {
+                id: "worker-failed",
+                severity: "blocking",
+                detail: event.workerResult.summary
+              }
+            ]
+          }
+        },
+        clearUnitOwners(state, unit.id)
+      ) : event.workerResult.status === "needs_repair" ? observe(
+        state,
+        unit,
+        "repair_required",
+        event,
+        {
+          workerResult: event.workerResult,
+          repairContext: {
+            baseOid: unit.baseOid,
+            responseHash: event.observationHash,
+            rationale: event.workerResult.summary,
+            findings: [
+              {
+                id: "worker-needs-repair",
+                severity: "blocking",
+                detail: event.workerResult.summary
+              }
+            ]
+          }
+        },
+        clearUnitOwners(state, unit.id)
+      ) : observe(
+        state,
+        unit,
+        "collected",
+        event,
+        { workerResult: event.workerResult },
+        {
+          activeModifyingUnitIds: state.activeModifyingUnitIds.filter(
+            (id) => id !== unit.id
+          )
+        }
+      );
+      if (event.workerResult.status === "failed")
+        result2 = persistTerminalClosureEvidence(result2, unit.id);
+      break;
+    case "candidate_intent":
+      if (unit.state !== "collected") return illegal(unit, event.type);
+      result2 = intent(
+        state,
+        unit,
+        "candidate_intent",
+        event,
+        "candidate_collect"
+      );
+      break;
+    case "candidate_observed":
+      if (unit.state !== "candidate_intent") return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "candidate_collect"))
+        return badObservation();
+      result2 = observe(
+        state,
+        unit,
+        "candidate_committed",
+        event,
+        {
+          candidateHead: event.headOid,
+          candidateTree: event.treeOid
+        },
+        { qualificationQueue: insertSorted(state.qualificationQueue, unit.id) }
+      );
+      break;
+    case "verification_intent":
+      if (unit.state !== "candidate_committed")
+        return illegal(unit, event.type);
+      if (state.qualificationOwnerUnitId !== void 0 && state.qualificationOwnerUnitId !== unit.id)
+        return reject(
+          "invariant",
+          "final qualification is owned by another unit"
+        );
+      if (state.qualificationQueue[0] !== unit.id)
+        return reject(
+          "invariant",
+          "unit is not first in deterministic qualification queue"
+        );
+      result2 = intent(state, unit, "verification_intent", event, "verify", {
+        qualificationOwnerUnitId: unit.id,
+        units: replaceUnit(state, {
+          ...unit,
+          verificationCommands: [...event.commands]
+        })
+      });
+      break;
+    case "verification_observed":
+      if (unit.state !== "verification_intent" || state.qualificationOwnerUnitId !== unit.id || unit.baseOid !== event.baseOid || unit.candidateHead !== event.headOid || unit.candidateTree !== event.treeOid)
+        return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "verify"))
+        return badObservation();
+      result2 = observe(state, unit, "qualified", event, {
+        verificationBaseOid: unit.baseOid,
+        verificationHeadOid: event.headOid,
+        verificationTree: event.treeOid,
+        verificationEvidenceHash: event.observationHash
+      });
+      break;
+    case "reviewer_dispatch_intent":
+      if (unit.state !== "qualified" || state.qualificationOwnerUnitId !== unit.id || state.currentReviewerUnitId !== void 0)
+        return illegal(unit, event.type);
+      result2 = intent(
+        state,
+        unit,
+        "reviewer_dispatch_intent",
+        event,
+        "review_dispatch",
+        {
+          currentReviewerUnitId: unit.id,
+          units: replaceUnit(state, {
+            ...unit,
+            reviewerRequestedModel: event.requestedModel,
+            reviewPromptHash: event.promptHash
+          })
+        }
+      );
+      break;
+    case "reviewer_observed":
+      const reviewerSessionUpdate = freshSessionUpdate(
+        state,
+        event.sessionId,
+        unit,
+        "reviewer"
+      );
+      if (unit.state !== "reviewer_dispatch_intent" || state.currentReviewerUnitId !== unit.id || event.requestedModel !== unit.reviewerRequestedModel || event.promptHash !== unit.reviewPromptHash || reviewerSessionUpdate === void 0)
+        return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "review_dispatch"))
+        return badObservation();
+      result2 = observe(
+        state,
+        unit,
+        "reviewer_dispatched",
+        event,
+        reviewerSession(event),
+        reviewerSessionUpdate
+      );
+      break;
+    case "review_collect_intent":
+      if (unit.state !== "reviewer_dispatched" || state.currentReviewerUnitId !== unit.id)
+        return illegal(unit, event.type);
+      result2 = intent(
+        state,
+        unit,
+        "review_collect_intent",
+        event,
+        "review_collect"
+      );
+      break;
+    case "review_collected": {
+      if (unit.state !== "review_collect_intent" || state.currentReviewerUnitId !== unit.id)
+        return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "review_collect"))
+        return badObservation();
+      const judgmentError = reviewJudgmentError(
+        unit,
+        event.judgment,
+        state.revision
+      );
+      if (judgmentError !== void 0)
+        return reject("illegal_transition", judgmentError);
+      if (event.judgment.decision === "request_changes") {
+        if (!event.judgment.findings.some(
+          (finding) => finding.severity === "blocking"
+        ))
+          return reject(
+            "illegal_transition",
+            "request_changes requires a blocking finding"
+          );
+        result2 = observe(
+          state,
+          unit,
+          "repair_required",
+          event,
+          {
+            repairContext: {
+              baseOid: event.judgment.baseOid,
+              headOid: event.judgment.headOid,
+              treeOid: event.judgment.treeOid,
+              responseHash: event.judgment.responseHash,
+              rationale: event.judgment.rationale,
+              findings: event.judgment.findings
+            }
+          },
+          clearUnitOwners(state, unit.id)
+        );
+      } else {
+        result2 = observe(
+          state,
+          unit,
+          "approved",
+          event,
+          {
+            reviewBaseOid: event.judgment.baseOid,
+            reviewHeadOid: event.judgment.headOid,
+            reviewTree: event.judgment.treeOid,
+            approvalResponseHash: event.judgment.responseHash
+          },
+          {
+            currentReviewerUnitId: null,
+            integrationQueue: insertSorted(state.integrationQueue, unit.id)
+          }
+        );
+      }
+      break;
+    }
+    case "publish_intent":
+      if (!isCurrentApproval(unit) || state.qualificationOwnerUnitId !== unit.id || publicationKind(state) === void 0)
+        return illegal(unit, event.type);
+      result2 = intent(state, unit, "publish_intent", event, "publish");
+      break;
+    case "publish_observed":
+      if (unit.state !== "publish_intent" || (event.publication.kind === "push_branch" ? unit.candidateHead !== event.publication.remoteHeadOid : unit.candidateHead !== event.publication.pullRequest.remoteHeadOid))
+        return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "publish"))
+        return badObservation();
+      if (publicationKind(state) === "open_pr") {
+        if (event.publication.kind !== "open_pr" || event.publication.pullRequest.baseRef !== state.integrationBranch || event.publication.pullRequest.baseOid !== unit.reviewBaseOid)
+          return reject(
+            "illegal_transition",
+            "open-pr publication lacks the reviewed open pull-request identity and base"
+          );
+      } else if (event.publication.kind !== "push_branch")
+        return reject(
+          "illegal_transition",
+          "branch publication must record a push-branch readback"
+        );
+      const publishedHeadOid = event.publication.kind === "open_pr" ? event.publication.pullRequest.remoteHeadOid : event.publication.remoteHeadOid;
+      result2 = observe(
+        state,
+        unit,
+        isPublicationHandoff(state) ? "handoff" : "published",
+        event,
+        {
+          publishedHeadOid,
+          ...event.publication.kind === "open_pr" ? { openPullRequest: event.publication.pullRequest } : {}
+        },
+        isPublicationHandoff(state) ? clearUnitOwners(state, unit.id) : {}
+      );
+      if (isPublicationHandoff(state))
+        result2 = persistTerminalClosureEvidence(result2, unit.id);
+      break;
+    case "integrate_intent":
+      if (!canIntegrateFrom(state, unit) || !hasCurrentApproval(unit) || state.qualificationOwnerUnitId !== unit.id || state.integrationOwnerUnitId !== void 0 && state.integrationOwnerUnitId !== unit.id)
+        return illegal(unit, event.type);
+      if (state.integrationQueue[0] !== unit.id)
+        return reject(
+          "invariant",
+          "unit is not first in deterministic integration queue"
+        );
+      result2 = intent(state, unit, "integrate_intent", event, "integrate", {
+        integrationOwnerUnitId: unit.id
+      });
+      break;
+    case "integrate_observed":
+      if (unit.state !== "integrate_intent" || state.integrationOwnerUnitId !== unit.id || event.controllerFencingToken !== state.controllerFencingToken || event.baseOid !== unit.reviewBaseOid || event.headOid !== unit.reviewHeadOid || event.treeOid !== unit.reviewTree)
+        return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "integrate"))
+        return badObservation();
+      result2 = observe(
+        state,
+        unit,
+        "landed",
+        event,
+        { landedOid: event.integrationOid },
+        {
+          qualificationOwnerUnitId: null,
+          integrationOwnerUnitId: null,
+          qualificationQueue: state.qualificationQueue.filter(
+            (id) => id !== unit.id
+          ),
+          integrationQueue: state.integrationQueue.filter(
+            (id) => id !== unit.id
+          )
+        }
+      );
+      result2 = persistTerminalClosureEvidence(result2, unit.id);
+      break;
+    case "reservation_release_intent":
+      if (![
+        "landed",
+        "handoff",
+        "cancelled",
+        "parked",
+        "failed",
+        "timed_out"
+      ].includes(unit.state))
+        return illegal(unit, event.type);
+      result2 = intent(
+        state,
+        unit,
+        "reservation_release_intent",
+        event,
+        "reservation_release",
+        { reservations: updateReservations(state, unit.id, "release_intent") }
+      );
+      result2 = {
+        ...result2,
+        state: {
+          ...result2.state,
+          closedUnitEvidence: updateClosureReleaseEvidence(
+            result2.state,
+            unit.id
+          )
+        }
+      };
+      break;
+    case "reservation_released":
+      if (unit.state !== "reservation_release_intent")
+        return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "reservation_release"))
+        return badObservation();
+      result2 = observe(
+        state,
+        unit,
+        "closed",
+        event,
+        {},
+        {
+          reservations: updateReservations(
+            state,
+            unit.id,
+            "released",
+            event.effectId
+          )
+        }
+      );
+      result2 = {
+        ...result2,
+        state: closeUnitAfterRelease(result2.state, unit.id)
+      };
+      break;
+    case "repair_intent":
+      if (unit.state !== "repair_required" && unit.state !== "failed" && unit.state !== "timed_out")
+        return illegal(unit, event.type);
+      if (!validRepairJudgment(state, unit, event.judgment, state.revision))
+        return reject(
+          "illegal_transition",
+          "repair judgment is not bound to this unit and revision"
+        );
+      if (unit.branchRef === void 0 || unit.worktreePath === void 0)
+        return reject(
+          "illegal_transition",
+          "repair requires the retained branch and worktree bindings"
+        );
+      if (unit.repairCount >= 16 || state.activeModifyingUnitIds.length >= 3)
+        return reject("invariant", "all three modifying slots are occupied");
+      result2 = modifyingIntent(state, unit, "repair_intent", event, "repair", {
+        workerRequestedModel: event.requestedModel,
+        workerPromptHash: event.promptHash
+      });
+      result2 = {
+        ...result2,
+        state: removeClosureEvidence(result2.state, unit.id)
+      };
+      break;
+    case "repair_observed":
+      const repairedSession = freshSessionUpdate(
+        state,
+        event.sessionId,
+        unit,
+        "worker"
+      );
+      if (unit.state !== "repair_intent" || event.requestedModel !== unit.workerRequestedModel || event.promptHash !== unit.workerPromptHash || repairedSession === void 0)
+        return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "repair"))
+        return badObservation();
+      result2 = observe(
+        state,
+        unit,
+        "dispatched",
+        event,
+        {
+          ...workerSession(event),
+          repairCount: unit.repairCount + 1
+        },
+        repairedSession
+      );
+      break;
+    case "failure_intent":
+      if (!canEnterTerminalIntent(unit.state)) return illegal(unit, event.type);
+      result2 = terminalIntent(state, unit, "failure_intent", event, "failure");
+      break;
+    case "failure_observed":
+      if (unit.state !== "failure_intent" || !matchesIntended(state, event, unit.id, "failure"))
+        return illegal(unit, event.type);
+      result2 = observe(
+        state,
+        unit,
+        "failed",
+        event,
+        failureRepairContext(unit, event.observationHash, "failure observed"),
+        clearUnitOwners(state, unit.id)
+      );
+      result2 = persistTerminalClosureEvidence(result2, unit.id);
+      break;
+    case "timeout_intent":
+      if (!canEnterTerminalIntent(unit.state)) return illegal(unit, event.type);
+      result2 = terminalIntent(state, unit, "timeout_intent", event, "timeout");
+      break;
+    case "timeout_observed":
+      if (unit.state !== "timeout_intent" || !matchesIntended(state, event, unit.id, "timeout"))
+        return illegal(unit, event.type);
+      result2 = observe(
+        state,
+        unit,
+        "timed_out",
+        event,
+        failureRepairContext(unit, event.observationHash, "timeout observed"),
+        clearUnitOwners(state, unit.id)
+      );
+      result2 = persistTerminalClosureEvidence(result2, unit.id);
+      break;
+    case "park_intent":
+      if (!canEnterTerminalIntent(unit.state)) return illegal(unit, event.type);
+      result2 = terminalIntent(state, unit, "park_intent", event, "park");
+      break;
+    case "park_observed":
+      if (unit.state !== "park_intent" || !matchesIntended(state, event, unit.id, "park"))
+        return illegal(unit, event.type);
+      result2 = observe(
+        state,
+        unit,
+        "parked",
+        event,
+        {},
+        clearUnitOwners(state, unit.id)
+      );
+      result2 = persistTerminalClosureEvidence(result2, unit.id);
+      break;
+    case "cancel_intent":
+      if (!canEnterTerminalIntent(unit.state)) return illegal(unit, event.type);
+      result2 = terminalIntent(state, unit, "cancel_intent", event, "cancel");
+      break;
+    case "cancel_observed":
+      if (unit.state !== "cancel_intent" || !matchesIntended(state, event, unit.id, "cancel"))
+        return illegal(unit, event.type);
+      result2 = observe(
+        state,
+        unit,
+        "cancelled",
+        event,
+        {},
+        clearUnitOwners(state, unit.id)
+      );
+      result2 = persistTerminalClosureEvidence(result2, unit.id);
+      break;
+    default:
+      return exhaustive(event);
+  }
+  return result2 === void 0 ? reject("illegal_transition", "event was not handled") : commit(result2.state, event, result2.effects);
+}
+function effectKindForIntent(type) {
+  const kinds = {
+    controller_acquire_intent: "controller_acquire",
+    controller_release_intent: "controller_release",
+    reservation_intent: "reservation_acquire",
+    branch_intent: "branch_create",
+    worktree_intent: "worktree_create",
+    dispatch_intent: "dispatch",
+    collect_intent: "worker_collect",
+    candidate_intent: "candidate_collect",
+    verification_intent: "verify",
+    reviewer_dispatch_intent: "review_dispatch",
+    review_collect_intent: "review_collect",
+    publish_intent: "publish",
+    integrate_intent: "integrate",
+    reservation_release_intent: "reservation_release",
+    repair_intent: "repair",
+    failure_intent: "failure",
+    timeout_intent: "timeout",
+    park_intent: "park",
+    cancel_intent: "cancel"
+  };
+  return kinds[type];
+}
+function deriveIdempotencyKey(state, expectedRevision, unitId, kind) {
+  return `sce:${sha256(
+    canonicalJson({
+      domain: "sce.protocol.idempotency.v1",
+      effectKind: kind,
+      expectedRevision,
+      incarnationId: state.controller.incarnationId,
+      runId: state.controller.runId,
+      unitId
+    })
+  )}`;
+}
 function deriveParamsHash(kind, params) {
   return sha256(
     canonicalJson({
@@ -10732,6 +11450,33 @@ function deriveParamsHash(kind, params) {
       schemaVersion: SCHEMA_VERSION
     })
   );
+}
+function rehydrateEffect(state, entry) {
+  try {
+    if (entry.intentCommitment !== deriveIntentCommitment(entry))
+      return void 0;
+    const params = runtimeEffectParams(
+      state,
+      entry.unitId,
+      entry.kind,
+      entry.slotTransition
+    );
+    if (deriveParamsHash(entry.kind, params) !== entry.paramsHash)
+      return void 0;
+    const effect2 = {
+      effectId: entry.effectId,
+      idempotencyKey: entry.idempotencyKey,
+      kind: entry.kind,
+      params,
+      paramsHash: entry.paramsHash,
+      schemaVersion: SCHEMA_VERSION,
+      unitId: entry.unitId
+    };
+    const checked = validate(RuntimeEffectSchema, effect2);
+    return checked.ok && checked.value !== void 0 ? checked.value : void 0;
+  } catch {
+    return void 0;
+  }
 }
 function deriveIntentCommitment(entry) {
   return sha256(
@@ -10773,6 +11518,96 @@ function deriveJournalCommitment(checkpointCommitment, entries) {
     checkpointCommitment
   );
 }
+function deriveRepairContextHash(context) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.repair-context.v1",
+      baseOid: context.baseOid,
+      ...context.headOid === void 0 ? {} : { headOid: context.headOid },
+      ...context.treeOid === void 0 ? {} : { treeOid: context.treeOid },
+      responseHash: context.responseHash,
+      rationale: context.rationale,
+      findings: context.findings.map((finding) => ({
+        id: finding.id,
+        severity: finding.severity,
+        detail: finding.detail
+      }))
+    })
+  );
+}
+function repairJudgmentPromptContent(judgment) {
+  return {
+    schemaVersion: judgment.schemaVersion,
+    role: judgment.role,
+    kind: judgment.kind,
+    unitId: judgment.unitId,
+    sessionId: judgment.sessionId,
+    requestedModel: judgment.requestedModel,
+    returnedModel: judgment.returnedModel,
+    aggregateRevision: judgment.aggregateRevision,
+    factOid: judgment.factOid,
+    currentEvidenceHash: judgment.currentEvidenceHash,
+    findingsContextHash: judgment.findingsContextHash
+  };
+}
+function repairJudgmentResponseContent(judgment) {
+  return {
+    ...repairJudgmentPromptContent(judgment),
+    promptHash: judgment.promptHash,
+    rationale: judgment.rationale,
+    decision: judgment.decision
+  };
+}
+function repairJudgmentAggregatePacket(state) {
+  const { closedUnitEvidence: _compressedClosedEvidence, ...aggregate } = state;
+  return aggregate;
+}
+function deriveRepairJudgmentResponseHash(judgment) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.repair-judgment-response.v1",
+      judgment: repairJudgmentResponseContent(judgment)
+    })
+  );
+}
+function deriveRepairJudgmentPromptHash(state, unit, judgment) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.repair-judgment-prompt.v1",
+      aggregate: repairJudgmentAggregatePacket(state),
+      controller: state.controller,
+      unit: {
+        id: unit.id,
+        ordinal: unit.ordinal,
+        revision: unit.revision,
+        state: unit.state,
+        baseOid: unit.baseOid,
+        ...unit.branchRef === void 0 ? {} : { branchRef: unit.branchRef },
+        ...unit.worktreePath === void 0 ? {} : { worktreePath: unit.worktreePath },
+        ...unit.candidateHead === void 0 ? {} : { candidateHead: unit.candidateHead },
+        ...unit.candidateTree === void 0 ? {} : { candidateTree: unit.candidateTree },
+        repairCount: unit.repairCount,
+        ...unit.repairContext === void 0 ? {} : { repairContext: unit.repairContext }
+      },
+      judgment: repairJudgmentPromptContent(judgment)
+    })
+  );
+}
+function effectAllowed(state, kind) {
+  if (kind === "publish")
+    return state.completionBoundary === "branch-handoff" && state.authorityProfile !== "local-change-only" || state.completionBoundary === "pr-handoff" && ["open-pr", "integrate"].includes(state.authorityProfile) || state.completionBoundary === "remote-integration" && state.authorityProfile === "integrate";
+  if (kind !== "integrate") return true;
+  return state.completionBoundary === "local-integration" || state.completionBoundary === "remote-integration" && state.authorityProfile === "integrate";
+}
+function isPublicationHandoff(state) {
+  return state.completionBoundary === "branch-handoff" || state.completionBoundary === "pr-handoff";
+}
+function canIntegrateFrom(state, unit) {
+  return integrationIsRequested(state) && (state.completionBoundary === "local-integration" ? unit.state === "approved" : unit.state === "published");
+}
+function integrationIsRequested(state) {
+  return state.completionBoundary === "local-integration" || state.completionBoundary === "remote-integration";
+}
 function completionConfigurationError(state) {
   switch (state.completionBoundary) {
     case "local-integration":
@@ -10784,6 +11619,39 @@ function completionConfigurationError(state) {
     case "remote-integration":
       return state.authorityProfile === "integrate" && state.integrationProfile === "remote-ff" ? void 0 : "remote integration requires integrate authority and a remote integration profile";
   }
+}
+function publicationKind(state) {
+  if (state.completionBoundary === "local-integration") return void 0;
+  if (state.completionBoundary === "pr-handoff") return "open_pr";
+  return "push_branch";
+}
+function freshSessionUpdate(state, sessionId, unit, role) {
+  if (state.usedSessionCount >= LIMITS.sessionHistory || controllerIdentityMatches(state, sessionId) || Object.values(state.units).some(
+    (unit2) => unit2.workerSessionId === sessionId || unit2.reviewerSessionId === sessionId
+  ))
+    return void 0;
+  const lineage = decodeSessionLineage(state.sessionLineage);
+  if (lineage === void 0) return void 0;
+  const fingerprint = sessionFingerprint(sessionId);
+  if (lineage.slots.some((entry) => entry?.equals(fingerprint)))
+    return void 0;
+  const start = sessionRoleSlot(unit.ordinal, role);
+  const slot = Array.from(
+    { length: sessionsPerRole() },
+    (_, offset) => start + offset
+  ).find((index) => lineage.slots[index] === void 0);
+  if (slot === void 0) return void 0;
+  const next = [...lineage.slots];
+  next[slot] = fingerprint;
+  const sessionLineage = encodeSessionLineage(next);
+  return {
+    sessionLineage,
+    sessionLineageRoot: deriveSessionLineageRoot(
+      sessionLineage,
+      state.usedSessionCount + 1
+    ),
+    usedSessionCount: state.usedSessionCount + 1
+  };
 }
 function controllerIdentityMatches(state, sessionId) {
   return [
@@ -10809,6 +11677,9 @@ function sessionRoleSlot(ordinal, role) {
 function sessionBitmapBytes(slotCount) {
   return Math.ceil(slotCount / 8);
 }
+function sessionRawBytes(slotCount) {
+  return sessionBitmapBytes(slotCount) + slotCount * LIMITS.sessionFingerprintBytes;
+}
 function sessionSlotsForRawLength(length) {
   for (let bitmapBytes = 1; bitmapBytes <= sessionBitmapBytes(LIMITS.sessionHistory); bitmapBytes += 1) {
     const slotCount = (length - bitmapBytes) / LIMITS.sessionFingerprintBytes;
@@ -10816,6 +11687,23 @@ function sessionSlotsForRawLength(length) {
       return slotCount;
   }
   return void 0;
+}
+function encodeSessionLineage(slots) {
+  let last = slots.length - 1;
+  while (last >= 0 && slots[last] === void 0) last -= 1;
+  if (last < 0) return "";
+  const slotCount = last + 1;
+  const bitmapBytes = sessionBitmapBytes(slotCount);
+  const raw = Buffer.alloc(sessionRawBytes(slotCount));
+  for (let index = 0; index < slotCount; index += 1) {
+    const fingerprint = slots[index];
+    if (fingerprint === void 0) continue;
+    if (fingerprint.length !== LIMITS.sessionFingerprintBytes)
+      throw new Error("invalid session fingerprint length");
+    raw[Math.floor(index / 8)] |= 1 << index % 8;
+    fingerprint.copy(raw, bitmapBytes + index * LIMITS.sessionFingerprintBytes);
+  }
+  return raw.toString("base64");
 }
 function decodeSessionLineage(encoded) {
   if (encoded === "") return { slots: [], count: 0 };
@@ -10867,6 +11755,11 @@ function deriveSessionLineageRoot(sessionLineage, usedSessionCount) {
     })
   );
 }
+function hasUnresolvedUnitEffect(state, unitId) {
+  return state.effectJournal.some(
+    (effect2) => effect2.unitId === unitId && (effect2.status === "intended" || effect2.status === "ambiguous")
+  );
+}
 function intentStateForEffect(kind) {
   const states = {
     reservation_acquire: "reservation_intent",
@@ -10888,6 +11781,241 @@ function intentStateForEffect(kind) {
     cancel: "cancel_intent"
   };
   return states[kind];
+}
+function effectMatchesObservation(type, kind) {
+  const observations = {
+    reservation_acquire: "reservation_observed",
+    branch_create: "branch_observed",
+    worktree_create: "worktree_observed",
+    dispatch: "dispatch_observed",
+    worker_collect: "worker_collected",
+    candidate_collect: "candidate_observed",
+    verify: "verification_observed",
+    review_dispatch: "reviewer_observed",
+    review_collect: "review_collected",
+    publish: "publish_observed",
+    integrate: "integrate_observed",
+    reservation_release: "reservation_released",
+    repair: "repair_observed",
+    failure: "failure_observed",
+    timeout: "timeout_observed",
+    park: "park_observed",
+    cancel: "cancel_observed"
+  };
+  return observations[kind] === type;
+}
+function prepareBlockedUnitObservation(state, event) {
+  if (!("unitId" in event) || event.unitId === null || event.type === "effect_ambiguous" || !("effectId" in event) || !("effectKind" in event))
+    return void 0;
+  const unit = state.units[event.unitId];
+  const entry = state.effectJournal.find(
+    (effect2) => effect2.effectId === event.effectId && effect2.unitId === event.unitId && effect2.kind === event.effectKind && (effect2.status === "intended" || effect2.status === "ambiguous")
+  );
+  const recoveredState = intentStateForEffect(event.effectKind);
+  if (unit === void 0 || entry === void 0 || recoveredState === void 0 || !effectMatchesObservation(event.type, event.effectKind))
+    return void 0;
+  if (entry.status === "intended")
+    return unit.state === recoveredState ? state : void 0;
+  if (unit.state !== "blocked") return void 0;
+  return {
+    ...state,
+    units: replaceUnit(state, { ...unit, state: recoveredState }),
+    effectJournal: state.effectJournal.map(
+      (effect2) => effect2.effectId === entry.effectId ? restoreIntended(effect2) : effect2
+    )
+  };
+}
+function restoreIntended(entry) {
+  const { observationHash: _ambiguousObservation, ...intended } = entry;
+  return { ...intended, status: "intended" };
+}
+function markEffectAmbiguous(state, event) {
+  const entry = state.effectJournal.find(
+    (candidate) => candidate.effectId === event.effectId && candidate.unitId === event.unitId && candidate.kind === event.effectKind && candidate.status === "intended"
+  );
+  if (entry === void 0) return void 0;
+  if (entry.unitId === null) {
+    const expectedControllerState = entry.kind === "controller_acquire" ? "acquire_intent" : entry.kind === "controller_release" ? "release_intent" : void 0;
+    if (expectedControllerState !== state.controller.state) return void 0;
+  } else {
+    const unit = state.units[entry.unitId];
+    const expectedUnitState = intentStateForEffect(entry.kind);
+    if (unit === void 0 || unit.state !== expectedUnitState)
+      return void 0;
+  }
+  const blocked = {
+    ...state,
+    state: "blocked",
+    effectJournal: state.effectJournal.map(
+      (candidate) => candidate.effectId === entry.effectId ? {
+        ...candidate,
+        status: "ambiguous",
+        ...event.observationHash === void 0 ? {} : { observationHash: event.observationHash }
+      } : candidate
+    ),
+    ...entry.unitId === null ? {} : {
+      units: replaceUnit(state, {
+        ...state.units[entry.unitId],
+        state: "blocked"
+      })
+    }
+  };
+  if (entry.unitId === null || entry.kind !== "reservation_release")
+    return blocked;
+  return {
+    ...blocked,
+    closedUnitEvidence: updateClosureReleaseEvidence(blocked, entry.unitId)
+  };
+}
+function reduceController(state, event) {
+  let result2;
+  switch (event.type) {
+    case "controller_acquire_intent":
+      if (state.state !== "initializing" || state.controller.state !== "unacquired")
+        return reject(
+          "illegal_transition",
+          "controller acquisition is not legal"
+        );
+      result2 = controllerIntent(
+        state,
+        event,
+        "controller_acquire",
+        "initializing",
+        "acquire_intent"
+      );
+      break;
+    case "controller_acquired":
+      if (state.state !== "initializing" && state.state !== "blocked" || state.controller.state !== "acquire_intent" || event.holder !== state.controller.holder || event.controllerFencingToken !== state.controllerFencingToken || !matchesRecoverableEffect(state, event, null, "controller_acquire"))
+        return badObservation();
+      result2 = {
+        state: settleAmbiguityState(
+          markObserved(state, event.effectId, event.observationHash, {
+            state: "active",
+            controller: { ...state.controller, state: "acquired" }
+          })
+        ),
+        effects: []
+      };
+      break;
+    case "controller_release_intent":
+      if (!canReleaseController(state))
+        return reject(
+          "illegal_transition",
+          "controller release requires closed units and released reservations"
+        );
+      result2 = controllerIntent(
+        state,
+        event,
+        "controller_release",
+        "release_intent",
+        "release_intent"
+      );
+      break;
+    case "controller_released":
+      if (state.state !== "release_intent" && state.state !== "blocked" || state.controller.state !== "release_intent" || !matchesRecoverableEffect(state, event, null, "controller_release"))
+        return badObservation();
+      result2 = {
+        state: settleAmbiguityState(
+          markObserved(state, event.effectId, event.observationHash, {
+            state: "released",
+            controller: { ...state.controller, state: "released" }
+          })
+        ),
+        effects: []
+      };
+      break;
+    default:
+      return exhaustive(event);
+  }
+  return commit(result2.state, event, result2.effects);
+}
+function controllerIntent(state, event, kind, aggregateState, controllerState) {
+  return appendIntent(
+    {
+      ...state,
+      state: aggregateState,
+      controller: { ...state.controller, state: controllerState }
+    },
+    null,
+    event,
+    kind,
+    "slotTransition" in event ? event.slotTransition : void 0
+  );
+}
+function modifyingIntent(state, unit, next, event, kind, unitChanges = {}) {
+  return intent(state, unit, next, event, kind, {
+    activeModifyingUnitIds: [...state.activeModifyingUnitIds, unit.id],
+    ...Object.keys(unitChanges).length === 0 ? {} : { units: replaceUnit(state, { ...unit, ...unitChanges }) }
+  });
+}
+function terminalIntent(state, unit, next, event, kind) {
+  const retainsQualification = state.qualificationOwnerUnitId === unit.id || state.currentReviewerUnitId === unit.id;
+  return intent(state, unit, next, event, kind, {
+    // An active worker or reviewer remains owned until the exact terminal
+    // observation confirms that its role/session target was handled.
+    activeModifyingUnitIds: state.activeModifyingUnitIds,
+    qualificationQueue: retainsQualification ? state.qualificationQueue : state.qualificationQueue.filter((id) => id !== unit.id),
+    integrationQueue: state.integrationQueue.filter((id) => id !== unit.id)
+  });
+}
+function intent(state, unit, next, event, kind, changes = {}) {
+  const changedUnit = changes.units?.[unit.id] ?? unit;
+  const base = {
+    ...state,
+    ...changes,
+    units: {
+      ...changes.units ?? state.units,
+      [unit.id]: { ...changedUnit, state: next, revision: unit.revision + 1 }
+    }
+  };
+  return appendIntent(
+    normalizeOwners(base, changes),
+    unit.id,
+    event,
+    kind
+  );
+}
+function appendIntent(state, unitId, event, kind, slotTransition) {
+  const compacted = compactJournal(state);
+  const effectId = `${event.eventId}:${kind}`;
+  const params = runtimeEffectParams(
+    compacted,
+    unitId,
+    kind,
+    slotTransition
+  );
+  const paramsHash = deriveParamsHash(kind, params);
+  const effect2 = {
+    kind,
+    effectId,
+    unitId,
+    idempotencyKey: event.idempotencyKey,
+    paramsHash,
+    schemaVersion: SCHEMA_VERSION,
+    params
+  };
+  const entry = {
+    effectId,
+    unitId,
+    idempotencyKey: event.idempotencyKey,
+    kind,
+    intentRevision: state.revision,
+    intentCommitment: "0".repeat(64),
+    paramsHash,
+    status: "intended",
+    ...slotTransition === void 0 ? {} : { slotTransition },
+    schemaVersion: SCHEMA_VERSION
+  };
+  entry.intentCommitment = deriveIntentCommitment(entry);
+  const validEffect = validate(RuntimeEffectSchema, effect2);
+  if (!validEffect.ok)
+    throw new Error(
+      `runtime effect construction failed: ${validEffect.errors.join("; ")}`
+    );
+  return {
+    state: { ...compacted, effectJournal: [...compacted.effectJournal, entry] },
+    effects: [effect2]
+  };
 }
 function runtimeEffectParams(state, unitId, kind, slotTransition) {
   if (kind === "controller_acquire")
@@ -11040,6 +12168,216 @@ function required(value, name, kind) {
   if (value === void 0) throw new Error(`${kind} lacks ${name}`);
   return value;
 }
+function observedEffect2(state, unitId, kind) {
+  const entry = [...state.effectJournal].reverse().find(
+    (candidate) => candidate.unitId === unitId && candidate.kind === kind && candidate.status === "observed"
+  );
+  if (entry === void 0 || entry.observationHash === void 0)
+    throw new Error(`missing observed ${kind} lineage for ${unitId}`);
+  return entry;
+}
+function closureReservations(state, unit) {
+  return unit.reservationIds.map((reservationId) => {
+    const reservation = state.reservations[reservationId];
+    if (reservation === void 0)
+      throw new Error(`missing reservation ${reservationId}`);
+    return {
+      id: reservation.id,
+      namespace: reservation.namespace,
+      resource: reservation.resource,
+      acquire: observedEffect2(state, unit.id, "reservation_acquire")
+    };
+  });
+}
+function sessionClosureBindings(unit) {
+  return {
+    ...unit.workerSessionId === void 0 ? {} : {
+      worker: {
+        sessionId: unit.workerSessionId,
+        requestedModel: required(
+          unit.workerRequestedModel,
+          "worker model",
+          "dispatch"
+        ),
+        returnedModel: required(
+          unit.workerReturnedModel,
+          "worker returned model",
+          "dispatch"
+        ),
+        promptHash: required(
+          unit.workerPromptHash,
+          "worker prompt",
+          "dispatch"
+        )
+      }
+    },
+    ...unit.reviewerSessionId === void 0 ? {} : {
+      reviewer: {
+        sessionId: unit.reviewerSessionId,
+        requestedModel: required(
+          unit.reviewerRequestedModel,
+          "reviewer model",
+          "review_dispatch"
+        ),
+        returnedModel: required(
+          unit.reviewerReturnedModel,
+          "reviewer returned model",
+          "review_dispatch"
+        ),
+        promptHash: required(
+          unit.reviewPromptHash,
+          "review prompt",
+          "review_dispatch"
+        )
+      }
+    }
+  };
+}
+function successfulClosureFacts(unit) {
+  return {
+    candidate: {
+      headOid: required(unit.candidateHead, "candidate head", "integrate"),
+      treeOid: required(unit.candidateTree, "candidate tree", "integrate")
+    },
+    verification: {
+      baseOid: required(
+        unit.verificationBaseOid,
+        "verification base",
+        "integrate"
+      ),
+      headOid: required(
+        unit.verificationHeadOid,
+        "verification head",
+        "integrate"
+      ),
+      treeOid: required(
+        unit.verificationTree,
+        "verification tree",
+        "integrate"
+      ),
+      evidenceHash: required(
+        unit.verificationEvidenceHash,
+        "verification evidence",
+        "integrate"
+      ),
+      commands: required(
+        unit.verificationCommands,
+        "verification commands",
+        "integrate"
+      )
+    },
+    review: {
+      baseOid: required(unit.reviewBaseOid, "review base", "integrate"),
+      headOid: required(unit.reviewHeadOid, "review head", "integrate"),
+      treeOid: required(unit.reviewTree, "review tree", "integrate"),
+      responseHash: required(
+        unit.approvalResponseHash,
+        "approval response",
+        "integrate"
+      )
+    }
+  };
+}
+function closureEvidenceFor(state, unit) {
+  const base = {
+    unitId: unit.id,
+    unitOrdinal: unit.ordinal,
+    baseOid: unit.baseOid,
+    ...unit.branchRef === void 0 ? {} : { branchRef: unit.branchRef },
+    ...unit.worktreePath === void 0 ? {} : { worktreePath: unit.worktreePath },
+    ...sessionClosureBindings(unit),
+    reservations: closureReservations(state, unit)
+  };
+  switch (unit.state) {
+    case "landed":
+      return {
+        ...base,
+        ...successfulClosureFacts(unit),
+        outcome: "landed",
+        landedOid: required(unit.landedOid, "landed OID", "integrate"),
+        terminalEffect: observedEffect2(state, unit.id, "integrate")
+      };
+    case "handoff": {
+      const success2 = successfulClosureFacts(unit);
+      if (unit.openPullRequest !== void 0)
+        return {
+          ...base,
+          ...success2,
+          outcome: "pr_handoff",
+          publishedHeadOid: required(
+            unit.publishedHeadOid,
+            "published head",
+            "publish"
+          ),
+          pullRequest: unit.openPullRequest,
+          terminalEffect: observedEffect2(state, unit.id, "publish")
+        };
+      return {
+        ...base,
+        ...success2,
+        outcome: "branch_handoff",
+        publishedHeadOid: required(
+          unit.publishedHeadOid,
+          "published head",
+          "publish"
+        ),
+        terminalEffect: observedEffect2(state, unit.id, "publish")
+      };
+    }
+    case "failed":
+    case "timed_out":
+    case "parked":
+    case "cancelled": {
+      const terminalKind = {
+        failed: "failure",
+        timed_out: "timeout",
+        parked: "park",
+        cancelled: "cancel"
+      };
+      return {
+        ...base,
+        outcome: unit.state,
+        terminalEffect: unit.state === "failed" && !state.effectJournal.some(
+          (entry) => entry.unitId === unit.id && entry.kind === "failure" && entry.status === "observed"
+        ) ? observedEffect2(state, unit.id, "worker_collect") : observedEffect2(state, unit.id, terminalKind[unit.state]),
+        ...unit.workerResult === void 0 ? {} : { workerResult: unit.workerResult },
+        ...unit.repairContext === void 0 ? {} : { repairContext: unit.repairContext },
+        ...unit.candidateHead === void 0 || unit.candidateTree === void 0 ? {} : {
+          candidate: {
+            headOid: unit.candidateHead,
+            treeOid: unit.candidateTree
+          }
+        }
+      };
+    }
+    default:
+      throw new Error(
+        `cannot close non-terminal unit ${unit.id}/${unit.state}`
+      );
+  }
+}
+function recordClosureEvidence(state, unit) {
+  const evidence = decodeClosedUnitEvidence(state.closedUnitEvidence);
+  if (evidence === void 0)
+    throw new Error("closed unit evidence ledger is malformed");
+  return encodeClosedUnitEvidence({
+    ...evidence,
+    [unit.id]: closureEvidenceFor(state, unit)
+  });
+}
+function removeClosureEvidence(state, unitId) {
+  const evidence = decodeClosedUnitEvidence(state.closedUnitEvidence);
+  if (evidence === void 0)
+    throw new Error("closed unit evidence ledger is malformed");
+  const next = { ...evidence };
+  delete next[unitId];
+  return { ...state, closedUnitEvidence: encodeClosedUnitEvidence(next) };
+}
+function invalidClosedUnitEvidenceCommitment() {
+  return sha256(
+    canonicalJson({ domain: "sce.protocol.closed-evidence.invalid.v1" })
+  );
+}
 function closedUnitEvidenceCommitment(dense) {
   if (Object.keys(dense.u).length === 0) return "0".repeat(64);
   return sha256(
@@ -11048,6 +12386,121 @@ function closedUnitEvidenceCommitment(dense) {
       evidence: dense
     })
   );
+}
+function denseJournal(entry) {
+  return [
+    entry.effectId,
+    entry.unitId,
+    entry.idempotencyKey,
+    entry.kind,
+    entry.intentRevision,
+    entry.intentCommitment,
+    entry.paramsHash,
+    entry.status,
+    entry.observationHash ?? null,
+    entry.schemaVersion
+  ];
+}
+function denseBinding(binding) {
+  return binding === void 0 ? null : [
+    binding.sessionId,
+    binding.requestedModel,
+    binding.returnedModel,
+    binding.promptHash
+  ];
+}
+function denseClosureRecord(closure) {
+  const common = [
+    closure.outcome,
+    closure.unitId,
+    closure.unitOrdinal,
+    closure.baseOid,
+    closure.repairCount ?? null,
+    closure.branchRef ?? null,
+    closure.worktreePath ?? null,
+    denseBinding(closure.worker),
+    denseBinding(closure.reviewer),
+    closure.reservations.map((reservation) => [
+      reservation.id,
+      reservation.namespace,
+      reservation.resource,
+      denseJournal(reservation.acquire),
+      reservation.release === void 0 ? null : denseJournal(reservation.release)
+    ]),
+    denseJournal(closure.terminalEffect)
+  ];
+  if (closure.outcome === "landed" || closure.outcome === "branch_handoff" || closure.outcome === "pr_handoff") {
+    const success2 = [
+      [closure.candidate.headOid, closure.candidate.treeOid],
+      [
+        closure.verification.baseOid,
+        closure.verification.headOid,
+        closure.verification.treeOid,
+        closure.verification.evidenceHash,
+        closure.verification.commands
+      ],
+      [
+        closure.review.baseOid,
+        closure.review.headOid,
+        closure.review.treeOid,
+        closure.review.responseHash
+      ]
+    ];
+    if (closure.outcome === "landed")
+      return [...common, [closure.landedOid, ...success2]];
+    if (closure.outcome === "branch_handoff")
+      return [...common, [closure.publishedHeadOid, ...success2]];
+    return [
+      ...common,
+      [
+        closure.publishedHeadOid,
+        [
+          closure.pullRequest.providerPrId,
+          closure.pullRequest.url ?? null,
+          closure.pullRequest.state,
+          closure.pullRequest.baseRef,
+          closure.pullRequest.baseOid,
+          closure.pullRequest.remoteHeadOid
+        ],
+        ...success2
+      ]
+    ];
+  }
+  return [
+    ...common,
+    [
+      closure.workerResult === void 0 ? null : [
+        closure.workerResult.status,
+        closure.workerResult.summary,
+        closure.workerResult.residualRisks,
+        closure.workerResult.suggestedFollowUps
+      ],
+      closure.repairContext === void 0 ? null : [
+        closure.repairContext.baseOid,
+        closure.repairContext.headOid ?? null,
+        closure.repairContext.treeOid ?? null,
+        closure.repairContext.responseHash,
+        closure.repairContext.rationale,
+        closure.repairContext.findings.map((finding) => [
+          finding.id,
+          finding.severity,
+          finding.detail
+        ])
+      ],
+      closure.candidate === void 0 ? null : [closure.candidate.headOid, closure.candidate.treeOid]
+    ]
+  ];
+}
+function denseClosureLedger(evidence) {
+  return {
+    v: 1,
+    u: Object.fromEntries(
+      Object.entries(evidence).map(([id, closure]) => [
+        id,
+        denseClosureRecord(closure)
+      ])
+    )
+  };
 }
 function tuple(value, length) {
   return Array.isArray(value) && value.length === length ? value : void 0;
@@ -11261,6 +12714,16 @@ function expandDenseClosure(value) {
     ...candidate === void 0 ? {} : { candidate: { headOid: candidate[0], treeOid: candidate[1] } }
   };
 }
+function encodeClosedUnitEvidence(evidence) {
+  if (Object.keys(evidence).length === 0) return "";
+  const dense = denseClosureLedger(evidence);
+  return deflateRawSync(
+    Buffer.from(canonicalJson(dense), "utf8"),
+    {
+      level: 9
+    }
+  ).toString("base64");
+}
 function decodeClosedUnitEvidenceDetails(encoded) {
   if (encoded === "") {
     const dense2 = { v: 1, u: {} };
@@ -11285,15 +12748,15 @@ function decodeClosedUnitEvidenceDetails(encoded) {
     return void 0;
   }
   if (decoded.length > LIMITS.envelopeBytes) return void 0;
-  const text3 = decoded.toString("utf8");
-  if (!Buffer.from(text3, "utf8").equals(decoded)) return void 0;
+  const text4 = decoded.toString("utf8");
+  if (!Buffer.from(text4, "utf8").equals(decoded)) return void 0;
   let parsed;
   try {
-    parsed = JSON.parse(text3);
+    parsed = JSON.parse(text4);
   } catch {
     return void 0;
   }
-  if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object" || canonicalJson(parsed) !== text3)
+  if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object" || canonicalJson(parsed) !== text4)
     return void 0;
   const parsedDense = parsed;
   if (Object.keys(parsedDense).length !== 2 || parsedDense.v !== 1 || parsedDense.u === null || Array.isArray(parsedDense.u) || typeof parsedDense.u !== "object")
@@ -11311,6 +12774,289 @@ function decodeClosedUnitEvidenceDetails(encoded) {
     evidence,
     commitment: closedUnitEvidenceCommitment(dense)
   };
+}
+function decodeClosedUnitEvidence(encoded) {
+  return decodeClosedUnitEvidenceDetails(encoded)?.evidence;
+}
+function updateClosureReleaseEvidence(state, unitId) {
+  const evidence = decodeClosedUnitEvidence(state.closedUnitEvidence);
+  const record2 = evidence?.[unitId];
+  const release = [...state.effectJournal].reverse().find(
+    (entry) => entry.unitId === unitId && entry.kind === "reservation_release"
+  );
+  if (evidence === void 0 || record2 === void 0 || release === void 0)
+    throw new Error(`missing closure release lineage for ${unitId}`);
+  return encodeClosedUnitEvidence({
+    ...evidence,
+    [unitId]: {
+      ...record2,
+      reservations: record2.reservations.map((reservation) => ({
+        ...reservation,
+        release
+      }))
+    }
+  });
+}
+function closeUnitAfterRelease(state, unitId) {
+  const closedUnit = state.units[unitId];
+  if (closedUnit === void 0)
+    throw new Error(`missing released unit ${unitId}`);
+  const releasedEvidence = updateClosureReleaseEvidence(state, unitId);
+  const evidence = decodeClosedUnitEvidence(releasedEvidence);
+  const record2 = evidence?.[unitId];
+  if (evidence === void 0 || record2 === void 0)
+    throw new Error(`missing final closure evidence for ${unitId}`);
+  const closedUnitEvidence = encodeClosedUnitEvidence({
+    ...evidence,
+    [unitId]: {
+      ...record2,
+      repairCount: closedUnit.repairCount
+    }
+  });
+  const units = { ...state.units };
+  delete units[unitId];
+  const reservations = Object.fromEntries(
+    Object.entries(state.reservations).filter(
+      ([, reservation]) => reservation.unitId !== unitId
+    )
+  );
+  return {
+    ...state,
+    units,
+    reservations,
+    wave: {
+      ...state.wave,
+      unitIds: state.wave.unitIds.filter((id) => id !== unitId)
+    },
+    closedUnitEvidence
+  };
+}
+function persistTerminalClosureEvidence(step, unitId) {
+  const unit = step.state.units[unitId];
+  if (unit === void 0) throw new Error(`missing terminal unit ${unitId}`);
+  return {
+    ...step,
+    state: {
+      ...step.state,
+      closedUnitEvidence: recordClosureEvidence(step.state, unit)
+    }
+  };
+}
+function compactJournal(state) {
+  const anchored = new Set(
+    Object.values(state.reservations).flatMap((reservation) => [
+      reservation.state === "released" ? void 0 : reservation.acquireEffectId,
+      reservation.state === "released" ? reservation.releaseEffectId : void 0
+    ]).filter((effectId) => effectId !== void 0)
+  );
+  const retained = state.effectJournal.filter(
+    (entry) => entry.status !== "observed" || anchored.has(entry.effectId)
+  );
+  const compactedEntries = state.effectJournal.filter(
+    (entry) => entry.status === "observed" && !anchored.has(entry.effectId)
+  );
+  const compacted = state.effectJournal.length - retained.length;
+  return compacted === 0 ? state : {
+    ...state,
+    effectJournal: retained,
+    journalCheckpoint: {
+      revision: state.revision,
+      commitment: deriveJournalCommitment(
+        state.journalCheckpoint.commitment,
+        compactedEntries
+      ),
+      compactedEffects: state.journalCheckpoint.compactedEffects + compacted,
+      compactedEvents: state.journalCheckpoint.compactedEvents,
+      compactedIdempotencyKeys: state.journalCheckpoint.compactedIdempotencyKeys
+    }
+  };
+}
+function observe(state, unit, next, event, unitChanges = {}, aggregateChanges = {}, replacementUnit) {
+  const nextUnit = {
+    ...replacementUnit ?? { ...unit, ...unitChanges },
+    state: next,
+    revision: unit.revision + 1
+  };
+  const nextState = markObserved(
+    {
+      ...state,
+      ...aggregateChanges,
+      units: replaceUnit(state, nextUnit)
+    },
+    event.effectId,
+    event.observationHash
+  );
+  return {
+    state: settleAmbiguityState(normalizeOwners(nextState, aggregateChanges)),
+    effects: []
+  };
+}
+function markObserved(state, effectId, observationHash2, changes = {}) {
+  return {
+    ...state,
+    ...changes,
+    effectJournal: state.effectJournal.map(
+      (entry) => entry.effectId === effectId ? { ...entry, status: "observed", observationHash: observationHash2 } : entry
+    )
+  };
+}
+function normalizeOwners(state, changes) {
+  const next = { ...state };
+  if (changes.qualificationOwnerUnitId === null)
+    delete next.qualificationOwnerUnitId;
+  if (changes.integrationOwnerUnitId === null)
+    delete next.integrationOwnerUnitId;
+  if (changes.currentReviewerUnitId === null) delete next.currentReviewerUnitId;
+  return next;
+}
+function settleAmbiguityState(state) {
+  const hasAmbiguity = state.effectJournal.some(
+    (entry) => entry.status === "ambiguous"
+  );
+  if (hasAmbiguity && state.state !== "blocked")
+    return { ...state, state: "blocked" };
+  if (!hasAmbiguity && state.state === "blocked")
+    return { ...state, state: "active" };
+  return state;
+}
+function replaceUnit(state, unit) {
+  return { ...state.units, [unit.id]: unit };
+}
+function matchesIntended(state, event, unitId, kind) {
+  return state.effectJournal.some(
+    (entry) => entry.effectId === event.effectId && entry.unitId === unitId && entry.kind === kind && entry.kind === event.effectKind && entry.status === "intended"
+  );
+}
+function matchesRecoverableEffect(state, event, unitId, kind) {
+  return state.effectJournal.some(
+    (entry) => entry.effectId === event.effectId && entry.unitId === unitId && entry.kind === kind && entry.kind === event.effectKind && (entry.status === "intended" || entry.status === "ambiguous")
+  );
+}
+function badObservation() {
+  return reject(
+    "illegal_transition",
+    "observation does not match an intended effect id, unit, kind, and status"
+  );
+}
+function workerSession(event) {
+  return {
+    workerSessionId: event.sessionId,
+    workerRequestedModel: event.requestedModel,
+    workerReturnedModel: event.returnedModel,
+    workerPromptHash: event.promptHash
+  };
+}
+function reviewerSession(event) {
+  return {
+    reviewerSessionId: event.sessionId,
+    reviewerRequestedModel: event.requestedModel,
+    reviewerReturnedModel: event.returnedModel,
+    reviewPromptHash: event.promptHash
+  };
+}
+function reviewJudgmentError(unit, judgment, revision3) {
+  if (judgment.role !== "reviewer" || judgment.kind !== "review_verdict" || judgment.unitId !== unit.id)
+    return "review judgment has wrong role, kind, or unit";
+  if (judgment.aggregateRevision !== revision3 || judgment.sessionId !== unit.reviewerSessionId || judgment.requestedModel !== unit.reviewerRequestedModel || judgment.returnedModel !== unit.reviewerReturnedModel || judgment.promptHash !== unit.reviewPromptHash)
+    return "review judgment is not bound to the dispatched reviewer session, model, prompt, and revision";
+  if (judgment.baseOid !== unit.verificationBaseOid || judgment.headOid !== unit.candidateHead || judgment.treeOid !== unit.candidateTree)
+    return "review judgment is not bound to the verified base, head, and tree";
+  if (judgment.decision === "approve" && judgment.findings.some((finding) => finding.severity === "blocking"))
+    return "approval cannot contain blocking findings";
+  return void 0;
+}
+function validRepairJudgment(state, unit, judgment, revision3) {
+  const context = unit.repairContext;
+  return context !== void 0 && judgment.role === "controller" && judgment.kind === "repair_disposition" && judgment.unitId === unit.id && judgment.aggregateRevision === revision3 && judgment.sessionId === state.controller.incarnationId && judgment.requestedModel === state.controller.requestedModel && judgment.returnedModel === state.controller.returnedModel && judgment.factOid === (context.headOid ?? context.baseOid) && judgment.currentEvidenceHash === context.responseHash && judgment.findingsContextHash === deriveRepairContextHash(context) && judgment.promptHash === deriveRepairJudgmentPromptHash(state, unit, judgment) && judgment.responseHash === deriveRepairJudgmentResponseHash(judgment) && (context.headOid === void 0 || context.headOid === unit.candidateHead) && judgment.decision === "repair";
+}
+function failureRepairContext(unit, responseHash, rationale) {
+  if (unit.candidateHead === void 0 || unit.candidateTree === void 0)
+    return {};
+  return {
+    repairContext: {
+      baseOid: unit.verificationBaseOid ?? unit.baseOid,
+      headOid: unit.candidateHead,
+      treeOid: unit.candidateTree,
+      responseHash,
+      rationale,
+      findings: [
+        { id: "runtime-failure", severity: "blocking", detail: rationale }
+      ]
+    }
+  };
+}
+function isCurrentApproval(unit) {
+  return unit.state === "approved" && unit.reviewBaseOid === unit.baseOid && unit.reviewHeadOid === unit.candidateHead && unit.reviewTree === unit.candidateTree && unit.approvalResponseHash !== void 0;
+}
+function hasCurrentApproval(unit) {
+  return unit.reviewBaseOid === unit.baseOid && unit.reviewHeadOid === unit.candidateHead && unit.reviewTree === unit.candidateTree && unit.approvalResponseHash !== void 0;
+}
+function insertSorted(values, value) {
+  return values.includes(value) ? [...values] : [...values, value].sort();
+}
+function updateReservations(state, unitId, next, effectId) {
+  return Object.fromEntries(
+    Object.entries(state.reservations).map(([id, reservation]) => [
+      id,
+      reservation.unitId !== unitId ? reservation : {
+        ...reservation,
+        state: next,
+        ...next === "reserved" && effectId !== void 0 ? { acquireEffectId: effectId } : {},
+        ...next === "released" && effectId !== void 0 ? { releaseEffectId: effectId } : {}
+      }
+    ])
+  );
+}
+function clearUnitOwners(state, unitId) {
+  return {
+    activeModifyingUnitIds: state.activeModifyingUnitIds.filter(
+      (id) => id !== unitId
+    ),
+    qualificationQueue: state.qualificationQueue.filter((id) => id !== unitId),
+    integrationQueue: state.integrationQueue.filter((id) => id !== unitId),
+    ...state.qualificationOwnerUnitId === unitId ? { qualificationOwnerUnitId: null } : {},
+    ...state.integrationOwnerUnitId === unitId ? { integrationOwnerUnitId: null } : {},
+    ...state.currentReviewerUnitId === unitId ? { currentReviewerUnitId: null } : {}
+  };
+}
+function canReleaseController(state) {
+  return state.controller.state === "acquired" && state.activeModifyingUnitIds.length === 0 && state.qualificationOwnerUnitId === void 0 && state.integrationOwnerUnitId === void 0 && state.currentReviewerUnitId === void 0 && Object.keys(state.units).length === 0 && Object.keys(state.reservations).length === 0;
+}
+function commit(state, event, effects) {
+  const eventIds = [...state.processedEventIds, event.eventId];
+  const idempotencyKeys = "idempotencyKey" in event ? [...state.processedIdempotencyKeys, event.idempotencyKey] : state.processedIdempotencyKeys;
+  const compactedEvents = Math.max(0, eventIds.length - 256);
+  const compactedIdempotencyKeys = Math.max(0, idempotencyKeys.length - 256);
+  const uncommittedState = {
+    ...state,
+    revision: state.revision + 1,
+    processedEventIds: eventIds.slice(-256),
+    processedIdempotencyKeys: idempotencyKeys.slice(-256),
+    journalCheckpoint: {
+      ...state.journalCheckpoint,
+      revision: compactedEvents > 0 || compactedIdempotencyKeys > 0 ? state.revision + 1 : state.journalCheckpoint.revision,
+      compactedEvents: state.journalCheckpoint.compactedEvents + compactedEvents,
+      compactedIdempotencyKeys: state.journalCheckpoint.compactedIdempotencyKeys + compactedIdempotencyKeys
+    }
+  };
+  const closedEvidenceDetails = decodeClosedUnitEvidenceDetails(
+    uncommittedState.closedUnitEvidence
+  );
+  const nextState = {
+    ...uncommittedState,
+    closedUnitEvidenceCommitment: closedEvidenceDetails?.commitment ?? invalidClosedUnitEvidenceCommitment(),
+    journalCommitment: deriveJournalCommitment(
+      uncommittedState.journalCheckpoint.commitment,
+      uncommittedState.effectJournal
+    )
+  };
+  const schema = validate(RepositoryRunSchema, nextState);
+  if (!schema.ok) return reject("invariant", schema.errors.join("; "));
+  const errors = runInvariantErrorsWithClosedEvidence(
+    nextState,
+    closedEvidenceDetails
+  );
+  return errors.length ? reject("invariant", errors.join("; ")) : { ok: true, nextState, effects };
 }
 function runInvariantErrors(state) {
   return runInvariantErrorsWithClosedEvidence(
@@ -11422,7 +13168,7 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
     liveOrdinals.add(unit.ordinal);
     const closure = closedEvidence?.[unit.id];
     const ambiguousRelease = state.effectJournal.some(
-      (effect) => effect.unitId === unit.id && effect.kind === "reservation_release" && effect.status === "ambiguous"
+      (effect2) => effect2.unitId === unit.id && effect2.kind === "reservation_release" && effect2.status === "ambiguous"
     );
     const blockedReleaseRecovery = unit.state === "blocked" && ambiguousRelease;
     if (liveTerminalStates.has(unit.state) && closure === void 0)
@@ -11476,7 +13222,7 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
     for (const reservation of closure.reservations) {
       const unit = state.units[id];
       const expectedReleaseStatus = unit === void 0 ? "observed" : unit.state === "reservation_release_intent" ? "intended" : unit.state === "blocked" && state.effectJournal.some(
-        (effect) => effect.unitId === id && effect.kind === "reservation_release" && effect.status === "ambiguous"
+        (effect2) => effect2.unitId === id && effect2.kind === "reservation_release" && effect2.status === "ambiguous"
       ) ? "ambiguous" : void 0;
       if (reservation.acquire.intentCommitment !== deriveIntentCommitment(reservation.acquire))
         errors.push(
@@ -11524,46 +13270,46 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
   ))
     errors.push("journal commitment does not match exact entries");
   const hasAmbiguousEffect = state.effectJournal.some(
-    (effect) => effect.status === "ambiguous"
+    (effect2) => effect2.status === "ambiguous"
   );
   if (hasAmbiguousEffect && state.state !== "blocked")
     errors.push("ambiguous effects require a blocked aggregate");
   if (!hasAmbiguousEffect && state.state === "blocked")
     errors.push("blocked aggregate lacks an ambiguous effect");
-  for (const effect of state.effectJournal) {
-    if (effectIds.has(effect.effectId))
-      errors.push(`duplicate effect id ${effect.effectId}`);
-    effectIds.add(effect.effectId);
-    if (idempotency.has(effect.idempotencyKey))
-      errors.push(`duplicate idempotency key ${effect.idempotencyKey}`);
-    idempotency.add(effect.idempotencyKey);
-    if (effect.unitId !== null && state.units[effect.unitId] === void 0 && (closedEvidence?.[effect.unitId] === void 0 || effect.status !== "observed"))
-      errors.push(`effect ${effect.effectId} has unknown unit`);
-    if (effect.intentCommitment !== deriveIntentCommitment(effect))
-      errors.push(`effect ${effect.effectId} has an invalid intent commitment`);
-    if (effect.status === "intended" && effect.observationHash !== void 0)
-      errors.push(`intended effect ${effect.effectId} has an observation`);
-    if (effect.status === "observed" && effect.observationHash === void 0)
-      errors.push(`observed effect ${effect.effectId} has no observation`);
-    if (effect.status === "intended" || effect.status === "ambiguous")
-      addUnresolved(effect);
-    if (effect.unitId !== null && (effect.status === "intended" || effect.status === "ambiguous") && !waveIds.has(effect.unitId))
+  for (const effect2 of state.effectJournal) {
+    if (effectIds.has(effect2.effectId))
+      errors.push(`duplicate effect id ${effect2.effectId}`);
+    effectIds.add(effect2.effectId);
+    if (idempotency.has(effect2.idempotencyKey))
+      errors.push(`duplicate idempotency key ${effect2.idempotencyKey}`);
+    idempotency.add(effect2.idempotencyKey);
+    if (effect2.unitId !== null && state.units[effect2.unitId] === void 0 && (closedEvidence?.[effect2.unitId] === void 0 || effect2.status !== "observed"))
+      errors.push(`effect ${effect2.effectId} has unknown unit`);
+    if (effect2.intentCommitment !== deriveIntentCommitment(effect2))
+      errors.push(`effect ${effect2.effectId} has an invalid intent commitment`);
+    if (effect2.status === "intended" && effect2.observationHash !== void 0)
+      errors.push(`intended effect ${effect2.effectId} has an observation`);
+    if (effect2.status === "observed" && effect2.observationHash === void 0)
+      errors.push(`observed effect ${effect2.effectId} has no observation`);
+    if (effect2.status === "intended" || effect2.status === "ambiguous")
+      addUnresolved(effect2);
+    if (effect2.unitId !== null && (effect2.status === "intended" || effect2.status === "ambiguous") && !waveIds.has(effect2.unitId))
       errors.push(
-        `unresolved effect ${effect.effectId} is outside the current wave`
+        `unresolved effect ${effect2.effectId} is outside the current wave`
       );
-    if (effect.status === "intended" || effect.status === "ambiguous") {
+    if (effect2.status === "intended" || effect2.status === "ambiguous") {
       try {
         const expectedParams = runtimeEffectParams(
           state,
-          effect.unitId,
-          effect.kind,
-          effect.slotTransition
+          effect2.unitId,
+          effect2.kind,
+          effect2.slotTransition
         );
-        if (effect.paramsHash !== deriveParamsHash(effect.kind, expectedParams))
-          errors.push(`effect ${effect.effectId} has an invalid params hash`);
+        if (effect2.paramsHash !== deriveParamsHash(effect2.kind, expectedParams))
+          errors.push(`effect ${effect2.effectId} has an invalid params hash`);
       } catch {
         errors.push(
-          `effect ${effect.effectId} lacks reconstructable parameters`
+          `effect ${effect2.effectId} lacks reconstructable parameters`
         );
       }
     }
@@ -11747,12 +13493,12 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
     const effectId = reservation.state === "released" ? reservation.releaseEffectId : reservation.acquireEffectId;
     const kind = reservation.state === "released" ? "reservation_release" : "reservation_acquire";
     if (["reserved", "released"].includes(reservation.state) && (effectId === void 0 || !state.effectJournal.some(
-      (effect) => effect.effectId === effectId && effect.unitId === reservation.unitId && effect.kind === kind && effect.status === "observed"
+      (effect2) => effect2.effectId === effectId && effect2.unitId === reservation.unitId && effect2.kind === kind && effect2.status === "observed"
     )))
       errors.push(`reserved ${id} has no exact acquisition journal lineage`);
   }
   const controllerUnresolved = state.effectJournal.filter(
-    (effect) => effect.unitId === null && (effect.status === "intended" || effect.status === "ambiguous")
+    (effect2) => effect2.unitId === null && (effect2.status === "intended" || effect2.status === "ambiguous")
   );
   const expectedControllerKind = state.controller.state === "acquire_intent" ? "controller_acquire" : state.controller.state === "release_intent" ? "controller_release" : void 0;
   if (expectedControllerKind === void 0 && controllerUnresolved.length !== 0 || expectedControllerKind !== void 0 && (controllerUnresolved.length !== 1 || controllerUnresolved[0]?.kind !== expectedControllerKind))
@@ -11857,6 +13603,15 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
     errors.push("released controller has non-released aggregate");
   return errors;
 }
+function illegal(unit, eventType) {
+  return reject(
+    "illegal_transition",
+    `${eventType} is not legal while ${unit.id} is ${unit.state}`
+  );
+}
+function reject(code, reason) {
+  return { ok: false, code, reason };
+}
 function exhaustive(value) {
   throw new Error(`Unhandled protocol event: ${JSON.stringify(value)}`);
 }
@@ -11874,7 +13629,7 @@ function legalActions(stateInput) {
   if (state.controller.state !== "acquired") return [];
   return sortActions(
     Object.values(state.units).filter((unit) => state.wave.unitIds.includes(unit.id)).flatMap((unit) => actionsForUnit(state, unit)).filter(
-      (action) => (action.mode !== "emit" || action.effectKind === void 0 || effectAllowed(state, action.effectKind) && (action.unitId === void 0 || !hasUnresolvedUnitEffect(state, action.unitId))) && (action.mode !== "record" || pendingUnitEffect(state, action))
+      (action) => (action.mode !== "emit" || action.effectKind === void 0 || effectAllowed2(state, action.effectKind) && (action.unitId === void 0 || !hasUnresolvedUnitEffect2(state, action.unitId))) && (action.mode !== "record" || pendingUnitEffect(state, action))
     )
   );
 }
@@ -11902,13 +13657,13 @@ var observationForEffect = {
 function ambiguityRecoveryActions(state) {
   return sortActions(
     state.effectJournal.filter(
-      (effect) => effect.status === "intended" || effect.status === "ambiguous"
-    ).map((effect) => ({
-      effectId: effect.effectId,
-      effectKind: effect.kind,
+      (effect2) => effect2.status === "intended" || effect2.status === "ambiguous"
+    ).map((effect2) => ({
+      effectId: effect2.effectId,
+      effectKind: effect2.kind,
       mode: "record",
-      type: observationForEffect[effect.kind],
-      ...effect.unitId === null ? {} : { unitId: effect.unitId }
+      type: observationForEffect[effect2.kind],
+      ...effect2.unitId === null ? {} : { unitId: effect2.unitId }
     }))
   );
 }
@@ -11941,7 +13696,7 @@ function actionsForController(state) {
     ] : [];
   }
   if (state.controller.state === "released") return [];
-  if (canReleaseController(state))
+  if (canReleaseController2(state))
     return [
       controllerAction(
         "controller_release_intent",
@@ -12018,11 +13773,11 @@ function lifecycleActions(state, unit) {
     case "review_collect_intent":
       return state.currentReviewerUnitId === unit.id ? [unitAction(unit, "review_collected", "record", "review_collect")] : [];
     case "approved":
-      return isCurrentApproval(unit) && state.qualificationOwnerUnitId === unit.id ? state.completionBoundary === "local-integration" ? [unitAction(unit, "integrate_intent", "emit", "integrate")] : [unitAction(unit, "publish_intent", "emit", "publish")] : [];
+      return isCurrentApproval2(unit) && state.qualificationOwnerUnitId === unit.id ? state.completionBoundary === "local-integration" ? [unitAction(unit, "integrate_intent", "emit", "integrate")] : [unitAction(unit, "publish_intent", "emit", "publish")] : [];
     case "publish_intent":
       return [unitAction(unit, "publish_observed", "record", "publish")];
     case "published":
-      return hasCurrentApproval(unit) && state.completionBoundary === "remote-integration" && state.qualificationOwnerUnitId === unit.id && (state.integrationOwnerUnitId === void 0 || state.integrationOwnerUnitId === unit.id) && state.integrationQueue[0] === unit.id ? [unitAction(unit, "integrate_intent", "emit", "integrate")] : [];
+      return hasCurrentApproval2(unit) && state.completionBoundary === "remote-integration" && state.qualificationOwnerUnitId === unit.id && (state.integrationOwnerUnitId === void 0 || state.integrationOwnerUnitId === unit.id) && state.integrationQueue[0] === unit.id ? [unitAction(unit, "integrate_intent", "emit", "integrate")] : [];
     case "integrate_intent":
       return state.integrationOwnerUnitId === unit.id ? [unitAction(unit, "integrate_observed", "record", "integrate")] : [];
     case "landed":
@@ -12081,18 +13836,18 @@ function unitAction(unit, type, mode, effectKind) {
 function repairIsEligible(state, unit) {
   return unit.repairContext !== void 0 && unit.branchRef !== void 0 && unit.worktreePath !== void 0 && (unit.repairContext.headOid === void 0 || unit.repairContext.headOid === unit.candidateHead) && unit.repairCount < 16 && state.activeModifyingUnitIds.length < 3;
 }
-function isCurrentApproval(unit) {
+function isCurrentApproval2(unit) {
   return unit.state === "approved" && unit.reviewBaseOid === unit.baseOid && unit.reviewHeadOid === unit.candidateHead && unit.reviewTree === unit.candidateTree && unit.approvalResponseHash !== void 0;
 }
-function hasCurrentApproval(unit) {
+function hasCurrentApproval2(unit) {
   return unit.reviewBaseOid === unit.baseOid && unit.reviewHeadOid === unit.candidateHead && unit.reviewTree === unit.candidateTree && unit.approvalResponseHash !== void 0;
 }
-function canReleaseController(state) {
+function canReleaseController2(state) {
   return state.controller.state === "acquired" && state.activeModifyingUnitIds.length === 0 && state.qualificationOwnerUnitId === void 0 && state.integrationOwnerUnitId === void 0 && state.currentReviewerUnitId === void 0 && Object.values(state.units).every((unit) => unit.state === "closed") && Object.values(state.reservations).every(
     (reservation) => reservation.state === "released"
   );
 }
-function effectAllowed(state, kind) {
+function effectAllowed2(state, kind) {
   if (kind === "publish")
     return state.completionBoundary === "branch-handoff" && state.authorityProfile !== "local-change-only" || state.completionBoundary === "pr-handoff" && ["open-pr", "integrate"].includes(state.authorityProfile) || state.completionBoundary === "remote-integration" && state.authorityProfile === "integrate";
   if (kind !== "integrate") return true;
@@ -12100,17 +13855,17 @@ function effectAllowed(state, kind) {
 }
 function pendingUnitEffect(state, action) {
   return action.unitId !== void 0 && action.effectKind !== void 0 && state.effectJournal.some(
-    (effect) => effect.unitId === action.unitId && effect.kind === action.effectKind && (effect.status === "intended" || effect.status === "ambiguous")
+    (effect2) => effect2.unitId === action.unitId && effect2.kind === action.effectKind && (effect2.status === "intended" || effect2.status === "ambiguous")
   );
 }
-function hasUnresolvedUnitEffect(state, unitId) {
+function hasUnresolvedUnitEffect2(state, unitId) {
   return state.effectJournal.some(
-    (effect) => effect.unitId === unitId && (effect.status === "intended" || effect.status === "ambiguous")
+    (effect2) => effect2.unitId === unitId && (effect2.status === "intended" || effect2.status === "ambiguous")
   );
 }
 function pendingControllerEffect(state, kind) {
   return state.effectJournal.some(
-    (effect) => effect.unitId === null && effect.kind === kind && (effect.status === "intended" || effect.status === "ambiguous")
+    (effect2) => effect2.unitId === null && effect2.kind === kind && (effect2.status === "intended" || effect2.status === "ambiguous")
   );
 }
 function sortActions(actions) {
@@ -12132,6 +13887,24 @@ function sortActions(actions) {
     return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
   });
 }
+
+// src/adapters/git/index.ts
+import { spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import {
+  basename,
+  dirname,
+  isAbsolute as isAbsolute2,
+  join,
+  normalize as normalize2,
+  relative,
+  resolve as resolve2
+} from "node:path";
+
+// src/preflight/identity.ts
+import { isAbsolute, normalize, resolve } from "node:path";
 
 // src/preflight/schemas.ts
 var import_ajv2 = __toESM(require_ajv(), 1);
@@ -12171,6 +13944,9 @@ ajv2.addKeyword({
   validate: (limit, value) => utf83.encode(value).byteLength <= limit,
   errors: false
 });
+function isSchema(schema, value) {
+  return ajv2.compile(schema)(value);
+}
 var InspectionCommandSchema = Type.Union([
   strictObject2({
     executable: Type.Literal("bd"),
@@ -12470,6 +14246,106 @@ var PreflightEnvelopeSchema = strictObject2({
   schema: Type.Literal(PREFLIGHT_SCHEMA),
   version: Type.Literal(PREFLIGHT_VERSION)
 });
+var secretKeyShape = /(?:^|[_.-])(?:api[_-]?(?:key|token)|authorization|bearer|cookie|credentials?|passwd|password|private[_-]?key|secret|session(?:[_-]?token)?|token)(?:$|[_.-])/iu;
+var secretCanaryShape = /(?:^|[\s_-])(?:api[_-]?(?:key|token)|authorization|bearer|cookie|credentials?|passwd|password|private[_-]?key|secret|session(?:[_-]?token)?|token)[_-]?canary(?:$|[\s_-])/iu;
+var secretAssignmentShape = /(?:^|[\s,{])(?:api[_-]?(?:key|token)|authorization|bearer|cookie|credentials?|passwd|password|private[_-]?key|secret|session(?:[_-]?token)?|token)\s*[:=]\s*[^\s,}]+/iu;
+var credentialUrlShape = /https?:\/\/[^/?#\s@]+@/iu;
+function containsSecretShape(value) {
+  if (typeof value === "string")
+    return secretCanaryShape.test(value) || secretAssignmentShape.test(value) || credentialUrlShape.test(value);
+  if (Array.isArray(value)) return value.some(containsSecretShape);
+  if (value === null || typeof value !== "object") return false;
+  return Object.entries(value).some(
+    ([key, nested]) => secretKeyShape.test(key) || containsSecretShape(nested)
+  );
+}
+
+// src/preflight/identity.ts
+function canonicalAbsolutePath(value) {
+  if (value.includes("\0") || value.length === 0 || !isAbsolute(value) || containsSecretShape(value))
+    return void 0;
+  const canonical2 = normalize(resolve(value));
+  return canonical2 === "/" ? void 0 : canonical2;
+}
+function canonicalRemotePath(value) {
+  if (value.length === 0 || value.includes("\0") || containsSecretShape(value))
+    return void 0;
+  const withoutGitSuffix = value.replace(/\.git$/u, "");
+  if (withoutGitSuffix.length === 0 || withoutGitSuffix.startsWith("/") || withoutGitSuffix.includes("//") || withoutGitSuffix.split("/").some((part) => part === "" || part === "." || part === ".."))
+    return void 0;
+  return withoutGitSuffix;
+}
+function canonicalLocalBarePath(path2, canonicalize) {
+  const lexical = canonicalAbsolutePath(path2);
+  if (lexical === void 0 || canonicalize === void 0) return void 0;
+  const canonical2 = canonicalize(lexical);
+  return canonical2 === void 0 ? void 0 : canonicalAbsolutePath(canonical2);
+}
+function decodeRemotePath(value) {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return void 0;
+  }
+}
+function normalizeGitRemote(value, localBareCanonicalizer) {
+  if (value !== value.trim() || value.length === 0 || containsSecretShape(value))
+    return void 0;
+  if (isAbsolute(value)) {
+    if (!value.endsWith(".git")) return void 0;
+    const path2 = canonicalLocalBarePath(value, localBareCanonicalizer);
+    return path2 === void 0 ? void 0 : `local:${path2}`;
+  }
+  const shorthand = /^git@([A-Za-z0-9.-]+):(.+)$/u.exec(value);
+  if (shorthand !== null) {
+    const host = shorthand[1]?.toLowerCase();
+    const path2 = shorthand[2] === void 0 ? void 0 : canonicalRemotePath(shorthand[2]);
+    return host === void 0 || path2 === void 0 ? void 0 : `${host}/${path2}`;
+  }
+  let parsed;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return void 0;
+  }
+  if (parsed.password !== "" || parsed.search !== "" || parsed.hash !== "" || parsed.port !== "" || containsSecretShape(parsed.username))
+    return void 0;
+  if (parsed.protocol === "file:") {
+    if (parsed.username !== "" || parsed.hostname !== "" && parsed.hostname !== "localhost")
+      return void 0;
+    if (!parsed.pathname.endsWith(".git")) return void 0;
+    const decodedPath2 = decodeRemotePath(parsed.pathname);
+    const path2 = decodedPath2 === void 0 ? void 0 : canonicalLocalBarePath(decodedPath2, localBareCanonicalizer);
+    return path2 === void 0 ? void 0 : `local:${path2}`;
+  }
+  if (!["https:", "ssh:", "git+ssh:"].includes(parsed.protocol) || parsed.protocol !== "ssh:" && parsed.protocol !== "git+ssh:" && parsed.username !== "" || (parsed.protocol === "ssh:" || parsed.protocol === "git+ssh:") && parsed.username !== "git")
+    return void 0;
+  const decodedPath = decodeRemotePath(parsed.pathname);
+  const remotePath = decodedPath === void 0 ? void 0 : canonicalRemotePath(decodedPath.replace(/^\/+/, ""));
+  return remotePath === void 0 ? void 0 : `${parsed.hostname.toLowerCase()}/${remotePath}`;
+}
+
+// src/preflight/subprocess.ts
+var remoteConfigKey = /^remote\.([A-Za-z0-9][A-Za-z0-9._-]*)\.url$/u;
+var secretRemoteName = /(?:^|[_.-])(?:api[_-]?(?:key|token)|authorization|bearer|cookie|credentials?|passwd|password|private[_-]?key|secret|session[_-]?token|token)(?:$|[_.-])/iu;
+function parseGitRemoteConfigOutput(source) {
+  if (source.includes("\uFFFD") || !source.endsWith("\0")) return void 0;
+  const records = source.slice(0, -1).split("\0");
+  if (records.length === 0 || records.some((record2) => record2.length === 0))
+    return void 0;
+  const urls = [];
+  for (const record2 of records) {
+    const separator = record2.indexOf("\n");
+    if (separator <= 0 || record2.indexOf("\n", separator + 1) !== -1)
+      return void 0;
+    const key = record2.slice(0, separator);
+    const url = record2.slice(separator + 1);
+    if (!remoteConfigKey.test(key) || secretRemoteName.test(key) || url.length === 0 || url.length > 1024 || /[\u0000\r\n\uFFFD]/u.test(url))
+      return void 0;
+    urls.push(url);
+  }
+  return urls;
+}
 
 // src/adapters/git/schemas.ts
 var import_ajv3 = __toESM(require_ajv(), 1);
@@ -12556,6 +14432,645 @@ var GitEffectSchema = strictObject3({
     Type.Literal("ambiguous")
   ])
 });
+function isSchema2(schema, value) {
+  return ajv3.compile(schema)(value);
+}
+function parseGitResult(value) {
+  return isSchema2(GitResultSchema, value) ? value : void 0;
+}
+
+// src/adapters/git/index.ts
+var OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
+var REF = /^(?:[A-Za-z0-9][A-Za-z0-9._/-]*)(?:[A-Za-z0-9._/-])?$/u;
+var REMOTE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
+var PATH = /^[^\u0000\r\n]{1,4096}$/u;
+var MAX_OUTPUT = 65536;
+var activeHookPaths = /* @__PURE__ */ new Set();
+function exactOid(format, value) {
+  return OID.test(value) && value.length === (format === "sha1" ? 40 : 64);
+}
+function safeRef(value) {
+  return REF.test(value) && !value.startsWith("/") && !value.endsWith("/") && !value.includes("//") && !value.includes("..") && !value.includes("@{") && !/[\\ ~^:?*\[\u0000-\u001f\u007f]/u.test(value) && value.split("/").every(
+    (part) => part.length > 0 && !part.startsWith(".") && !part.endsWith(".") && !part.endsWith(".lock")
+  );
+}
+function safePath(value) {
+  return PATH.test(value) && !value.startsWith("-") && !value.includes("../");
+}
+function safeAbsolutePath(value) {
+  return isAbsolute2(value) && safePath(value) && normalize2(resolve2(value)) !== "/";
+}
+function scopedHookPath(value) {
+  if (!safeAbsolutePath(value)) return false;
+  const root = normalize2(resolve2(tmpdir()));
+  const candidate = normalize2(resolve2(value));
+  const suffix = relative(root, candidate);
+  return !isAbsolute2(suffix) && !suffix.startsWith("../") && suffix.startsWith("sce-git-pre-push-") && !suffix.includes("/") && activeHookPaths.has(candidate);
+}
+function allowedGitArgv(argv) {
+  const [command, ...args] = argv;
+  if (command === "rev-parse")
+    return args.length === 1 && ["--git-common-dir", "--show-object-format"].includes(args[0] ?? "") || args.length === 2 && args[0] === "--verify" && ["HEAD^{commit}", "HEAD^{tree}"].includes(args[1] ?? "");
+  if (command === "config")
+    return args.length === 3 && args[0] === "--null" && args[1] === "--get-regexp" && args[2] === "^remote\\..*\\.url$";
+  if (command === "for-each-ref")
+    return args.length === 2 && args[0] === "--format=%(objectname)" && args[1]?.startsWith("refs/heads/") === true && safeRef(args[1].slice(11));
+  if (command === "branch")
+    return args.length === 2 && safeRef(args[0] ?? "") && OID.test(args[1] ?? "");
+  if (command === "worktree")
+    return args.length === 2 && args[0] === "list" && args[1] === "--porcelain" || args.length === 3 && args[0] === "add" && safeAbsolutePath(args[1] ?? "") && safeRef(args[2] ?? "");
+  if (command === "status")
+    return args.length === 2 && args[0] === "--porcelain=v1" && args[1] === "-z";
+  if (command === "merge-base")
+    return args.length === 3 && args[0] === "--is-ancestor" && OID.test(args[1] ?? "") && OID.test(args[2] ?? "");
+  if (command === "diff")
+    return args.length === 4 && args[0] === "--name-only" && args[1] === "-z" && args[2] === "--no-renames" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})\.\.(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(
+      args[3] ?? ""
+    );
+  if (command === "symbolic-ref")
+    return args.length === 2 && args[0] === "-q" && args[1] === "HEAD";
+  if (command === "merge")
+    return args.length === 2 && args[0] === "--ff-only" && OID.test(args[1] ?? "");
+  if (command === "remote")
+    return args.length === 4 && args[0] === "get-url" && args[1] === "--all" && args[2] === "--push" && REMOTE.test(args[3] ?? "");
+  if (command === "ls-remote")
+    return args.length === 4 && args[0] === "--refs" && args[1] === "--exit-code" && REMOTE.test(args[2] ?? "") && args[3]?.startsWith("refs/heads/") === true && safeRef(args[3].slice(11));
+  if (command === "push") {
+    const destination = /^([0-9a-f]{40}|[0-9a-f]{64}):refs\/heads\/(.+)$/u.exec(
+      args[1] ?? ""
+    );
+    return args.length === 2 && REMOTE.test(args[0] ?? "") && destination !== null && safeRef(destination[2] ?? "");
+  }
+  if (command === "-c") {
+    const hookPath = (args[0] ?? "").slice("core.hooksPath=".length);
+    const destination = /^([0-9a-f]{40}|[0-9a-f]{64}):refs\/heads\/(.+)$/u.exec(
+      args[3] ?? ""
+    );
+    return args.length === 4 && args[0]?.startsWith("core.hooksPath=") === true && scopedHookPath(hookPath) && args[1] === "push" && REMOTE.test(args[2] ?? "") && destination !== null && safeRef(destination[2] ?? "");
+  }
+  return false;
+}
+function canonicalWorktreePath(value) {
+  if (!safeAbsolutePath(value)) return void 0;
+  try {
+    return normalize2(realpathSync(value));
+  } catch {
+    try {
+      return join(normalize2(realpathSync(dirname(value))), basename(value));
+    } catch {
+      return void 0;
+    }
+  }
+}
+function canonicalExistingOrLexical(value) {
+  try {
+    return normalize2(realpathSync(value));
+  } catch {
+    return normalize2(resolve2(value));
+  }
+}
+function effect(state, code) {
+  return { code, state };
+}
+function commandOk(result2) {
+  return result2.exitCode === 0 && result2.signal === null && result2.timedOut !== true && result2.unavailable !== true && Buffer.byteLength(result2.stdout, "utf8") <= MAX_OUTPUT;
+}
+function terminalFailure(result2) {
+  if (result2.timedOut === true || result2.signal !== null)
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  if (result2.unavailable === true)
+    return effect("refused", "GIT_COMMAND_FAILED");
+  if (Buffer.byteLength(result2.stdout, "utf8") > MAX_OUTPUT)
+    return effect("refused", "GIT_COMMAND_FAILED");
+  return void 0;
+}
+function lines(value) {
+  if (value.includes("\0") || value.length > MAX_OUTPUT) return void 0;
+  const output = value.trimEnd();
+  if (output.length === 0) return [];
+  const result2 = output.split("\n");
+  return result2.some((line) => line.length === 0 || line.includes("\r")) ? void 0 : result2;
+}
+function oneLine(value) {
+  const result2 = lines(value);
+  return result2?.length === 1 ? result2[0] : void 0;
+}
+function outputResult(result2) {
+  return terminalFailure(result2) ?? (commandOk(result2) ? void 0 : effect("refused", "GIT_COMMAND_FAILED"));
+}
+function validRepository(repository) {
+  return safeAbsolutePath(repository.cwd) && safeAbsolutePath(repository.commonDir) && repository.identity.length > 0 && repository.identity.length <= 1024 && !repository.identity.includes("\0") && repository.remoteUrls.length <= 16 && repository.remoteUrls.every(
+    (url) => url.length > 0 && url.length <= 1024 && !url.includes("\0")
+  ) && (repository.objectFormat === "sha1" || repository.objectFormat === "sha256");
+}
+function localIdentity(repository) {
+  return `local:${canonicalExistingOrLexical(repository.commonDir)}`;
+}
+function canonicalRemoteAliases(urls) {
+  const aliases = urls.map(
+    (url) => normalizeGitRemote(url, (path2) => canonicalGitCommonDir(path2))
+  );
+  return aliases.some((alias) => alias === void 0) ? void 0 : [...new Set(aliases)].sort();
+}
+async function run(runner, repository, argv) {
+  try {
+    const observed2 = parseGitResult(
+      await runner({ argv, cwd: repository.cwd })
+    );
+    return observed2 ?? {
+      exitCode: null,
+      signal: null,
+      stdout: "",
+      unavailable: true
+    };
+  } catch {
+    return { exitCode: null, signal: null, stdout: "", unavailable: true };
+  }
+}
+async function runAt(runner, cwd, argv) {
+  try {
+    const observed2 = parseGitResult(await runner({ argv, cwd }));
+    return observed2 ?? {
+      exitCode: null,
+      signal: null,
+      stdout: "",
+      unavailable: true
+    };
+  } catch {
+    return { exitCode: null, signal: null, stdout: "", unavailable: true };
+  }
+}
+async function refOid(runner, repository, ref) {
+  const result2 = await run(runner, repository, [
+    "for-each-ref",
+    "--format=%(objectname)",
+    ref
+  ]);
+  if (terminalFailure(result2) !== void 0) return { state: "unreadable" };
+  if (!commandOk(result2)) return { state: "unreadable" };
+  if (result2.stdout.length === 0) return { state: "missing" };
+  const value = oneLine(result2.stdout);
+  return value !== void 0 && exactOid(repository.objectFormat, value) ? { state: "found", oid: value } : { state: "unreadable" };
+}
+async function remoteRefOid(runner, repository, remote2, ref) {
+  const result2 = await run(runner, repository, [
+    "ls-remote",
+    "--refs",
+    "--exit-code",
+    remote2,
+    ref
+  ]);
+  if (terminalFailure(result2) !== void 0) return { state: "unreadable" };
+  if (result2.exitCode === 2 && result2.signal === null)
+    return { state: "missing" };
+  if (!commandOk(result2)) return { state: "unreadable" };
+  const record2 = oneLine(result2.stdout);
+  if (record2 === void 0) return { state: "unreadable" };
+  const fields = record2.split("	");
+  return fields.length === 2 && fields[0] !== void 0 && fields[1] === ref && exactOid(repository.objectFormat, fields[0]) ? { state: "found", oid: fields[0] } : { state: "unreadable" };
+}
+async function verifyWorktreeOwnership(runner, repository, path2) {
+  const result2 = await runAt(runner, path2, ["rev-parse", "--git-common-dir"]);
+  const failure2 = outputResult(result2);
+  if (failure2 !== void 0) return effect("refused", "GIT_FOREIGN_WORKTREE");
+  const observed2 = oneLine(result2.stdout);
+  if (observed2 === void 0 || !safePath(observed2))
+    return effect("refused", "GIT_FOREIGN_WORKTREE");
+  const commonDir = isAbsolute2(observed2) ? normalize2(resolve2(observed2)) : normalize2(resolve2(path2, observed2));
+  return canonicalExistingOrLexical(commonDir) === canonicalExistingOrLexical(repository.commonDir) ? effect("observed", "GIT_OK") : effect("refused", "GIT_FOREIGN_WORKTREE");
+}
+async function verifyCleanWorktree(runner, repository, path2) {
+  const ownership = await verifyWorktreeOwnership(runner, repository, path2);
+  if (ownership.state !== "observed") return ownership;
+  const status = await runAt(runner, path2, ["status", "--porcelain=v1", "-z"]);
+  if (!commandOk(status)) return effect("refused", "GIT_FOREIGN_WORKTREE");
+  return status.stdout.length === 0 ? effect("observed", "GIT_OK") : effect("refused", "GIT_DIRTY");
+}
+async function verifySinglePushRemote(runner, repository, remote2) {
+  const result2 = await run(runner, repository, [
+    "remote",
+    "get-url",
+    "--all",
+    "--push",
+    remote2
+  ]);
+  const failure2 = outputResult(result2);
+  if (failure2 !== void 0) return effect("refused", "GIT_REMOTE_AMBIGUOUS");
+  const urls = lines(result2.stdout);
+  if (urls?.length !== 1 || urls[0] === void 0 || /(?:^|[/:@])(?:token|password|secret|bearer|authorization)(?:[=:]|$)/iu.test(
+    urls[0]
+  ))
+    return effect("refused", "GIT_REMOTE_AMBIGUOUS");
+  const expectedAliases = canonicalRemoteAliases(repository.remoteUrls);
+  const pushAliases = canonicalRemoteAliases(urls);
+  if (expectedAliases === void 0 || pushAliases === void 0 || pushAliases.length !== 1 || !expectedAliases.includes(pushAliases[0] ?? ""))
+    return effect("refused", "GIT_REMOTE_AMBIGUOUS");
+  return effect("observed", "GIT_OK");
+}
+async function guardedPush(runner, repository, input) {
+  let directory;
+  try {
+    directory = await mkdtemp(join(tmpdir(), "sce-git-pre-push-"));
+    const hook = join(directory, "pre-push");
+    await writeFile(
+      hook,
+      `#!/bin/sh
+IFS=' '
+read -r local_ref local_oid remote_ref remote_oid || exit 1
+[ "$local_oid" = '${input.candidate}' ] || exit 1
+[ "$remote_ref" = '${input.ref}' ] || exit 1
+[ "$remote_oid" = '${input.base}' ] || exit 1
+exit 0
+`,
+      { encoding: "utf8", mode: 448 }
+    );
+    await chmod(hook, 448);
+    activeHookPaths.add(normalize2(resolve2(directory)));
+    return await run(runner, repository, [
+      "-c",
+      `core.hooksPath=${directory}`,
+      "push",
+      input.remote,
+      `${input.candidate}:${input.ref}`
+    ]);
+  } catch {
+    return { exitCode: null, signal: null, stdout: "", unavailable: true };
+  } finally {
+    if (directory !== void 0) {
+      activeHookPaths.delete(normalize2(resolve2(directory)));
+      await rm(directory, { force: true, recursive: true }).catch(
+        () => void 0
+      );
+    }
+  }
+}
+async function verifyRepository(runner, repository) {
+  if (!validRepository(repository)) return effect("refused", "GIT_BAD_INPUT");
+  const [common, format, remotes] = await Promise.all([
+    run(runner, repository, ["rev-parse", "--git-common-dir"]),
+    run(runner, repository, ["rev-parse", "--show-object-format"]),
+    run(runner, repository, [
+      "config",
+      "--null",
+      "--get-regexp",
+      "^remote\\..*\\.url$"
+    ])
+  ]);
+  const failure2 = terminalFailure(common) ?? terminalFailure(format) ?? terminalFailure(remotes);
+  if (failure2 !== void 0) return failure2;
+  if (!commandOk(common) || !commandOk(format))
+    return effect("refused", "GIT_COMMAND_FAILED");
+  const commonDir = oneLine(common.stdout);
+  const objectFormat = oneLine(format.stdout);
+  if (commonDir === void 0 || objectFormat === void 0 || !safePath(commonDir) || objectFormat !== repository.objectFormat)
+    return effect("refused", "GIT_UNSUPPORTED_OBJECT_FORMAT");
+  const canonicalCommon = isAbsolute2(commonDir) ? normalize2(resolve2(commonDir)) : normalize2(resolve2(repository.cwd, commonDir));
+  if (canonicalExistingOrLexical(canonicalCommon) !== canonicalExistingOrLexical(repository.commonDir))
+    return effect("refused", "GIT_IDENTITY_MISMATCH");
+  const noConfiguredRemotes = remotes.exitCode === 1 && remotes.signal === null && remotes.stdout.length === 0;
+  if (!commandOk(remotes) && !noConfiguredRemotes)
+    return effect("refused", "GIT_COMMAND_FAILED");
+  const actualUrls = noConfiguredRemotes ? [] : parseGitRemoteConfigOutput(remotes.stdout);
+  const expectedAliases = canonicalRemoteAliases(repository.remoteUrls);
+  const actualAliases = actualUrls === void 0 ? void 0 : canonicalRemoteAliases(actualUrls);
+  if (expectedAliases === void 0 || actualAliases === void 0 || expectedAliases.length !== actualAliases.length || expectedAliases.some((alias, index) => alias !== actualAliases[index]))
+    return effect("refused", "GIT_IDENTITY_MISMATCH");
+  if (actualAliases.length === 0 && repository.identity !== localIdentity(repository))
+    return effect("refused", "GIT_IDENTITY_MISMATCH");
+  if (actualAliases.length > 0 && !repository.identity.startsWith("provider:") && (actualAliases.length !== 1 || actualAliases[0] !== repository.identity))
+    return effect("refused", "GIT_IDENTITY_MISMATCH");
+  return effect("observed", "GIT_OK");
+}
+async function ensureBranch(runner, repository, input) {
+  if (!safeRef(input.branch) || !exactOid(repository.objectFormat, input.base))
+    return effect("refused", "GIT_BAD_INPUT");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
+  const ref = `refs/heads/${input.branch}`;
+  const before = await refOid(runner, repository, ref);
+  if (before.state === "found" && before.oid === input.base)
+    return effect("observed", "GIT_OK");
+  if (before.state !== "missing") return effect("refused", "GIT_REFUSED");
+  const created = await run(runner, repository, [
+    "branch",
+    input.branch,
+    input.base
+  ]);
+  const after = await refOid(runner, repository, ref);
+  if (after.state === "found" && after.oid === input.base)
+    return effect("observed", "GIT_OK");
+  if (after.state === "unreadable" || terminalFailure(created) !== void 0)
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  return created.exitCode === 0 ? effect("ambiguous", "GIT_UNRESOLVED_EFFECT") : effect("refused", "GIT_REFUSED");
+}
+async function discoverBranch(runner, repository, input) {
+  if (!safeRef(input.branch) || !exactOid(repository.objectFormat, input.base))
+    return effect("refused", "GIT_BAD_INPUT");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
+  const current = await refOid(
+    runner,
+    repository,
+    `refs/heads/${input.branch}`
+  );
+  if (current.state === "unreadable")
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  if (current.state === "missing") return effect("refused", "GIT_ABSENT");
+  return current.oid === input.base ? effect("observed", "GIT_OK") : effect("refused", "GIT_FOREIGN_BRANCH");
+}
+function parseWorktreeList(source, format) {
+  const blocks = source.trimEnd().split("\n\n");
+  if (blocks.length === 0 || blocks.some((block) => block.length === 0))
+    return void 0;
+  const records = [];
+  for (const block of blocks) {
+    const fields = /* @__PURE__ */ new Map();
+    for (const line of block.split("\n")) {
+      const position = line.indexOf(" ");
+      if (position === -1) {
+        if (!["bare", "detached", "locked", "prunable"].includes(line))
+          return void 0;
+        if (fields.has(line)) return void 0;
+        fields.set(line, "");
+        continue;
+      }
+      if (position < 1 || fields.has(line.slice(0, position))) return void 0;
+      if (!["worktree", "HEAD", "branch", "locked", "prunable"].includes(
+        line.slice(0, position)
+      ))
+        return void 0;
+      fields.set(line.slice(0, position), line.slice(position + 1));
+    }
+    const path2 = fields.get("worktree");
+    const head3 = fields.get("HEAD");
+    const branch = fields.get("branch");
+    if (path2 === void 0 || !safeAbsolutePath(path2) || head3 !== void 0 && !exactOid(format, head3) || branch !== void 0 && (!branch.startsWith("refs/heads/") || !safeRef(branch.slice(11))))
+      return void 0;
+    records.push({
+      ...branch === void 0 ? {} : { branch },
+      ...head3 === void 0 ? {} : { head: head3 },
+      path: path2
+    });
+  }
+  return records;
+}
+async function ensureWorktree(runner, repository, input) {
+  if (!safeRef(input.branch) || !exactOid(repository.objectFormat, input.head) || !safeAbsolutePath(input.path))
+    return effect("refused", "GIT_BAD_INPUT");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
+  const listed = await run(runner, repository, [
+    "worktree",
+    "list",
+    "--porcelain"
+  ]);
+  const listFailure = outputResult(listed);
+  if (listFailure !== void 0) return listFailure;
+  const records = parseWorktreeList(listed.stdout, repository.objectFormat);
+  if (records === void 0) return effect("refused", "GIT_REFUSED");
+  const wantedPath = canonicalWorktreePath(input.path);
+  if (wantedPath === void 0) return effect("refused", "GIT_BAD_INPUT");
+  const existing = records.find((record2) => record2.path === wantedPath);
+  const wantedBranch = `refs/heads/${input.branch}`;
+  if (existing !== void 0)
+    return existing.head === input.head && existing.branch === wantedBranch ? verifyCleanWorktree(runner, repository, input.path) : effect("refused", "GIT_FOREIGN_WORKTREE");
+  if (records.some((record2) => record2.branch === wantedBranch))
+    return effect("refused", "GIT_FOREIGN_WORKTREE");
+  const added = await run(runner, repository, [
+    "worktree",
+    "add",
+    input.path,
+    input.branch
+  ]);
+  const reread = await run(runner, repository, [
+    "worktree",
+    "list",
+    "--porcelain"
+  ]);
+  if (!commandOk(reread)) return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  const discovered2 = parseWorktreeList(
+    reread.stdout,
+    repository.objectFormat
+  )?.find((record2) => record2.path === wantedPath);
+  if (discovered2?.head !== input.head || discovered2.branch !== wantedBranch)
+    return terminalFailure(added) === void 0 && added.exitCode !== 0 ? effect("refused", "GIT_REFUSED") : effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  return verifyCleanWorktree(runner, repository, input.path);
+}
+async function discoverWorktree(runner, repository, input) {
+  if (!safeRef(input.branch) || !exactOid(repository.objectFormat, input.head) || !safeAbsolutePath(input.path))
+    return effect("refused", "GIT_BAD_INPUT");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
+  const listed = await run(runner, repository, [
+    "worktree",
+    "list",
+    "--porcelain"
+  ]);
+  const failure2 = outputResult(listed);
+  if (failure2 !== void 0) return failure2;
+  const records = parseWorktreeList(listed.stdout, repository.objectFormat);
+  const wantedPath = canonicalWorktreePath(input.path);
+  if (records === void 0 || wantedPath === void 0)
+    return effect("refused", "GIT_REFUSED");
+  const existing = records.find((record2) => record2.path === wantedPath);
+  if (existing === void 0) return effect("refused", "GIT_ABSENT");
+  return existing.head === input.head && existing.branch === `refs/heads/${input.branch}` ? verifyCleanWorktree(runner, repository, input.path) : effect("refused", "GIT_FOREIGN_WORKTREE");
+}
+async function discoverIntegration(runner, repository, input) {
+  if (!safeRef(input.integrationRef) || !exactOid(repository.objectFormat, input.candidate))
+    return effect("refused", "GIT_BAD_INPUT");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
+  const current = await refOid(runner, repository, input.integrationRef);
+  if (current.state === "unreadable")
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  return current.state === "found" && current.oid === input.candidate ? effect("observed", "GIT_OK") : effect("refused", "GIT_NOT_FAST_FORWARD");
+}
+async function integrateLocalFastForward(runner, repository, input) {
+  if (!safeRef(input.integrationRef) || !exactOid(repository.objectFormat, input.base) || !exactOid(repository.objectFormat, input.candidate))
+    return effect("refused", "GIT_BAD_INPUT");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
+  const before = await refOid(runner, repository, input.integrationRef);
+  if (before.state !== "found" || before.oid !== input.base)
+    return effect("refused", "GIT_MOVED_BASE");
+  const headRef = await run(runner, repository, ["symbolic-ref", "-q", "HEAD"]);
+  if (!commandOk(headRef) || oneLine(headRef.stdout) !== input.integrationRef)
+    return effect("refused", "GIT_FOREIGN_WORKTREE");
+  const clean = await run(runner, repository, [
+    "status",
+    "--porcelain=v1",
+    "-z"
+  ]);
+  if (!commandOk(clean) || clean.stdout.length !== 0)
+    return effect("refused", "GIT_DIRTY");
+  const merged = await run(runner, repository, [
+    "merge",
+    "--ff-only",
+    input.candidate
+  ]);
+  const after = await refOid(runner, repository, input.integrationRef);
+  if (after.state === "found" && after.oid === input.candidate)
+    return effect("observed", "GIT_OK");
+  if (after.state === "unreadable" || terminalFailure(merged) !== void 0)
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  return merged.exitCode === 0 ? effect("ambiguous", "GIT_UNRESOLVED_EFFECT") : effect("refused", "GIT_NOT_FAST_FORWARD");
+}
+async function publishCandidate(runner, repository, input) {
+  if (!REMOTE.test(input.remote) || !safeRef(input.remoteBranch) || !exactOid(repository.objectFormat, input.candidate))
+    return effect("refused", "GIT_BAD_INPUT");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
+  const remoteVerified = await verifySinglePushRemote(
+    runner,
+    repository,
+    input.remote
+  );
+  if (remoteVerified.state !== "observed") return remoteVerified;
+  const pushed = await run(runner, repository, [
+    "push",
+    input.remote,
+    `${input.candidate}:refs/heads/${input.remoteBranch}`
+  ]);
+  const remote2 = await remoteRefOid(
+    runner,
+    repository,
+    input.remote,
+    `refs/heads/${input.remoteBranch}`
+  );
+  if (remote2.state === "found" && remote2.oid === input.candidate)
+    return effect("observed", "GIT_OK");
+  if (remote2.state === "unreadable" || terminalFailure(pushed) !== void 0)
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+}
+async function discoverPublication(runner, repository, input) {
+  if (!REMOTE.test(input.remote) || !safeRef(input.remoteBranch) || !exactOid(repository.objectFormat, input.candidate))
+    return effect("refused", "GIT_BAD_INPUT");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
+  const remoteVerified = await verifySinglePushRemote(
+    runner,
+    repository,
+    input.remote
+  );
+  if (remoteVerified.state !== "observed") return remoteVerified;
+  const current = await remoteRefOid(
+    runner,
+    repository,
+    input.remote,
+    `refs/heads/${input.remoteBranch}`
+  );
+  if (current.state === "unreadable")
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  if (current.state === "missing") return effect("refused", "GIT_ABSENT");
+  return current.oid === input.candidate ? effect("observed", "GIT_OK") : effect("refused", "GIT_FOREIGN_PUBLICATION");
+}
+async function integrateRemoteFastForward(runner, repository, input) {
+  if (!REMOTE.test(input.remote) || !safeRef(input.integrationBranch) || !exactOid(repository.objectFormat, input.base) || !exactOid(repository.objectFormat, input.candidate))
+    return effect("refused", "GIT_BAD_INPUT");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
+  const remoteVerified = await verifySinglePushRemote(
+    runner,
+    repository,
+    input.remote
+  );
+  if (remoteVerified.state !== "observed") return remoteVerified;
+  const ref = `refs/heads/${input.integrationBranch}`;
+  const before = await remoteRefOid(runner, repository, input.remote, ref);
+  if (before.state === "unreadable")
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  if (before.state === "found" && before.oid === input.candidate)
+    return effect("observed", "GIT_OK");
+  if (before.state === "missing")
+    return effect("refused", "GIT_REMOTE_MISSING");
+  if (before.oid !== input.base) return effect("refused", "GIT_MOVED_BASE");
+  const pushed = await guardedPush(runner, repository, {
+    base: input.base,
+    candidate: input.candidate,
+    ref,
+    remote: input.remote
+  });
+  const after = await remoteRefOid(runner, repository, input.remote, ref);
+  if (after.state === "unreadable")
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  if (after.state === "found" && after.oid === input.candidate)
+    return effect("observed", "GIT_OK");
+  if (after.state === "found" && after.oid !== input.base)
+    return effect("refused", "GIT_MOVED_BASE");
+  if (after.state === "missing" || terminalFailure(pushed) !== void 0)
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  if (pushed.exitCode !== 0) return effect("refused", "GIT_NOT_FAST_FORWARD");
+  return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+}
+async function discoverRemoteIntegration(runner, repository, input) {
+  if (!REMOTE.test(input.remote) || !safeRef(input.integrationBranch) || !exactOid(repository.objectFormat, input.candidate))
+    return effect("refused", "GIT_BAD_INPUT");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
+  const remoteVerified = await verifySinglePushRemote(
+    runner,
+    repository,
+    input.remote
+  );
+  if (remoteVerified.state !== "observed") return remoteVerified;
+  const observed2 = await remoteRefOid(
+    runner,
+    repository,
+    input.remote,
+    `refs/heads/${input.integrationBranch}`
+  );
+  if (observed2.state === "unreadable")
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  if (observed2.state === "missing")
+    return effect("refused", "GIT_REMOTE_MISSING");
+  return observed2.oid === input.candidate ? effect("observed", "GIT_OK") : effect("refused", "GIT_MOVED_BASE");
+}
+var nodeGitRunner = async ({ argv, cwd }) => {
+  if (!safeAbsolutePath(cwd) || !allowedGitArgv(argv))
+    return { exitCode: null, signal: null, stdout: "", unavailable: true };
+  return new Promise((done) => {
+    let stdout = "";
+    let outputBytes = 0;
+    let timedOut = false;
+    let unavailable3 = false;
+    const child = spawn("/usr/bin/git", argv, {
+      cwd,
+      env: { LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin", TZ: "UTC" },
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true
+    });
+    const consume = (isStdout, chunk) => {
+      outputBytes += chunk.byteLength;
+      if (outputBytes > MAX_OUTPUT) child.kill("SIGKILL");
+      else if (isStdout) stdout += chunk.toString("utf8");
+    };
+    child.stdout.on("data", (chunk) => consume(true, chunk));
+    child.stderr.on("data", (chunk) => consume(false, chunk));
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, 15e3);
+    child.once("error", () => {
+      unavailable3 = true;
+    });
+    child.once("close", (exitCode, signal) => {
+      clearTimeout(timer);
+      done({ exitCode, signal, stdout, timedOut, unavailable: unavailable3 });
+    });
+  });
+};
+function canonicalGitCommonDir(path2) {
+  if (!safeAbsolutePath(path2)) return void 0;
+  try {
+    const canonical2 = realpathSync(path2);
+    return safeAbsolutePath(canonical2) ? canonical2 : void 0;
+  } catch {
+    return void 0;
+  }
+}
 
 // src/fencing/schemas.ts
 var FENCING_SCHEMA_VERSION = 1;
@@ -12721,9 +15236,600 @@ var OperationLockStateSchema = strictObject({
 
 // src/fencing/projections.ts
 var utf85 = new TextEncoder();
+function json(value) {
+  return value;
+}
+function equal(left, right) {
+  return canonicalJson(json(left)) === canonicalJson(json(right));
+}
+function compareCodeUnits(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+function holderRunId(holder4) {
+  return holder4.split("/", 1)[0] ?? "";
+}
+function scopeFor(run2) {
+  return {
+    beadsStoreIdentity: run2.storeIdentity,
+    gitRepositoryIdentity: run2.repositoryIdentity,
+    integrationBranch: run2.integrationBranch
+  };
+}
+function deriveScopeCommitment(scope) {
+  return sha256(
+    canonicalJson({ domain: "sce.fencing.scope.v1", scope: json(scope) })
+  );
+}
+function deriveAggregateCommitment(run2) {
+  return sha256(
+    canonicalJson({ domain: "sce.fencing.aggregate.v1", run: json(run2) })
+  );
+}
+function deriveChildCommitment(unit) {
+  return sha256(
+    canonicalJson({ domain: "sce.fencing.child.v1", unit: json(unit) })
+  );
+}
+function deriveChangedRowsCommitment(rows) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.fencing.changed-rows.v1",
+      rows: json(
+        [...rows].sort(
+          (left, right) => compareCodeUnits(left.unitId, right.unitId)
+        )
+      )
+    })
+  );
+}
+function childRows(run2) {
+  return Object.values(run2.units).map((unit) => ({
+    commitment: deriveChildCommitment(unit),
+    revision: unit.revision,
+    unitId: unit.id
+  })).sort((left, right) => compareCodeUnits(left.unitId, right.unitId));
+}
+function checkpoint(aggregateRevision, aggregateCommitment) {
+  return {
+    aggregateRevision,
+    changedRowsCommitment: deriveChangedRowsCommitment([]),
+    rootCommitment: aggregateCommitment
+  };
+}
+function checkpointForBatch(root, changedRows) {
+  return {
+    aggregateRevision: root.aggregateRevision,
+    changedRowsCommitment: deriveChangedRowsCommitment(changedRows),
+    rootCommitment: root.aggregateCommitment
+  };
+}
+function withBatchCheckpoint(root, changedRows) {
+  return { ...root, checkpoint: checkpointForBatch(root, changedRows) };
+}
+function makeRootProjection(run2) {
+  const aggregateCommitment = deriveAggregateCommitment(run2);
+  return {
+    aggregateCommitment,
+    aggregateRevision: run2.revision,
+    checkpoint: checkpoint(run2.revision, aggregateCommitment),
+    childRows: [...childRows(run2)],
+    holder: run2.controller.holder,
+    run: run2,
+    schema: "sce.fencing.root",
+    scope: scopeFor(run2),
+    version: FENCING_SCHEMA_VERSION
+  };
+}
+function makeChildProjection(root, unitId) {
+  const unit = root.run.units[unitId];
+  if (unit === void 0) return void 0;
+  return {
+    commitment: deriveChildCommitment(unit),
+    holder: root.holder,
+    revision: unit.revision,
+    schema: "sce.fencing.child",
+    scope: root.scope,
+    unit,
+    unitId,
+    version: FENCING_SCHEMA_VERSION
+  };
+}
+function parseSchema(schema, input) {
+  const parsed = validate(schema, input);
+  return parsed.ok && parsed.value !== void 0 ? { ok: true, value: parsed.value } : { ok: false, reason: parsed.errors.join("; ") };
+}
+function validateRootProjection(input) {
+  const parsed = parseSchema(RootProjectionSchema, input);
+  if (!parsed.ok) return parsed;
+  const root = parsed.value;
+  if (runInvariantErrors(root.run).length > 0)
+    return { ok: false, reason: "root run invariants fail" };
+  if (!equal(root.scope, scopeFor(root.run)))
+    return { ok: false, reason: "root scope disagrees with run" };
+  if (root.holder !== root.run.controller.holder)
+    return { ok: false, reason: "root holder disagrees with run" };
+  if (root.aggregateRevision !== root.run.revision)
+    return { ok: false, reason: "root revision disagrees with run" };
+  if (root.aggregateCommitment !== deriveAggregateCommitment(root.run))
+    return { ok: false, reason: "root aggregate commitment is invalid" };
+  if (!equal(root.childRows, childRows(root.run)))
+    return { ok: false, reason: "root child rows disagree with run" };
+  if (root.checkpoint.aggregateRevision !== root.aggregateRevision || root.checkpoint.rootCommitment !== root.aggregateCommitment)
+    return { ok: false, reason: "root checkpoint is invalid" };
+  return parsed;
+}
+function validateChildProjection(input) {
+  const parsed = parseSchema(ChildProjectionSchema, input);
+  if (!parsed.ok) return parsed;
+  const child = parsed.value;
+  if (child.unit.id !== child.unitId || child.unit.revision !== child.revision || child.commitment !== deriveChildCommitment(child.unit))
+    return { ok: false, reason: "child facts disagree with projection" };
+  return parsed;
+}
+function validateMutationBatch(input) {
+  const parsed = parseSchema(MutationBatchSchema, input);
+  if (!parsed.ok) return parsed;
+  const batch = parsed.value;
+  const root = validateRootProjection(batch.next.root);
+  if (!root.ok) return { ok: false, reason: root.reason };
+  if (!equal(batch.scope, root.value.scope) || batch.holder !== root.value.holder)
+    return { ok: false, reason: "batch scope or holder disagrees with root" };
+  if (!equal(batch.checkpoint, root.value.checkpoint))
+    return { ok: false, reason: "batch checkpoint disagrees with root" };
+  if (batch.continuation === void 0 && batch.expectedHolder !== batch.holder)
+    return { ok: false, reason: "expected holder disagrees with next holder" };
+  if (root.value.aggregateRevision !== batch.expectedAggregateRevision + 1)
+    return { ok: false, reason: "next aggregate revision is not exact" };
+  if (batch.expectedAggregateCommitment === root.value.aggregateCommitment)
+    return { ok: false, reason: "aggregate commitment did not change" };
+  const changedIds = batch.changedRows.map((row) => row.unitId);
+  if (new Set(changedIds).size !== changedIds.length || [...changedIds].sort().some((id, index) => id !== changedIds[index]))
+    return { ok: false, reason: "changed rows are not sorted and unique" };
+  if (batch.expectedChildren.length !== batch.changedRows.length || batch.next.children.length !== batch.changedRows.length)
+    return { ok: false, reason: "affected child row count is not exact" };
+  if (!equal(
+    batch.expectedChildren.map((child) => child.unitId),
+    changedIds
+  ) || !equal(
+    batch.next.children.map((child) => child.unitId),
+    changedIds
+  ))
+    return { ok: false, reason: "affected child rows are not ordered exactly" };
+  for (const row of batch.changedRows) {
+    const expected = batch.expectedChildren.find(
+      (item) => item.unitId === row.unitId
+    );
+    const child = batch.next.children.find(
+      (item) => item.unitId === row.unitId
+    );
+    const rootRow = root.value.childRows.find(
+      (item) => item.unitId === row.unitId
+    );
+    if (expected === void 0 || child === void 0 || rootRow === void 0)
+      return { ok: false, reason: "affected child row is missing" };
+    const validatedChild = validateChildProjection(child);
+    if (!validatedChild.ok) return { ok: false, reason: validatedChild.reason };
+    if (expected.expectedRevision !== row.expectedRevision || expected.expectedCommitment !== row.expectedCommitment || row.nextRevision !== row.expectedRevision + 1 || child.revision !== row.nextRevision || child.commitment !== row.nextCommitment || rootRow.revision !== row.nextRevision || rootRow.commitment !== row.nextCommitment || !equal(child.scope, batch.scope) || child.holder !== batch.holder || !equal(child.unit, root.value.run.units[row.unitId]))
+      return { ok: false, reason: "affected child row disagrees with batch" };
+  }
+  if (batch.checkpoint.aggregateRevision !== root.value.aggregateRevision || batch.checkpoint.rootCommitment !== root.value.aggregateCommitment || batch.checkpoint.changedRowsCommitment !== deriveChangedRowsCommitment(batch.changedRows))
+    return { ok: false, reason: "batch checkpoint is invalid" };
+  const scopeCommitment = deriveScopeCommitment(batch.scope);
+  if (batch.continuation !== void 0 && (batch.continuation.scopeCommitment !== scopeCommitment || batch.continuation.nextHolder !== batch.holder || batch.continuation.previousHolder !== batch.expectedHolder || batch.continuation.previousHolder === batch.holder || holderRunId(batch.continuation.previousHolder) !== holderRunId(batch.holder)))
+    return { ok: false, reason: "continuation evidence is invalid" };
+  if (batch.release !== void 0 && (batch.release.scopeCommitment !== scopeCommitment || batch.release.holder !== batch.holder))
+    return { ok: false, reason: "release evidence is invalid" };
+  return parsed;
+}
 
 // src/fencing/operation-lock.ts
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync as realpathSync2,
+  statSync,
+  unlinkSync,
+  writeFileSync
+} from "node:fs";
+import { join as join2 } from "node:path";
+import { createConnection, createServer } from "node:net";
+var LOCK_DIRECTORY = ".sce-op";
+var SOCKET_NAME = "l";
+var STATE_NAME = "s";
+var STATE_MAX_BYTES = 4096;
+var MAX_ACQUIRE_ATTEMPTS = 4;
 var utf86 = new TextEncoder();
+function ownerMatches(uid) {
+  return typeof process.getuid !== "function" || uid === process.getuid();
+}
+function identity(stat2) {
+  return {
+    dev: stat2.dev,
+    ino: stat2.ino,
+    mode: stat2.mode & 511,
+    uid: stat2.uid
+  };
+}
+function sameIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode && left.uid === right.uid;
+}
+function absentError(error) {
+  return error.code === "ENOENT";
+}
+function strictDirectory(path2, expectedMode) {
+  try {
+    const stat2 = lstatSync(path2);
+    return stat2.isDirectory() && !stat2.isSymbolicLink() && ownerMatches(stat2.uid) && (expectedMode === void 0 || (stat2.mode & 511) === expectedMode);
+  } catch {
+    return false;
+  }
+}
+function captureSocket(path2) {
+  try {
+    const stat2 = lstatSync(path2);
+    if (!stat2.isSocket() || stat2.isSymbolicLink() || !ownerMatches(stat2.uid) || (stat2.mode & 511) !== 384)
+      return { kind: "invalid" };
+    return { kind: "valid", value: { identity: identity(stat2) } };
+  } catch (error) {
+    return absentError(error) ? { kind: "absent" } : { kind: "invalid" };
+  }
+}
+function stateSource(state) {
+  return canonicalJson(state);
+}
+function captureState(path2) {
+  let descriptor;
+  try {
+    const before = lstatSync(path2);
+    if (!before.isFile() || before.isSymbolicLink() || !ownerMatches(before.uid) || (before.mode & 511) !== 384 || constants.O_NOFOLLOW === void 0)
+      return { kind: "invalid" };
+    descriptor = openSync(path2, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const opened = fstatSync(descriptor);
+    if (!opened.isFile() || !ownerMatches(opened.uid) || (opened.mode & 511) !== 384 || opened.dev !== before.dev || opened.ino !== before.ino || opened.size > STATE_MAX_BYTES)
+      return { kind: "invalid" };
+    const source = readFileSync(descriptor, "utf8");
+    if (utf86.encode(source).byteLength > STATE_MAX_BYTES)
+      return { kind: "invalid" };
+    const input = JSON.parse(source);
+    const parsed = validate(
+      OperationLockStateSchema,
+      input
+    );
+    if (!parsed.ok || parsed.value === void 0 || stateSource(parsed.value) !== source)
+      return { kind: "invalid" };
+    return {
+      kind: "valid",
+      value: { identity: identity(opened), source, state: parsed.value }
+    };
+  } catch (error) {
+    return absentError(error) ? { kind: "absent" } : { kind: "invalid" };
+  } finally {
+    if (descriptor !== void 0) closeSync(descriptor);
+  }
+}
+function writeState(path2, state) {
+  let descriptor;
+  try {
+    if (constants.O_NOFOLLOW === void 0) return { kind: "invalid" };
+    descriptor = openSync(
+      path2,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      384
+    );
+    writeFileSync(descriptor, stateSource(state), "utf8");
+  } catch (error) {
+    return absentError(error) ? { kind: "absent" } : { kind: "invalid" };
+  } finally {
+    if (descriptor !== void 0) closeSync(descriptor);
+  }
+  return captureState(path2);
+}
+function paths(commonDir) {
+  try {
+    if (realpathSync2(commonDir) !== commonDir || !strictDirectory(commonDir))
+      return void 0;
+    const directory = join2(commonDir, LOCK_DIRECTORY);
+    try {
+      mkdirSync(directory, { mode: 448 });
+    } catch (error) {
+      if (error.code !== "EEXIST") return void 0;
+    }
+    if (!strictDirectory(directory, 448)) return void 0;
+    if (statSync(commonDir).dev !== statSync(directory).dev) return void 0;
+    return {
+      directory,
+      socket: join2(directory, SOCKET_NAME),
+      state: join2(directory, STATE_NAME)
+    };
+  } catch {
+    return void 0;
+  }
+}
+function listen(socket) {
+  return new Promise((resolve5) => {
+    const server = createServer((connection) => connection.destroy());
+    const fail = (error) => {
+      resolve5({ code: error.code ?? "UNKNOWN" });
+    };
+    server.once("error", fail);
+    server.listen(socket, () => {
+      server.removeListener("error", fail);
+      resolve5({ server });
+    });
+  });
+}
+function socketIsLive(socketPath) {
+  return new Promise((resolve5) => {
+    const socket = createConnection(socketPath);
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve5(true);
+    });
+    socket.once("error", (error) => {
+      socket.destroy();
+      if (error.code === "ECONNREFUSED" || error.code === "ENOENT")
+        resolve5(false);
+      else resolve5(void 0);
+    });
+  });
+}
+async function closeServer(server) {
+  return new Promise((resolve5) => {
+    server.close((error) => resolve5(error === void 0));
+  });
+}
+function removeSocket(path2, expected) {
+  const current = captureSocket(path2);
+  if (current.kind === "absent") return "absent";
+  if (current.kind === "invalid") return "invalid";
+  if (!sameIdentity(current.value.identity, expected.identity))
+    return "changed";
+  try {
+    unlinkSync(path2);
+  } catch (error) {
+    return absentError(error) ? "absent" : "changed";
+  }
+  return captureSocket(path2).kind === "absent" ? "removed" : "changed";
+}
+function removeState(path2, expected) {
+  const current = captureState(path2);
+  if (current.kind === "absent") return "absent";
+  if (current.kind === "invalid") return "invalid";
+  if (!sameIdentity(current.value.identity, expected.identity) || current.value.source !== expected.source)
+    return "changed";
+  try {
+    unlinkSync(path2);
+  } catch (error) {
+    return absentError(error) ? "absent" : "changed";
+  }
+  return captureState(path2).kind === "absent" ? "removed" : "changed";
+}
+function cleanupStatus(result2) {
+  if (result2 === "removed" || result2 === "absent") return "retry";
+  return result2 === "invalid" ? "quarantined" : "unavailable";
+}
+var OperationLock = class _OperationLock {
+  #paths;
+  #server;
+  #socket;
+  #state;
+  constructor(pathsInput, server, socket, state) {
+    this.#paths = pathsInput;
+    this.#server = server;
+    this.#socket = socket;
+    this.#state = state;
+  }
+  static async acquire(input) {
+    const lockPaths = paths(input.commonDir);
+    if (lockPaths === void 0) return { status: "quarantined" };
+    const desired = {
+      holder: input.holder,
+      nonce: input.nonce,
+      scopeCommitment: deriveScopeCommitment(input.scope),
+      version: FENCING_SCHEMA_VERSION
+    };
+    if (!validate(OperationLockStateSchema, desired).ok)
+      return { status: "quarantined" };
+    for (let attemptNumber = 0; attemptNumber < MAX_ACQUIRE_ATTEMPTS; attemptNumber += 1) {
+      const socket = captureSocket(lockPaths.socket);
+      const state = captureState(lockPaths.state);
+      if (socket.kind === "invalid" || state.kind === "invalid")
+        return { status: "quarantined" };
+      if (socket.kind === "absent" && state.kind === "valid") {
+        const cleaned = cleanupStatus(
+          removeState(lockPaths.state, state.value)
+        );
+        if (cleaned === "retry") continue;
+        return { status: cleaned };
+      }
+      if (socket.kind === "valid" && state.kind === "absent") {
+        const live = await socketIsLive(lockPaths.socket);
+        if (live === true) return { status: "held" };
+        if (live === void 0) return { status: "unavailable" };
+        const cleaned = cleanupStatus(
+          removeSocket(lockPaths.socket, socket.value)
+        );
+        if (cleaned === "retry") continue;
+        return { status: cleaned };
+      }
+      if (socket.kind === "valid" && state.kind === "valid") {
+        const live = await socketIsLive(lockPaths.socket);
+        if (live === true) return { status: "held" };
+        if (live === void 0) return { status: "unavailable" };
+        const removedSocket = cleanupStatus(
+          removeSocket(lockPaths.socket, socket.value)
+        );
+        if (removedSocket !== "retry") return { status: removedSocket };
+        const removedState = cleanupStatus(
+          removeState(lockPaths.state, state.value)
+        );
+        if (removedState !== "retry") return { status: removedState };
+        continue;
+      }
+      const listened = await listen(lockPaths.socket);
+      if (listened.server === void 0) {
+        if (listened.code === "EADDRINUSE") continue;
+        return { status: "unavailable" };
+      }
+      try {
+        chmodSync(lockPaths.socket, 384);
+      } catch {
+        await closeServer(listened.server);
+        return { status: "quarantined" };
+      }
+      const ownedSocket = captureSocket(lockPaths.socket);
+      if (ownedSocket.kind !== "valid") {
+        await closeServer(listened.server);
+        return { status: "quarantined" };
+      }
+      const written = writeState(lockPaths.state, desired);
+      if (written.kind !== "valid") {
+        await closeServer(listened.server);
+        const cleanup = cleanupStatus(
+          removeSocket(lockPaths.socket, ownedSocket.value)
+        );
+        return {
+          status: cleanup === "quarantined" ? "quarantined" : "unavailable"
+        };
+      }
+      return {
+        status: "acquired",
+        lock: new _OperationLock(
+          lockPaths,
+          listened.server,
+          ownedSocket.value,
+          written.value
+        )
+      };
+    }
+    return { status: "unavailable" };
+  }
+  async release() {
+    const currentSocket = captureSocket(this.#paths.socket);
+    const currentState = captureState(this.#paths.state);
+    if (currentSocket.kind === "invalid" || currentState.kind === "invalid")
+      return { status: "quarantined" };
+    if (currentSocket.kind !== "valid" || currentState.kind !== "valid")
+      return { status: "holder_mismatch" };
+    if (!sameIdentity(currentSocket.value.identity, this.#socket.identity) || !sameIdentity(currentState.value.identity, this.#state.identity) || currentState.value.source !== this.#state.source)
+      return { status: "holder_mismatch" };
+    if (!await closeServer(this.#server)) return { status: "unavailable" };
+    const socketResult = removeSocket(this.#paths.socket, this.#socket);
+    if (socketResult === "invalid") return { status: "quarantined" };
+    if (socketResult === "changed") return { status: "holder_mismatch" };
+    const stateResult2 = removeState(this.#paths.state, this.#state);
+    if (stateResult2 === "invalid") return { status: "quarantined" };
+    if (stateResult2 === "changed") return { status: "holder_mismatch" };
+    return { status: "released" };
+  }
+};
+
+// src/fencing/merge-slot.ts
+function same(left, right) {
+  return canonicalJson(left) === canonicalJson(right);
+}
+function slotReadbackPayload(observation) {
+  return {
+    actor: observation.actor,
+    ...observation.holder === void 0 ? {} : { holder: observation.holder },
+    label: observation.label,
+    scope: observation.scope,
+    scopeCommitment: observation.scopeCommitment,
+    slotId: observation.slotId,
+    status: observation.status,
+    title: observation.title,
+    version: observation.version
+  };
+}
+function deriveSlotReadbackHash(observation) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.fencing.merge-slot.v1",
+      observation: slotReadbackPayload(observation)
+    })
+  );
+}
+function slotId(prefix) {
+  return `${prefix}-merge-slot`;
+}
+function runId(holder4) {
+  return holder4.split("/", 1)[0] ?? "";
+}
+function validateMergeSlotObservation(input, prefix, scope) {
+  const parsed = validate(
+    MergeSlotObservationSchema,
+    input
+  );
+  if (!parsed.ok || parsed.value === void 0)
+    return { ok: false, reason: parsed.errors.join("; ") };
+  const observation = parsed.value;
+  if (observation.slotId !== slotId(prefix) || !same(observation.scope, scope) || observation.scopeCommitment !== deriveScopeCommitment(scope) || observation.readbackHash !== deriveSlotReadbackHash(observation))
+    return { ok: false, reason: "slot identity or readback is invalid" };
+  if (observation.status === "available" && observation.holder !== void 0 || observation.status === "acquired" && (observation.holder === void 0 || observation.actor !== observation.holder))
+    return { ok: false, reason: "slot status and holder disagree" };
+  return { ok: true, value: observation };
+}
+function continuationMatches(input, prefix, scope, holder4, knownHolder, observation) {
+  const parsed = validate(
+    SlotContinuationEvidenceSchema,
+    input
+  );
+  if (!parsed.ok || parsed.value === void 0) return false;
+  const evidence = parsed.value;
+  if (evidence.nextHolder !== holder4 || evidence.previousHolder === holder4 || knownHolder !== evidence.previousHolder || runId(evidence.previousHolder) !== runId(holder4) || !same(evidence.after, observation))
+    return false;
+  const before = validateMergeSlotObservation(evidence.before, prefix, scope);
+  const after = validateMergeSlotObservation(evidence.after, prefix, scope);
+  return before.ok && after.ok && before.value.status === "acquired" && before.value.holder === evidence.previousHolder && before.value.actor === evidence.previousHolder && after.value.status === "acquired" && after.value.holder === holder4 && after.value.actor === holder4;
+}
+function decideControllerSlot(prefix, scope, holder4, knownHolder, observationInput, continuationInput, releaseInput) {
+  const observation = validateMergeSlotObservation(
+    observationInput,
+    prefix,
+    scope
+  );
+  if (!observation.ok) return { kind: "quarantined" };
+  if (observation.value.status === "available") {
+    if (knownHolder === void 0) return { kind: "acquire" };
+    return validateSlotRelease(prefix, scope, knownHolder, releaseInput).ok ? { kind: "acquire" } : { kind: "blocked" };
+  }
+  if (observation.value.holder !== void 0 && runId(observation.value.holder) === runId(holder4) && continuationMatches(
+    continuationInput,
+    prefix,
+    scope,
+    holder4,
+    knownHolder,
+    observation.value
+  ))
+    return { kind: "continue" };
+  if (observation.value.holder === holder4 && knownHolder === holder4)
+    return { kind: "resume" };
+  return { kind: "blocked" };
+}
+function validateSlotRelease(prefix, scope, holder4, evidenceInput) {
+  const parsed = validate(
+    SlotReleaseEvidenceSchema,
+    evidenceInput
+  );
+  if (!parsed.ok || parsed.value === void 0)
+    return { ok: false, reason: parsed.errors.join("; ") };
+  if (parsed.value.holder !== holder4)
+    return { ok: false, reason: "release holder differs" };
+  const readback = validateMergeSlotObservation(
+    parsed.value.readback,
+    prefix,
+    scope
+  );
+  if (!readback.ok || readback.value.status !== "available" || readback.value.holder !== void 0 || readback.value.actor !== holder4)
+    return { ok: false, reason: "release lacks positive available readback" };
+  return { ok: true, value: parsed.value };
+}
 
 // src/commands/recovery.ts
 var InitialControllerAcquireSchema = strictObject({
@@ -12744,6 +15850,724 @@ var InitialControllerAcquireSchema = strictObject({
   schema: Type.Literal("sce.recovery.initial-controller-acquire"),
   version: Type.Literal(1)
 });
+var RECOVERABLE_EFFECT_KINDS = /* @__PURE__ */ new Set([
+  "controller_acquire",
+  "controller_release",
+  "branch_create",
+  "worktree_create",
+  "candidate_collect",
+  "publish",
+  "integrate"
+]);
+function isRecoverableEffect(effect2) {
+  if (!RECOVERABLE_EFFECT_KINDS.has(
+    effect2.kind
+  ))
+    return false;
+  if (effect2.kind === "controller_acquire" || effect2.kind === "controller_release")
+    return "slotTransition" in effect2.params && effect2.params.slotTransition !== void 0;
+  return true;
+}
+function same2(left, right) {
+  return canonicalJson(left) === canonicalJson(right);
+}
+function isRun(value) {
+  return "effectJournal" in value;
+}
+function effectFor(entry, run2) {
+  return rehydrateEffect(run2, entry);
+}
+function validReadback(readback, scope) {
+  if (readback === void 0) return void 0;
+  const root = validateRootProjection(readback.root);
+  if (!root.ok || !same2(root.value.scope, scope)) return void 0;
+  const expected = root.value.childRows;
+  if (readback.children.length !== expected.length) return void 0;
+  for (const row of expected) {
+    const child = readback.children.find(
+      (candidate) => candidate.unitId === row.unitId
+    );
+    const parsed = child === void 0 ? void 0 : validateChildProjection(child);
+    if (parsed === void 0 || !parsed.ok || parsed.value.commitment !== row.commitment || parsed.value.revision !== row.revision || !same2(parsed.value.unit, root.value.run.units[row.unitId]) || parsed.value.holder !== root.value.holder || !same2(parsed.value.scope, scope))
+      return void 0;
+  }
+  return root.value.run;
+}
+function loadOutcome(status) {
+  return { status: status === "absent" ? "uninitialized" : status };
+}
+function batchFor(before, nextRun) {
+  const nextBase = makeRootProjection(nextRun);
+  const changedIds = Object.keys(nextRun.units).filter((unitId) => !same2(before.run.units[unitId], nextRun.units[unitId])).sort();
+  if (Object.keys(before.run.units).some(
+    (unitId) => nextRun.units[unitId] === void 0
+  ))
+    return void 0;
+  const changedRows = changedIds.map((unitId) => {
+    const prior = before.childRows.find((row) => row.unitId === unitId);
+    const child = makeChildProjection(nextBase, unitId);
+    if (prior === void 0 || child === void 0) return void 0;
+    return {
+      expectedCommitment: prior.commitment,
+      expectedRevision: prior.revision,
+      nextCommitment: child.commitment,
+      nextRevision: child.revision,
+      unitId
+    };
+  });
+  if (changedRows.some((row) => row === void 0)) return void 0;
+  const rows = changedRows;
+  const next = withBatchCheckpoint(nextBase, rows);
+  const candidate = {
+    changedRows: rows,
+    checkpoint: {
+      aggregateRevision: next.aggregateRevision,
+      changedRowsCommitment: deriveChangedRowsCommitment(rows),
+      rootCommitment: next.aggregateCommitment
+    },
+    expectedAggregateCommitment: before.aggregateCommitment,
+    expectedAggregateRevision: before.aggregateRevision,
+    expectedChildren: rows.map((row) => ({
+      expectedCommitment: row.expectedCommitment,
+      expectedRevision: row.expectedRevision,
+      unitId: row.unitId
+    })),
+    expectedHolder: before.holder,
+    holder: next.holder,
+    next: {
+      children: rows.map((row) => makeChildProjection(next, row.unitId)),
+      root: next
+    },
+    schema: "sce.fencing.batch",
+    scope: next.scope,
+    version: 1
+  };
+  return candidate;
+}
+function isPreOwnershipAcquire(before, next) {
+  return before.state === "initializing" && before.controller.state === "unacquired" && next.state === "initializing" && next.controller.state === "acquire_intent" && next.effectJournal.length === before.effectJournal.length + 1 && next.effectJournal.at(-1)?.kind === "controller_acquire" && next.effectJournal.at(-1)?.slotTransition !== void 0;
+}
+function isInitialAcquire(next, holder4, scope) {
+  const run2 = next.run;
+  return next.holder === holder4 && same2(next.scope, scope) && run2.revision === 1 && run2.state === "initializing" && run2.controller.state === "acquire_intent" && next.childRows.length === Object.keys(run2.units).length && run2.effectJournal.length === 1 && run2.effectJournal[0]?.kind === "controller_acquire" && run2.effectJournal[0]?.status === "intended" && run2.effectJournal[0]?.slotTransition !== void 0;
+}
+function initialRequest(run2, holder4, scope) {
+  const root = makeRootProjection(run2);
+  if (!isInitialAcquire(root, holder4, scope)) return void 0;
+  const candidate = {
+    expected: { children: "absent", holder: holder4, root: "absent", scope },
+    next: {
+      children: Object.keys(run2.units).sort().map((unitId) => makeChildProjection(root, unitId)),
+      root
+    },
+    schema: "sce.recovery.initial-controller-acquire",
+    version: 1
+  };
+  const parsed = validate(
+    InitialControllerAcquireSchema,
+    candidate
+  );
+  return parsed.ok && parsed.value !== void 0 ? parsed.value : void 0;
+}
+function ambiguousEvent(run2, entry, observationHash2) {
+  return {
+    effectId: entry.effectId,
+    effectKind: entry.kind,
+    eventId: `recover-${entry.effectId}`,
+    expectedRevision: run2.revision,
+    ...observationHash2 === void 0 ? {} : { observationHash: observationHash2 },
+    type: "effect_ambiguous",
+    unitId: entry.unitId
+  };
+}
+function observationFor(run2, entry, event) {
+  const parsed = validate(ProtocolEventSchema, event);
+  if (!parsed.ok || parsed.value === void 0) return void 0;
+  if (!("effectId" in parsed.value) || parsed.value.effectId !== entry.effectId || parsed.value.effectKind !== entry.kind)
+    return void 0;
+  return { ...parsed.value, expectedRevision: run2.revision };
+}
+function createRecoveryRunner(options) {
+  const fault = (point) => options.fault?.(point);
+  async function preparedControllerEvent(event, run2, proof) {
+    if (event.type !== "controller_acquire_intent" && event.type !== "controller_release_intent" || event.slotTransition !== void 0)
+      return { ok: true, event };
+    if (options.prepareControllerTransition === void 0)
+      return { ok: false, outcome: { status: "blocked" } };
+    let result2;
+    try {
+      result2 = await options.prepareControllerTransition({
+        holder: proof.holder,
+        kind: event.type === "controller_acquire_intent" ? "acquire" : "release",
+        run: run2,
+        scope: proof.scope
+      });
+    } catch {
+      return { ok: false, outcome: { status: "ambiguous" } };
+    }
+    if (result2.status !== "planned")
+      return { ok: false, outcome: { status: result2.status } };
+    const candidate = { ...event, slotTransition: result2.transition };
+    const parsed = validate(ProtocolEventSchema, candidate);
+    return parsed.ok && parsed.value !== void 0 ? { ok: true, event: parsed.value } : { ok: false, outcome: { status: "corrupt" } };
+  }
+  async function persist(before, reduction, preOwnership = false) {
+    if (!reduction.ok) return { status: "corrupt" };
+    const batch = batchFor(before, reduction.nextState);
+    if (batch === void 0) return { status: "quarantined" };
+    fault("before_intent_persist");
+    fault("during_intent_persist");
+    const result2 = preOwnership ? await options.preOwnership.persistControllerAcquireIntent(batch) : await options.store.compareAndSet(batch);
+    fault("after_intent_persist");
+    const parsed = validate(RunStoreResultSchema, result2);
+    if (!parsed.ok || parsed.value === void 0)
+      return { status: "quarantined" };
+    if (parsed.value.status !== "applied")
+      return {
+        status: parsed.value.status === "holder_mismatch" ? "blocked" : parsed.value.status
+      };
+    if (parsed.value.affectedRowCount !== batch.changedRows.length + 1 || !same2(parsed.value.root, batch.next.root) || !same2(parsed.value.children, batch.next.children) || !same2(parsed.value.checkpoint, batch.checkpoint))
+      return { status: "quarantined" };
+    const read = validReadback(
+      { children: parsed.value.children, root: parsed.value.root },
+      before.scope
+    );
+    return read === void 0 || !same2(read, reduction.nextState) ? { status: "quarantined" } : read;
+  }
+  async function persistEvent(beforeRoot, run2, event, preOwnership = false) {
+    return persist(beforeRoot, reduce(run2, event), preOwnership);
+  }
+  async function reconcile(root, run2) {
+    let currentRoot = root;
+    let current = run2;
+    for (const entry of current.effectJournal.filter(
+      (value) => value.status === "intended" || value.status === "ambiguous"
+    )) {
+      const effect2 = effectFor(entry, current);
+      if (effect2 === void 0) return { status: "blocked" };
+      if (!isRecoverableEffect(effect2)) return { status: "blocked" };
+      const answer = await options.adapter.reconcile(effect2, current);
+      if (answer.status === "unavailable") return { status: "unavailable" };
+      let settledAnswer = answer;
+      if (answer.status === "absent") {
+        try {
+          fault("before_act");
+          fault("during_act");
+          settledAnswer = await options.adapter.execute(effect2, current);
+          fault("after_act");
+        } catch {
+          settledAnswer = { status: "ambiguous" };
+        }
+        if (settledAnswer.status === "unavailable")
+          return { status: "unavailable" };
+      }
+      const event = settledAnswer.status === "observed" ? observationFor(current, entry, settledAnswer.observation) : ambiguousEvent(
+        current,
+        entry,
+        settledAnswer.status === "ambiguous" ? settledAnswer.observationHash : void 0
+      );
+      if (event === void 0) return { status: "corrupt" };
+      const persisted = await persistEvent(currentRoot, current, event);
+      if (!isRun(persisted)) return persisted;
+      current = persisted;
+      currentRoot = makeRootProjection(current);
+      if (settledAnswer.status !== "observed") return { status: "ambiguous" };
+    }
+    return current;
+  }
+  return async function recoverAndRun(requested) {
+    const proof = await options.proveTopology();
+    if (proof === void 0) return { status: "unavailable" };
+    const lockResult = await (options.acquireOperationLock ?? OperationLock.acquire)({
+      commonDir: proof.commonDir,
+      holder: proof.holder,
+      nonce: options.nonce,
+      scope: proof.scope
+    });
+    if (lockResult.status !== "acquired")
+      return {
+        status: lockResult.status === "held" ? "held" : lockResult.status
+      };
+    try {
+      let initialized = false;
+      const loadedResult = await options.store.load();
+      let loaded = loadedResult.status === "observed" ? loadedResult.value : void 0;
+      if (loadedResult.status !== "observed" && loadedResult.status !== "absent")
+        return loadOutcome(loadedResult.status);
+      if (loadedResult.status === "absent") {
+        if (requested === void 0 || options.initialRun === void 0 || options.preOwnership.createControllerAcquireIntent === void 0)
+          return { status: "uninitialized" };
+        const initial = validate(
+          RepositoryRunSchema,
+          options.initialRun
+        );
+        const first = validate(ProtocolEventSchema, requested);
+        if (!initial.ok || initial.value === void 0 || !first.ok || first.value === void 0 || initial.value.controller.holder !== proof.holder || initial.value.state !== "initializing" || initial.value.controller.state !== "unacquired" || !same2(
+          {
+            beadsStoreIdentity: initial.value.storeIdentity,
+            gitRepositoryIdentity: initial.value.repositoryIdentity,
+            integrationBranch: initial.value.integrationBranch
+          },
+          proof.scope
+        ) || first.value.type !== "controller_acquire_intent" || first.value.expectedRevision !== initial.value.revision)
+          return { status: "corrupt" };
+        const prepared2 = await preparedControllerEvent(
+          first.value,
+          initial.value,
+          proof
+        );
+        if (!prepared2.ok) return prepared2.outcome;
+        const created = reduce(initial.value, prepared2.event);
+        if (!created.ok || !isPreOwnershipAcquire(initial.value, created.nextState))
+          return { status: "corrupt" };
+        const creation = initialRequest(
+          created.nextState,
+          proof.holder,
+          proof.scope
+        );
+        if (creation === void 0) return { status: "corrupt" };
+        fault("before_intent_persist");
+        fault("during_intent_persist");
+        const result2 = await options.preOwnership.createControllerAcquireIntent(creation);
+        fault("after_intent_persist");
+        const parsedResult = validate(
+          RunStoreResultSchema,
+          result2
+        );
+        if (!parsedResult.ok || parsedResult.value === void 0)
+          return { status: "quarantined" };
+        if (parsedResult.value.status !== "applied")
+          return {
+            status: parsedResult.value.status === "holder_mismatch" ? "blocked" : parsedResult.value.status
+          };
+        if (parsedResult.value.affectedRowCount !== creation.next.children.length + 1 || !same2(parsedResult.value.root, creation.next.root) || !same2(parsedResult.value.children, creation.next.children) || !same2(parsedResult.value.checkpoint, creation.next.root.checkpoint))
+          return { status: "quarantined" };
+        const createdRun = validReadback(
+          {
+            children: parsedResult.value.children,
+            root: parsedResult.value.root
+          },
+          proof.scope
+        );
+        if (createdRun === void 0 || !same2(createdRun, created.nextState))
+          return { status: "quarantined" };
+        loaded = {
+          children: parsedResult.value.children,
+          root: parsedResult.value.root
+        };
+        initialized = true;
+        requested = void 0;
+      }
+      if (loaded === void 0) return { status: "corrupt" };
+      const run2 = validReadback(loaded, proof.scope);
+      if (run2 === void 0 || runInvariantErrors(run2).length > 0 || loaded.root.holder !== proof.holder || run2.controller.holder !== proof.holder)
+        return { status: "corrupt" };
+      const root = loaded.root;
+      const reconciled = await reconcile(root, run2);
+      if (!isRun(reconciled)) return reconciled;
+      if (requested === void 0)
+        return {
+          status: initialized ? "reconciled" : "idle",
+          revision: reconciled.revision,
+          run: reconciled
+        };
+      const event = validate(ProtocolEventSchema, requested);
+      if (!event.ok || event.value === void 0) return { status: "corrupt" };
+      if (event.value.expectedRevision !== reconciled.revision)
+        return { status: "stale" };
+      const prepared = await preparedControllerEvent(
+        event.value,
+        reconciled,
+        proof
+      );
+      if (!prepared.ok) return prepared.outcome;
+      const reduction = reduce(reconciled, prepared.event);
+      if (!reduction.ok) return { status: "blocked" };
+      const emitted = reduction.effects[0];
+      if (emitted !== void 0 && !isRecoverableEffect(emitted))
+        return { status: "blocked" };
+      const preOwnership = isPreOwnershipAcquire(
+        reconciled,
+        reduction.nextState
+      );
+      const intent2 = await persist(
+        makeRootProjection(reconciled),
+        reduction,
+        preOwnership
+      );
+      if (!isRun(intent2)) return intent2;
+      const effect2 = emitted;
+      if (effect2 === void 0) {
+        return { status: "applied", revision: intent2.revision, run: intent2 };
+      }
+      fault("before_act");
+      let acted;
+      try {
+        fault("during_act");
+        acted = await options.adapter.execute(effect2, intent2);
+        fault("after_act");
+      } catch {
+        acted = { status: "ambiguous" };
+      }
+      const entry = intent2.effectJournal.find(
+        (candidate) => candidate.effectId === effect2.effectId
+      );
+      if (entry === void 0) return { status: "corrupt" };
+      if (acted.status === "unavailable") return { status: "unavailable" };
+      const observed2 = acted.status === "observed" ? observationFor(intent2, entry, acted.observation) : ambiguousEvent(intent2, entry, acted.observationHash);
+      if (observed2 === void 0) return { status: "corrupt" };
+      fault("before_observation_persist");
+      fault("during_observation_persist");
+      const settled = await persistEvent(
+        makeRootProjection(intent2),
+        intent2,
+        observed2
+      );
+      fault("after_observation_persist");
+      if (!isRun(settled)) return settled;
+      return acted.status === "observed" ? { status: "applied", revision: settled.revision, run: settled } : { status: "ambiguous" };
+    } finally {
+      const released = await lockResult.lock.release();
+      if (released.status !== "released")
+        return {
+          status: released.status === "holder_mismatch" ? "blocked" : released.status
+        };
+    }
+  };
+}
+function observationHash(value) {
+  return sha256(
+    canonicalJson({ domain: "sce.recovery.observation.v1", value })
+  );
+}
+
+// src/commands/production-recovery.ts
+function ambiguous() {
+  return { status: "ambiguous" };
+}
+function unavailable() {
+  return { status: "unavailable" };
+}
+function classifyDiscovery(result2) {
+  if (result2.state === "observed") return "observed";
+  if (result2.state === "refused" && result2.code === "GIT_ABSENT")
+    return "absent";
+  return "ambiguous";
+}
+function eventBase2(effect2, run2) {
+  return {
+    effectId: effect2.effectId,
+    effectKind: effect2.kind,
+    eventId: `recover-${effect2.effectId}`,
+    expectedRevision: run2.revision,
+    observationHash: observationHash({
+      effectId: effect2.effectId,
+      kind: effect2.kind,
+      paramsHash: effect2.paramsHash
+    }),
+    unitId: effect2.unitId
+  };
+}
+function observed(effect2, run2) {
+  const base = eventBase2(effect2, run2);
+  switch (effect2.kind) {
+    case "controller_acquire":
+      return {
+        observation: {
+          ...base,
+          controllerFencingToken: effect2.params.controllerFencingToken,
+          holder: effect2.params.holder,
+          type: "controller_acquired"
+        },
+        status: "observed"
+      };
+    case "controller_release":
+      return {
+        observation: { ...base, type: "controller_released" },
+        status: "observed"
+      };
+    case "branch_create":
+      return {
+        observation: {
+          ...base,
+          branchRef: effect2.params.branchRef,
+          type: "branch_observed"
+        },
+        status: "observed"
+      };
+    case "worktree_create":
+      return {
+        observation: {
+          ...base,
+          type: "worktree_observed",
+          worktreePath: effect2.params.worktreePath
+        },
+        status: "observed"
+      };
+    case "publish":
+      return {
+        observation: {
+          ...base,
+          publication: {
+            kind: "push_branch",
+            remoteHeadOid: effect2.params.candidate.headOid
+          },
+          type: "publish_observed"
+        },
+        status: "observed"
+      };
+    case "integrate":
+      return {
+        observation: {
+          ...base,
+          baseOid: effect2.params.candidate.baseOid,
+          controllerFencingToken: effect2.params.controllerFencingToken,
+          headOid: effect2.params.candidate.headOid,
+          integrationOid: effect2.params.candidate.headOid,
+          treeOid: effect2.params.candidate.treeOid,
+          type: "integrate_observed"
+        },
+        status: "observed"
+      };
+    default:
+      return void 0;
+  }
+}
+function controllerTransition(effect2) {
+  return effect2.kind === "controller_acquire" || effect2.kind === "controller_release" ? effect2.params.slotTransition : void 0;
+}
+function worktreeBase(effect2, run2) {
+  return effect2.kind === "worktree_create" && effect2.unitId !== null ? run2.units[effect2.unitId]?.baseOid : void 0;
+}
+function canPublish(effect2) {
+  return effect2.params.completionBoundary !== "pr-handoff" && effect2.params.authorityProfile !== "local-change-only";
+}
+function remote(options) {
+  return options.git.remote;
+}
+function gitMatchesRun(repository, run2) {
+  return repository.identity === run2.repositoryIdentity && repository.objectFormat === run2.gitObjectFormat;
+}
+function transitionMatchesRun(effect2, run2) {
+  const transition = controllerTransition(effect2);
+  if (transition === void 0 || transition === null || typeof transition !== "object" || !("scope" in transition) || !("holder" in transition))
+    return false;
+  const scope = transition.scope;
+  if (scope.beadsStoreIdentity !== run2.storeIdentity || scope.gitRepositoryIdentity !== run2.repositoryIdentity || scope.integrationBranch !== run2.integrationBranch || transition.holder !== run2.controller.holder)
+    return false;
+  return effect2.kind === "controller_acquire" || effect2.kind === "controller_release" ? effect2.params.controllerFencingToken === run2.controllerFencingToken && effect2.params.holder === run2.controller.holder : false;
+}
+function localIntegrationRef(branch) {
+  return `refs/heads/${branch}`;
+}
+function createProductionRecoveryEffectAdapter(options) {
+  const git = options.git;
+  async function discover(effect2, run2) {
+    const done = observed(effect2, run2);
+    if (done === void 0) return ambiguous();
+    if (effect2.kind !== "controller_acquire" && effect2.kind !== "controller_release" && !gitMatchesRun(git.repository, run2) || (effect2.kind === "controller_acquire" || effect2.kind === "controller_release") && !transitionMatchesRun(effect2, run2))
+      return ambiguous();
+    try {
+      switch (effect2.kind) {
+        case "controller_acquire":
+        case "controller_release": {
+          const transition = controllerTransition(effect2);
+          if (transition === void 0 || options.topology === void 0)
+            return ambiguous();
+          const result2 = await options.topology.reconcileControllerTransition(transition);
+          if (result2.status === "observed") return done;
+          if (result2.status === "absent") return { status: "absent" };
+          return result2.status === "unavailable" ? unavailable() : ambiguous();
+        }
+        case "branch_create":
+          return discovered(
+            done,
+            await discoverBranch(git.runner, git.repository, {
+              base: effect2.params.baseOid,
+              branch: effect2.params.branchRef
+            })
+          );
+        case "worktree_create": {
+          const base = worktreeBase(effect2, run2);
+          if (base === void 0) return ambiguous();
+          return discovered(
+            done,
+            await discoverWorktree(git.runner, git.repository, {
+              branch: effect2.params.branchRef,
+              head: base,
+              path: effect2.params.worktreePath
+            })
+          );
+        }
+        case "publish": {
+          const configuredRemote = remote(options);
+          if (configuredRemote === void 0 || !canPublish(effect2))
+            return ambiguous();
+          return discovered(
+            done,
+            await discoverPublication(git.runner, git.repository, {
+              candidate: effect2.params.candidate.headOid,
+              remote: configuredRemote,
+              remoteBranch: effect2.params.branchRef
+            })
+          );
+        }
+        case "integrate": {
+          if (effect2.params.integrationProfile === "local-ff")
+            return discovered(
+              done,
+              await discoverIntegration(git.runner, git.repository, {
+                candidate: effect2.params.candidate.headOid,
+                integrationRef: localIntegrationRef(
+                  effect2.params.integrationBranch
+                )
+              })
+            );
+          const configuredRemote = remote(options);
+          if (effect2.params.integrationProfile !== "remote-ff" || configuredRemote === void 0)
+            return ambiguous();
+          return discovered(
+            done,
+            await discoverRemoteIntegration(git.runner, git.repository, {
+              candidate: effect2.params.candidate.headOid,
+              integrationBranch: effect2.params.integrationBranch,
+              remote: configuredRemote
+            })
+          );
+        }
+        // The durable candidate intent has no exact candidate OID/tree/scope
+        // binding.  Never infer those values from a worktree during recovery.
+        case "candidate_collect":
+          return ambiguous();
+        default:
+          return ambiguous();
+      }
+    } catch {
+      return ambiguous();
+    }
+  }
+  async function execute(effect2, run2) {
+    const done = observed(effect2, run2);
+    if (done === void 0) return ambiguous();
+    if (effect2.kind !== "controller_acquire" && effect2.kind !== "controller_release" && !gitMatchesRun(git.repository, run2) || (effect2.kind === "controller_acquire" || effect2.kind === "controller_release") && !transitionMatchesRun(effect2, run2))
+      return ambiguous();
+    try {
+      switch (effect2.kind) {
+        case "controller_acquire":
+        case "controller_release": {
+          const transition = controllerTransition(effect2);
+          const executor = options.topology?.executeControllerTransition;
+          if (transition === void 0 || executor === void 0)
+            return ambiguous();
+          const result2 = await executor(transition);
+          return result2.status === "observed" ? done : result2.status === "unavailable" ? unavailable() : ambiguous();
+        }
+        case "branch_create":
+          return executed(
+            done,
+            await ensureBranch(git.runner, git.repository, {
+              base: effect2.params.baseOid,
+              branch: effect2.params.branchRef
+            })
+          );
+        case "worktree_create": {
+          const base = worktreeBase(effect2, run2);
+          if (base === void 0) return ambiguous();
+          return executed(
+            done,
+            await ensureWorktree(git.runner, git.repository, {
+              branch: effect2.params.branchRef,
+              head: base,
+              path: effect2.params.worktreePath
+            })
+          );
+        }
+        case "publish": {
+          const configuredRemote = remote(options);
+          if (configuredRemote === void 0 || !canPublish(effect2))
+            return ambiguous();
+          return executed(
+            done,
+            await publishCandidate(git.runner, git.repository, {
+              candidate: effect2.params.candidate.headOid,
+              remote: configuredRemote,
+              remoteBranch: effect2.params.branchRef
+            })
+          );
+        }
+        case "integrate": {
+          if (effect2.params.integrationProfile === "local-ff")
+            return executed(
+              done,
+              await integrateLocalFastForward(git.runner, git.repository, {
+                base: effect2.params.candidate.baseOid,
+                candidate: effect2.params.candidate.headOid,
+                integrationRef: localIntegrationRef(
+                  effect2.params.integrationBranch
+                )
+              })
+            );
+          const configuredRemote = remote(options);
+          if (effect2.params.integrationProfile !== "remote-ff" || configuredRemote === void 0)
+            return ambiguous();
+          return executed(
+            done,
+            await integrateRemoteFastForward(git.runner, git.repository, {
+              base: effect2.params.candidate.baseOid,
+              candidate: effect2.params.candidate.headOid,
+              integrationBranch: effect2.params.integrationBranch,
+              remote: configuredRemote
+            })
+          );
+        }
+        case "candidate_collect":
+        default:
+          return ambiguous();
+      }
+    } catch {
+      return ambiguous();
+    }
+  }
+  return { execute, reconcile: discover };
+}
+function createProductionRecoveryRunner(options) {
+  const { git, topology, ...recovery } = options;
+  return createRecoveryRunner({
+    ...recovery,
+    adapter: createProductionRecoveryEffectAdapter({
+      git,
+      ...topology === void 0 ? {} : { topology }
+    }),
+    ...topology?.prepareControllerTransition === void 0 ? {} : {
+      prepareControllerTransition: async (input) => await topology.prepareControllerTransition({
+        holder: input.holder,
+        kind: input.kind,
+        scope: input.scope
+      })
+    },
+    proveTopology: async () => {
+      let proof;
+      try {
+        proof = await recovery.proveTopology();
+      } catch {
+        return void 0;
+      }
+      if (proof === void 0 || proof.commonDir !== git.repository.commonDir || proof.scope.gitRepositoryIdentity !== git.repository.identity)
+        return void 0;
+      if (recovery.initialRun !== void 0 && (recovery.initialRun.controller.holder !== proof.holder || recovery.initialRun.repositoryIdentity !== proof.scope.gitRepositoryIdentity || recovery.initialRun.gitObjectFormat !== git.repository.objectFormat || recovery.initialRun.storeIdentity !== proof.scope.beadsStoreIdentity || recovery.initialRun.integrationBranch !== proof.scope.integrationBranch))
+        return void 0;
+      const verified = await verifyRepository(git.runner, git.repository);
+      return verified.state === "observed" ? proof : void 0;
+    }
+  });
+}
+function discovered(observedResult, result2) {
+  const classification = classifyDiscovery(result2);
+  return classification === "observed" ? observedResult : classification === "absent" ? { status: "absent" } : ambiguous();
+}
+function executed(observedResult, result2) {
+  return result2.state === "observed" ? observedResult : ambiguous();
+}
 
 // src/commands/index.ts
 var commandNames = [
@@ -12928,7 +16752,7 @@ function validateCommandPayload(input) {
 }
 var stateOnlyCommandRunner = (request) => {
   if (!validateCommandRequest(request)) return invalidStateRequest();
-  if (!isStateCommandRequest(request)) return unavailable();
+  if (!isStateCommandRequest(request)) return unavailable2();
   if (!("request" in request.options)) return invalidStateRequest();
   const parsedRun = validate(
     RepositoryRunSchema,
@@ -12936,9 +16760,9 @@ var stateOnlyCommandRunner = (request) => {
   );
   if (!parsedRun.ok || parsedRun.value === void 0)
     return invalidStateRequest();
-  const run = parsedRun.value;
-  if (runInvariantErrors(run).length > 0) return invalidStateRequest();
-  const ambiguities = ambiguityRecoveryActions(run).flatMap(
+  const run2 = parsedRun.value;
+  if (runInvariantErrors(run2).length > 0) return invalidStateRequest();
+  const ambiguities = ambiguityRecoveryActions(run2).flatMap(
     (action) => action.effectId === void 0 || action.effectKind === void 0 ? [] : [
       {
         effectId: action.effectId,
@@ -12955,11 +16779,11 @@ var stateOnlyCommandRunner = (request) => {
       status: "ok",
       result: {
         ambiguities,
-        integrationBranch: run.integrationBranch,
-        repositoryIdentity: run.repositoryIdentity,
-        revision: run.revision,
-        state: run.state,
-        unitCount: Object.keys(run.units).length
+        integrationBranch: run2.integrationBranch,
+        repositoryIdentity: run2.repositoryIdentity,
+        revision: run2.revision,
+        state: run2.state,
+        unitCount: Object.keys(run2.units).length
       }
     };
   }
@@ -12969,11 +16793,11 @@ var stateOnlyCommandRunner = (request) => {
       version: 1,
       status: "ok",
       result: {
-        activeModifyingUnitIds: [...run.activeModifyingUnitIds].sort(),
+        activeModifyingUnitIds: [...run2.activeModifyingUnitIds].sort(),
         ambiguities,
-        effectCount: run.effectJournal.length,
-        revision: run.revision,
-        state: run.state
+        effectCount: run2.effectJournal.length,
+        revision: run2.revision,
+        state: run2.state
       }
     };
   }
@@ -12982,13 +16806,79 @@ var stateOnlyCommandRunner = (request) => {
     version: 1,
     status: "ok",
     result: {
-      legalActions: legalActions(run).map((action) => ({
+      legalActions: legalActions(run2).map((action) => ({
         ...action
       })),
-      revision: run.revision
+      revision: run2.revision
     }
   };
 };
+var commandEvent = {
+  "acquire-controller": ["controller_acquire_intent"],
+  "prepare-wave": ["reservation_intent", "branch_intent", "worktree_intent"],
+  "dispatch-request": ["dispatch_intent"],
+  "record-dispatch": ["dispatch_observed"],
+  "collect-candidate": ["candidate_intent"],
+  qualify: ["verification_intent"],
+  "review-prepare": ["reviewer_dispatch_intent"],
+  "review-record": ["review_collected"],
+  publish: ["publish_intent"],
+  integrate: ["integrate_intent"],
+  "release-controller": ["controller_release_intent"]
+};
+function createRecoveryCommandRunner(runner) {
+  return async (request) => {
+    if (!validateCommandRequest(request)) return invalidStateRequest();
+    if (isStateCommandRequest(request)) {
+      const outcome2 = await runner();
+      if (!("run" in outcome2))
+        return outcome2.status === "unavailable" ? unavailable2() : recoveryBlocked();
+      return await stateResult(request.command, outcome2.run);
+    }
+    if (request.command === "feedback") return unavailable2();
+    const payload = request.options.request;
+    const event = payload?.event;
+    const expected = commandEvent[request.command];
+    if (expected !== void 0 && (event === void 0 || !expected.includes(event.type)))
+      return invalidStateRequest();
+    if (expected === void 0 && event !== void 0)
+      return invalidStateRequest();
+    if (event !== void 0 && (request.options.expectedRevision !== void 0 && request.options.expectedRevision !== event.expectedRevision || request.options.idempotencyKey !== void 0 && (!("idempotencyKey" in event) || request.options.idempotencyKey !== event.idempotencyKey)))
+      return invalidStateRequest();
+    const outcome = await runner(event);
+    if (!("revision" in outcome) || outcome.revision < 0)
+      return outcome.status === "unavailable" ? unavailable2() : recoveryBlocked();
+    return {
+      result: {
+        revision: outcome.revision,
+        status: outcome.status
+      },
+      schema: "sce.command.result",
+      status: "ok",
+      version: 1
+    };
+  };
+}
+function createProductionRecoveryCommandRunner(options) {
+  return createRecoveryCommandRunner(createProductionRecoveryRunner(options));
+}
+function recoveryBlocked() {
+  return {
+    code: "SCE_RECOVERY_BLOCKED",
+    schema: "sce.command.result",
+    status: "blocked",
+    version: 1
+  };
+}
+async function stateResult(command, run2) {
+  const request = {
+    command,
+    options: { json: true, request: { run: run2 } },
+    schema: "sce.command.request",
+    version: 1
+  };
+  return await stateOnlyCommandRunner(request);
+}
 function isStateCommandRequest(request) {
   return request.command === "inspect" || request.command === "next" || request.command === "status";
 }
@@ -13000,7 +16890,7 @@ function invalidStateRequest() {
     version: 1
   };
 }
-function unavailable() {
+function unavailable2() {
   return { schema: "sce.command.result", status: "unavailable", version: 1 };
 }
 function isCommandName(value) {
@@ -13013,6 +16903,6290 @@ function isJsonObject(value) {
   return value !== null && !Array.isArray(value) && typeof value === "object";
 }
 
+// src/controller-config.ts
+import { readFile } from "node:fs/promises";
+import { isAbsolute as isAbsolute6, normalize as normalize3, resolve as resolve3 } from "node:path";
+
+// src/adapters/beads-embedded/schemas.ts
+var PINNED_BD_ISSUE_BASE_KEYS = [
+  "acceptance_criteria",
+  "actor",
+  "agent_state",
+  "await_id",
+  "await_type",
+  "close_reason",
+  "closed_by_session",
+  "compaction_level",
+  "content_hash",
+  "created_at",
+  "created_by",
+  "description",
+  "design",
+  "ephemeral",
+  "event_kind",
+  "external_ref",
+  "hook_bead",
+  "id",
+  "is_blocked",
+  "is_template",
+  "issue_type",
+  "metadata",
+  "mol_type",
+  "no_history",
+  "notes",
+  "owner",
+  "payload",
+  "pinned",
+  "priority",
+  "rig",
+  "role_bead",
+  "role_type",
+  "sender",
+  "source_repo",
+  "source_system",
+  "spec_id",
+  "status",
+  "target",
+  "timeout_ns",
+  "title",
+  "updated_at",
+  "waiters",
+  "wisp_type",
+  "work_type"
+];
+var PINNED_BD_ISSUE_NUMERIC_KEYS = [
+  "compaction_level",
+  "ephemeral",
+  "is_blocked",
+  "is_template",
+  "no_history",
+  "pinned",
+  "priority",
+  "timeout_ns"
+];
+var PINNED_BD_ISSUE_STRING_KEYS = [
+  "acceptance_criteria",
+  "actor",
+  "agent_state",
+  "await_id",
+  "await_type",
+  "close_reason",
+  "closed_by_session",
+  "content_hash",
+  "created_by",
+  "description",
+  "design",
+  "event_kind",
+  "external_ref",
+  "hook_bead",
+  "mol_type",
+  "notes",
+  "owner",
+  "payload",
+  "rig",
+  "role_bead",
+  "role_type",
+  "sender",
+  "source_repo",
+  "source_system",
+  "spec_id",
+  "target",
+  "waiters",
+  "wisp_type",
+  "work_type"
+];
+function exactKeys(value, expected) {
+  return Object.keys(value).length === expected.length && expected.every((key) => Object.prototype.hasOwnProperty.call(value, key));
+}
+function sqlTimestamp(value) {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u.test(value);
+}
+function isPinnedBdIssueRow(value) {
+  const hasStartedAt = Object.prototype.hasOwnProperty.call(
+    value,
+    "started_at"
+  );
+  const hasExternalRef = Object.prototype.hasOwnProperty.call(
+    value,
+    "external_ref"
+  );
+  const baseKeys = hasExternalRef ? PINNED_BD_ISSUE_BASE_KEYS : PINNED_BD_ISSUE_BASE_KEYS.filter((key) => key !== "external_ref");
+  const keys = hasStartedAt ? [...baseKeys, "started_at"] : baseKeys;
+  return exactKeys(value, keys) && typeof value.id === "string" && typeof value.issue_type === "string" && typeof value.status === "string" && typeof value.title === "string" && value.metadata !== null && typeof value.metadata === "object" && !Array.isArray(value.metadata) && PINNED_BD_ISSUE_STRING_KEYS.filter(
+    (key) => hasExternalRef || key !== "external_ref"
+  ).every((key) => typeof value[key] === "string") && PINNED_BD_ISSUE_NUMERIC_KEYS.every(
+    (key) => typeof value[key] === "number" && Number.isSafeInteger(value[key])
+  ) && sqlTimestamp(value.created_at) && sqlTimestamp(value.updated_at) && (!hasStartedAt || sqlTimestamp(value.started_at));
+}
+var EMBEDDED_ADAPTER_VERSION = 1;
+var EmbeddedResultSchema = Type.Object(
+  {
+    code: Type.Union([
+      Type.Literal("applied"),
+      Type.Literal("blocked"),
+      Type.Literal("stale"),
+      Type.Literal("holder_mismatch"),
+      Type.Literal("conflict"),
+      Type.Literal("ambiguous"),
+      Type.Literal("unavailable"),
+      Type.Literal("quarantined"),
+      Type.Literal("worker_mutation")
+    ]),
+    schema: Type.Literal("sce.beads-embedded.result"),
+    version: Type.Literal(EMBEDDED_ADAPTER_VERSION)
+  },
+  { additionalProperties: false }
+);
+
+// src/adapters/beads-embedded/slot-transition.ts
+function same3(left, right) {
+  return canonicalJson(left) === canonicalJson(right);
+}
+function head(value) {
+  return typeof value === "string" && /^[0-9a-z]{20,64}$/u.test(value);
+}
+function holder2(value) {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(value);
+}
+function object(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : void 0;
+}
+function transitionPayload(input) {
+  return {
+    after: input.after,
+    before: input.before,
+    holder: input.holder,
+    kind: input.kind,
+    schema: input.schema,
+    scope: input.scope,
+    version: input.version
+  };
+}
+function deriveSlotTransitionId(input) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.beads-embedded.slot-transition.v1",
+      transition: transitionPayload(input)
+    })
+  );
+}
+function makeSlotTransitionIntent(kind, holderValue, scope, before, after) {
+  const unsigned = {
+    after,
+    before,
+    holder: holderValue,
+    kind,
+    schema: "sce.beads-embedded.slot-transition",
+    scope,
+    version: 1
+  };
+  return { ...unsigned, idempotencyKey: deriveSlotTransitionId(unsigned) };
+}
+function validateSlotTransitionIntent(input, prefix, scope, mode, expectedHolder) {
+  const value = object(input);
+  if (value === void 0 || Object.keys(value).some(
+    (key) => ![
+      "after",
+      "before",
+      "holder",
+      "idempotencyKey",
+      "kind",
+      "schema",
+      "scope",
+      "version"
+    ].includes(key)
+  ) || value.schema !== "sce.beads-embedded.slot-transition" || value.version !== 1 || value.kind !== "acquire" && value.kind !== "release" || !holder2(value.holder) || expectedHolder !== void 0 && value.holder !== expectedHolder || !same3(value.scope, scope) || typeof value.idempotencyKey !== "string" || !/^[0-9a-f]{64}$/u.test(value.idempotencyKey))
+    return false;
+  const before = object(value.before);
+  if (before === void 0 || Object.keys(before).some(
+    (key) => key !== "head" && key !== "remoteHead" && key !== "slot"
+  ) || !head(before.head) || before.remoteHead !== void 0 && !head(before.remoteHead) || mode === "git-sync" && before.remoteHead === void 0)
+    return false;
+  const beforeSlot = validateMergeSlotObservation(before.slot, prefix, scope);
+  const afterSlot = validateMergeSlotObservation(value.after, prefix, scope);
+  if (!beforeSlot.ok || !afterSlot.ok) return false;
+  const intended = value.kind === "acquire" ? beforeSlot.value.status === "available" && afterSlot.value.status === "acquired" && afterSlot.value.actor === value.holder && afterSlot.value.holder === value.holder : beforeSlot.value.status === "acquired" && beforeSlot.value.actor === value.holder && beforeSlot.value.holder === value.holder && afterSlot.value.status === "available" && afterSlot.value.actor === value.holder;
+  if (!intended) return false;
+  const unsigned = {
+    after: afterSlot.value,
+    before: {
+      head: before.head,
+      ...before.remoteHead === void 0 ? {} : { remoteHead: before.remoteHead },
+      slot: beforeSlot.value
+    },
+    holder: value.holder,
+    kind: value.kind,
+    schema: value.schema,
+    scope,
+    version: value.version
+  };
+  return value.idempotencyKey === deriveSlotTransitionId(unsigned);
+}
+
+// src/adapters/beads-embedded/pinned-bd-process.ts
+import { spawn as spawn2 } from "node:child_process";
+import { createHash as createHash2 } from "node:crypto";
+import { closeSync as closeSync2, openSync as openSync2, readSync, realpathSync as realpathSync3, statSync as statSync2 } from "node:fs";
+import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute3 } from "node:path";
+var MAX_OUTPUT_BYTES = 65536;
+var PINNED_BD_VERSION = "1.1.0";
+var PINNED_DOLT_VERSION = "2.2.1";
+var PROCESS_TIMEOUT_MS = 15e3;
+var EXECUTABLE_SAMPLE_BYTES = 65536;
+var MAX_CLONE_LINEAGE_EDGES = 64;
+var SLOT_INITIALIZATION_AUTHORITY = "sce.embedded.slot.initialize.v1";
+function sameExecutable(left, right) {
+  return left !== void 0 && left.ctimeMs === right.ctimeMs && left.dev === right.dev && left.digest === right.digest && left.ino === right.ino && left.mtimeMs === right.mtimeMs && left.mode === right.mode && left.path === right.path && left.size === right.size;
+}
+function executableDigest(path2, size) {
+  if (!Number.isSafeInteger(size) || size < 0) return void 0;
+  let descriptor;
+  try {
+    descriptor = openSync2(path2, "r");
+    const hash3 = createHash2("sha256").update(`${size}:`);
+    const sample = Math.min(size, EXECUTABLE_SAMPLE_BYTES);
+    const first = Buffer.alloc(sample);
+    if (sample > 0)
+      hash3.update(first.subarray(0, readSync(descriptor, first, 0, sample, 0)));
+    if (size > sample) {
+      const last = Buffer.alloc(sample);
+      hash3.update(
+        last.subarray(
+          0,
+          readSync(descriptor, last, 0, sample, Math.max(0, size - sample))
+        )
+      );
+    }
+    return hash3.digest("hex");
+  } catch {
+    return void 0;
+  } finally {
+    if (descriptor !== void 0) closeSync2(descriptor);
+  }
+}
+function safeString(value, max = 160) {
+  return typeof value === "string" && value.length > 0 && value.length <= max && !value.includes("\0") ? value : void 0;
+}
+function safeHead(value) {
+  const head3 = safeString(value, 64);
+  return head3 !== void 0 && /^[0-9a-z]{20,64}$/u.test(head3) ? head3 : void 0;
+}
+function object2(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : void 0;
+}
+function json2(source) {
+  try {
+    return object2(JSON.parse(source));
+  } catch {
+    return void 0;
+  }
+}
+function doltShow(source) {
+  const raw = json2(source);
+  if (raw === void 0 || raw.backend !== "dolt" || raw.embedded !== true || raw.schema_version !== 1)
+    return void 0;
+  const dataDir = safeString(raw.data_dir, 4096);
+  const database = safeString(raw.database);
+  return dataDir === void 0 || database === void 0 ? void 0 : { dataDir, database };
+}
+function autoCommit(source) {
+  const raw = json2(source);
+  if (raw === void 0 || raw.key !== "dolt.auto-commit" || raw.schema_version !== 1)
+    return void 0;
+  return raw.value === "off" || raw.value === "on" || raw.value === "batch" ? raw.value : void 0;
+}
+function sqlRows(source) {
+  const raw = json2(source);
+  if (raw !== void 0 && Object.keys(raw).length === 0) return [];
+  return raw !== void 0 && Array.isArray(raw.rows) && raw.rows.every((row) => object2(row) !== void 0) ? raw.rows : void 0;
+}
+function sqlHead(source) {
+  const rows = sqlRows(source);
+  return rows?.length === 1 ? safeHead(rows[0]?.head) : void 0;
+}
+function sqlWorkingSet(source) {
+  const rows = sqlRows(source);
+  if (rows === void 0) return void 0;
+  return rows.length === 0 ? "clean" : rows.every(
+    (row) => row.staged === 0 && typeof row.status === "string" && safeString(row.table_name) !== void 0
+  ) ? "pending" : void 0;
+}
+function isPinnedCloneMergeDelta(source) {
+  const raw = json2(source);
+  if (raw === void 0 || Object.keys(raw).length !== 1 || Object.keys(raw)[0] !== "tables")
+    return false;
+  const tables = raw?.tables;
+  if (!Array.isArray(tables) || tables.length !== 1) return false;
+  const table = object2(tables[0]);
+  const diffs = table?.data_diff;
+  if (table === void 0 || Object.keys(table).length !== 2 || !Object.prototype.hasOwnProperty.call(table, "name") || !Object.prototype.hasOwnProperty.call(table, "data_diff") || table.name !== "metadata" || !Array.isArray(diffs) || diffs.length !== 2)
+    return false;
+  const seen = /* @__PURE__ */ new Set();
+  for (const diff of diffs) {
+    const entry = object2(diff);
+    const from = object2(entry?.from_row);
+    const to = object2(entry?.to_row);
+    if (entry === void 0 || Object.keys(entry).length !== 2 || !Object.prototype.hasOwnProperty.call(entry, "from_row") || !Object.prototype.hasOwnProperty.call(entry, "to_row") || from === void 0 || to === void 0 || Object.keys(from).length !== 2 || Object.keys(to).length !== 2 || Object.keys(from).some((key) => key !== "key" && key !== "value") || Object.keys(to).some((key) => key !== "key" && key !== "value") || from.key !== to.key || typeof from.key !== "string" || seen.has(from.key) || typeof from.value !== "string" || typeof to.value !== "string" || from.value === to.value)
+      return false;
+    seen.add(from.key);
+    if (from.key === "clone_id" && (!/^[0-9a-f]{16}$/u.test(from.value) || !/^[0-9a-f]{16}$/u.test(to.value)) || from.key === "last_import_time" && (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(
+      from.value
+    ) || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(
+      to.value
+    )))
+      return false;
+  }
+  return seen.size === 2 && seen.has("clone_id") && seen.has("last_import_time");
+}
+var SLOT_ISSUE_BASE_KEYS = [
+  "acceptance_criteria",
+  "actor",
+  "agent_state",
+  "await_id",
+  "await_type",
+  "close_reason",
+  "closed_by_session",
+  "compaction_level",
+  "content_hash",
+  "created_at",
+  "created_by",
+  "description",
+  "design",
+  "ephemeral",
+  "event_kind",
+  "external_ref",
+  "hook_bead",
+  "id",
+  "is_blocked",
+  "is_template",
+  "issue_type",
+  "metadata",
+  "mol_type",
+  "no_history",
+  "notes",
+  "owner",
+  "payload",
+  "pinned",
+  "priority",
+  "rig",
+  "role_bead",
+  "role_type",
+  "sender",
+  "source_repo",
+  "source_system",
+  "spec_id",
+  "status",
+  "target",
+  "timeout_ns",
+  "title",
+  "updated_at",
+  "waiters",
+  "wisp_type",
+  "work_type"
+];
+var SLOT_ISSUE_NUMERIC_KEYS = [
+  "compaction_level",
+  "ephemeral",
+  "is_blocked",
+  "is_template",
+  "no_history",
+  "pinned",
+  "priority",
+  "timeout_ns"
+];
+var SLOT_ISSUE_STRING_KEYS = [
+  "acceptance_criteria",
+  "actor",
+  "agent_state",
+  "await_id",
+  "await_type",
+  "close_reason",
+  "closed_by_session",
+  "content_hash",
+  "created_by",
+  "description",
+  "design",
+  "event_kind",
+  "external_ref",
+  "hook_bead",
+  "mol_type",
+  "notes",
+  "owner",
+  "payload",
+  "rig",
+  "role_bead",
+  "role_type",
+  "sender",
+  "source_repo",
+  "source_system",
+  "spec_id",
+  "target",
+  "waiters",
+  "wisp_type",
+  "work_type"
+];
+var EVENT_ROW_KEYS = [
+  "actor",
+  "created_at",
+  "event_type",
+  "id",
+  "issue_id",
+  "new_value",
+  "old_value"
+];
+var EVENT_OLD_BASE_KEYS = [
+  "created_at",
+  "description",
+  "design",
+  "external_ref",
+  "id",
+  "issue_type",
+  "labels",
+  "priority",
+  "status",
+  "title",
+  "updated_at"
+];
+function hasExactKeys(value, expected) {
+  const actual = Object.keys(value);
+  return actual.length === expected.length && expected.every((key) => Object.prototype.hasOwnProperty.call(value, key));
+}
+function sameJson(left, right) {
+  try {
+    return canonicalJson(left) === canonicalJson(right);
+  } catch {
+    return false;
+  }
+}
+function sqlTimestamp2(value) {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u.test(value);
+}
+function eventTimestamp(value) {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/u.test(value);
+}
+function eventId(value) {
+  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(
+    value
+  );
+}
+function jsonObjectString(value) {
+  if (typeof value !== "string") return void 0;
+  try {
+    return object2(JSON.parse(value));
+  } catch {
+    return void 0;
+  }
+}
+function exactSlotMetadata(value, holder4) {
+  const metadata = object2(value);
+  return metadata !== void 0 && hasExactKeys(metadata, holder4 === void 0 ? [] : ["holder"]) && (holder4 === void 0 || metadata.holder === holder4);
+}
+function exactSlotIssueRow(row, expectedId, status, holder4, hasStartedAt) {
+  const expectedKeys = hasStartedAt ? [...SLOT_ISSUE_BASE_KEYS, "started_at"] : SLOT_ISSUE_BASE_KEYS;
+  return isPinnedBdIssueRow(row) && hasExactKeys(row, expectedKeys) && row.id === expectedId && row.issue_type === "task" && row.status === status && row.title === MERGE_SLOT_TITLE && exactSlotMetadata(row.metadata, holder4) && SLOT_ISSUE_STRING_KEYS.every((key) => typeof row[key] === "string") && SLOT_ISSUE_NUMERIC_KEYS.every(
+    (key) => typeof row[key] === "number" && Number.isSafeInteger(row[key])
+  ) && sqlTimestamp2(row.created_at) && sqlTimestamp2(row.updated_at) && (!hasStartedAt || sqlTimestamp2(row.started_at));
+}
+function exactPriorEventValue(value, issue, beforeHolder, hasStartedAt) {
+  const expectedKeys = [
+    ...EVENT_OLD_BASE_KEYS,
+    ...beforeHolder === void 0 ? [] : ["metadata"],
+    ...hasStartedAt ? ["started_at"] : []
+  ];
+  return hasExactKeys(value, expectedKeys) && value.id === issue.id && value.title === issue.title && value.description === issue.description && value.design === issue.design && value.status === issue.status && value.priority === issue.priority && value.issue_type === issue.issue_type && value.external_ref === issue.external_ref && eventTimestamp(value.created_at) && eventTimestamp(value.updated_at) && (!hasStartedAt || eventTimestamp(value.started_at)) && Array.isArray(value.labels) && value.labels.length === 1 && value.labels[0] === MERGE_SLOT_LABEL && (beforeHolder === void 0 || exactSlotMetadata(value.metadata, beforeHolder));
+}
+function exactNextEventValue(value, issue, afterHolder) {
+  return hasExactKeys(value, ["metadata", "status"]) && value.status === issue.status && typeof value.metadata === "string" && exactSlotMetadata(jsonObjectString(value.metadata), afterHolder);
+}
+function isPinnedSlotTransitionDelta(source, prefix, intent2) {
+  const raw = json2(source);
+  if (raw === void 0 || !hasExactKeys(raw, ["tables"])) return false;
+  const tables = raw.tables;
+  if (!Array.isArray(tables) || tables.length !== 2) return false;
+  const byName = /* @__PURE__ */ new Map();
+  for (const table of tables) {
+    const value = object2(table);
+    const name = value === void 0 ? void 0 : value.name;
+    if (value === void 0 || !hasExactKeys(value, ["name", "data_diff"]) || name !== "issues" && name !== "events" || byName.has(name))
+      return false;
+    byName.set(name, value);
+  }
+  const issues = byName.get("issues");
+  const events = byName.get("events");
+  if (issues === void 0 || events === void 0) return false;
+  const issueDiffs = issues.data_diff;
+  const eventDiffs = events.data_diff;
+  if (!Array.isArray(issueDiffs) || issueDiffs.length !== 1 || !Array.isArray(eventDiffs) || eventDiffs.length !== 1)
+    return false;
+  const issue = object2(issueDiffs[0]);
+  const event = object2(eventDiffs[0]);
+  if (issue === void 0 || event === void 0 || !hasExactKeys(issue, ["from_row", "to_row"]) || !hasExactKeys(event, ["from_row", "to_row"]))
+    return false;
+  const from = object2(issue.from_row);
+  const to = object2(issue.to_row);
+  const eventFrom = object2(event.from_row);
+  const eventTo = object2(event.to_row);
+  if (from === void 0 || to === void 0 || eventFrom === void 0 || !hasExactKeys(eventFrom, []) || eventTo === void 0 || !hasExactKeys(eventTo, EVENT_ROW_KEYS) || sameJson(from, to))
+    return false;
+  const expectedId = `${prefix}-merge-slot`;
+  const before = intent2.before.slot;
+  const after = intent2.after;
+  const fromStatus = before.status === "available" ? "open" : "in_progress";
+  const toStatus = after.status === "available" ? "open" : "in_progress";
+  const fromHasStartedAt = Object.prototype.hasOwnProperty.call(
+    from,
+    "started_at"
+  );
+  const exactFrom = exactSlotIssueRow(
+    from,
+    expectedId,
+    fromStatus,
+    before.holder,
+    fromHasStartedAt
+  );
+  const exactTo = exactSlotIssueRow(
+    to,
+    expectedId,
+    toStatus,
+    after.holder,
+    true
+  );
+  if (!exactFrom || !exactTo || before.status === "acquired" && !fromHasStartedAt)
+    return false;
+  const mutable = /* @__PURE__ */ new Set(["metadata", "started_at", "status", "updated_at"]);
+  for (const key of /* @__PURE__ */ new Set([...Object.keys(from), ...Object.keys(to)])) {
+    if (!mutable.has(key) && !sameJson(from[key], to[key])) return false;
+  }
+  const previousValue = jsonObjectString(eventTo.old_value);
+  const nextValue = jsonObjectString(eventTo.new_value);
+  return eventId(eventTo.id) && eventTo.issue_id === expectedId && eventTo.actor === intent2.holder && eventTo.event_type === "status_changed" && sqlTimestamp2(eventTo.created_at) && previousValue !== void 0 && exactPriorEventValue(
+    previousValue,
+    from,
+    before.holder,
+    fromHasStartedAt
+  ) && nextValue !== void 0 && exactNextEventValue(nextValue, to, after.holder);
+}
+function parseSlotDocument(source, expectedId, expectedScope) {
+  let parsed;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    return void 0;
+  }
+  const rows = object2(parsed)?.rows;
+  const raw = Array.isArray(parsed) ? parsed.length === 1 ? object2(parsed[0]) : void 0 : Array.isArray(rows) && rows.length === 1 ? object2(rows[0]) : void 0;
+  const metadata = raw === void 0 ? void 0 : raw.metadata === void 0 ? {} : object2(raw.metadata);
+  const labels = raw === void 0 || !Array.isArray(raw.labels) ? void 0 : raw.labels;
+  if (raw === void 0 || raw.id !== expectedId || raw.title !== MERGE_SLOT_TITLE || !Array.isArray(labels) || labels.length !== 1 || labels[0] !== MERGE_SLOT_LABEL || raw.status !== "open" && raw.status !== "in_progress" || metadata === void 0 || Object.keys(metadata).some((key) => key !== "holder") || raw.external_ref !== `sce-scope:v1:${deriveScopeCommitment(expectedScope)}` || raw.design !== canonicalJson(expectedScope))
+    return void 0;
+  const holder4 = metadata.holder === void 0 ? void 0 : safeString(metadata.holder, 321);
+  if (metadata.holder !== void 0 && holder4 === void 0) return void 0;
+  if (raw.status === "open" !== (holder4 === void 0)) return void 0;
+  return {
+    ...holder4 === void 0 ? {} : { holder: holder4 },
+    scope: expectedScope,
+    status: raw.status === "open" ? "available" : "acquired"
+  };
+}
+function parseRemoteSlotDocument(issueSource, labelsSource, expectedId, expectedScope) {
+  const rows = sqlRows(issueSource);
+  const labels = sqlRows(labelsSource);
+  if (rows === void 0 || rows.length !== 1 || labels === void 0 || labels.length !== 1 || labels[0]?.label !== MERGE_SLOT_LABEL)
+    return void 0;
+  return parseSlotDocument(
+    JSON.stringify([{ ...rows[0], labels: [MERGE_SLOT_LABEL] }]),
+    expectedId,
+    expectedScope
+  );
+}
+var PinnedBdEmbeddedProcess = class {
+  identity;
+  bdExecutable;
+  cwd;
+  databaseDirectory;
+  doltExecutable;
+  bdVersionCheck;
+  bdVersionExecutable;
+  bdRejectedExecutable;
+  doltVersionCheck;
+  doltVersionExecutable;
+  doltRejectedExecutable;
+  prefix;
+  projections;
+  remote;
+  scope;
+  constructor(options) {
+    this.bdExecutable = options.bdExecutable;
+    this.cwd = options.cwd;
+    this.databaseDirectory = this.canonicalDirectory(options.databaseDirectory);
+    this.doltExecutable = options.doltExecutable;
+    this.prefix = options.prefix;
+    this.projections = options.projections;
+    this.remote = options.remote;
+    this.scope = options.scope;
+    const storePath = this.databaseDirectory === "" ? "" : this.canonicalDirectory(dirname2(this.databaseDirectory));
+    this.identity = {
+      database: this.databaseDirectory === "" ? "" : basename2(this.databaseDirectory),
+      databaseDirectory: this.databaseDirectory,
+      prefix: this.prefix,
+      ...this.remote === void 0 ? {} : { remote: this.remote },
+      storePath
+    };
+  }
+  /** Authorized bootstrap only; normal acquire/check/release never touches it. */
+  async initializeSlotScope(authority) {
+    if (authority !== SLOT_INITIALIZATION_AUTHORITY)
+      return this.result("quarantined");
+    const before = await this.run([
+      "show",
+      `${this.prefix}-merge-slot`,
+      "--long",
+      "--json"
+    ]);
+    if (before === void 0 || before.code !== 0 || before.exceeded || !this.uninitializedSlot(before.stdout))
+      return this.result("quarantined");
+    const update = await this.run([
+      "update",
+      `${this.prefix}-merge-slot`,
+      "--external-ref",
+      `sce-scope:v1:${deriveScopeCommitment(this.scope)}`,
+      "--design",
+      canonicalJson(this.scope),
+      "--json"
+    ]);
+    if (update === void 0 || update.code !== 0 || update.exceeded)
+      return this.result("ambiguous");
+    const after = await this.run([
+      "show",
+      `${this.prefix}-merge-slot`,
+      "--long",
+      "--json"
+    ]);
+    return after !== void 0 && after.code === 0 && !after.exceeded && parseSlotDocument(
+      after.stdout,
+      `${this.prefix}-merge-slot`,
+      this.scope
+    ) !== void 0 ? this.result("applied") : this.result("ambiguous");
+  }
+  async execute(request) {
+    switch (request.kind) {
+      case "state": {
+        const engine = await this.run(["dolt", "status", "--json"]);
+        const show = await this.run(["dolt", "show", "--json"]);
+        const policy = await this.run([
+          "config",
+          "get",
+          "dolt.auto-commit",
+          "--json"
+        ]);
+        const shown = show === void 0 || show.code !== 0 || show.exceeded ? void 0 : doltShow(show.stdout);
+        const engineOk = engine !== void 0 && engine.code === 0 && !engine.exceeded && this.engineStatus(engine.stdout);
+        const configured = policy === void 0 || policy.code !== 0 || policy.exceeded ? void 0 : autoCommit(policy.stdout);
+        const cwd = shown === void 0 ? void 0 : this.canonicalDirectory(`${shown.dataDir}/${shown.database}`);
+        if (cwd === void 0 || cwd !== this.databaseDirectory)
+          return {
+            kind: "state",
+            value: {
+              autoCommit: "off",
+              reachable: false,
+              workingSet: "unknown"
+            }
+          };
+        const head3 = cwd === void 0 ? void 0 : await this.doltHead(cwd);
+        const workingSet = cwd === void 0 ? void 0 : await this.doltWorkingSet(cwd);
+        const remoteHead = cwd === void 0 || this.remote === void 0 ? void 0 : await this.remoteHead(cwd, this.remote);
+        return !engineOk || configured === void 0 || head3 === void 0 || workingSet === void 0 ? {
+          kind: "state",
+          value: {
+            autoCommit: "off",
+            reachable: false,
+            workingSet: "unknown"
+          }
+        } : {
+          kind: "state",
+          value: {
+            autoCommit: configured,
+            head: head3,
+            reachable: true,
+            ...this.remote === void 0 || remoteHead === void 0 ? {} : { remoteHead },
+            workingSet
+          }
+        };
+      }
+      case "load":
+        return {
+          kind: "load",
+          value: this.projections.load === void 0 ? { status: "unavailable" } : await this.projections.load()
+        };
+      case "slot": {
+        if (request.source === "remote") {
+          if (request.action !== "check" || this.remote === void 0)
+            throw new Error("invalid remote slot request");
+          const remoteRef = await this.fetchRemoteMain(this.remote);
+          const slot2 = remoteRef === void 0 ? void 0 : await this.remoteSlotAt(remoteRef, request.actor);
+          if (slot2 === void 0)
+            throw new Error("remote slot readback failed");
+          return {
+            kind: "slot",
+            value: this.slotObservation(slot2, request.actor)
+          };
+        }
+        const action = await this.run([
+          "--actor",
+          request.actor,
+          "merge-slot",
+          request.action,
+          "--json"
+        ]);
+        if (action === void 0 || action.exceeded || action.code !== 0 && request.action === "release")
+          throw new Error("pinned bd slot operation failed");
+        const show = await this.run([
+          "show",
+          `${this.prefix}-merge-slot`,
+          "--long",
+          "--json"
+        ]);
+        const slot = show === void 0 || show.code !== 0 || show.exceeded ? void 0 : parseSlotDocument(
+          show.stdout,
+          `${this.prefix}-merge-slot`,
+          this.scope
+        );
+        if (slot === void 0)
+          throw new Error("pinned bd slot readback failed");
+        return {
+          kind: "slot",
+          value: this.slotObservation(slot, request.actor)
+        };
+      }
+      case "slot_transition":
+        return {
+          kind: "slot_transition",
+          value: await this.proveSlotTransition(request.intent)
+        };
+      case "remote_slot_transition":
+        return {
+          kind: "remote_slot_transition",
+          value: await this.proveRemoteSlotTransition(request.intent)
+        };
+      case "mutation":
+        if (!validateMutationBatch(request.batch).ok)
+          return { kind: "mutation", value: "quarantined" };
+        return this.projections.mutate(request.batch);
+      case "initialize":
+        if (!validateMergeSlotObservation(request.slot, this.prefix, this.scope).ok || request.slot.status !== "available" || request.slot.holder !== void 0)
+          return { kind: "mutation", value: "quarantined" };
+        return this.projections.initialize === void 0 ? { kind: "mutation", value: "unavailable" } : this.projections.initialize(
+          "sce.embedded.projection.initialize.v1",
+          request.input,
+          request.slot
+        );
+      case "preownership_mutation":
+        if (!validateMutationBatch(request.batch).ok)
+          return { kind: "mutation", value: "quarantined" };
+        if (!validateMergeSlotObservation(request.slot, this.prefix, this.scope).ok || request.slot.status !== "available" || request.slot.holder !== void 0)
+          return { kind: "mutation", value: "quarantined" };
+        return this.projections.mutatePreOwnership === void 0 ? { kind: "mutation", value: "unavailable" } : this.projections.mutatePreOwnership(request.batch, request.slot);
+      case "initial_commit":
+        return {
+          kind: "commit",
+          value: await this.commitInitialProjection(request.input)
+        };
+      case "initial_push":
+        return {
+          kind: "push",
+          value: await this.pushInitialProjection(request.input)
+        };
+      case "readback": {
+        if (!validateMutationBatch(request.batch).ok)
+          throw new Error("invalid readback batch");
+        const value = await this.projections.readback(request.batch);
+        if (value === void 0) throw new Error("projection readback failed");
+        return { kind: "readback", value };
+      }
+      case "discover": {
+        if (!validateMutationBatch(request.batch).ok)
+          throw new Error("invalid recovery batch");
+        const value = await this.projections.discover(request);
+        if (value === void 0) throw new Error("checkpoint discovery failed");
+        if (request.point !== "after_push" || this.remote === void 0)
+          return {
+            kind: "discover",
+            value: await this.proveCheckpointDelta(request, value)
+          };
+        return {
+          kind: "discover",
+          value: await this.proveRemoteCheckpointDelta(request, value)
+        };
+      }
+      case "commit": {
+        const capture = await this.run(["dolt", request.kind, "--json"]);
+        if (capture === void 0 || capture.exceeded)
+          return { kind: "commit", value: "unavailable" };
+        return {
+          kind: "commit",
+          value: capture.code === 0 ? "applied" : "ambiguous"
+        };
+      }
+      case "pull": {
+        if (this.remote === void 0)
+          return { kind: "pull", value: "ambiguous" };
+        const before = await this.doltHead(this.databaseDirectory);
+        const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+        const remote2 = await this.remoteHead(
+          this.databaseDirectory,
+          this.remote
+        );
+        if (before === void 0 || remote2 === void 0 || workingSet === void 0)
+          return { kind: "pull", value: "unavailable" };
+        if (workingSet !== "clean") return { kind: "pull", value: "conflict" };
+        if (before === remote2) return { kind: "pull", value: "applied" };
+        const fastForward = await this.isAncestor(before, remote2);
+        const cloneLineage = fastForward ? false : await this.provePinnedCloneLineage(before, remote2);
+        if (!fastForward && !cloneLineage)
+          return { kind: "pull", value: "conflict" };
+        const capture = await this.run(["dolt", request.kind, "--json"]);
+        if (capture === void 0 || capture.exceeded)
+          return { kind: "pull", value: "unavailable" };
+        const after = await this.doltHead(this.databaseDirectory);
+        const afterRemote = await this.remoteHead(
+          this.databaseDirectory,
+          this.remote
+        );
+        return {
+          kind: "pull",
+          value: capture.code === 0 && afterRemote === remote2 && (fastForward ? after === remote2 : after !== void 0 && await this.provePinnedClonePull(
+            before,
+            remote2,
+            after,
+            cloneLineage
+          )) ? "applied" : "conflict"
+        };
+      }
+      case "push": {
+        const capture = await this.run(["dolt", request.kind, "--json"]);
+        if (capture === void 0 || capture.exceeded)
+          return { kind: "push", value: "unavailable" };
+        return {
+          kind: "push",
+          value: capture.code === 0 ? "applied" : "conflict"
+        };
+      }
+    }
+  }
+  slotObservation(slot, actor) {
+    const withoutHash = {
+      // The observation actor is the durable slot holder when held; the
+      // command caller is only a request identity and must not fabricate a
+      // holder/actor agreement for a competing controller.
+      actor: slot.holder ?? actor,
+      ...slot.holder === void 0 ? {} : { holder: slot.holder },
+      label: MERGE_SLOT_LABEL,
+      scope: this.scope,
+      scopeCommitment: deriveScopeCommitment(this.scope),
+      slotId: `${this.prefix}-merge-slot`,
+      status: slot.status,
+      title: MERGE_SLOT_TITLE,
+      version: 1
+    };
+    return {
+      ...withoutHash,
+      readbackHash: deriveSlotReadbackHash(withoutHash)
+    };
+  }
+  /** Commit only an exact all-row initial projection delta. */
+  async commitInitialProjection(input) {
+    const head3 = await this.doltHead(this.databaseDirectory);
+    const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+    if (head3 === void 0 || workingSet === void 0) return "unavailable";
+    if (this.projections.matchesInitialDelta === void 0)
+      return "unavailable";
+    if (workingSet === "pending") {
+      const diff2 = await this.runDolt(this.databaseDirectory, [
+        "diff",
+        "--data",
+        "-r",
+        "json",
+        head3
+      ]);
+      if (diff2 === void 0 || diff2.code !== 0 || diff2.exceeded || !this.projections.matchesInitialDelta(input, diff2.stdout))
+        return "ambiguous";
+      const committed = await this.run(["dolt", "commit", "--json"]);
+      return committed === void 0 || committed.exceeded ? "unavailable" : committed.code === 0 ? "applied" : "ambiguous";
+    }
+    if (workingSet !== "clean") return "ambiguous";
+    const parents = await this.directParents(head3);
+    if (parents === void 0 || parents.length !== 1 || parents[0] === void 0)
+      return "ambiguous";
+    const diff = await this.runDolt(this.databaseDirectory, [
+      "diff",
+      "--data",
+      "-r",
+      "json",
+      parents[0],
+      head3
+    ]);
+    return diff !== void 0 && diff.code === 0 && !diff.exceeded && this.projections.matchesInitialDelta(input, diff.stdout) ? "applied" : "ambiguous";
+  }
+  /** Push only the exact direct checkpoint whose parent is the remote head. */
+  async pushInitialProjection(input) {
+    if (this.remote === void 0 || this.projections.matchesInitialDelta === void 0)
+      return "unavailable";
+    const head3 = await this.doltHead(this.databaseDirectory);
+    const remote2 = await this.remoteHead(this.databaseDirectory, this.remote);
+    const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+    if (head3 === void 0 || remote2 === void 0 || workingSet === void 0)
+      return "unavailable";
+    if (workingSet !== "clean") return "ambiguous";
+    if (head3 === remote2) return "applied";
+    const parents = await this.directParents(head3);
+    if (parents === void 0 || parents.length !== 1 || parents[0] !== remote2)
+      return "ambiguous";
+    const diff = await this.runDolt(this.databaseDirectory, [
+      "diff",
+      "--data",
+      "-r",
+      "json",
+      remote2,
+      head3
+    ]);
+    if (diff === void 0 || diff.code !== 0 || diff.exceeded || !this.projections.matchesInitialDelta(input, diff.stdout))
+      return "ambiguous";
+    const pushed = await this.run(["dolt", "push", "--json"]);
+    if (pushed === void 0 || pushed.exceeded) return "unavailable";
+    if (pushed.code !== 0) return "conflict";
+    const after = await this.remoteHead(this.databaseDirectory, this.remote);
+    return after === head3 ? "applied" : "ambiguous";
+  }
+  /**
+   * Validates exactly the two rows a bd 1.1.0 merge-slot action is allowed to
+   * create: its `issues` row and Beads' corresponding immutable `events`
+   * audit record. Any other table, issue, label, or field movement is refused.
+   */
+  exactSlotDelta(source, intent2) {
+    return isPinnedSlotTransitionDelta(source, this.prefix, intent2);
+  }
+  /**
+   * Selected projection readback alone cannot authorize a commit: another
+   * pending or committed row could be carried with it. Bind recovery to the
+   * complete current working-set or one-parent commit delta.
+   */
+  async proveCheckpointDelta(request, discovery) {
+    if (discovery.status !== "observed") return discovery;
+    const head3 = await this.doltHead(this.databaseDirectory);
+    const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+    if (head3 === void 0 || workingSet === void 0)
+      return { status: "ambiguous" };
+    if (workingSet === "pending") {
+      const before = await this.projections.discoverAt(request, head3);
+      const diff = await this.runDolt(this.databaseDirectory, [
+        "diff",
+        "--data",
+        "-r",
+        "json",
+        head3
+      ]);
+      const proven = before?.status === "absent" && diff !== void 0 && diff.code === 0 && !diff.exceeded && this.projections.matchesBatchDelta(request.batch, diff.stdout) ? { ...discovery, baseHead: head3, head: head3 } : { status: "ambiguous" };
+      return this.bindRemoteCheckpointBaseline(proven);
+    }
+    if (workingSet !== "clean") return { status: "ambiguous" };
+    return this.bindRemoteCheckpointBaseline(
+      await this.proveCommittedCheckpoint(request, discovery, head3)
+    );
+  }
+  /** Exact one-parent checkpoint proof at a stable local or fetched ref. */
+  async proveCommittedCheckpoint(request, discovery, head3) {
+    if (discovery.status !== "observed" || discovery.head !== head3)
+      return { status: "ambiguous" };
+    const parents = await this.directParents(head3);
+    if (parents === void 0 || parents.length !== 1)
+      return { status: "ambiguous" };
+    const parent = parents[0];
+    if (parent === void 0) return { status: "ambiguous" };
+    const before = await this.projections.discoverAt(request, parent);
+    const diff = await this.runDolt(this.databaseDirectory, [
+      "diff",
+      "--data",
+      "-r",
+      "json",
+      parent,
+      head3
+    ]);
+    return before?.status === "absent" && diff !== void 0 && diff.code === 0 && !diff.exceeded && this.projections.matchesBatchDelta(request.batch, diff.stdout) ? { ...discovery, baseHead: parent, head: head3 } : { status: "ambiguous" };
+  }
+  /**
+   * Remote durable authority is an exact effect commit, not merely a selected
+   * projection. A clone may wrap it once in bd's pinned metadata merge; that
+   * preserves the clone-local head while proving the remote effect and its
+   * expected parent without accepting arbitrary later ancestry.
+   */
+  async proveRemoteCheckpointDelta(request, local) {
+    if (this.remote === void 0 || local.status !== "observed")
+      return { status: "ambiguous" };
+    const localHead = await this.doltHead(this.databaseDirectory);
+    const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+    const remoteRef = await this.fetchRemoteMain(this.remote);
+    const remoteHead = remoteRef === void 0 ? void 0 : await this.doltRefHead(remoteRef);
+    const remote2 = remoteRef === void 0 ? void 0 : await this.projections.discoverAt(request, remoteRef);
+    if (localHead === void 0 || workingSet !== "clean" || remoteHead === void 0 || remote2 === void 0)
+      return { status: "ambiguous" };
+    const effect2 = await this.proveCommittedCheckpoint(
+      request,
+      remote2,
+      remoteHead
+    );
+    if (effect2.status !== "observed" || local.rootCommitment !== effect2.rootCommitment || canonicalJson(local.childCommitments) !== canonicalJson(effect2.childCommitments))
+      return { status: "ambiguous" };
+    if (localHead === remoteHead && effect2.baseHead !== void 0)
+      return {
+        ...local,
+        baseHead: effect2.baseHead,
+        head: localHead,
+        remoteHead
+      };
+    const parents = await this.directParents(localHead);
+    if (parents === void 0 || parents.length !== 2 || parents.filter((parent) => parent === remoteHead).length !== 1)
+      return { status: "ambiguous" };
+    const otherParent = parents.find((parent) => parent !== remoteHead);
+    const baseHead = effect2.baseHead;
+    if (otherParent === void 0 || baseHead === void 0 || !await this.exactPinnedCloneDelta(remoteHead, localHead) || !await this.provePinnedCloneLineage(otherParent, baseHead))
+      return { status: "ambiguous" };
+    return { ...local, baseHead, head: localHead, remoteHead };
+  }
+  /** Verifies the exact post-pull clone merge from the pre-pull local head. */
+  async provePinnedClonePull(before, remote2, after, prePullLineage) {
+    const parents = await this.directParents(after);
+    if (parents === void 0 || parents.length !== 2 || parents.filter((parent) => parent === remote2).length !== 1 || !parents.includes(before))
+      return false;
+    return prePullLineage && await this.exactPinnedCloneDelta(remote2, after);
+  }
+  /**
+   * A checkpoint may be pushed only from the fetched remote baseline itself,
+   * or from bd's exact clone-local metadata-only representation of it.
+   */
+  async bindRemoteCheckpointBaseline(discovery) {
+    if (discovery.status !== "observed" || this.remote === void 0)
+      return discovery;
+    const baseHead = discovery.baseHead;
+    const remoteHead = await this.remoteHead(
+      this.databaseDirectory,
+      this.remote
+    );
+    if (baseHead === void 0 || remoteHead === void 0 || !(baseHead === remoteHead || await this.isPinnedCloneBaseline(remoteHead, baseHead)))
+      return { status: "ambiguous" };
+    return { ...discovery, remoteHead };
+  }
+  /** Exact pinned clone metadata delta from a fetched remote baseline. */
+  async isPinnedCloneBaseline(remoteHead, localHead) {
+    if (remoteHead === localHead) return true;
+    const parents = await this.directParents(localHead);
+    if (parents === void 0 || parents.length !== 1 && parents.length !== 2)
+      return false;
+    if (parents.length === 1)
+      return parents[0] === remoteHead && await this.exactPinnedCloneDelta(remoteHead, localHead);
+    if (parents.filter((parent) => parent === remoteHead).length !== 1)
+      return false;
+    const otherParent = parents.find((parent) => parent !== remoteHead);
+    return otherParent !== void 0 && await this.exactPinnedCloneDelta(remoteHead, localHead) && await this.provePinnedCloneLineage(otherParent, remoteHead);
+  }
+  /** The only tolerated clone-local history edge is the pinned metadata pair. */
+  async exactPinnedCloneDelta(from, to) {
+    const diff = await this.runDolt(this.databaseDirectory, [
+      "diff",
+      "--data",
+      "-r",
+      "json",
+      from,
+      to
+    ]);
+    return diff !== void 0 && diff.code === 0 && !diff.exceeded && isPinnedCloneMergeDelta(diff.stdout);
+  }
+  /**
+   * Bounded, direct-parent proof of clone-only history. Every traversed edge
+   * is independently the pinned metadata pair; endpoint net diffs never
+   * authorize hidden add/revert history.
+   */
+  async provePinnedCloneLineage(localHead, authoritativeHead, depth = 0, visited = /* @__PURE__ */ new Set()) {
+    if (depth >= MAX_CLONE_LINEAGE_EDGES || visited.has(localHead) || localHead === authoritativeHead)
+      return false;
+    visited.add(localHead);
+    const parents = await this.directParents(localHead);
+    if (parents === void 0 || parents.length !== 1 && parents.length !== 2)
+      return false;
+    const authorityParents = [];
+    for (const parent of parents) {
+      if (parent === authoritativeHead || await this.isAncestor(parent, authoritativeHead))
+        authorityParents.push(parent);
+    }
+    if (authorityParents.length !== 1) return false;
+    const authorityParent = authorityParents[0];
+    if (authorityParent === void 0 || !await this.exactPinnedCloneDelta(authorityParent, localHead))
+      return false;
+    if (parents.length === 1) return true;
+    const otherParent = parents.find((parent) => parent !== authorityParent);
+    return otherParent !== void 0 && await this.provePinnedCloneLineage(
+      otherParent,
+      authorityParent,
+      depth + 1,
+      visited
+    );
+  }
+  async proveSlotTransition(intent2) {
+    if (!validateSlotTransitionIntent(
+      intent2,
+      this.prefix,
+      this.scope,
+      this.remote === void 0 ? "local-only" : "git-sync"
+    ))
+      return "ambiguous";
+    const head3 = await this.doltHead(this.databaseDirectory);
+    const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+    const show = await this.run([
+      "show",
+      `${this.prefix}-merge-slot`,
+      "--long",
+      "--json"
+    ]);
+    const slot = show === void 0 || show.code !== 0 || show.exceeded ? void 0 : parseSlotDocument(
+      show.stdout,
+      `${this.prefix}-merge-slot`,
+      this.scope
+    );
+    if (head3 === void 0 || workingSet === void 0 || slot === void 0 || canonicalJson(this.slotObservation(slot, intent2.holder)) !== canonicalJson(intent2.after) || workingSet === "pending" && head3 !== intent2.before.head || workingSet === "clean" && head3 === intent2.before.head)
+      return "absent";
+    const args = workingSet === "pending" ? ["diff", "--data", "-r", "json", intent2.before.head] : ["diff", "--data", "-r", "json", intent2.before.head, head3];
+    const diff = await this.runDolt(this.databaseDirectory, args);
+    return diff !== void 0 && diff.code === 0 && !diff.exceeded && this.exactSlotDelta(diff.stdout, intent2) ? "observed" : "ambiguous";
+  }
+  /** Exact remote-AS-OF readback bound to one bounded fetch reference. */
+  async remoteSlotAt(remoteRef, actor) {
+    const show = await this.runDolt(this.databaseDirectory, [
+      "sql",
+      "-r",
+      "json",
+      "-q",
+      `SELECT id, title, status, metadata, external_ref, design FROM issues AS OF '${remoteRef}' WHERE id = '${this.prefix}-merge-slot'`
+    ]);
+    const labels = await this.runDolt(this.databaseDirectory, [
+      "sql",
+      "-r",
+      "json",
+      "-q",
+      `SELECT label FROM labels AS OF '${remoteRef}' WHERE issue_id = '${this.prefix}-merge-slot'`
+    ]);
+    const slot = show === void 0 || show.code !== 0 || show.exceeded || labels === void 0 || labels.code !== 0 || labels.exceeded ? void 0 : parseRemoteSlotDocument(
+      show.stdout,
+      labels.stdout,
+      `${this.prefix}-merge-slot`,
+      this.scope
+    );
+    return slot === void 0 ? void 0 : this.slotObservation(slot, actor);
+  }
+  async doltRefHead(ref) {
+    const capture = await this.runDolt(this.databaseDirectory, [
+      "sql",
+      "-r",
+      "json",
+      "-q",
+      `SELECT DOLT_HASHOF('${ref}') AS head`
+    ]);
+    return capture === void 0 || capture.code !== 0 || capture.exceeded ? void 0 : sqlHead(capture.stdout);
+  }
+  /** Strict immediate-parent list from the pinned Dolt system table. */
+  async directParents(commit2) {
+    if (safeHead(commit2) === void 0) return void 0;
+    const capture = await this.runDolt(this.databaseDirectory, [
+      "sql",
+      "-r",
+      "json",
+      "-q",
+      `SELECT parent_hash, parent_index FROM dolt_commit_ancestors WHERE commit_hash = '${commit2}' ORDER BY parent_index`
+    ]);
+    const rows = capture === void 0 || capture.code !== 0 || capture.exceeded ? void 0 : sqlRows(capture.stdout);
+    if (rows === void 0 || rows.length === 0 || rows.length > 2)
+      return void 0;
+    const values = rows.map(
+      (row, index) => Object.keys(row).length === 2 && Object.keys(row).every(
+        (key) => key === "parent_hash" || key === "parent_index"
+      ) && row.parent_index === index ? safeHead(row.parent_hash) : void 0
+    );
+    return values.some((value) => value === void 0) || new Set(values).size !== values.length ? void 0 : values;
+  }
+  /**
+   * Pinned, bounded ancestry predicate. The CTE returns one exact count row,
+   * so no caller can infer reachability from a partial ancestor listing.
+   */
+  async isAncestor(ancestor, descendant) {
+    if (safeHead(ancestor) === void 0 || safeHead(descendant) === void 0)
+      return false;
+    const capture = await this.runDolt(this.databaseDirectory, [
+      "sql",
+      "-r",
+      "json",
+      "-q",
+      `WITH RECURSIVE ancestry(parent_hash) AS (SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash = '${descendant}' UNION SELECT edge.parent_hash FROM dolt_commit_ancestors AS edge JOIN ancestry ON edge.commit_hash = ancestry.parent_hash) SELECT COUNT(*) AS matches FROM ancestry WHERE parent_hash = '${ancestor}'`
+    ]);
+    if (capture === void 0 || capture.code !== 0 || capture.exceeded)
+      return false;
+    const raw = json2(capture.stdout);
+    const rows = raw?.rows;
+    const row = Array.isArray(rows) && rows.length === 1 ? object2(rows[0]) : void 0;
+    return raw !== void 0 && hasExactKeys(raw, ["rows"]) && row !== void 0 && hasExactKeys(row, ["matches"]) && row.matches === 1;
+  }
+  remoteProof(status) {
+    return {
+      schema: "sce.beads-embedded.remote-slot-transition-proof",
+      status,
+      version: 1
+    };
+  }
+  /**
+   * A clean different clone cannot prove the whole range from the origin
+   * controller's before-head to its merge head: bd adds clone-local metadata
+   * during pull. First prove the remote one-parent slot effect exactly, then
+   * admit only that pinned pull metadata in the local merge relation.
+   */
+  async proveRemoteSlotTransition(intent2) {
+    if (this.remote === void 0 || !validateSlotTransitionIntent(
+      intent2,
+      this.prefix,
+      this.scope,
+      "git-sync"
+    ) || intent2.before.remoteHead === void 0)
+      return this.remoteProof("ambiguous");
+    const localHead = await this.doltHead(this.databaseDirectory);
+    const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+    const remoteRef = await this.fetchRemoteMain(this.remote);
+    const remoteHead = remoteRef === void 0 ? void 0 : await this.doltRefHead(remoteRef);
+    if (localHead === void 0 || workingSet !== "clean" || remoteRef === void 0 || remoteHead === void 0 || remoteHead === intent2.before.remoteHead)
+      return this.remoteProof("absent");
+    const effectParents = await this.directParents(remoteHead);
+    if (effectParents === void 0 || effectParents.length !== 1 || effectParents[0] !== intent2.before.remoteHead)
+      return this.remoteProof("ambiguous");
+    const effectDiff = await this.runDolt(this.databaseDirectory, [
+      "diff",
+      "--data",
+      "-r",
+      "json",
+      intent2.before.remoteHead,
+      remoteHead
+    ]);
+    const remoteSlot = await this.remoteSlotAt(remoteRef, intent2.holder);
+    if (effectDiff === void 0 || effectDiff.code !== 0 || effectDiff.exceeded || !this.exactSlotDelta(effectDiff.stdout, intent2) || remoteSlot === void 0 || canonicalJson(remoteSlot) !== canonicalJson(intent2.after))
+      return this.remoteProof("ambiguous");
+    if (localHead !== remoteHead) {
+      const localParents = await this.directParents(localHead);
+      if (localParents === void 0 || localParents.length !== 2 || localParents.filter((parent) => parent === remoteHead).length !== 1 || !await this.exactPinnedCloneDelta(remoteHead, localHead))
+        return this.remoteProof("ambiguous");
+      const otherParent = localParents.find((parent) => parent !== remoteHead);
+      if (otherParent === void 0 || !await this.provePinnedCloneLineage(
+        otherParent,
+        intent2.before.remoteHead
+      ))
+        return this.remoteProof("ambiguous");
+    }
+    return {
+      effectHead: remoteHead,
+      localHead,
+      remoteHead,
+      schema: "sce.beads-embedded.remote-slot-transition-proof",
+      status: "observed",
+      version: 1
+    };
+  }
+  async run(argv) {
+    const executable = this.executable(this.bdExecutable);
+    if (executable === void 0 || sameExecutable(this.bdRejectedExecutable, executable))
+      return void 0;
+    this.bdRejectedExecutable = void 0;
+    if (!sameExecutable(this.bdVersionExecutable, executable)) {
+      this.bdVersionCheck = void 0;
+      this.bdVersionExecutable = executable;
+    }
+    this.bdVersionCheck ??= this.runOnce(executable.path, ["--version"]);
+    const version = await this.bdVersionCheck;
+    if (version === void 0 || version.code !== 0 || !new RegExp(
+      `^bd version ${PINNED_BD_VERSION}(?: \\(Homebrew\\))?\\n?$`,
+      "u"
+    ).test(version.stdout))
+      return void 0;
+    const operational = this.executable(this.bdExecutable);
+    if (operational === void 0 || !sameExecutable(executable, operational)) {
+      this.bdRejectedExecutable = operational ?? executable;
+      return void 0;
+    }
+    return this.runOnce(operational.path, argv);
+  }
+  async runOnce(executable, argv) {
+    return new Promise((resolve5) => {
+      let stdout = "";
+      let bytes2 = 0;
+      let exceeded = false;
+      let settled = false;
+      const child = spawn2(executable, argv, {
+        cwd: this.cwd,
+        env: {
+          LANG: "C",
+          LC_ALL: "C",
+          PATH: `${dirname2(this.bdExecutable)}:${dirname2(this.doltExecutable)}:/usr/bin:/bin`,
+          TMPDIR: process.env.TMPDIR ?? "/private/tmp",
+          DARWIN_USER_TEMP_DIR: process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
+          TZ: "UTC"
+        },
+        shell: false,
+        stdio: ["ignore", "pipe", "ignore"]
+      });
+      const timer = setTimeout(() => child.kill("SIGKILL"), PROCESS_TIMEOUT_MS);
+      child.stdout.on("data", (chunk) => {
+        bytes2 += chunk.byteLength;
+        if (bytes2 > MAX_OUTPUT_BYTES) {
+          exceeded = true;
+          child.kill("SIGKILL");
+        } else stdout += chunk.toString("utf8");
+      });
+      child.once("error", () => {
+        clearTimeout(timer);
+        if (!settled) {
+          settled = true;
+          resolve5(void 0);
+        }
+      });
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        if (!settled) {
+          settled = true;
+          resolve5({ code, exceeded, stdout });
+        }
+      });
+    });
+  }
+  engineStatus(source) {
+    const raw = json2(source);
+    return raw !== void 0 && raw.mode === "embedded" && raw.schema_version === 1 && raw.data_dir_exists === true && typeof raw.data_dir === "string" && typeof raw.server_running === "boolean";
+  }
+  uninitializedSlot(source) {
+    let parsed;
+    try {
+      parsed = JSON.parse(source);
+    } catch {
+      return false;
+    }
+    const issue = Array.isArray(parsed) && parsed.length === 1 ? object2(parsed[0]) : void 0;
+    return issue !== void 0 && issue.id === `${this.prefix}-merge-slot` && issue.title === MERGE_SLOT_TITLE && Array.isArray(issue.labels) && issue.labels.length === 1 && issue.labels[0] === MERGE_SLOT_LABEL && (issue.external_ref === void 0 || issue.external_ref === "" || issue.external_ref === null) && (issue.design === void 0 || issue.design === "" || issue.design === null);
+  }
+  result(code) {
+    return { code, schema: "sce.beads-embedded.result", version: 1 };
+  }
+  async doltHead(cwd) {
+    const capture = await this.runDolt(cwd, [
+      "sql",
+      "-r",
+      "json",
+      "-q",
+      'SELECT DOLT_HASHOF("HEAD") AS head'
+    ]);
+    return capture === void 0 || capture.code !== 0 || capture.exceeded ? void 0 : sqlHead(capture.stdout);
+  }
+  async doltWorkingSet(cwd) {
+    const capture = await this.runDolt(cwd, [
+      "sql",
+      "-r",
+      "json",
+      "-q",
+      "SELECT * FROM dolt_status"
+    ]);
+    return capture === void 0 || capture.code !== 0 || capture.exceeded ? void 0 : sqlWorkingSet(capture.stdout);
+  }
+  async remoteHead(cwd, remote2) {
+    if (cwd !== this.databaseDirectory) return void 0;
+    const remoteRef = await this.fetchRemoteMain(remote2);
+    if (remoteRef === void 0) return void 0;
+    const capture = await this.runDolt(cwd, [
+      "sql",
+      "-r",
+      "json",
+      "-q",
+      `SELECT DOLT_HASHOF('${remoteRef}') AS head`
+    ]);
+    return capture === void 0 || capture.code !== 0 || capture.exceeded ? void 0 : sqlHead(capture.stdout);
+  }
+  async fetchRemoteMain(remote2) {
+    if (!/^[A-Za-z0-9._-]{1,80}$/u.test(remote2.name)) return void 0;
+    if (!await this.remoteIsConfigured(this.databaseDirectory, remote2))
+      return void 0;
+    const fetched = await this.runDolt(this.databaseDirectory, [
+      "fetch",
+      remote2.name
+    ]);
+    return fetched !== void 0 && fetched.code === 0 && !fetched.exceeded ? `${remote2.name}/main` : void 0;
+  }
+  async remoteIsConfigured(cwd, remote2) {
+    if (!/^[A-Za-z0-9._-]{1,80}$/u.test(remote2.name) || cwd !== this.databaseDirectory)
+      return false;
+    const configured = await this.runDolt(cwd, ["remote", "-v"]);
+    return configured !== void 0 && configured.code === 0 && !configured.exceeded && configured.stdout.split("\n").some((line) => {
+      const parts = line.trim().split(/\s+/u);
+      return parts.length === 2 && parts[0] === remote2.name && parts[1] === remote2.url;
+    });
+  }
+  async runDolt(cwd, argv) {
+    const executable = this.executable(this.doltExecutable);
+    if (executable === void 0 || sameExecutable(this.doltRejectedExecutable, executable))
+      return void 0;
+    this.doltRejectedExecutable = void 0;
+    if (!sameExecutable(this.doltVersionExecutable, executable)) {
+      this.doltVersionCheck = void 0;
+      this.doltVersionExecutable = executable;
+    }
+    this.doltVersionCheck ??= this.runDoltOnce(executable.path, cwd, [
+      "version"
+    ]);
+    const version = await this.doltVersionCheck;
+    if (version === void 0 || version.code !== 0 || version.stdout.split("\n", 1)[0] !== `dolt version ${PINNED_DOLT_VERSION}`)
+      return void 0;
+    const operational = this.executable(this.doltExecutable);
+    if (operational === void 0 || !sameExecutable(executable, operational)) {
+      this.doltRejectedExecutable = operational ?? executable;
+      return void 0;
+    }
+    return this.runDoltOnce(operational.path, cwd, argv);
+  }
+  executable(value) {
+    if (!isAbsolute3(value) || value.length > 4096 || value.includes("\0"))
+      return void 0;
+    try {
+      const path2 = realpathSync3.native(value);
+      const stat2 = statSync2(path2, { throwIfNoEntry: false });
+      const digest = stat2 === void 0 ? void 0 : executableDigest(path2, stat2.size);
+      return stat2 === void 0 || !stat2.isFile() || digest === void 0 ? void 0 : {
+        ctimeMs: stat2.ctimeMs,
+        dev: stat2.dev,
+        digest,
+        ino: stat2.ino,
+        mtimeMs: stat2.mtimeMs,
+        mode: stat2.mode,
+        path: path2,
+        size: stat2.size
+      };
+    } catch {
+      return void 0;
+    }
+  }
+  canonicalDirectory(value) {
+    try {
+      return realpathSync3.native(value);
+    } catch {
+      return "";
+    }
+  }
+  async runDoltOnce(executable, cwd, argv) {
+    return new Promise((resolve5) => {
+      let stdout = "";
+      let bytes2 = 0;
+      let exceeded = false;
+      let settled = false;
+      const child = spawn2(executable, argv, {
+        cwd,
+        env: {
+          LANG: "C",
+          LC_ALL: "C",
+          PATH: `${dirname2(this.bdExecutable)}:${dirname2(this.doltExecutable)}:/usr/bin:/bin`,
+          TMPDIR: process.env.TMPDIR ?? "/private/tmp",
+          DARWIN_USER_TEMP_DIR: process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
+          TZ: "UTC"
+        },
+        shell: false,
+        stdio: ["ignore", "pipe", "ignore"]
+      });
+      const timer = setTimeout(() => child.kill("SIGKILL"), PROCESS_TIMEOUT_MS);
+      child.stdout.on("data", (chunk) => {
+        bytes2 += chunk.byteLength;
+        if (bytes2 > MAX_OUTPUT_BYTES) {
+          exceeded = true;
+          child.kill("SIGKILL");
+        } else stdout += chunk.toString("utf8");
+      });
+      child.once("error", () => {
+        clearTimeout(timer);
+        if (!settled) {
+          settled = true;
+          resolve5(void 0);
+        }
+      });
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        if (!settled) {
+          settled = true;
+          resolve5({ code, exceeded, stdout });
+        }
+      });
+    });
+  }
+};
+
+// src/adapters/beads-embedded/dolt-projections.ts
+import { spawn as spawn3 } from "node:child_process";
+import { createHash as createHash3 } from "node:crypto";
+import { closeSync as closeSync3, openSync as openSync3, readSync as readSync2, realpathSync as realpathSync4, statSync as statSync3 } from "node:fs";
+import { dirname as dirname3, isAbsolute as isAbsolute4 } from "node:path";
+var MAX_OUTPUT_BYTES2 = 262144;
+var TIMEOUT_MS = 15e3;
+var PINNED_DOLT_VERSION2 = "2.2.1";
+var EXECUTABLE_SAMPLE_BYTES2 = 65536;
+function sameExecutable2(left, right) {
+  return left !== void 0 && left.ctimeMs === right.ctimeMs && left.dev === right.dev && left.digest === right.digest && left.ino === right.ino && left.mtimeMs === right.mtimeMs && left.mode === right.mode && left.path === right.path && left.size === right.size;
+}
+function executableDigest2(path2, size) {
+  if (!Number.isSafeInteger(size) || size < 0) return void 0;
+  let descriptor;
+  try {
+    descriptor = openSync3(path2, "r");
+    const hash3 = createHash3("sha256").update(`${size}:`);
+    const sample = Math.min(size, EXECUTABLE_SAMPLE_BYTES2);
+    const first = Buffer.alloc(sample);
+    if (sample > 0)
+      hash3.update(first.subarray(0, readSync2(descriptor, first, 0, sample, 0)));
+    if (size > sample) {
+      const last = Buffer.alloc(sample);
+      hash3.update(
+        last.subarray(
+          0,
+          readSync2(descriptor, last, 0, sample, Math.max(0, size - sample))
+        )
+      );
+    }
+    return hash3.digest("hex");
+  } catch {
+    return void 0;
+  } finally {
+    if (descriptor !== void 0) closeSync3(descriptor);
+  }
+}
+var PROJECTION_INITIALIZATION_AUTHORITY = "sce.embedded.projection.initialize.v1";
+function same4(left, right) {
+  return canonicalJson(left) === canonicalJson(right);
+}
+function compareCodeUnits2(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+function hex(value) {
+  return Buffer.from(value, "utf8").toString("hex");
+}
+function stringLiteral(value) {
+  return `CONVERT(0x${hex(value)} USING utf8mb4)`;
+}
+function jsonLiteral(value) {
+  return `CAST(${stringLiteral(canonicalJson(value))} AS JSON)`;
+}
+function parseRows(source) {
+  try {
+    const input = JSON.parse(source);
+    if (input === null || typeof input !== "object" || Array.isArray(input) || Object.keys(input).length !== 1 || !Array.isArray(input.rows) || !input.rows.every(
+      (row) => row !== null && typeof row === "object" && !Array.isArray(row)
+    ))
+      return void 0;
+    return input.rows;
+  } catch {
+    return void 0;
+  }
+}
+function object3(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : void 0;
+}
+var DoltProjectionPersistence = class {
+  directory;
+  rootIssueId;
+  childIssueId;
+  doltExecutable;
+  versionCheck;
+  versionExecutable;
+  rejectedExecutable;
+  constructor(options) {
+    try {
+      this.directory = realpathSync4.native(options.databaseDirectory);
+    } catch {
+      this.directory = "";
+    }
+    this.rootIssueId = options.rootIssueId;
+    this.childIssueId = options.childIssueId;
+    this.doltExecutable = options.doltExecutable;
+  }
+  async mutate(batch) {
+    if (!validateMutationBatch(batch).ok)
+      return { kind: "mutation", value: "quarantined" };
+    const statement = this.writeStatement(batch);
+    if (statement === void 0)
+      return { kind: "mutation", value: "quarantined" };
+    const output = await this.sql(
+      `${statement}; SELECT ROW_COUNT() AS affected`
+    );
+    const readback = output === void 0 || this.affected(output) !== batch.changedRows.length + 1 ? void 0 : await this.readback(batch);
+    if (readback === void 0) return { kind: "mutation", value: "stale" };
+    return { kind: "mutation", value: "applied" };
+  }
+  /** Existing-root acquire intent CAS with the available slot in its SQL CAS. */
+  async mutatePreOwnership(batch, slot) {
+    if (!validateMutationBatch(batch).ok)
+      return { kind: "mutation", value: "quarantined" };
+    const statement = this.writeStatement(batch, slot);
+    if (statement === void 0)
+      return { kind: "mutation", value: "quarantined" };
+    const output = await this.sql(
+      `${statement}; SELECT ROW_COUNT() AS affected`
+    );
+    const readback = output === void 0 || this.affected(output) !== batch.changedRows.length + 1 ? void 0 : await this.readback(batch);
+    return readback === void 0 ? { kind: "mutation", value: "stale" } : { kind: "mutation", value: "applied" };
+  }
+  /**
+   * Authorized bootstrap only. Normal CAS never calls this and therefore
+   * refuses an absent `$.sce` envelope rather than creating it lazily.
+   */
+  async initialize(authority, input, slot) {
+    if (authority !== PROJECTION_INITIALIZATION_AUTHORITY)
+      return { kind: "mutation", value: "quarantined" };
+    const legacy = validateMutationBatch(input);
+    if (legacy.ok) return this.initializeLegacy(legacy.value, slot);
+    if (slot === void 0) return { kind: "mutation", value: "quarantined" };
+    const initial = input;
+    const rows = this.initialRows(initial);
+    if (rows === void 0) return { kind: "mutation", value: "quarantined" };
+    const ids = rows.map((row) => stringLiteral(row.issueId)).join(",");
+    const absent = rows.map(
+      (row) => `(id=${stringLiteral(row.issueId)} AND JSON_EXTRACT(metadata,'$.sce') IS NULL)`
+    ).join(" OR ");
+    const cases = rows.map(
+      (row) => `WHEN ${stringLiteral(row.issueId)} THEN JSON_SET(metadata,'$.sce',${jsonLiteral(row.next)})`
+    ).join(" ");
+    const slotPredicate = this.availableSlotPredicate(slot);
+    const source = await this.sql(
+      `UPDATE issues SET metadata=CASE id ${cases} ELSE metadata END WHERE id IN (${ids}) AND (SELECT COUNT(*) FROM issues WHERE ${absent})=${rows.length}${slotPredicate}; SELECT ROW_COUNT() AS affected`
+    );
+    const readback = source === void 0 || this.affected(source) !== rows.length ? void 0 : await this.load();
+    return readback?.status === "observed" && same4(readback.value.root, initial.root) && same4(readback.value.children, initial.children) ? { kind: "mutation", value: "applied" } : { kind: "mutation", value: "stale" };
+  }
+  async initializeLegacy(batch, slot) {
+    const rows = this.rows(batch);
+    if (rows === void 0) return { kind: "mutation", value: "quarantined" };
+    const ids = rows.map((row) => stringLiteral(row.issueId)).join(",");
+    const absent = rows.map(
+      (row) => `(id=${stringLiteral(row.issueId)} AND JSON_EXTRACT(metadata,'$.sce') IS NULL)`
+    ).join(" OR ");
+    const cases = rows.map(
+      (row) => `WHEN ${stringLiteral(row.issueId)} THEN JSON_SET(metadata,'$.sce',${jsonLiteral(row.next)})`
+    ).join(" ");
+    const source = await this.sql(
+      `UPDATE issues SET metadata=CASE id ${cases} ELSE metadata END WHERE id IN (${ids}) AND (SELECT COUNT(*) FROM issues WHERE ${absent})=${rows.length}${slot === void 0 ? "" : this.availableSlotPredicate(slot)}; SELECT ROW_COUNT() AS affected`
+    );
+    const readback = source === void 0 || this.affected(source) !== rows.length ? void 0 : await this.readback(batch);
+    return readback === void 0 ? { kind: "mutation", value: "stale" } : { kind: "mutation", value: "applied" };
+  }
+  /**
+   * Load exactly the root and every child that root references. A malformed
+   * root/child, missing child, or duplicate mapping is never absence.
+   */
+  async load() {
+    const source = await this.sql(this.selectStatement([this.rootIssueId]));
+    const records = source === void 0 ? void 0 : parseRows(source);
+    if (records === void 0) return { status: "unavailable" };
+    if (records.length !== 1 || records[0]?.id !== this.rootIssueId)
+      return { status: "ambiguous" };
+    const rootValue = records[0]?.sce;
+    if (rootValue === null) return { status: "absent" };
+    const rootEnvelope = object3(rootValue);
+    if (rootEnvelope === void 0 || Object.keys(rootEnvelope).length !== 2 || typeof rootEnvelope.commitment !== "string" || !Object.prototype.hasOwnProperty.call(rootEnvelope, "projection"))
+      return { status: "ambiguous" };
+    const parsedRoot = validateRootProjection(rootEnvelope.projection);
+    if (!parsedRoot.ok || parsedRoot.value.aggregateCommitment !== rootEnvelope.commitment)
+      return { status: "ambiguous" };
+    const childIds = parsedRoot.value.childRows.map(
+      (child) => this.childIssueId(child.unitId)
+    );
+    if (childIds.some((id) => id === void 0) || new Set(childIds).size !== childIds.length)
+      return { status: "ambiguous" };
+    if (childIds.length === 0)
+      return {
+        status: "observed",
+        value: { children: [], root: parsedRoot.value }
+      };
+    const childSource = await this.sql(
+      this.selectStatement(childIds)
+    );
+    const childrenRows = childSource === void 0 ? void 0 : parseRows(childSource);
+    if (childrenRows === void 0) return { status: "unavailable" };
+    if (childrenRows.length !== childIds.length) return { status: "ambiguous" };
+    const expected = new Map(
+      parsedRoot.value.childRows.map((child) => [child.unitId, child])
+    );
+    const seen = /* @__PURE__ */ new Set();
+    const children = [];
+    for (const record2 of childrenRows) {
+      if (Object.keys(record2).length !== 2 || typeof record2.id !== "string" || seen.has(record2.id) || !Object.prototype.hasOwnProperty.call(record2, "sce"))
+        return { status: "ambiguous" };
+      seen.add(record2.id);
+      const envelope = object3(record2.sce);
+      if (envelope === void 0 || Object.keys(envelope).length !== 2 || typeof envelope.commitment !== "string" || !Object.prototype.hasOwnProperty.call(envelope, "projection"))
+        return { status: "ambiguous" };
+      const child = validateChildProjection(envelope.projection);
+      const reference = child.ok ? expected.get(child.value.unitId) : void 0;
+      if (!child.ok || reference === void 0 || child.value.commitment !== envelope.commitment || this.childIssueId(child.value.unitId) !== record2.id || child.value.revision !== reference.revision || child.value.commitment !== reference.commitment || !same4(child.value.scope, parsedRoot.value.scope) || child.value.holder !== parsedRoot.value.holder || !same4(child.value.unit, parsedRoot.value.run.units[child.value.unitId]))
+        return { status: "ambiguous" };
+      children.push(child.value);
+    }
+    return children.length !== expected.size || seen.size !== childIds.length ? { status: "ambiguous" } : {
+      status: "observed",
+      value: {
+        children: children.sort(
+          (a, b) => compareCodeUnits2(a.unitId, b.unitId)
+        ),
+        root: parsedRoot.value
+      }
+    };
+  }
+  async readback(batch) {
+    if (!validateMutationBatch(batch).ok) return void 0;
+    const statement = this.readStatement(batch);
+    if (statement === void 0) return void 0;
+    const output = await this.sql(statement);
+    return output === void 0 ? void 0 : this.parseReadback(output, batch);
+  }
+  async discover(request) {
+    return this.discoverAt(request, void 0);
+  }
+  async discoverAt(request, ref) {
+    if (!validateMutationBatch(request.batch).ok) return void 0;
+    const actual = await this.actual(request.batch, ref);
+    const head3 = await this.head(ref);
+    if (actual === void 0 || head3 === void 0) return void 0;
+    const rootCommitment = actual.root.aggregateCommitment;
+    const childCommitments = actual.children.map((child) => child.commitment);
+    if (same4(actual.root, request.batch.next.root) && same4(actual.children, request.batch.next.children))
+      return { childCommitments, head: head3, rootCommitment, status: "observed" };
+    return rootCommitment === request.batch.expectedAggregateCommitment && same4(
+      childCommitments,
+      request.batch.expectedChildren.map((child) => child.expectedCommitment)
+    ) ? { head: head3, status: "absent" } : { head: head3, status: "ambiguous" };
+  }
+  /**
+   * The selected root/child readback above establishes the requested state.
+   * This companion proof establishes that a Dolt checkpoint contains no other
+   * pending or committed data movement.
+   */
+  matchesBatchDelta(batchInput, source) {
+    const batch = validateMutationBatch(batchInput);
+    if (!batch.ok) return false;
+    const rows = this.rows(batch.value);
+    let parsed;
+    try {
+      parsed = JSON.parse(source);
+    } catch {
+      return false;
+    }
+    const root = object3(parsed);
+    if (rows === void 0 || root === void 0 || Object.keys(root).length !== 1 || !Object.prototype.hasOwnProperty.call(root, "tables") || !Array.isArray(root.tables) || root.tables.length !== 1)
+      return false;
+    const table = object3(root.tables[0]);
+    if (table === void 0 || Object.keys(table).length !== 2 || table.name !== "issues" || !Array.isArray(table.data_diff) || table.data_diff.length !== rows.length)
+      return false;
+    const expected = new Map(rows.map((row) => [row.issueId, row]));
+    const seen = /* @__PURE__ */ new Set();
+    for (const input of table.data_diff) {
+      const diff = object3(input);
+      const from = diff === void 0 ? void 0 : object3(diff.from_row);
+      const to = diff === void 0 ? void 0 : object3(diff.to_row);
+      if (diff === void 0 || Object.keys(diff).length !== 2 || from === void 0 || to === void 0 || typeof from.id !== "string" || from.id !== to.id || seen.has(from.id))
+        return false;
+      const row = expected.get(from.id);
+      if (row === void 0 || !this.matchesProjectionRow(from, to, row.expectedCommitment, row.next))
+        return false;
+      seen.add(from.id);
+    }
+    return seen.size === expected.size;
+  }
+  /** Complete root+initial-child delta proof used before initial commit/push. */
+  matchesInitialDelta(input, source) {
+    const rows = this.initialRows(input);
+    let parsed;
+    try {
+      parsed = JSON.parse(source);
+    } catch {
+      return false;
+    }
+    const table = object3(parsed)?.tables;
+    const change = Array.isArray(table) && table.length === 1 ? object3(table[0])?.data_diff : void 0;
+    if (rows === void 0 || !Array.isArray(table) || table.length !== 1 || object3(table[0])?.name !== "issues" || !Array.isArray(change) || change.length !== rows.length)
+      return false;
+    const expected = new Map(rows.map((row) => [row.issueId, row.next]));
+    const seen = /* @__PURE__ */ new Set();
+    for (const value of change) {
+      const diff = object3(value);
+      const before = diff === void 0 ? void 0 : object3(diff.from_row);
+      const after = diff === void 0 ? void 0 : object3(diff.to_row);
+      if (diff === void 0 || before === void 0 || after === void 0 || typeof before.id !== "string" || before.id !== after.id || seen.has(before.id) || !isPinnedBdIssueRow(before) || !isPinnedBdIssueRow(after))
+        return false;
+      const next = expected.get(before.id);
+      const beforeMetadata = object3(before.metadata);
+      const afterMetadata = object3(after.metadata);
+      if (next === void 0 || beforeMetadata === void 0 || afterMetadata === void 0 || beforeMetadata.sce !== void 0 || !same4(afterMetadata.sce, next))
+        return false;
+      for (const key of Object.keys(before)) {
+        if (key !== "metadata" && key !== "updated_at" && !same4(before[key], after[key]))
+          return false;
+      }
+      for (const key of Object.keys(beforeMetadata)) {
+        if (key !== "sce" && !same4(beforeMetadata[key], afterMetadata[key]))
+          return false;
+      }
+      seen.add(before.id);
+    }
+    return seen.size === expected.size;
+  }
+  writeStatement(batch, slot) {
+    const rows = this.rows(batch);
+    if (rows === void 0) return void 0;
+    const expected = rows.map(
+      (row) => `(id=${stringLiteral(row.issueId)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.sce.commitment'))=${stringLiteral(row.expectedCommitment)})`
+    ).join(" OR ");
+    const cases = rows.map(
+      (row) => `WHEN ${stringLiteral(row.issueId)} THEN JSON_SET(metadata,'$.sce',${jsonLiteral(row.next)})`
+    ).join(" ");
+    const ids = rows.map((row) => stringLiteral(row.issueId)).join(",");
+    return `UPDATE issues SET metadata=CASE id ${cases} ELSE metadata END WHERE id IN (${ids}) AND (SELECT COUNT(*) FROM issues WHERE ${expected})=${rows.length}${slot === void 0 ? "" : this.availableSlotPredicate(slot)}`;
+  }
+  availableSlotPredicate(slot) {
+    return ` AND (SELECT COUNT(*) FROM issues WHERE id=${stringLiteral(slot.slotId)} AND title=${stringLiteral(slot.title)} AND status='open' AND external_ref=${stringLiteral(`sce-scope:v1:${slot.scopeCommitment}`)} AND design=${stringLiteral(canonicalJson(slot.scope))} AND JSON_TYPE(metadata)='OBJECT' AND JSON_LENGTH(metadata)=0)=1 AND (SELECT COUNT(*) FROM labels WHERE issue_id=${stringLiteral(slot.slotId)} AND label=${stringLiteral(slot.label)})=1`;
+  }
+  initialRows(input) {
+    const root = validateRootProjection(input.root);
+    if (!root.ok) return void 0;
+    const values = [];
+    for (const inputChild of input.children) {
+      const child = validateChildProjection(inputChild);
+      if (!child.ok) return void 0;
+      values.push(child.value);
+    }
+    values.sort((left, right) => compareCodeUnits2(left.unitId, right.unitId));
+    if (values.length !== root.value.childRows.length || values.some(
+      (child, index) => root.value.childRows[index]?.unitId !== child.unitId || root.value.childRows[index]?.revision !== child.revision || root.value.childRows[index]?.commitment !== child.commitment || !same4(child.scope, root.value.scope) || child.holder !== root.value.holder || !same4(child.unit, root.value.run.units[child.unitId])
+    ))
+      return void 0;
+    const rows = [
+      {
+        issueId: this.rootIssueId,
+        next: {
+          commitment: root.value.aggregateCommitment,
+          projection: root.value
+        }
+      },
+      ...values.map((child) => {
+        const issueId = this.childIssueId(child.unitId);
+        return issueId === void 0 ? void 0 : {
+          issueId,
+          next: { commitment: child.commitment, projection: child }
+        };
+      })
+    ];
+    return rows.some((row) => row === void 0) || new Set(rows.map((row) => row?.issueId)).size !== rows.length ? void 0 : rows.sort(
+      (left, right) => compareCodeUnits2(left.issueId, right.issueId)
+    );
+  }
+  readStatement(batch) {
+    const rows = this.rows(batch);
+    return rows === void 0 ? void 0 : this.selectStatement(rows.map((row) => row.issueId));
+  }
+  selectStatement(ids) {
+    return `SELECT id, JSON_EXTRACT(metadata,'$.sce') AS sce FROM issues WHERE id IN (${ids.map(stringLiteral).join(",")}) ORDER BY id`;
+  }
+  async actual(batch, ref) {
+    const rows = this.rows(batch);
+    if (rows === void 0 || ref !== void 0 && !(/^[A-Za-z0-9._-]{1,80}\/main$/u.test(ref) || /^[0-9a-z]{20,64}$/u.test(ref)))
+      return void 0;
+    const statement = this.selectStatement(rows.map((row) => row.issueId));
+    const source = await this.sql(
+      ref === void 0 ? statement : statement.replace(" FROM issues", ` FROM issues AS OF '${ref}'`)
+    );
+    if (source === void 0) return void 0;
+    return this.projectionRows(source, batch);
+  }
+  rows(batch) {
+    const children = batch.changedRows.map((row) => {
+      const child = batch.next.children.find(
+        (item) => item.unitId === row.unitId
+      );
+      const issueId = this.childIssueId(row.unitId);
+      return child === void 0 || issueId === void 0 ? void 0 : {
+        expectedCommitment: row.expectedCommitment,
+        issueId,
+        next: { commitment: child.commitment, projection: child }
+      };
+    });
+    if (children.some((row) => row === void 0)) return void 0;
+    return [
+      {
+        expectedCommitment: batch.expectedAggregateCommitment,
+        issueId: this.rootIssueId,
+        next: {
+          commitment: batch.next.root.aggregateCommitment,
+          projection: batch.next.root
+        }
+      },
+      ...children
+    ].sort((left, right) => compareCodeUnits2(left.issueId, right.issueId));
+  }
+  matchesProjectionRow(from, to, expectedCommitment, next) {
+    if (!isPinnedBdIssueRow(from) || !isPinnedBdIssueRow(to) || Object.keys(from).length !== Object.keys(to).length || Object.keys(from).some(
+      (key) => !Object.prototype.hasOwnProperty.call(to, key)
+    ))
+      return false;
+    for (const key of Object.keys(from)) {
+      if (key !== "metadata" && key !== "updated_at" && !same4(from[key], to[key]))
+        return false;
+    }
+    if (typeof from.updated_at !== "string" || typeof to.updated_at !== "string" || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u.test(from.updated_at) || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u.test(to.updated_at))
+      return false;
+    const before = object3(from.metadata);
+    const after = object3(to.metadata);
+    if (before === void 0 || after === void 0 || Object.keys(before).length !== Object.keys(after).length || Object.keys(before).some(
+      (key) => !Object.prototype.hasOwnProperty.call(after, key)
+    ))
+      return false;
+    for (const key of Object.keys(before)) {
+      if (key !== "sce" && !same4(before[key], after[key])) return false;
+    }
+    const previous = object3(before.sce);
+    if (previous === void 0 || Object.keys(previous).length !== 2 || previous.commitment !== expectedCommitment || !Object.prototype.hasOwnProperty.call(previous, "projection"))
+      return false;
+    const projection = previous.projection;
+    const commitment = projection !== null && typeof projection === "object" && "unitId" in projection ? (() => {
+      const valid = validateChildProjection(projection);
+      return valid.ok ? valid.value.commitment : void 0;
+    })() : (() => {
+      const valid = validateRootProjection(projection);
+      return valid.ok ? valid.value.aggregateCommitment : void 0;
+    })();
+    return commitment === expectedCommitment && same4(after.sce, next) && !same4(before.sce, after.sce);
+  }
+  parseReadback(source, batch) {
+    const actual = this.projectionRows(source, batch);
+    return actual === void 0 || !same4(actual.root, batch.next.root) || !same4(
+      actual.children,
+      [...batch.next.children].sort(
+        (a, b) => compareCodeUnits2(a.unitId, b.unitId)
+      )
+    ) ? void 0 : actual;
+  }
+  /**
+   * A projection read is a fixed root/affected-child set, not a loose JSON
+   * blob. Parse it once for local and AS OF reads so swapped/extra rows cannot
+   * become recovery authority through a different call path.
+   */
+  projectionRows(source, batch) {
+    const expected = this.rows(batch);
+    const records = parseRows(source);
+    if (expected === void 0 || records === void 0 || records.length !== expected.length)
+      return void 0;
+    const expectedIds = new Set(expected.map((row) => row.issueId));
+    if (expectedIds.size !== expected.length) return void 0;
+    const seen = /* @__PURE__ */ new Set();
+    let root;
+    const children = [];
+    for (const record2 of records) {
+      if (Object.keys(record2).length !== 2 || !Object.prototype.hasOwnProperty.call(record2, "id") || !Object.prototype.hasOwnProperty.call(record2, "sce") || typeof record2.id !== "string" || !expectedIds.has(record2.id) || seen.has(record2.id))
+        return void 0;
+      seen.add(record2.id);
+      const envelope = object3(record2.sce);
+      if (envelope === void 0 || Object.keys(envelope).length !== 2 || !Object.prototype.hasOwnProperty.call(envelope, "commitment") || !Object.prototype.hasOwnProperty.call(envelope, "projection") || typeof envelope.commitment !== "string")
+        return void 0;
+      if (record2.id === this.rootIssueId) {
+        const candidate2 = validateRootProjection(envelope.projection);
+        if (!candidate2.ok || candidate2.value.aggregateCommitment !== envelope.commitment)
+          return void 0;
+        root = candidate2.value;
+        continue;
+      }
+      const candidate = validateChildProjection(envelope.projection);
+      if (!candidate.ok || candidate.value.commitment !== envelope.commitment || this.childIssueId(candidate.value.unitId) !== record2.id)
+        return void 0;
+      children.push(candidate.value);
+    }
+    return root === void 0 || seen.size !== expectedIds.size || children.length !== batch.changedRows.length ? void 0 : {
+      children: children.sort(
+        (a, b) => compareCodeUnits2(a.unitId, b.unitId)
+      ),
+      root
+    };
+  }
+  async sql(query) {
+    const executable = this.executable();
+    if (executable === void 0 || sameExecutable2(this.rejectedExecutable, executable))
+      return void 0;
+    this.rejectedExecutable = void 0;
+    if (!await this.pinnedVersion(executable)) return void 0;
+    const operational = this.executable();
+    if (operational === void 0 || !sameExecutable2(executable, operational)) {
+      this.rejectedExecutable = operational ?? executable;
+      return void 0;
+    }
+    return new Promise((resolve5) => {
+      let output = "";
+      let bytes2 = 0;
+      let settled = false;
+      const child = spawn3(
+        operational.path,
+        ["sql", "-r", "json", "-q", query],
+        {
+          cwd: this.directory,
+          env: {
+            LANG: "C",
+            LC_ALL: "C",
+            PATH: `${dirname3(this.doltExecutable)}:/usr/bin:/bin`,
+            TMPDIR: process.env.TMPDIR ?? "/private/tmp",
+            DARWIN_USER_TEMP_DIR: process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
+            TZ: "UTC"
+          },
+          shell: false,
+          stdio: ["ignore", "pipe", "ignore"]
+        }
+      );
+      const timer = setTimeout(() => child.kill("SIGKILL"), TIMEOUT_MS);
+      child.stdout.on("data", (chunk) => {
+        bytes2 += chunk.byteLength;
+        if (bytes2 > MAX_OUTPUT_BYTES2) child.kill("SIGKILL");
+        else output += chunk.toString("utf8");
+      });
+      child.once("error", () => {
+        clearTimeout(timer);
+        if (!settled) {
+          settled = true;
+          resolve5(void 0);
+        }
+      });
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        if (!settled) {
+          settled = true;
+          resolve5(code === 0 && bytes2 <= MAX_OUTPUT_BYTES2 ? output : void 0);
+        }
+      });
+    });
+  }
+  affected(source) {
+    const rows = parseRows(source);
+    const value = rows?.length === 1 ? rows[0]?.affected : void 0;
+    return typeof value === "number" && Number.isSafeInteger(value) ? value : void 0;
+  }
+  executable() {
+    if (!isAbsolute4(this.doltExecutable) || this.doltExecutable.includes("\0"))
+      return void 0;
+    try {
+      const path2 = realpathSync4.native(this.doltExecutable);
+      const stat2 = statSync3(path2, { throwIfNoEntry: false });
+      const digest = stat2 === void 0 ? void 0 : executableDigest2(path2, stat2.size);
+      return stat2 === void 0 || !stat2.isFile() || digest === void 0 ? void 0 : {
+        ctimeMs: stat2.ctimeMs,
+        dev: stat2.dev,
+        digest,
+        ino: stat2.ino,
+        mtimeMs: stat2.mtimeMs,
+        mode: stat2.mode,
+        path: path2,
+        size: stat2.size
+      };
+    } catch {
+      return void 0;
+    }
+  }
+  pinnedVersion(executable) {
+    if (!sameExecutable2(this.versionExecutable, executable)) {
+      this.versionCheck = void 0;
+      this.versionExecutable = executable;
+    }
+    this.versionCheck ??= new Promise((resolve5) => {
+      let output = "";
+      let settled = false;
+      const child = spawn3(executable.path, ["version"], {
+        cwd: this.directory,
+        env: {
+          DARWIN_USER_TEMP_DIR: process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
+          LANG: "C",
+          LC_ALL: "C",
+          PATH: `${dirname3(this.doltExecutable)}:/usr/bin:/bin`,
+          TMPDIR: process.env.TMPDIR ?? "/private/tmp",
+          TZ: "UTC"
+        },
+        shell: false,
+        stdio: ["ignore", "pipe", "ignore"]
+      });
+      const timer = setTimeout(() => child.kill("SIGKILL"), TIMEOUT_MS);
+      child.stdout.on("data", (chunk) => {
+        output += chunk.toString("utf8");
+        if (Buffer.byteLength(output, "utf8") > MAX_OUTPUT_BYTES2)
+          child.kill("SIGKILL");
+      });
+      child.once("error", () => {
+        clearTimeout(timer);
+        if (!settled) {
+          settled = true;
+          resolve5(false);
+        }
+      });
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        if (!settled) {
+          settled = true;
+          resolve5(
+            code === 0 && output.split("\n", 1)[0] === `dolt version ${PINNED_DOLT_VERSION2}`
+          );
+        }
+      });
+    });
+    return this.versionCheck;
+  }
+  async head(ref) {
+    const source = await this.sql(
+      `SELECT DOLT_HASHOF('${ref ?? "HEAD"}') AS head`
+    );
+    const rows = source === void 0 ? void 0 : parseRows(source);
+    const value = rows?.length === 1 ? rows[0]?.head : void 0;
+    return typeof value === "string" && /^[0-9a-z]{20,64}$/u.test(value) ? value : void 0;
+  }
+};
+
+// src/adapters/beads-embedded/index.ts
+function result(code) {
+  return {
+    code,
+    schema: "sce.beads-embedded.result",
+    version: EMBEDDED_ADAPTER_VERSION
+  };
+}
+function same5(left, right) {
+  return canonicalJson(left) === canonicalJson(right);
+}
+function object4(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : void 0;
+}
+function head2(value) {
+  return typeof value === "string" && /^[0-9a-z]{20,64}$/u.test(value);
+}
+function holder3(value) {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(value);
+}
+function checkedPreflight(preflight, identity2, mode, prefix, scope) {
+  if (!isSchema(PreflightEnvelopeSchema, preflight) || !isSchema(FencingScopeSchema, scope) || preflight.payload.status !== "ready")
+    return false;
+  const beads = preflight.payload.beads;
+  const expectedDirectory = `${identity2.storePath}/${identity2.database}`;
+  if (beads.mode !== "embedded" || beads.provenance !== "embedded_config" || beads.database !== identity2.database || beads.prefix !== prefix || beads.projectId !== scope.beadsStoreIdentity || identity2.prefix !== prefix || beads.storePath !== identity2.storePath || identity2.databaseDirectory !== expectedDirectory || preflight.payload.git.identity !== scope.gitRepositoryIdentity)
+    return false;
+  if (mode === "local-only")
+    return beads.syncRemote === void 0 && beads.syncRef === void 0 && identity2.remote === void 0;
+  return identity2.remote !== void 0 && beads.syncRemote === identity2.remote.url && beads.syncRef === identity2.remote.ref;
+}
+var EmbeddedBeadsAdapter = class {
+  holder;
+  mode;
+  prefix;
+  process;
+  scope;
+  usable;
+  constructor(options) {
+    this.holder = options.holder;
+    this.mode = options.mode;
+    this.prefix = options.prefix;
+    this.process = options.process;
+    this.scope = options.scope;
+    this.usable = checkedPreflight(
+      options.preflight,
+      options.process.identity,
+      options.mode,
+      options.prefix,
+      options.scope
+    );
+  }
+  /** Acquires only the pre-existing built-in merge slot, with exact readback. */
+  async acquire(authority) {
+    if (!this.usable || authority === void 0 || !this.validAcquisitionAuthority(authority) || // A holder-less acquire is necessarily mutating, so it must carry a
+    // persisted plan before even a state probe is permitted.
+    authority.knownHolder === void 0 && authority.transition === void 0)
+      return result("quarantined");
+    const initial = await this.state();
+    if (initial === void 0 || !initial.reachable)
+      return result("unavailable");
+    if (initial.workingSet === "unknown") return result("ambiguous");
+    if (initial.workingSet !== "clean" || this.mode === "git-sync" && initial.head !== initial.remoteHead) {
+      if (this.mode === "git-sync" && authority.transition === void 0) {
+        const remote2 = await this.slot("check", "remote");
+        if (remote2 === void 0) return result("ambiguous");
+        const decision2 = decideControllerSlot(
+          this.prefix,
+          this.scope,
+          this.holder,
+          authority.knownHolder,
+          remote2,
+          authority.continuation,
+          authority.release
+        );
+        return decision2.kind === "blocked" ? result("blocked") : result("ambiguous");
+      }
+      return this.recoverSlotTransition("acquire", authority?.transition);
+    }
+    const before = await this.state();
+    if (before === void 0 || !before.reachable || before.workingSet !== "clean" || before.head === void 0 || this.mode === "git-sync" && (before.remoteHead === void 0 || before.remoteHead !== before.head))
+      return result("ambiguous");
+    const check = await this.slot("check");
+    if (check === void 0) return result("quarantined");
+    if (authority.transition !== void 0 && same5(check, authority.transition.after))
+      return this.reconcileLostSlotTransition(
+        "acquire",
+        authority.transition,
+        before,
+        check
+      );
+    const decision = decideControllerSlot(
+      this.prefix,
+      this.scope,
+      this.holder,
+      authority?.knownHolder,
+      check,
+      authority?.continuation,
+      authority?.release
+    );
+    if (decision.kind === "blocked") return result("blocked");
+    if (decision.kind === "quarantined") return result("quarantined");
+    if (decision.kind === "resume" || decision.kind === "continue")
+      return this.confirmDurableSlot(check);
+    const transition = authority.transition;
+    if (transition === void 0) return result("quarantined");
+    if (!this.matchesTransitionBefore(transition, "acquire", before, check))
+      return result("quarantined");
+    const acquired = await this.slot("acquire");
+    if (acquired === void 0) return result("quarantined");
+    if (!same5(acquired, transition.after)) return result("blocked");
+    return this.durableSlotTransition(transition);
+  }
+  /**
+   * Read-only planning half of acquire. Persist its returned intent in the
+   * controller journal before calling `acquire`; it is the sole authority for
+   * any pending or pre-push recovery in a replacement process.
+   */
+  async prepareAcquireTransition(authority) {
+    if (!this.usable || !this.validAcquisitionPlanningAuthority(authority))
+      return result("quarantined");
+    const state = await this.state();
+    if (state === void 0 || !state.reachable) return result("unavailable");
+    if (state.workingSet !== "clean" || state.head === void 0 || this.mode === "git-sync" && (state.remoteHead === void 0 || state.remoteHead !== state.head))
+      return result("ambiguous");
+    const before = await this.slot("check");
+    if (before === void 0) return result("quarantined");
+    if (this.mode === "git-sync") {
+      const remote2 = await this.slot("check", "remote");
+      if (remote2 === void 0 || !same5(remote2, before))
+        return result("ambiguous");
+    }
+    const decision = decideControllerSlot(
+      this.prefix,
+      this.scope,
+      this.holder,
+      authority?.knownHolder,
+      before,
+      authority?.continuation,
+      authority?.release
+    );
+    if (decision.kind === "blocked") return result("blocked");
+    if (decision.kind === "quarantined") return result("quarantined");
+    if (decision.kind === "resume" || decision.kind === "continue")
+      return this.confirmDurableSlot(before);
+    return makeSlotTransitionIntent(
+      "acquire",
+      this.holder,
+      this.scope,
+      {
+        head: state.head,
+        ...state.remoteHead === void 0 ? {} : { remoteHead: state.remoteHead },
+        slot: before
+      },
+      this.expectedSlot("acquire", before)
+    );
+  }
+  /** Releases only after a positive available readback from the built-in slot. */
+  async release(authority) {
+    if (!this.usable || authority === void 0 || !this.validReleaseAuthority(authority))
+      return result("quarantined");
+    const initial = await this.state();
+    if (initial === void 0 || !initial.reachable)
+      return result("unavailable");
+    if (initial.workingSet === "unknown") return result("ambiguous");
+    if (initial.workingSet !== "clean" || this.mode === "git-sync" && initial.head !== initial.remoteHead)
+      return this.recoverSlotTransition("release", authority?.transition);
+    const before = await this.slot("check");
+    if (before !== void 0 && same5(before, authority.transition.after))
+      return this.reconcileLostSlotTransition(
+        "release",
+        authority.transition,
+        initial,
+        before
+      );
+    if (before === void 0 || before.status !== "acquired" || before.actor !== this.holder || before.holder !== this.holder)
+      return result("blocked");
+    const state = await this.state();
+    if (state === void 0 || !state.reachable || state.workingSet !== "clean" || state.head === void 0 || this.mode === "git-sync" && (state.remoteHead === void 0 || state.remoteHead !== state.head))
+      return result("ambiguous");
+    const transition = authority.transition;
+    if (!this.matchesTransitionBefore(transition, "release", state, before))
+      return result("quarantined");
+    const released = await this.slot("release");
+    if (released === void 0) return result("quarantined");
+    if (!same5(released, transition.after)) return result("blocked");
+    return this.durableSlotTransition(transition);
+  }
+  /** Read-only planning half of release; see `prepareAcquireTransition`. */
+  async prepareReleaseTransition() {
+    if (!this.usable) return result("quarantined");
+    const state = await this.state();
+    if (state === void 0 || !state.reachable) return result("unavailable");
+    if (state.workingSet !== "clean" || state.head === void 0 || this.mode === "git-sync" && (state.remoteHead === void 0 || state.remoteHead !== state.head))
+      return result("ambiguous");
+    const before = await this.slot("check");
+    if (before === void 0 || before.status !== "acquired" || before.actor !== this.holder || before.holder !== this.holder)
+      return result("blocked");
+    if (this.mode === "git-sync") {
+      const remote2 = await this.slot("check", "remote");
+      if (remote2 === void 0 || !same5(remote2, before))
+        return result("ambiguous");
+    }
+    return makeSlotTransitionIntent(
+      "release",
+      this.holder,
+      this.scope,
+      {
+        head: state.head,
+        ...state.remoteHead === void 0 ? {} : { remoteHead: state.remoteHead },
+        slot: before
+      },
+      this.expectedSlot("release", before)
+    );
+  }
+  /** Generic read-only planning port used by production CLI composition. */
+  async prepareControllerTransition(input) {
+    if (input.holder !== this.holder || !same5(input.scope, this.scope))
+      return { status: "quarantined" };
+    const planned = input.kind === "acquire" ? await this.prepareAcquireTransition() : await this.prepareReleaseTransition();
+    if (!("code" in planned)) return { status: "planned", transition: planned };
+    if (planned.code === "blocked" || planned.code === "holder_mismatch")
+      return { status: "blocked" };
+    if (planned.code === "unavailable") return { status: "unavailable" };
+    return planned.code === "quarantined" ? { status: "quarantined" } : { status: "ambiguous" };
+  }
+  /**
+   * Reconciles an already-journalled slot transition without invoking acquire,
+   * release, commit, pull, or push. Positive observation requires both the
+   * exact local transition-history proof and current after-slot readback.
+   */
+  async reconcileControllerTransition(transition) {
+    if (!this.usable || !validateSlotTransitionIntent(
+      transition,
+      this.prefix,
+      this.scope,
+      this.mode,
+      this.holder
+    ))
+      return { status: "ambiguous" };
+    const state = await this.state();
+    const current = await this.slot("check");
+    if (state === void 0 || current === void 0)
+      return { status: "unavailable" };
+    if (!state.reachable || state.workingSet !== "clean" || state.head === void 0 || this.mode === "git-sync" && state.remoteHead === void 0)
+      return { status: "ambiguous" };
+    if (same5(current, transition.after)) {
+      const proof = await this.call({
+        kind: "slot_transition",
+        intent: transition
+      });
+      if (proof?.kind !== "slot_transition" || proof.value !== "observed")
+        return { status: "ambiguous" };
+      if (this.mode === "git-sync") {
+        const remote2 = await this.slot("check", "remote");
+        if (remote2 === void 0 || !same5(remote2, transition.after))
+          return { status: "ambiguous" };
+      }
+      return { status: "observed" };
+    }
+    if (current.status === "acquired" && current.holder !== this.holder)
+      return { status: "blocked" };
+    if (same5(current, transition.before.slot) && state.head === transition.before.head && (this.mode === "local-only" || state.remoteHead === transition.before.remoteHead))
+      return { status: "absent" };
+    return { status: "ambiguous" };
+  }
+  /** Execute only a validated transition recovered from the durable journal. */
+  async executeControllerTransition(transition) {
+    if (!this.usable || !validateSlotTransitionIntent(
+      transition,
+      this.prefix,
+      this.scope,
+      this.mode,
+      this.holder
+    ))
+      return { status: "ambiguous" };
+    const outcome = transition.kind === "acquire" ? await this.acquire({ transition }) : await this.release({ transition });
+    if (outcome.code === "applied") return { status: "observed" };
+    if (outcome.code === "blocked" || outcome.code === "holder_mismatch")
+      return { status: "blocked" };
+    return outcome.code === "unavailable" ? { status: "unavailable" } : { status: "ambiguous" };
+  }
+  /** One validated aggregate/child mutation batch, followed by exact readback. */
+  async compareAndSet(batch) {
+    if (!this.usable || !validateMutationBatch(batch).ok || !same5(batch.scope, this.scope) || batch.holder !== this.holder)
+      return { status: "quarantined" };
+    const recovery = await this.state();
+    if (recovery === void 0 || !recovery.reachable)
+      return { status: "unavailable" };
+    if (recovery.workingSet === "pending") {
+      const discovered2 = await this.discover("before_commit", batch);
+      if (discovered2.status !== "observed") return { status: "ambiguous" };
+      const baseline2 = this.checkpointBaseline(recovery);
+      if (baseline2 === void 0 || !this.matchesCheckpointBaseline(discovered2, baseline2))
+        return { status: "ambiguous" };
+      const slot2 = await this.slot("check");
+      if (slot2 === void 0 || slot2.status !== "acquired" || slot2.actor !== this.holder || slot2.holder !== this.holder)
+        return { status: "holder_mismatch" };
+      const durable2 = await this.durableCheckpoint(batch, baseline2);
+      if (durable2.code !== "applied") return this.storeFailure(durable2.code);
+      const readback2 = await this.readback(batch);
+      return readback2 === void 0 || !same5(readback2.root, batch.next.root) || !same5(readback2.children, batch.next.children) ? { status: "quarantined" } : {
+        affectedRowCount: 1 + batch.changedRows.length,
+        checkpoint: batch.checkpoint,
+        children: [...readback2.children],
+        root: readback2.root,
+        status: "applied"
+      };
+    }
+    if (recovery.workingSet !== "clean") return { status: "ambiguous" };
+    if (this.mode === "git-sync" && recovery.head !== void 0 && recovery.remoteHead !== void 0 && recovery.head !== recovery.remoteHead) {
+      const discovered2 = await this.discover("before_push", batch);
+      if (discovered2.status === "observed" && discovered2.head === recovery.head && discovered2.baseHead !== void 0 && discovered2.remoteHead === recovery.remoteHead) {
+        const slot2 = await this.slot("check");
+        if (slot2 === void 0 || slot2.status !== "acquired" || slot2.actor !== this.holder || slot2.holder !== this.holder)
+          return { status: "holder_mismatch" };
+        const durable2 = await this.durableCheckpoint(batch, {
+          head: discovered2.baseHead,
+          remoteHead: discovered2.remoteHead
+        });
+        if (durable2.code !== "applied") return this.storeFailure(durable2.code);
+        const readback2 = await this.readback(batch);
+        return readback2 === void 0 || !same5(readback2.root, batch.next.root) || !same5(readback2.children, batch.next.children) ? { status: "quarantined" } : {
+          affectedRowCount: 1 + batch.changedRows.length,
+          checkpoint: batch.checkpoint,
+          children: [...readback2.children],
+          root: readback2.root,
+          status: "applied"
+        };
+      }
+    }
+    const prepared = await this.prepareSharedState();
+    if (prepared.result.code !== "applied")
+      return this.storeFailure(prepared.result.code);
+    const slot = await this.slot("check");
+    if (slot === void 0 || slot.status !== "acquired" || slot.actor !== this.holder || slot.holder !== this.holder)
+      return { status: "holder_mismatch" };
+    const baseline = this.checkpointBaseline(prepared.state);
+    if (baseline === void 0) return { status: "ambiguous" };
+    const mutation = await this.call({ kind: "mutation", batch });
+    if (mutation?.kind !== "mutation") return { status: "ambiguous" };
+    if (mutation.value !== "applied") {
+      if (mutation.value !== "stale") return { status: mutation.value };
+      const discovered2 = await this.discover(
+        this.mode === "git-sync" ? "after_push" : "after_commit",
+        batch
+      );
+      if (discovered2.status !== "observed" || discovered2.head !== baseline.head || this.mode === "git-sync" && discovered2.remoteHead !== baseline.remoteHead)
+        return {
+          status: discovered2.status === "absent" ? "stale" : "ambiguous"
+        };
+      const readback2 = await this.readback(batch);
+      return readback2 === void 0 || !same5(readback2.root, batch.next.root) || !same5(readback2.children, batch.next.children) ? { status: "quarantined" } : {
+        affectedRowCount: 1 + batch.changedRows.length,
+        checkpoint: batch.checkpoint,
+        children: [...readback2.children],
+        root: readback2.root,
+        status: "applied"
+      };
+    }
+    const durable = await this.durableCheckpoint(batch, baseline);
+    if (durable.code !== "applied") return this.storeFailure(durable.code);
+    const readback = await this.readback(batch);
+    if (readback === void 0 || !same5(readback.root, batch.next.root) || !same5(readback.children, batch.next.children))
+      return { status: "quarantined" };
+    return {
+      affectedRowCount: 1 + batch.changedRows.length,
+      checkpoint: batch.checkpoint,
+      children: [...readback.children],
+      root: readback.root,
+      status: "applied"
+    };
+  }
+  /**
+   * Authoritative projection load. Only the process's positive `absent` is
+   * passed through; malformed, partial, and transport failures remain tagged
+   * failures and can never drive bootstrap.
+   */
+  async load() {
+    if (!this.usable) return { status: "quarantined" };
+    const response = await this.call({ kind: "load" });
+    if (response?.kind !== "load") return { status: "unavailable" };
+    if (response.value.status !== "observed") return response.value;
+    const root = validateRootProjection(response.value.value.root);
+    if (!root.ok || !same5(root.value.scope, this.scope))
+      return { status: "corrupt" };
+    const expected = root.value.childRows;
+    const children = response.value.value.children;
+    if (children.length !== expected.length) return { status: "corrupt" };
+    const seen = /* @__PURE__ */ new Set();
+    for (const child of children) {
+      const parsed = validateChildProjection(child);
+      const reference = parsed.ok ? expected.find((row) => row.unitId === parsed.value.unitId) : void 0;
+      if (!parsed.ok || reference === void 0 || seen.has(parsed.value.unitId) || parsed.value.revision !== reference.revision || parsed.value.commitment !== reference.commitment || !same5(parsed.value.scope, root.value.scope) || parsed.value.holder !== root.value.holder)
+        return { status: "corrupt" };
+      seen.add(parsed.value.unitId);
+    }
+    return seen.size !== expected.length ? { status: "corrupt" } : { status: "observed", value: response.value.value };
+  }
+  /**
+   * The sole existing-root write permitted before controller ownership. It is
+   * intentionally narrower than compareAndSet: it writes only a validated
+   * unacquired -> acquire_intent journal transition, never an active run.
+   */
+  async persistControllerAcquireIntent(batch) {
+    if (!this.validPreOwnershipBatch(batch)) return { status: "quarantined" };
+    const loaded = await this.load();
+    if (loaded.status !== "observed") return this.loadFailure(loaded.status);
+    const current = loaded.value.root;
+    if (this.isExactIntentReadback(loaded.value, batch))
+      return this.durablePreOwnershipIntent(batch);
+    if (current.aggregateRevision !== batch.expectedAggregateRevision || current.aggregateCommitment !== batch.expectedAggregateCommitment || current.holder !== batch.expectedHolder || !this.isPreOwnershipTransition(current, batch.next.root))
+      return { status: "stale" };
+    const slot = await this.availablePreOwnershipSlot();
+    if (slot === void 0) return { status: "ambiguous" };
+    const state = await this.state();
+    if (state === void 0 || !state.reachable || state.workingSet !== "clean" || this.mode === "git-sync" && (state.head === void 0 || state.remoteHead !== state.head))
+      return { status: "ambiguous" };
+    const mutation = await this.call({
+      kind: "preownership_mutation",
+      batch,
+      slot
+    });
+    if (mutation?.kind !== "mutation") return { status: "unavailable" };
+    if (mutation.value === "applied")
+      return this.durablePreOwnershipIntent(batch);
+    if (mutation.value !== "stale") return { status: mutation.value };
+    const after = await this.load();
+    if (after.status !== "observed") return this.loadFailure(after.status);
+    return this.isExactIntentReadback(after.value, batch) ? this.durablePreOwnershipIntent(batch) : { status: "stale" };
+  }
+  /** Atomic absent-root bootstrap; active runs and ordinary CAS are refused. */
+  async createControllerAcquireIntent(request) {
+    const parsed = validate(
+      InitialControllerAcquireSchema,
+      request
+    );
+    if (!this.usable || !parsed.ok || parsed.value === void 0 || !same5(parsed.value.expected.scope, this.scope) || parsed.value.expected.holder !== this.holder)
+      return { status: "quarantined" };
+    const projection = parsed.value.next;
+    if (!this.validInitialProjection(projection))
+      return { status: "quarantined" };
+    const existing = await this.load();
+    if (existing.status === "observed")
+      return this.isExactInitialReadback(existing.value, projection) ? this.durableInitialIntent(projection) : { status: "stale" };
+    if (existing.status !== "absent") return this.loadFailure(existing.status);
+    const slot = await this.availablePreOwnershipSlot();
+    if (slot === void 0) return { status: "ambiguous" };
+    const state = await this.state();
+    if (state === void 0 || !state.reachable || state.workingSet !== "clean" || this.mode === "git-sync" && (state.head === void 0 || state.remoteHead !== state.head))
+      return { status: "ambiguous" };
+    const initialized = await this.call({
+      kind: "initialize",
+      input: projection,
+      slot
+    });
+    if (initialized?.kind !== "mutation") return { status: "unavailable" };
+    if (initialized.value === "applied")
+      return this.durableInitialIntent(projection);
+    if (initialized.value !== "stale") return { status: initialized.value };
+    const after = await this.load();
+    if (after.status !== "observed") return this.loadFailure(after.status);
+    return this.isExactInitialReadback(after.value, projection) ? this.durableInitialIntent(projection) : { status: "stale" };
+  }
+  validInitialProjection(input) {
+    const root = validateRootProjection(input.root);
+    if (!root.ok || !same5(root.value.scope, this.scope)) return false;
+    if (root.value.aggregateRevision !== 1) return false;
+    const values = [];
+    for (const inputChild of input.children) {
+      const child = validateChildProjection(inputChild);
+      if (!child.ok) return false;
+      values.push(child.value);
+    }
+    values.sort(
+      (a, b) => a.unitId < b.unitId ? -1 : a.unitId > b.unitId ? 1 : 0
+    );
+    if (!same5(values, input.children) || values.length !== root.value.childRows.length || values.some(
+      (child, index) => root.value.childRows[index]?.unitId !== child.unitId || root.value.childRows[index]?.revision !== child.revision || root.value.childRows[index]?.commitment !== child.commitment
+    ))
+      return false;
+    return root.value.run.revision === 1 && root.value.run.effectJournal.length === 1 && this.isPreOwnershipTransition(void 0, root.value);
+  }
+  validPreOwnershipBatch(batch) {
+    return this.usable && validateMutationBatch(batch).ok && same5(batch.scope, this.scope) && batch.holder === this.holder && this.isPreOwnershipTransition(void 0, batch.next.root);
+  }
+  isPreOwnershipTransition(before, next) {
+    const prior = before?.run;
+    const run2 = next.run;
+    const entry = run2.effectJournal.at(-1);
+    return next.holder === this.holder && same5(next.scope, this.scope) && run2.state === "initializing" && run2.controller.holder === this.holder && run2.controller.state === "acquire_intent" && run2.effectJournal.length === (prior?.effectJournal.length ?? 0) + 1 && entry?.kind === "controller_acquire" && entry.status === "intended" && entry.slotTransition !== void 0 && validateSlotTransitionIntent(
+      entry.slotTransition,
+      this.prefix,
+      this.scope,
+      this.mode,
+      this.holder
+    ) && (prior === void 0 || prior.state === "initializing" && prior.controller.holder === this.holder && prior.controller.state === "unacquired" && prior.effectJournal.length === 0 && run2.effectJournal.length === prior.effectJournal.length + 1);
+  }
+  isExactIntentReadback(readback, batch) {
+    if (!same5(readback.root, batch.next.root)) return false;
+    return batch.next.children.every(
+      (expected) => readback.children.some((actual) => same5(actual, expected))
+    );
+  }
+  isExactInitialReadback(readback, input) {
+    return same5(readback.root, input.root) && same5(readback.children, input.children);
+  }
+  async availablePreOwnershipSlot() {
+    const prepared = await this.prepareSharedState();
+    if (prepared.result.code !== "applied") return void 0;
+    const local = await this.slot("check");
+    if (local === void 0 || local.status !== "available" || local.holder !== void 0)
+      return void 0;
+    if (this.mode === "local-only") return local;
+    const remote2 = await this.slot("check", "remote");
+    return remote2 !== void 0 && same5(remote2, local) ? local : void 0;
+  }
+  async durablePreOwnershipIntent(batch) {
+    const durable = await this.durableCheckpoint(batch);
+    if (durable.code !== "applied") return this.storeFailure(durable.code);
+    const readback = await this.readback(batch);
+    return readback === void 0 || !this.isExactIntentReadback(readback, batch) ? { status: "quarantined" } : {
+      affectedRowCount: 1 + batch.changedRows.length,
+      checkpoint: batch.checkpoint,
+      children: [...batch.next.children],
+      root: batch.next.root,
+      status: "applied"
+    };
+  }
+  /** Commit/push and exact load after the separate absent-row SQL mutation. */
+  async durableInitialIntent(input) {
+    let state = await this.state();
+    if (state === void 0 || !state.reachable || state.workingSet === "unknown")
+      return { status: "unavailable" };
+    if (state.workingSet === "pending" || state.workingSet === "clean") {
+      const committed = await this.call({ kind: "initial_commit", input });
+      if (committed?.kind !== "commit" || committed.value !== "applied")
+        return {
+          status: committed?.kind === "commit" && committed.value === "unavailable" ? "unavailable" : "ambiguous"
+        };
+      state = await this.state();
+    }
+    if (state === void 0 || !state.reachable || state.workingSet !== "clean" || state.head === void 0)
+      return { status: "ambiguous" };
+    if (this.mode === "git-sync") {
+      if (state.remoteHead === state.head) {
+      } else {
+        const pushed = await this.call({ kind: "initial_push", input });
+        if (pushed?.kind !== "push" || pushed.value !== "applied")
+          return {
+            status: pushed?.kind === "push" && pushed.value === "unavailable" ? "unavailable" : "ambiguous"
+          };
+        state = await this.state();
+        if (state === void 0 || !state.reachable || state.workingSet !== "clean" || state.head === void 0 || state.remoteHead !== state.head)
+          return { status: "ambiguous" };
+      }
+    }
+    const loaded = await this.load();
+    if (loaded.status !== "observed") return this.loadFailure(loaded.status);
+    return !this.isExactInitialReadback(loaded.value, input) ? { status: "stale" } : {
+      affectedRowCount: 1 + input.children.length,
+      checkpoint: input.root.checkpoint,
+      children: [...input.children],
+      root: input.root,
+      status: "applied"
+    };
+  }
+  loadFailure(status) {
+    switch (status) {
+      case "absent":
+        return { status: "stale" };
+      case "corrupt":
+        return { status: "quarantined" };
+      default:
+        return { status };
+    }
+  }
+  /** Records a clean baseline before a cooperative worker/reviewer session. */
+  async workerBaseline() {
+    if (!this.usable) return void 0;
+    const state = await this.state();
+    if (state === void 0 || state.workingSet !== "clean" || this.mode === "git-sync" && (state.head === void 0 || state.remoteHead === void 0 || state.head !== state.remoteHead))
+      return void 0;
+    const slot = await this.slot("check");
+    if (slot === void 0 || slot.status !== "acquired" || slot.actor !== this.holder || slot.holder !== this.holder)
+      return void 0;
+    return {
+      ...state.head === void 0 ? {} : { head: state.head },
+      ...this.mode === "git-sync" ? { remoteHead: state.remoteHead } : {},
+      slot,
+      workingSet: "clean"
+    };
+  }
+  /** Detects tracker mutation by a worker; it intentionally does not repair it. */
+  async verifyWorkerBaseline(baseline) {
+    if (!this.usable) return result("quarantined");
+    if (!this.validWorkerBaseline(baseline)) return result("quarantined");
+    const state = await this.state();
+    const slot = await this.slot("check");
+    if (state === void 0 || slot === void 0) return result("ambiguous");
+    return state.workingSet === "clean" && state.head === baseline.head && state.remoteHead === baseline.remoteHead && slot.status === "acquired" && slot.actor === this.holder && slot.holder === this.holder && same5(slot, baseline.slot) ? result("applied") : result("worker_mutation");
+  }
+  async prepareSharedState() {
+    const before = await this.state();
+    if (before === void 0 || !before.reachable)
+      return { result: result("unavailable") };
+    if (before.workingSet !== "clean") return { result: result("blocked") };
+    if (this.mode === "local-only")
+      return { result: result("applied"), state: before };
+    const pull = await this.call({ kind: "pull" });
+    if (pull?.kind !== "pull") return { result: result("ambiguous") };
+    if (pull.value === "conflict") return { result: result("conflict") };
+    if (pull.value !== "applied") return { result: result(pull.value) };
+    const after = await this.state();
+    return after === void 0 || !after.reachable ? { result: result("unavailable") } : after.workingSet === "clean" ? { result: result("applied"), state: after } : { result: result("blocked") };
+  }
+  expectedSlot(kind, before) {
+    const value = {
+      ...before,
+      actor: this.holder,
+      ...kind === "acquire" ? { holder: this.holder } : {},
+      ...kind === "acquire" ? { status: "acquired" } : { status: "available" }
+    };
+    if (kind === "release") delete value.holder;
+    const { readbackHash: _ignored, ...withoutHash } = value;
+    return {
+      ...withoutHash,
+      readbackHash: deriveSlotReadbackHash(withoutHash)
+    };
+  }
+  matchesTransitionBefore(transition, kind, state, slot) {
+    return validateSlotTransitionIntent(
+      transition,
+      this.prefix,
+      this.scope,
+      this.mode,
+      this.holder
+    ) && transition.kind === kind && state.head !== void 0 && transition.before.head === state.head && transition.before.remoteHead === state.remoteHead && same5(transition.before.slot, slot) && same5(transition.after, this.expectedSlot(kind, slot));
+  }
+  /**
+   * Resumes only a controller-journalled built-in transition. The process
+   * proves the entire local delta before this method can commit or push it.
+   */
+  async recoverSlotTransition(kind, transition) {
+    if (transition === void 0 || !validateSlotTransitionIntent(
+      transition,
+      this.prefix,
+      this.scope,
+      this.mode,
+      this.holder
+    ) || transition.kind !== kind)
+      return result("ambiguous");
+    const state = await this.state();
+    const local = await this.slot("check");
+    if (state === void 0 || !state.reachable || state.workingSet === "unknown" || local === void 0 || !same5(local, transition.after) || state.head === void 0 || // A pending change retains the before head; an auto-committed change
+    // must have created a new head. Either other shape is unrelated state.
+    state.workingSet === "pending" && state.head !== transition.before.head || state.workingSet === "clean" && state.head === transition.before.head)
+      return result("ambiguous");
+    if (this.mode === "git-sync") {
+      if (state.remoteHead === transition.before.remoteHead) {
+        const remote2 = await this.slot("check", "remote");
+        if (remote2 === void 0 || !same5(remote2, transition.before.slot))
+          return result("ambiguous");
+      } else if (state.workingSet === "clean") {
+        return this.reconcileRemoteSlotTransition(
+          kind,
+          transition,
+          state,
+          local
+        );
+      } else return result("ambiguous");
+    }
+    return this.durableSlotTransition(transition);
+  }
+  /** Runtime-checks the semantic cross-clone proof returned by the process. */
+  remoteTransitionProofMatches(value, state) {
+    const proof = object4(value);
+    return proof !== void 0 && Object.keys(proof).length === 6 && proof.schema === "sce.beads-embedded.remote-slot-transition-proof" && proof.status === "observed" && proof.version === 1 && head2(proof.effectHead) && head2(proof.localHead) && head2(proof.remoteHead) && proof.effectHead === proof.remoteHead && proof.localHead === state.head && proof.remoteHead === state.remoteHead;
+  }
+  /**
+   * Replays an already-pushed transition from another clone only after its
+   * remote parent→effect proof and this clone's pinned merge proof agree.
+   */
+  async reconcileRemoteSlotTransition(kind, transition, state, local) {
+    if (!validateSlotTransitionIntent(
+      transition,
+      this.prefix,
+      this.scope,
+      "git-sync",
+      this.holder
+    ) || transition.kind !== kind || !state.reachable || state.workingSet !== "clean" || state.head === void 0 || state.remoteHead === void 0 || state.head === transition.before.head || state.remoteHead === transition.before.remoteHead || !same5(local, transition.after))
+      return result("ambiguous");
+    const proof = await this.call({
+      kind: "remote_slot_transition",
+      intent: transition
+    });
+    if (proof?.kind !== "remote_slot_transition" || !this.remoteTransitionProofMatches(proof.value, state))
+      return result("ambiguous");
+    const remote2 = await this.slot("check", "remote");
+    const final = await this.state();
+    return remote2 !== void 0 && same5(remote2, transition.after) && final !== void 0 && final.reachable && final.workingSet === "clean" && final.head === state.head && final.remoteHead === state.remoteHead ? result("applied") : result("ambiguous");
+  }
+  /**
+   * Reconciles a clean, already-durable slot transition after its caller lost
+   * the result.  Unlike the ordinary current-slot decision, this path must
+   * prove the exact persisted transition delta before it can publish applied.
+   */
+  async reconcileLostSlotTransition(kind, transition, state, local) {
+    if (!validateSlotTransitionIntent(
+      transition,
+      this.prefix,
+      this.scope,
+      this.mode,
+      this.holder
+    ) || transition.kind !== kind || !state.reachable || state.workingSet !== "clean" || state.head === void 0 || state.head === transition.before.head || !same5(local, transition.after) || this.mode === "git-sync" && (state.remoteHead === void 0 || state.remoteHead !== state.head))
+      return result("ambiguous");
+    const prove = await this.call({
+      kind: "slot_transition",
+      intent: transition
+    });
+    if (prove?.kind !== "slot_transition" || prove.value !== "observed")
+      return result("ambiguous");
+    if (this.mode === "local-only") {
+      const final2 = await this.state();
+      return final2 !== void 0 && final2.reachable && final2.workingSet === "clean" && final2.head === state.head ? result("applied") : result("ambiguous");
+    }
+    const remote2 = await this.slot("check", "remote");
+    const final = await this.state();
+    return remote2 !== void 0 && same5(remote2, transition.after) && final !== void 0 && final.reachable && final.workingSet === "clean" && final.head === state.head && final.remoteHead === state.head ? result("applied") : result("ambiguous");
+  }
+  /**
+   * Applies a transition only after a semantic process proof that its delta
+   * contains the built-in slot issue and its unavoidable audit event, with no
+   * other table, issue, or label movement.
+   */
+  async durableSlotTransition(transition) {
+    const prove = await this.call({
+      kind: "slot_transition",
+      intent: transition
+    });
+    if (prove?.kind !== "slot_transition" || prove.value !== "observed")
+      return result("ambiguous");
+    let state = await this.state();
+    if (state === void 0 || !state.reachable || state.workingSet === "unknown")
+      return result("ambiguous");
+    if (state.workingSet === "pending") {
+      const commit2 = await this.call({ kind: "commit" });
+      if (commit2?.kind !== "commit" || commit2.value !== "applied")
+        return result(
+          commit2?.kind === "commit" && commit2.value === "unavailable" ? "unavailable" : "ambiguous"
+        );
+      const afterCommit = await this.call({
+        kind: "slot_transition",
+        intent: transition
+      });
+      if (afterCommit?.kind !== "slot_transition" || afterCommit.value !== "observed")
+        return result("ambiguous");
+      state = await this.state();
+    }
+    if (state === void 0 || !state.reachable || state.workingSet !== "clean" || state.head === void 0)
+      return result("ambiguous");
+    const local = await this.slot("check");
+    if (local === void 0 || !same5(local, transition.after))
+      return result("ambiguous");
+    if (this.mode === "local-only") return result("applied");
+    if (state.remoteHead !== transition.before.remoteHead || state.head === transition.before.remoteHead)
+      return result("ambiguous");
+    const remoteBefore = await this.slot("check", "remote");
+    if (remoteBefore === void 0 || !same5(remoteBefore, transition.before.slot))
+      return result("ambiguous");
+    const push = await this.call({ kind: "push" });
+    if (push?.kind !== "push") return result("ambiguous");
+    if (push.value === "conflict") return result("conflict");
+    if (push.value !== "applied") return result("ambiguous");
+    const synced = await this.state();
+    const remoteAfter = await this.slot("check", "remote");
+    const final = await this.state();
+    return synced !== void 0 && synced.reachable && synced.workingSet === "clean" && synced.head !== void 0 && synced.remoteHead === synced.head && same5(synced.head, state.head) && remoteAfter !== void 0 && same5(remoteAfter, transition.after) && final !== void 0 && final.reachable && final.workingSet === "clean" && final.head === state.head && final.remoteHead === state.head ? result("applied") : result("ambiguous");
+  }
+  async confirmDurableSlot(local) {
+    if (this.mode === "local-only") return result("applied");
+    const state = await this.state();
+    const remote2 = await this.slot("check", "remote");
+    const final = await this.state();
+    return state !== void 0 && state.reachable && state.workingSet === "clean" && state.head !== void 0 && state.remoteHead === state.head && remote2 !== void 0 && same5(remote2, local) && final !== void 0 && final.reachable && final.workingSet === "clean" && final.head === state.head && final.remoteHead === state.head ? result("applied") : result("ambiguous");
+  }
+  /** Commit state and sync it without force; discovery brackets commit/push. */
+  async durableCheckpoint(batch, baseline) {
+    const initial = await this.state();
+    if (initial === void 0 || !initial.reachable)
+      return result("unavailable");
+    if (initial.workingSet === "unknown") return result("ambiguous");
+    let committedHead;
+    if (initial.workingSet === "pending") {
+      const beforeCommit = batch === void 0 ? void 0 : await this.discover("before_commit", batch);
+      if (beforeCommit !== void 0 && (beforeCommit.status !== "observed" || baseline !== void 0 && !this.matchesCheckpointBaseline(beforeCommit, baseline)))
+        return result(
+          beforeCommit.status === "ambiguous" ? "ambiguous" : "blocked"
+        );
+      const commit2 = await this.call({ kind: "commit" });
+      if (commit2?.kind !== "commit") return result("ambiguous");
+      if (commit2.value !== "applied")
+        return result(
+          commit2.value === "unavailable" ? "ambiguous" : commit2.value
+        );
+      const afterCommit = batch === void 0 ? void 0 : await this.discover("after_commit", batch);
+      if (afterCommit !== void 0 && (afterCommit.status !== "observed" || afterCommit.head === void 0 || baseline !== void 0 && !this.matchesCheckpointBaseline(afterCommit, baseline)))
+        return result("ambiguous");
+      committedHead = afterCommit?.head;
+    }
+    const clean = await this.state();
+    if (clean === void 0 || !clean.reachable) return result("unavailable");
+    if (clean.workingSet !== "clean" || clean.head === void 0 || committedHead !== void 0 && clean.head !== committedHead)
+      return result("blocked");
+    if (this.mode === "local-only") return result("applied");
+    const beforePush = batch === void 0 ? void 0 : await this.discover("before_push", batch);
+    if (beforePush !== void 0 && (beforePush.status !== "observed" || baseline !== void 0 && !this.matchesCheckpointBaseline(beforePush, baseline)))
+      return result("ambiguous");
+    const push = await this.call({ kind: "push" });
+    if (push?.kind !== "push") return result("ambiguous");
+    if (push.value === "conflict") return result("conflict");
+    if (push.value !== "applied") return result(push.value);
+    const afterPush = batch === void 0 ? void 0 : await this.discover("after_push", batch);
+    if (afterPush !== void 0 && (afterPush.status !== "observed" || afterPush.head === void 0 || afterPush.remoteHead === void 0))
+      return result("ambiguous");
+    const synced = await this.state();
+    if (batch === void 0)
+      return synced !== void 0 && synced.reachable && synced.workingSet === "clean" && synced.head !== void 0 && synced.remoteHead === synced.head ? result("applied") : result("ambiguous");
+    return synced !== void 0 && synced.reachable && synced.workingSet === "clean" && synced.head !== void 0 && synced.remoteHead !== void 0 && synced.remoteHead === synced.head && (afterPush === void 0 || afterPush.head === synced.head && afterPush.remoteHead === synced.head) ? result("applied") : result("ambiguous");
+  }
+  async state() {
+    const response = await this.call({ kind: "state" });
+    return response?.kind === "state" ? response.value : void 0;
+  }
+  checkpointBaseline(state) {
+    if (state === void 0 || !state.reachable || !head2(state.head))
+      return void 0;
+    if (this.mode === "local-only") return { head: state.head };
+    return head2(state.remoteHead) ? { head: state.head, remoteHead: state.remoteHead } : void 0;
+  }
+  matchesCheckpointBaseline(discovery, baseline) {
+    return discovery.baseHead === baseline.head && (this.mode === "local-only" ? baseline.remoteHead === void 0 : baseline.remoteHead !== void 0 && discovery.remoteHead === baseline.remoteHead);
+  }
+  validWorkerBaseline(input) {
+    const baseline = object4(input);
+    if (baseline === void 0 || Object.keys(baseline).some(
+      (key) => !["head", "remoteHead", "slot", "workingSet"].includes(key)
+    ) || baseline.workingSet !== "clean" || baseline.head !== void 0 && !head2(baseline.head) || baseline.remoteHead !== void 0 && !head2(baseline.remoteHead))
+      return false;
+    const slot = validateMergeSlotObservation(
+      baseline.slot,
+      this.prefix,
+      this.scope
+    );
+    if (!slot.ok || slot.value.status !== "acquired" || slot.value.actor !== this.holder || slot.value.holder !== this.holder)
+      return false;
+    return this.mode === "git-sync" ? baseline.head !== void 0 && baseline.remoteHead !== void 0 && baseline.head === baseline.remoteHead : baseline.remoteHead === void 0;
+  }
+  validAcquisitionAuthority(authority) {
+    if (authority === void 0) return true;
+    const input = object4(authority);
+    if (input === void 0 || Object.keys(input).some(
+      (key) => key !== "knownHolder" && key !== "continuation" && key !== "release" && key !== "transition"
+    ) || input.knownHolder !== void 0 && !holder3(input.knownHolder))
+      return false;
+    if (input.release !== void 0) {
+      const release = object4(input.release);
+      if (release === void 0 || Object.keys(release).some(
+        (key) => key !== "holder" && key !== "readback"
+      ) || input.knownHolder === void 0 || release.holder !== input.knownHolder || !validateMergeSlotObservation(release.readback, this.prefix, this.scope).ok || release.readback === void 0)
+        return false;
+    }
+    if (input.transition !== void 0 && !validateSlotTransitionIntent(
+      input.transition,
+      this.prefix,
+      this.scope,
+      this.mode,
+      this.holder
+    ))
+      return false;
+    if (input.continuation === void 0) return true;
+    const continuation = object4(input.continuation);
+    if (continuation === void 0 || Object.keys(continuation).some(
+      (key) => key !== "after" && key !== "before" && key !== "nextHolder" && key !== "previousHolder"
+    ) || !holder3(continuation.nextHolder) || !holder3(continuation.previousHolder) || input.knownHolder !== continuation.previousHolder)
+      return false;
+    const before = validateMergeSlotObservation(
+      continuation.before,
+      this.prefix,
+      this.scope
+    );
+    const after = validateMergeSlotObservation(
+      continuation.after,
+      this.prefix,
+      this.scope
+    );
+    return before.ok && after.ok && before.value.status === "acquired" && before.value.holder === continuation.previousHolder && before.value.actor === continuation.previousHolder && after.value.status === "acquired" && after.value.holder === continuation.nextHolder && after.value.actor === continuation.nextHolder;
+  }
+  validAcquisitionPlanningAuthority(authority) {
+    if (authority === void 0) return true;
+    const input = object4(authority);
+    if (input === void 0 || Object.keys(input).some(
+      (key) => key !== "knownHolder" && key !== "continuation" && key !== "release"
+    ))
+      return false;
+    return this.validAcquisitionAuthority(input);
+  }
+  validReleaseAuthority(authority) {
+    if (authority === void 0) return true;
+    const input = object4(authority);
+    return input !== void 0 && Object.keys(input).length === 1 && Object.keys(input)[0] === "transition" && input.transition !== void 0 && validateSlotTransitionIntent(
+      input.transition,
+      this.prefix,
+      this.scope,
+      this.mode,
+      this.holder
+    );
+  }
+  async slot(action, source) {
+    const response = await this.call({
+      kind: "slot",
+      action,
+      actor: this.holder,
+      ...source === void 0 ? {} : { source }
+    });
+    if (response?.kind !== "slot") return void 0;
+    const validated = validateMergeSlotObservation(
+      response.value,
+      this.prefix,
+      this.scope
+    );
+    return validated.ok ? validated.value : void 0;
+  }
+  async readback(batch) {
+    const response = await this.call({ kind: "readback", batch });
+    return response?.kind === "readback" ? response.value : void 0;
+  }
+  async discover(point, batch) {
+    const response = await this.call({
+      kind: "discover",
+      point,
+      batch
+    });
+    return response?.kind === "discover" ? response.value : { status: "ambiguous" };
+  }
+  async call(request) {
+    try {
+      return await this.process.execute(request);
+    } catch {
+      return void 0;
+    }
+  }
+  storeFailure(code) {
+    switch (code) {
+      case "stale":
+      case "holder_mismatch":
+      case "ambiguous":
+      case "unavailable":
+      case "quarantined":
+        return { status: code };
+      default:
+        return { status: "ambiguous" };
+    }
+  }
+};
+
+// src/adapters/beads-server/index.ts
+import { spawn as spawn4 } from "node:child_process";
+import { createHash as createHash4 } from "node:crypto";
+import { open, realpath, stat } from "node:fs/promises";
+import { dirname as dirname4, isAbsolute as isAbsolute5, join as join3 } from "node:path";
+var MAX_ENDPOINT_BYTES = 320;
+var MAX_SCHEMA_BYTES = 160;
+var MAX_FINGERPRINT_BYTES = 160;
+var bytes = new TextEncoder();
+var DOLT_SQL_TIMEOUT_MS = 15e3;
+var DOLT_SQL_MAX_STATEMENT_BYTES = 1048576;
+var DOLT_SQL_MAX_OUTPUT_BYTES = 1048576;
+var DOLT_SQL_MAX_ERROR_BYTES = 4096;
+var MUTATION_BATCH_MAX_BYTES = 256 * 1024;
+var BD_PROCESS_TIMEOUT_MS = 15e3;
+var BD_PROCESS_MAX_OUTPUT_BYTES = 16384;
+var PROCESS_TERM_GRACE_MS = 250;
+var EXECUTABLE_SAMPLE_BYTES3 = 4096;
+var doltSqlTransportOperations = /* @__PURE__ */ new WeakMap();
+function executeDoltSqlRead(transport, query) {
+  return doltSqlTransportOperations.get(transport)?.executeRead(query) ?? Promise.resolve({ status: "refused" });
+}
+function doltSqlTransportBinding(transport) {
+  return doltSqlTransportOperations.get(transport)?.binding();
+}
+function executeDoltSqlProgram(transport, query) {
+  return doltSqlTransportOperations.get(transport)?.executeProgram(query) ?? Promise.resolve({ status: "refused" });
+}
+function executeDoltSqlTransaction(transport, statement, expectedRows) {
+  return doltSqlTransportOperations.get(transport)?.executeTransaction(statement, expectedRows) ?? Promise.resolve({ status: "refused" });
+}
+function probeDoltSqlWorkerWrite(transport) {
+  return doltSqlTransportOperations.get(transport)?.probeWorkerWrite() ?? Promise.resolve("refused");
+}
+async function executableSnapshot(executable) {
+  try {
+    const canonical2 = await realpath(executable);
+    const information = await stat(canonical2);
+    if (!information.isFile() || (information.mode & 73) === 0)
+      return void 0;
+    const sampleSize = Math.min(information.size, EXECUTABLE_SAMPLE_BYTES3);
+    const handle = await open(canonical2, "r");
+    try {
+      const first = Buffer.alloc(sampleSize);
+      const firstRead = await handle.read(first, 0, sampleSize, 0);
+      const lastOffset = Math.max(0, information.size - sampleSize);
+      const last = Buffer.alloc(sampleSize);
+      const lastRead = await handle.read(last, 0, sampleSize, lastOffset);
+      const digest = createHash4("sha256").update("first\0").update(first.subarray(0, firstRead.bytesRead)).update("last\0").update(last.subarray(0, lastRead.bytesRead)).digest("hex");
+      return {
+        canonical: canonical2,
+        fingerprint: [
+          canonical2,
+          information.dev,
+          information.ino,
+          information.size,
+          information.mtimeMs,
+          information.ctimeMs,
+          information.mode,
+          digest
+        ].join(":")
+      };
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return void 0;
+  }
+}
+var doltSqlTransactionTestHook;
+var doltBeadsServerDriverPostTransactionTestHook;
+function parseDoltRows(output) {
+  const decoded = JSON.parse(output);
+  const parsed = Array.isArray(decoded) ? decoded : decoded !== null && typeof decoded === "object" && !Array.isArray(decoded) && Object.keys(decoded).length === 0 ? [] : decoded !== null && typeof decoded === "object" && !Array.isArray(decoded) && Object.keys(decoded).length === 1 && Object.hasOwn(decoded, "rows") && Array.isArray(decoded.rows) ? decoded.rows : void 0;
+  if (parsed === void 0 || containsSecretShape(decoded) || !parsed.every(
+    (row) => row !== null && typeof row === "object" && !Array.isArray(row)
+  ))
+    return void 0;
+  return parsed;
+}
+function closedReadSql(query) {
+  return /^\s*(?:SELECT|SHOW|DESCRIBE|EXPLAIN)\b/iu.test(query) && !query.includes(";") && !/\b(?:INTO\s+(?:OUTFILE|DUMPFILE)|LOAD_FILE|GET_LOCK|RELEASE_LOCK|SLEEP)\b/iu.test(
+    query
+  );
+}
+function loopbackEndpoint(endpoint) {
+  const host = endpoint.startsWith("[") ? endpoint.slice(1, endpoint.indexOf("]")) : endpoint.split(":", 1)[0];
+  return host === "127.0.0.1" || host === "localhost" || host === "::1";
+}
+var DoltSqlTransport = class {
+  #identity;
+  #executable;
+  #password;
+  #process;
+  #role;
+  #credentialReference;
+  #user;
+  #executablePoisoned = false;
+  #executableSnapshot;
+  #verifiedExecutable;
+  constructor(input) {
+    if (!validIdentifier(input.user) || input.executable !== void 0 && !isAbsolute5(input.executable) || input.process === void 0 && input.executable === void 0 || input.identity.transportSecurity === "loopback_plaintext" && !loopbackEndpoint(input.identity.endpoint) || input.identity.topology === "external_server" && input.identity.transportSecurity !== "tls" && input.identity.transportSecurity !== "loopback_plaintext" || input.password !== void 0 && (!safeText(input.password, 4096) || containsSecretShape(input.password)))
+      throw new Error("invalid Dolt SQL transport configuration");
+    const role = input.role ?? (input.user === "worker" ? "worker" : "writer");
+    const credentialReference = input.credentialReference ?? (role === "worker" ? input.identity.workerCredentialReference : input.identity.credentialReference);
+    if (role !== "writer" && role !== "worker" || !validIdentifier(credentialReference, MAX_FINGERPRINT_BYTES))
+      throw new Error("invalid Dolt SQL transport binding");
+    this.#identity = input.identity;
+    this.#executable = input.executable;
+    this.#password = input.password;
+    this.#process = input.process ?? runDoltSql;
+    this.#role = role;
+    this.#credentialReference = credentialReference;
+    this.#user = input.user;
+    doltSqlTransportOperations.set(
+      this,
+      Object.freeze({
+        binding: () => ({
+          credentialReference: this.#credentialReference,
+          identity: this.#identity,
+          role: this.#role,
+          user: this.#user
+        }),
+        executeRead: (query) => this.#executeRead(query),
+        executeProgram: (query) => this.#executeProgram(query),
+        executeTransaction: (statement, expectedRows) => this.#executeTransaction(statement, expectedRows),
+        probeWorkerWrite: () => this.#probeWorkerWrite()
+      })
+    );
+  }
+  /** Closed internal reads only; callers cannot supply SQL through this class. */
+  async #executeRead(query) {
+    if (!safeText(query, DOLT_SQL_MAX_STATEMENT_BYTES) || containsSecretShape(query) || !closedReadSql(query))
+      return { status: "refused" };
+    const result2 = await this.#execute(query);
+    if (result2.status !== "ok") return result2;
+    try {
+      const rows = parseDoltRows(result2.output);
+      return rows === void 0 ? { status: "refused" } : { status: "ok", rows };
+    } catch {
+      return { status: "refused" };
+    }
+  }
+  async #executeProgram(query) {
+    if (!safeText(query, DOLT_SQL_MAX_STATEMENT_BYTES))
+      return { status: "refused" };
+    const result2 = await this.#execute(query);
+    if (result2.status !== "ok") return result2;
+    try {
+      const output = result2.output.trim();
+      const results = output.length === 0 ? [] : output.split("\n").filter((line) => line.trim().length > 0).map(parseDoltRows);
+      return results.some((rows) => rows === void 0) ? { status: "refused" } : {
+        status: "ok",
+        results
+      };
+    } catch {
+      return { status: "refused" };
+    }
+  }
+  async #executeTransaction(statement, expectedRows) {
+    if (!safeText(statement, DOLT_SQL_MAX_STATEMENT_BYTES) || !Number.isSafeInteger(expectedRows) || expectedRows < 1 || this.#process !== runDoltSql)
+      return { status: "refused" };
+    const [host, port] = this.#endpointParts();
+    const executable = await this.#verifiedDoltExecutable();
+    if (host === void 0 || port === void 0 || executable === void 0)
+      return { status: "refused" };
+    if (await this.#pinnedDoltExecutable() !== executable)
+      return { status: "refused" };
+    const argv = [
+      ...this.#identity.transportSecurity === "loopback_plaintext" ? ["--no-tls"] : [],
+      "--host",
+      host,
+      "--port",
+      port,
+      "--use-db",
+      this.#identity.database,
+      "--user",
+      this.#user,
+      "sql",
+      "-r",
+      "json"
+    ];
+    return runDoltSqlTransaction({
+      argv,
+      executable,
+      expectedRows,
+      password: this.#password,
+      statement
+    });
+  }
+  /**
+   * Private, constant no-op capability probe. It never accepts caller SQL and
+   * reports denial only for Dolt's exact pinned table-write permission error.
+   * Every other failure is deliberately non-evidence.
+   */
+  async #probeWorkerWrite() {
+    const [host, port] = this.#endpointParts();
+    const executable = await this.#verifiedDoltExecutable();
+    const database = quotedIdentifier(this.#identity.database);
+    if (host === void 0 || port === void 0 || executable === void 0 || database === void 0 || await this.#pinnedDoltExecutable() !== executable)
+      return "refused";
+    const statement = `UPDATE ${database}.issues SET status = status WHERE 1 = 0`;
+    try {
+      const result2 = await this.#process({
+        argv: [
+          ...this.#identity.transportSecurity === "loopback_plaintext" ? ["--no-tls"] : [],
+          "--host",
+          host,
+          "--port",
+          port,
+          "--use-db",
+          this.#identity.database,
+          "--user",
+          this.#user,
+          "sql",
+          "-q",
+          statement,
+          "-r",
+          "json"
+        ],
+        executable,
+        env: {
+          DOLT_CLI_PASSWORD: this.#password ?? "",
+          PATH: `${dirname4(executable)}:/usr/bin:/bin`
+        },
+        timeoutMs: DOLT_SQL_TIMEOUT_MS
+      });
+      const diagnostic = (result2.stderr ?? "").trim().length > 0 ? result2.stderr ?? "" : result2.output;
+      if (result2.timedOut || result2.exitCode === void 0 || Buffer.byteLength(result2.output, "utf8") > DOLT_SQL_MAX_OUTPUT_BYTES || Buffer.byteLength(diagnostic, "utf8") > DOLT_SQL_MAX_ERROR_BYTES || containsSecretShape(diagnostic))
+        return "unavailable";
+      if (result2.exitCode === 0) return "allowed";
+      const escapedStatement = statement.replace(
+        /[.*+?^${}()|[\]\\]/gu,
+        "\\$&"
+      );
+      const denied = new RegExp(
+        `^error on line 1 for query ${escapedStatement}: Error 1105 \\(HY000\\): command denied to user '${this.#user}'@'%'$`,
+        "u"
+      );
+      return denied.test(diagnostic.trim()) ? "denied" : "unavailable";
+    } catch {
+      return "unavailable";
+    }
+  }
+  async #execute(query) {
+    const [host, port] = this.#endpointParts();
+    if (host === void 0 || port === void 0) return { status: "refused" };
+    const executable = await this.#verifiedDoltExecutable();
+    if (executable === void 0) return { status: "refused" };
+    if (await this.#pinnedDoltExecutable() !== executable)
+      return { status: "refused" };
+    const argv = [
+      ...this.#identity.transportSecurity === "loopback_plaintext" ? ["--no-tls"] : [],
+      "--host",
+      host,
+      "--port",
+      port,
+      "--use-db",
+      this.#identity.database,
+      "--user",
+      this.#user,
+      "sql",
+      "-q",
+      query,
+      "-r",
+      "json"
+    ];
+    try {
+      const result2 = await this.#process({
+        argv,
+        executable,
+        // Dolt's CLI reads this variable during authentication. Keeping it in
+        // the child environment avoids exposing a password through argv.
+        env: {
+          DOLT_CLI_PASSWORD: this.#password ?? "",
+          PATH: this.#executable === void 0 ? process.env.PATH : dirname4(this.#executable)
+        },
+        timeoutMs: DOLT_SQL_TIMEOUT_MS
+      });
+      if (result2.timedOut || result2.exitCode !== 0)
+        return { status: "unavailable" };
+      if (Buffer.byteLength(result2.output, "utf8") > DOLT_SQL_MAX_OUTPUT_BYTES)
+        return { status: "unavailable" };
+      return { status: "ok", output: result2.output };
+    } catch {
+      return { status: "unavailable" };
+    }
+  }
+  #endpointParts() {
+    const bracketed = /^\[([^\]]+)\]:(\d{1,5})$/u.exec(this.#identity.endpoint);
+    if (bracketed !== null) return [bracketed[1], bracketed[2]];
+    const plain = /^([A-Za-z0-9.-]+):(\d{1,5})$/u.exec(this.#identity.endpoint);
+    return plain === null ? [void 0, void 0] : [plain[1], plain[2]];
+  }
+  async #verifiedDoltExecutable() {
+    if (this.#process !== runDoltSql && this.#executable === void 0)
+      return "";
+    const executable = await this.#pinnedDoltExecutable();
+    if (executable === void 0) return void 0;
+    if (this.#verifiedExecutable === executable) return executable;
+    const version = await this.#process({
+      argv: ["version"],
+      executable,
+      env: { PATH: `${dirname4(executable)}:/usr/bin:/bin` },
+      timeoutMs: DOLT_SQL_TIMEOUT_MS
+    });
+    if (await this.#pinnedDoltExecutable() !== executable) return void 0;
+    if (version.timedOut || version.exitCode !== 0 || Buffer.byteLength(version.output, "utf8") > DOLT_SQL_MAX_OUTPUT_BYTES || !/^dolt version 2\.2\.1(?:\s|$)/u.test(version.output))
+      return void 0;
+    this.#verifiedExecutable = executable;
+    return executable;
+  }
+  async #pinnedDoltExecutable() {
+    if (this.#executablePoisoned) return void 0;
+    if (this.#executable === void 0)
+      return this.#process === runDoltSql ? void 0 : "";
+    const snapshot = await executableSnapshot(this.#executable);
+    if (snapshot === void 0)
+      return this.#process === runDoltSql ? void 0 : this.#executable;
+    if (this.#executableSnapshot !== void 0 && this.#executableSnapshot.fingerprint !== snapshot.fingerprint) {
+      this.#executablePoisoned = true;
+      return void 0;
+    }
+    this.#executableSnapshot ??= snapshot;
+    return snapshot.canonical;
+  }
+};
+async function runDoltSql(request) {
+  return new Promise((resolve5) => {
+    const child = spawn4(request.executable, request.argv, {
+      env: request.env,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let output = "";
+    let stderr = "";
+    let capped = false;
+    let failed = false;
+    let timedOut = false;
+    let closing = false;
+    let killTimer;
+    const terminate = () => {
+      if (closing) return;
+      closing = true;
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null) child.kill("SIGKILL");
+      }, PROCESS_TERM_GRACE_MS);
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      terminate();
+    }, request.timeoutMs);
+    child.stdout.on("data", (chunk) => {
+      if (capped) return;
+      output += chunk.toString("utf8");
+      if (Buffer.byteLength(output, "utf8") > DOLT_SQL_MAX_OUTPUT_BYTES) {
+        capped = true;
+        terminate();
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      if (capped) return;
+      stderr += chunk.toString("utf8");
+      if (Buffer.byteLength(stderr, "utf8") > DOLT_SQL_MAX_ERROR_BYTES) {
+        capped = true;
+        terminate();
+      }
+    });
+    child.once("error", () => {
+      failed = true;
+      terminate();
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      if (killTimer !== void 0) clearTimeout(killTimer);
+      resolve5({
+        exitCode: capped || timedOut || failed ? void 0 : code ?? void 0,
+        output,
+        stderr,
+        timedOut: capped || timedOut
+      });
+    });
+  });
+}
+async function runDoltSqlTransaction(input) {
+  return new Promise((resolve5) => {
+    const child = spawn4(input.executable, input.argv, {
+      env: {
+        DOLT_CLI_PASSWORD: input.password ?? "",
+        PATH: `${dirname4(input.executable)}:/usr/bin:/bin`
+      },
+      stdio: ["pipe", "pipe", "ignore"]
+    });
+    let output = "";
+    let rowCount;
+    let result2;
+    let finalSent = false;
+    let postCommitClean = false;
+    let postCommitHead;
+    let rowCountPhaseObserved = false;
+    let closing = false;
+    let stdinClosed = false;
+    let outputBytes = 0;
+    let killTimer;
+    const finishAfterClose = (value) => {
+      if (result2 !== void 0) return;
+      result2 = value;
+    };
+    const terminate = (value) => {
+      finishAfterClose(value);
+      if (closing) return;
+      closing = true;
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null) child.kill("SIGKILL");
+      }, PROCESS_TERM_GRACE_MS);
+    };
+    const observeTestPhase = (phase) => {
+      const hook = doltSqlTransactionTestHook;
+      if (hook === void 0 || result2 !== void 0) return;
+      try {
+        hook({
+          abort: () => terminate({ status: "unavailable" }),
+          pause: () => {
+            if (!closing) child.kill("SIGSTOP");
+          },
+          phase
+        });
+      } catch {
+        terminate({ status: "unavailable" });
+      }
+    };
+    const timer = setTimeout(() => {
+      terminate({ status: "unavailable" });
+    }, DOLT_SQL_TIMEOUT_MS);
+    child.stdin.once("error", () => terminate({ status: "unavailable" }));
+    const writeStdin = (value) => {
+      if (closing || stdinClosed) return false;
+      try {
+        child.stdin.write(value, (error) => {
+          if (error !== void 0 && error !== null)
+            terminate({ status: "unavailable" });
+        });
+        return true;
+      } catch {
+        terminate({ status: "unavailable" });
+        return false;
+      }
+    };
+    const closeStdin = () => {
+      if (stdinClosed) return;
+      stdinClosed = true;
+      try {
+        child.stdin.end(() => void 0);
+      } catch {
+        terminate({ status: "unavailable" });
+      }
+    };
+    const sendFinal = (commit2) => {
+      if (finalSent || closing) return;
+      finalSent = true;
+      if (!commit2) {
+        writeStdin("ROLLBACK;\n");
+        closeStdin();
+        return;
+      }
+      if (!writeStdin("COMMIT;\n")) return;
+      observeTestPhase("after_commit_before_outcome");
+      if (closing) return;
+      if (!writeStdin(
+        "SELECT DOLT_HASHOF('HEAD') AS committed_head; SELECT COUNT(*) AS working_set_rows FROM dolt_status;\n"
+      ))
+        return;
+      closeStdin();
+    };
+    const inspectLine = (line) => {
+      if (line.trim().length === 0 || result2 !== void 0) return;
+      if (!rowCountPhaseObserved && rowCount === void 0 && !finalSent) {
+        rowCountPhaseObserved = true;
+        observeTestPhase("after_guarded_write_before_rowcount");
+        if (closing) return;
+      }
+      let rows;
+      try {
+        rows = parseDoltRows(line);
+      } catch {
+        terminate({ status: "refused" });
+        return;
+      }
+      if (rows === void 0) {
+        terminate({ status: "refused" });
+        return;
+      }
+      if (rows.length === 1 && rows[0]?.committed_head !== void 0) {
+        const head3 = rows[0].committed_head;
+        if (typeof head3 !== "string" || !/^[0-9a-z]{20,64}$/u.test(head3)) {
+          terminate({ status: "refused" });
+          return;
+        }
+        postCommitHead = head3;
+        return;
+      }
+      if (rows.length === 1 && rows[0]?.working_set_rows !== void 0) {
+        const count = Number(rows[0].working_set_rows);
+        if (!Number.isSafeInteger(count) || count !== 0) {
+          terminate({ status: "refused" });
+          return;
+        }
+        postCommitClean = true;
+        if (postCommitHead === void 0) {
+          terminate({ status: "refused" });
+          return;
+        }
+        observeTestPhase("after_commit_marker_before_close");
+        return;
+      }
+      const value = rows[0]?.affected_rows;
+      if (value === void 0 || rowCount !== void 0) return;
+      const parsed = typeof value === "number" || typeof value === "string" ? Number(value) : NaN;
+      if (!Number.isSafeInteger(parsed) || parsed < 0) {
+        terminate({ status: "refused" });
+        return;
+      }
+      rowCount = parsed;
+      observeTestPhase("after_rowcount_before_commit");
+      if (closing) return;
+      sendFinal(parsed === input.expectedRows);
+    };
+    child.stdout.on("data", (chunk) => {
+      if (result2 !== void 0) return;
+      outputBytes += Buffer.byteLength(chunk, "utf8");
+      if (outputBytes > DOLT_SQL_MAX_OUTPUT_BYTES) {
+        terminate({ status: "unavailable" });
+        return;
+      }
+      output += chunk.toString("utf8");
+      const lines2 = output.split("\n");
+      output = lines2.pop() ?? "";
+      for (const line of lines2) inspectLine(line);
+    });
+    child.once("error", () => terminate({ status: "unavailable" }));
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      if (killTimer !== void 0) clearTimeout(killTimer);
+      if (result2 !== void 0) return resolve5(result2);
+      if (code !== 0 || !finalSent || rowCount === void 0)
+        return resolve5({ status: "unavailable" });
+      if (rowCount !== input.expectedRows)
+        return resolve5({ status: "ok", rows: rowCount });
+      return resolve5(
+        postCommitClean && postCommitHead !== void 0 ? { status: "ok", rows: rowCount, committedHead: postCommitHead } : { status: "unavailable" }
+      );
+    });
+    writeStdin(
+      `SET @@SESSION.dolt_transaction_commit = 1; START TRANSACTION; ${input.statement}; SET @sce_affected_rows := ROW_COUNT(); SELECT @sce_affected_rows AS affected_rows;
+`
+    );
+  });
+}
+var PinnedBdServerProcess = class {
+  #credentialEnvironment;
+  #executable;
+  #identity;
+  #process;
+  #runtimeEnvironment;
+  #workspace;
+  #executablePoisoned = false;
+  #executableSnapshot;
+  #verifiedExecutable;
+  constructor(input) {
+    if (!isAbsolute5(input.executable) || !isAbsolute5(input.workspace))
+      throw new Error("invalid pinned bd process configuration");
+    this.#credentialEnvironment = input.credentialEnvironment;
+    this.#executable = input.executable;
+    this.#identity = input.identity;
+    this.#process = input.process ?? runPinnedBd;
+    this.#runtimeEnvironment = input.runtimeEnvironment;
+    this.#workspace = input.workspace;
+  }
+  async acquire(actor) {
+    return this.#run("acquire", actor);
+  }
+  async check(actor) {
+    return this.#run("check", actor);
+  }
+  async release(actor) {
+    return this.#run("release", actor);
+  }
+  /** Closed domain check used by the driver before every slot mutation. */
+  async matchesIdentity(identity2) {
+    if (this.#identity === void 0 || !exact(this.#identity, identity2))
+      return { status: "refused" };
+    const verification = await this.#verify();
+    if (verification.status !== "ok") return verification;
+    const workspace = await this.#canonicalWorkspace();
+    if (workspace === void 0) return { status: "refused" };
+    if (await this.#canonicalExecutable() !== verification.executable)
+      return { status: "refused" };
+    const context = await this.#exec(verification.executable, [
+      "-C",
+      workspace,
+      "context",
+      "--json"
+    ]);
+    if (context.timedOut || context.exitCode !== 0 || Buffer.byteLength(context.output, "utf8") > BD_PROCESS_MAX_OUTPUT_BYTES)
+      return { status: "unavailable" };
+    if (await this.#canonicalExecutable() !== verification.executable)
+      return { status: "refused" };
+    let parsed;
+    try {
+      parsed = JSON.parse(context.output);
+    } catch {
+      return { status: "refused" };
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed) || !this.#matchesContext(
+      parsed,
+      identity2,
+      workspace
+    ))
+      return { status: "refused" };
+    const prefix = await this.#workspacePrefixMatches(
+      verification.executable,
+      workspace,
+      identity2.prefix
+    );
+    if (prefix === "unavailable") return { status: "unavailable" };
+    if (!prefix) return { status: "refused" };
+    return { status: "ok" };
+  }
+  async #run(command, actor) {
+    if (!validIdentifier(actor)) return { status: "refused" };
+    if (this.#identity !== void 0) {
+      const binding = await this.matchesIdentity(this.#identity);
+      if (binding.status !== "ok") return binding;
+    }
+    const verification = await this.#verify();
+    if (verification.status !== "ok") return verification;
+    const workspace = await this.#canonicalWorkspace();
+    if (workspace === void 0) return { status: "refused" };
+    const executable = verification.executable;
+    if (await this.#canonicalExecutable() !== executable)
+      return { status: "refused" };
+    const result2 = await this.#exec(executable, [
+      "-C",
+      workspace,
+      "--actor",
+      actor,
+      "--dolt-auto-commit",
+      "on",
+      "merge-slot",
+      command,
+      ...command === "check" ? [] : ["--holder", actor],
+      "--json"
+    ]);
+    if (result2.timedOut || result2.exitCode === void 0 || Buffer.byteLength(result2.output, "utf8") > BD_PROCESS_MAX_OUTPUT_BYTES)
+      return { status: "unavailable" };
+    if (result2.exitCode !== 0) return { status: "rejected" };
+    try {
+      const parsed = JSON.parse(result2.output);
+      return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? { status: "completed" } : { status: "ambiguous" };
+    } catch {
+      return { status: "ambiguous" };
+    }
+  }
+  async #verify() {
+    const executable = await this.#canonicalExecutable();
+    if (executable === void 0) return { status: "refused" };
+    if (this.#verifiedExecutable === executable)
+      return { status: "ok", executable };
+    const result2 = await this.#exec(executable, ["version"]);
+    if (await this.#canonicalExecutable() !== executable)
+      return { status: "refused" };
+    if (result2.timedOut || result2.exitCode === void 0 || Buffer.byteLength(result2.output, "utf8") > BD_PROCESS_MAX_OUTPUT_BYTES)
+      return { status: "unavailable" };
+    if (result2.exitCode !== 0 || !/^bd version 1\.1\.0(?:\s|$)/u.test(result2.output))
+      return { status: "refused" };
+    this.#verifiedExecutable = executable;
+    return { status: "ok", executable };
+  }
+  async #canonicalExecutable() {
+    if (this.#executablePoisoned) return void 0;
+    const snapshot = await executableSnapshot(this.#executable);
+    if (snapshot === void 0)
+      return this.#process === runPinnedBd ? void 0 : this.#executable;
+    if (this.#executableSnapshot !== void 0 && this.#executableSnapshot.fingerprint !== snapshot.fingerprint) {
+      this.#executablePoisoned = true;
+      return void 0;
+    }
+    this.#executableSnapshot ??= snapshot;
+    return snapshot.canonical;
+  }
+  async #canonicalWorkspace() {
+    if (this.#process !== runPinnedBd) return this.#workspace;
+    try {
+      const canonical2 = await realpath(this.#workspace);
+      return (await stat(canonical2)).isDirectory() ? canonical2 : void 0;
+    } catch {
+      return void 0;
+    }
+  }
+  /**
+   * `bd context --json` v1 has no prefix field. Bind the remaining immutable
+   * project identity with a fixed, read-only lookup of its built-in slot.
+   * The command accepts only the validated declared prefix and does not alter
+   * the server, so a mismatched workspace fails before slot mutation/CAS.
+   */
+  async #workspacePrefixMatches(executable, workspace, prefix) {
+    if (this.#process !== runPinnedBd) return true;
+    try {
+      const result2 = await this.#exec(executable, [
+        "-C",
+        workspace,
+        "show",
+        `${prefix}-merge-slot`,
+        "--json"
+      ]);
+      if (result2.timedOut || result2.exitCode === void 0 || Buffer.byteLength(result2.output, "utf8") > BD_PROCESS_MAX_OUTPUT_BYTES)
+        return "unavailable";
+      if (result2.exitCode !== 0) return "unavailable";
+      const parsed = JSON.parse(result2.output);
+      const issue = Array.isArray(parsed) ? parsed[0] : parsed;
+      return issue !== null && typeof issue === "object" && !Array.isArray(issue) && issue.id === `${prefix}-merge-slot`;
+    } catch {
+      return false;
+    }
+  }
+  #matchesContext(context, identity2, workspace) {
+    const endpoint = `${String(context.server_host ?? "")}:${String(context.server_port ?? "")}`;
+    if (context.backend !== "dolt" || context.database !== identity2.database || context.dolt_mode !== "server" || endpoint !== identity2.endpoint || typeof context.beads_dir !== "string" || !isAbsolute5(context.beads_dir))
+      return false;
+    if (identity2.topology === "managed_local_shared_server" && this.#runtimeEnvironment === void 0 || identity2.topology === "external_server" && this.#credentialEnvironment === void 0)
+      return false;
+    return context.beads_dir === join3(workspace, ".beads");
+  }
+  async #exec(executable, argv, additionalPath = []) {
+    const source = this.#credentialEnvironment?.();
+    const runtime = this.#runtimeEnvironment?.();
+    const password = source?.BEADS_DOLT_PASSWORD;
+    if (password !== void 0 && !safeText(password, 4096))
+      return { exitCode: void 0, output: "", timedOut: false };
+    if (runtime !== void 0 && (Object.keys(runtime).some(
+      (key) => key !== "HOME" && key !== "XDG_CONFIG_HOME"
+    ) || runtime.HOME !== void 0 && (!isAbsolute5(runtime.HOME) || !safeText(runtime.HOME, 4096)) || runtime.XDG_CONFIG_HOME !== void 0 && (!isAbsolute5(runtime.XDG_CONFIG_HOME) || !safeText(runtime.XDG_CONFIG_HOME, 4096))))
+      return { exitCode: void 0, output: "", timedOut: false };
+    return this.#process({
+      argv,
+      executable,
+      env: {
+        BD_NON_INTERACTIVE: "1",
+        ...password === void 0 ? {} : { BEADS_DOLT_PASSWORD: password },
+        CI: "1",
+        ...runtime?.HOME === void 0 ? {} : { HOME: runtime.HOME },
+        PATH: [dirname4(executable), ...additionalPath, "/usr/bin", "/bin"].join(
+          ":"
+        ),
+        ...runtime?.XDG_CONFIG_HOME === void 0 ? {} : { XDG_CONFIG_HOME: runtime.XDG_CONFIG_HOME }
+      },
+      timeoutMs: BD_PROCESS_TIMEOUT_MS
+    });
+  }
+};
+async function runPinnedBd(request) {
+  return new Promise((resolve5) => {
+    const child = spawn4(request.executable, request.argv, {
+      env: request.env,
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    let output = "";
+    let capped = false;
+    let failed = false;
+    let timedOut = false;
+    let closing = false;
+    let killTimer;
+    const terminate = () => {
+      if (closing) return;
+      closing = true;
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null) child.kill("SIGKILL");
+      }, PROCESS_TERM_GRACE_MS);
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      terminate();
+    }, request.timeoutMs);
+    child.stdout.on("data", (chunk) => {
+      if (capped) return;
+      output += chunk.toString("utf8");
+      if (Buffer.byteLength(output, "utf8") > BD_PROCESS_MAX_OUTPUT_BYTES) {
+        capped = true;
+        terminate();
+      }
+    });
+    child.once("error", () => {
+      failed = true;
+      terminate();
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      if (killTimer !== void 0) clearTimeout(killTimer);
+      resolve5({
+        exitCode: capped || timedOut || failed ? void 0 : code ?? void 0,
+        output,
+        timedOut: capped || timedOut
+      });
+    });
+  });
+}
+function slotScopeReference(scope) {
+  return `sce-scope:v1:${deriveScopeCommitment(scope)}`;
+}
+function serverSlotTransitionKey(input) {
+  return createHash4("sha256").update(
+    canonicalJson({
+      domain: "sce.beads-server.slot-transition.v1",
+      transition: input
+    })
+  ).digest("hex");
+}
+function makeServerSlotTransitionIntent(input) {
+  const withoutKey = {
+    after: input.after,
+    before: input.before,
+    holder: input.holder,
+    kind: input.kind,
+    precondition: {
+      kind: input.kind === "acquire" ? "available" : "held",
+      observationHash: input.before.readbackHash
+    },
+    schema: "sce.beads-server.slot-transition",
+    scope: input.scope,
+    topology: "shared-server",
+    version: 1
+  };
+  const candidate = {
+    ...withoutKey,
+    idempotencyKey: serverSlotTransitionKey(withoutKey)
+  };
+  return validateServerSlotTransitionIntent(
+    candidate,
+    input.after.slotId.slice(0, -"-merge-slot".length),
+    input.scope,
+    input.holder,
+    input.kind
+  ) ? candidate : void 0;
+}
+function validateServerSlotTransitionIntent(input, prefix, scope, holder4, kind) {
+  const parsed = validate(
+    ServerSlotTransitionIntentSchema,
+    input
+  );
+  if (!parsed.ok || parsed.value === void 0) return false;
+  const transition = parsed.value;
+  const before = validateMergeSlotObservation(transition.before, prefix, scope);
+  const after = validateMergeSlotObservation(transition.after, prefix, scope);
+  if (!before.ok || !after.ok || transition.kind !== kind || transition.holder !== holder4 || !exact(transition.scope, scope) || transition.precondition.observationHash !== before.value.readbackHash || transition.idempotencyKey !== serverSlotTransitionKey({
+    after: transition.after,
+    before: transition.before,
+    holder: transition.holder,
+    kind: transition.kind,
+    precondition: transition.precondition,
+    schema: transition.schema,
+    scope: transition.scope,
+    topology: transition.topology,
+    version: transition.version
+  }))
+    return false;
+  return kind === "acquire" ? transition.precondition.kind === "available" && before.value.status === "available" && before.value.actor === holder4 && after.value.status === "acquired" && after.value.actor === holder4 && after.value.holder === holder4 : transition.precondition.kind === "held" && before.value.status === "acquired" && before.value.actor === holder4 && before.value.holder === holder4 && after.value.status === "available" && after.value.actor === holder4;
+}
+var PinnedBdManagedServerProcess = class {
+  #dataDirectory;
+  #doltExecutable;
+  #executable;
+  #process;
+  #runtimeEnvironment;
+  #workspace;
+  #doltPoisoned = false;
+  #doltSnapshot;
+  #executablePoisoned = false;
+  #executableSnapshot;
+  #verifiedDolt;
+  #verifiedExecutable;
+  constructor(input) {
+    if (!isAbsolute5(input.dataDirectory) || !isAbsolute5(input.doltExecutable) || !isAbsolute5(input.executable) || !isAbsolute5(input.workspace))
+      throw new Error("invalid pinned managed bd process configuration");
+    this.#dataDirectory = input.dataDirectory;
+    this.#doltExecutable = input.doltExecutable;
+    this.#executable = input.executable;
+    this.#process = input.process ?? runPinnedBd;
+    this.#runtimeEnvironment = input.runtimeEnvironment;
+    this.#workspace = input.workspace;
+  }
+  async start() {
+    const executable = await this.#verify();
+    if (executable === void 0) return { status: "refused" };
+    const dolt = await this.#verifyDolt();
+    if (dolt === void 0) return { status: "refused" };
+    const workspace = await this.#canonicalWorkspace();
+    if (workspace === void 0) return { status: "refused" };
+    if (await this.#canonicalExecutable() !== executable || await this.#canonicalDolt() !== dolt)
+      return { status: "refused" };
+    const before = await this.#status(executable, dolt, workspace);
+    if (before === void 0) return { status: "refused" };
+    if (before === "running") return { status: "ok", value: void 0 };
+    if (await this.#canonicalExecutable() !== executable || await this.#canonicalDolt() !== dolt)
+      return { status: "refused" };
+    const result2 = await this.#exec(
+      executable,
+      ["-C", workspace, "dolt", "start"],
+      [dirname4(dolt)]
+    );
+    if (result2.timedOut || result2.exitCode === void 0)
+      return { status: "unavailable" };
+    if (result2.exitCode !== 0) return { status: "refused" };
+    if (await this.#canonicalExecutable() !== executable || await this.#canonicalDolt() !== dolt)
+      return { status: "refused" };
+    if (await this.#status(executable, dolt, workspace) !== "running")
+      return { status: "refused" };
+    return { status: "ok", value: void 0 };
+  }
+  async #verify() {
+    const executable = await this.#canonicalExecutable();
+    if (executable === void 0) return void 0;
+    if (this.#verifiedExecutable === executable) return executable;
+    const result2 = await this.#exec(executable, ["version"]);
+    if (await this.#canonicalExecutable() !== executable) return void 0;
+    if (result2.timedOut || result2.exitCode !== 0 || Buffer.byteLength(result2.output, "utf8") > BD_PROCESS_MAX_OUTPUT_BYTES || !/^bd version 1\.1\.0(?:\s|$)/u.test(result2.output))
+      return void 0;
+    this.#verifiedExecutable = executable;
+    return executable;
+  }
+  async #canonicalExecutable() {
+    if (this.#executablePoisoned) return void 0;
+    const snapshot = await executableSnapshot(this.#executable);
+    if (snapshot === void 0)
+      return this.#process === runPinnedBd ? void 0 : this.#executable;
+    if (this.#executableSnapshot !== void 0 && this.#executableSnapshot.fingerprint !== snapshot.fingerprint) {
+      this.#executablePoisoned = true;
+      return void 0;
+    }
+    this.#executableSnapshot ??= snapshot;
+    return snapshot.canonical;
+  }
+  async #verifyDolt() {
+    const dolt = await this.#canonicalDolt();
+    if (dolt === void 0) return void 0;
+    if (this.#verifiedDolt === dolt) return dolt;
+    const result2 = await this.#exec(dolt, ["version"]);
+    if (await this.#canonicalDolt() !== dolt) return void 0;
+    if (result2.timedOut || result2.exitCode !== 0 || Buffer.byteLength(result2.output, "utf8") > DOLT_SQL_MAX_OUTPUT_BYTES || !/^dolt version 2\.2\.1(?:\s|$)/u.test(result2.output))
+      return void 0;
+    this.#verifiedDolt = dolt;
+    return dolt;
+  }
+  async #canonicalDolt() {
+    if (this.#doltPoisoned) return void 0;
+    const snapshot = await executableSnapshot(this.#doltExecutable);
+    if (snapshot === void 0)
+      return this.#process === runPinnedBd ? void 0 : this.#doltExecutable;
+    if (this.#doltSnapshot !== void 0 && this.#doltSnapshot.fingerprint !== snapshot.fingerprint) {
+      this.#doltPoisoned = true;
+      return void 0;
+    }
+    this.#doltSnapshot ??= snapshot;
+    return snapshot.canonical;
+  }
+  async #status(executable, dolt, workspace) {
+    if (await this.#canonicalExecutable() !== executable || await this.#canonicalDolt() !== dolt)
+      return void 0;
+    const result2 = await this.#exec(
+      executable,
+      ["-C", workspace, "dolt", "status", "--json"],
+      [dirname4(dolt)]
+    );
+    if (result2.timedOut || result2.exitCode !== 0 || Buffer.byteLength(result2.output, "utf8") > BD_PROCESS_MAX_OUTPUT_BYTES)
+      return void 0;
+    try {
+      const parsed = JSON.parse(result2.output);
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed) || Object.keys(parsed).sort().join(",") !== "data_dir,pid,port,running,schema_version")
+        return void 0;
+      const value = parsed;
+      if (value.schema_version !== 1 || typeof value.running !== "boolean")
+        return void 0;
+      if (!value.running)
+        return value.data_dir === "" && value.pid === 0 && value.port === 0 ? "stopped" : void 0;
+      if (typeof value.data_dir !== "string" || !isAbsolute5(value.data_dir) || typeof value.pid !== "number" || !Number.isSafeInteger(value.pid) || value.pid <= 0 || typeof value.port !== "number" || !Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65535)
+        return void 0;
+      const [actual, expected] = await Promise.all([
+        realpath(value.data_dir),
+        realpath(this.#dataDirectory)
+      ]);
+      return actual === expected ? "running" : void 0;
+    } catch {
+      return void 0;
+    }
+  }
+  async #canonicalWorkspace() {
+    try {
+      const canonical2 = await realpath(this.#workspace);
+      return (await stat(canonical2)).isDirectory() ? canonical2 : void 0;
+    } catch {
+      return void 0;
+    }
+  }
+  async #exec(executable, argv, additionalPath = []) {
+    const runtime = this.#runtimeEnvironment?.();
+    if (runtime !== void 0 && (Object.keys(runtime).some(
+      (key) => key !== "HOME" && key !== "XDG_CONFIG_HOME"
+    ) || runtime.HOME !== void 0 && (!isAbsolute5(runtime.HOME) || !safeText(runtime.HOME, 4096)) || runtime.XDG_CONFIG_HOME !== void 0 && (!isAbsolute5(runtime.XDG_CONFIG_HOME) || !safeText(runtime.XDG_CONFIG_HOME, 4096))))
+      return { exitCode: void 0, output: "", timedOut: false };
+    return this.#process({
+      argv,
+      executable,
+      env: {
+        BD_NON_INTERACTIVE: "1",
+        CI: "1",
+        ...runtime?.HOME === void 0 ? {} : { HOME: runtime.HOME },
+        PATH: [dirname4(executable), ...additionalPath, "/usr/bin", "/bin"].join(
+          ":"
+        ),
+        ...runtime?.XDG_CONFIG_HOME === void 0 ? {} : { XDG_CONFIG_HOME: runtime.XDG_CONFIG_HOME }
+      },
+      timeoutMs: BD_PROCESS_TIMEOUT_MS
+    });
+  }
+};
+function safeText(value, max) {
+  return bytes.encode(value).byteLength > 0 && bytes.encode(value).byteLength <= max && !value.includes("\0") && !containsSecretShape(value);
+}
+function exact(left, right) {
+  try {
+    return canonicalJson(left) === canonicalJson(right);
+  } catch {
+    return false;
+  }
+}
+function safeRecord(input, keys) {
+  try {
+    if (input === null || typeof input !== "object" || Array.isArray(input))
+      return void 0;
+    const prototype = Object.getPrototypeOf(input);
+    if (prototype !== Object.prototype && prototype !== null) return void 0;
+    const descriptors = Object.getOwnPropertyDescriptors(input);
+    const ownKeys = Reflect.ownKeys(descriptors);
+    if (ownKeys.some((key) => typeof key !== "string")) return void 0;
+    const actual = ownKeys;
+    actual.sort();
+    const expected = [...keys].sort();
+    if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index]))
+      return void 0;
+    const record2 = {};
+    for (const key of keys) {
+      const descriptor = descriptors[key];
+      if (descriptor === void 0 || !("value" in descriptor))
+        return void 0;
+      record2[key] = descriptor.value;
+    }
+    return record2;
+  } catch {
+    return void 0;
+  }
+}
+function safeOptionalRecord(input, required2, optional) {
+  try {
+    if (input === null || typeof input !== "object" || Array.isArray(input))
+      return void 0;
+    const prototype = Object.getPrototypeOf(input);
+    if (prototype !== Object.prototype && prototype !== null) return void 0;
+    const descriptors = Object.getOwnPropertyDescriptors(input);
+    const ownKeys = Reflect.ownKeys(descriptors);
+    if (ownKeys.some((key) => typeof key !== "string")) return void 0;
+    const actual = ownKeys;
+    actual.sort();
+    const allowed = /* @__PURE__ */ new Set([...required2, ...optional]);
+    if (actual.some((key) => !allowed.has(key)) || required2.some((key) => !actual.includes(key)))
+      return void 0;
+    const record2 = {};
+    for (const key of actual) {
+      const descriptor = descriptors[key];
+      if (descriptor === void 0 || !("value" in descriptor))
+        return void 0;
+      record2[key] = descriptor.value;
+    }
+    return record2;
+  } catch {
+    return void 0;
+  }
+}
+function validIdentifier(value, max = MAX_SCHEMA_BYTES) {
+  return safeText(value, max) && /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u.test(value);
+}
+function mapFailure(failure2) {
+  if (failure2 === "unavailable") return "unavailable";
+  if (failure2 === "ambiguous") return "ambiguous";
+  return "quarantined";
+}
+function sameServerIdentity(identity2, probe) {
+  return identity2.endpoint === probe.endpoint && identity2.database === probe.database && identity2.schema === probe.schema && identity2.autoCommitPolicy === probe.autoCommitPolicy && identity2.credentialReference === probe.credentialReference && probe.workerGrant.credentialReference === identity2.workerCredentialReference && identity2.workerCredentialReference !== identity2.credentialReference;
+}
+var ServerProbeSchema = strictObject2({
+  autoCommitPolicy: Type.Union([
+    Type.Literal("on"),
+    Type.Literal("off"),
+    Type.Literal("batch")
+  ]),
+  credentialReference: Type.String({
+    minLength: 1,
+    maxLength: MAX_FINGERPRINT_BYTES
+  }),
+  database: Type.String({ minLength: 1, maxLength: MAX_SCHEMA_BYTES }),
+  endpoint: Type.String({ minLength: 1, maxLength: MAX_ENDPOINT_BYTES }),
+  schema: Type.String({ minLength: 1, maxLength: MAX_SCHEMA_BYTES }),
+  workerGrant: strictObject2({
+    credentialReference: Type.String({
+      minLength: 1,
+      maxLength: MAX_FINGERPRINT_BYTES
+    }),
+    serverEnforced: Type.Boolean(),
+    writeDenied: Type.Boolean()
+  })
+});
+var ServerIdentitySchema = strictObject2({
+  autoCommitPolicy: Type.Union([
+    Type.Literal("on"),
+    Type.Literal("off"),
+    Type.Literal("batch")
+  ]),
+  credentialProvenance: Type.Union([
+    Type.Literal("environment"),
+    Type.Literal("managed_local_runtime")
+  ]),
+  credentialReference: Type.String({
+    minLength: 1,
+    maxLength: MAX_FINGERPRINT_BYTES
+  }),
+  database: Type.String({ minLength: 1, maxLength: MAX_SCHEMA_BYTES }),
+  endpoint: Type.String({ minLength: 1, maxLength: MAX_ENDPOINT_BYTES }),
+  prefix: Type.String({ minLength: 1, maxLength: MAX_SCHEMA_BYTES }),
+  schema: Type.String({ minLength: 1, maxLength: MAX_SCHEMA_BYTES }),
+  topology: Type.Union([
+    Type.Literal("managed_local_shared_server"),
+    Type.Literal("external_server")
+  ]),
+  transportSecurity: Type.Union([
+    Type.Literal("tls"),
+    Type.Literal("loopback_plaintext")
+  ]),
+  workerCredentialReference: Type.String({
+    minLength: 1,
+    maxLength: MAX_FINGERPRINT_BYTES
+  })
+});
+var ServerCommitReadbackSchema = strictObject2({
+  autoCommitPolicy: Type.Union([
+    Type.Literal("on"),
+    Type.Literal("off"),
+    Type.Literal("batch")
+  ]),
+  commit: Type.Union([Type.Literal("auto"), Type.Literal("explicit")]),
+  head: Type.Optional(
+    Type.String({
+      minLength: 20,
+      maxLength: 64,
+      pattern: "^[0-9a-z]{20,64}$"
+    })
+  ),
+  workingSet: Type.Literal("clean")
+});
+function parseProbe(input) {
+  return isSchema(ServerProbeSchema, input) ? input : void 0;
+}
+function parseCommit(input) {
+  return isSchema(ServerCommitReadbackSchema, input) ? input : void 0;
+}
+function normalizedServerIdentity(input) {
+  const record2 = safeRecord(input, [
+    "autoCommitPolicy",
+    "credentialProvenance",
+    "credentialReference",
+    "database",
+    "endpoint",
+    "prefix",
+    "schema",
+    "topology",
+    "transportSecurity",
+    "workerCredentialReference"
+  ]);
+  try {
+    return record2 !== void 0 && isSchema(ServerIdentitySchema, record2) ? record2 : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function normalizedScope(input) {
+  const record2 = safeRecord(input, [
+    "beadsStoreIdentity",
+    "gitRepositoryIdentity",
+    "integrationBranch"
+  ]);
+  try {
+    return record2 !== void 0 && isSchema(FencingScopeSchema, record2) ? record2 : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function normalizedJsonValue(input) {
+  try {
+    return JSON.parse(canonicalJson(input));
+  } catch {
+    return void 0;
+  }
+}
+function parseResult(input) {
+  if (!isSchema(RunStoreResultSchema, input)) return void 0;
+  const result2 = input;
+  if (result2.status !== "applied") return result2;
+  if (!validateRootProjection(result2.root).ok || !isSchema(CheckpointObservationSchema, result2.checkpoint))
+    return void 0;
+  return result2.children.every((child) => validateChildProjection(child).ok) ? result2 : void 0;
+}
+function parseSlotReadback(input, prefix, scope) {
+  if (input === null || typeof input !== "object" || Array.isArray(input))
+    return void 0;
+  const value = input;
+  if (Object.keys(value).sort().join(",") !== "observation,scopeReference" || value.scopeReference !== slotScopeReference(scope))
+    return void 0;
+  const slot = validateMergeSlotObservation(value.observation, prefix, scope);
+  return slot.ok ? slot.value : void 0;
+}
+function parseDiscovery(input, prefix, scope) {
+  if (input === null || typeof input !== "object" || Array.isArray(input))
+    return void 0;
+  const value = input;
+  if (Object.keys(value).sort().join(",") === "slot,status") {
+    const slot2 = validateMergeSlotObservation(value.slot, prefix, scope);
+    return value.status === "absent" && slot2.ok && slot2.value.status === "available" ? { status: "absent", slot: slot2.value } : void 0;
+  }
+  if (Object.keys(value).sort().join(",") !== "checkpoint,children,root,slot" || !Array.isArray(value.children))
+    return void 0;
+  const root = validateRootProjection(value.root);
+  const slot = validateMergeSlotObservation(value.slot, prefix, scope);
+  if (!root.ok || !slot.ok || !isSchema(CheckpointObservationSchema, value.checkpoint) || !exact(root.value.checkpoint, value.checkpoint) || value.children.length !== root.value.childRows.length)
+    return void 0;
+  const expectedUnitIds = new Set(
+    root.value.childRows.map((child) => child.unitId)
+  );
+  const observedUnitIds = /* @__PURE__ */ new Set();
+  for (const child of value.children) {
+    const parsed = validateChildProjection(child);
+    const reference = parsed.ok ? root.value.childRows.find((row) => row.unitId === parsed.value.unitId) : void 0;
+    if (!parsed.ok || observedUnitIds.has(parsed.value.unitId) || reference?.revision !== parsed.value.revision || reference.commitment !== parsed.value.commitment)
+      return void 0;
+    observedUnitIds.add(parsed.value.unitId);
+  }
+  if (observedUnitIds.size !== expectedUnitIds.size || [...expectedUnitIds].some((unitId) => !observedUnitIds.has(unitId)))
+    return void 0;
+  return {
+    checkpoint: value.checkpoint,
+    children: value.children,
+    root: value.root,
+    slot: value.slot
+  };
+}
+function boundedMutationBatch(value) {
+  try {
+    return Buffer.byteLength(canonicalJson(value), "utf8") <= MUTATION_BATCH_MAX_BYTES;
+  } catch {
+    return false;
+  }
+}
+function normalizedMutationBatch(input) {
+  try {
+    const parsed = validateMutationBatch(input);
+    if (!parsed.ok || !boundedMutationBatch(parsed.value)) return void 0;
+    const normalized = JSON.parse(
+      canonicalJson(parsed.value)
+    );
+    const reparsed = validateMutationBatch(normalized);
+    return reparsed.ok && boundedMutationBatch(reparsed.value) ? reparsed.value : void 0;
+  } catch {
+    return void 0;
+  }
+}
+var BeadsServerAdapter = class {
+  #driver;
+  #identity;
+  #process;
+  #recoveryScope;
+  #ready = false;
+  #started = false;
+  #lastDiscovery;
+  constructor(input) {
+    if (input.identity.topology === "external_server" && input.process !== void 0 || input.identity.topology === "managed_local_shared_server" && input.identity.credentialProvenance !== "managed_local_runtime")
+      throw new Error("invalid server adapter topology");
+    this.#driver = input.driver;
+    this.#identity = input.identity;
+    this.#process = input.process;
+    this.#recoveryScope = input.recoveryScope;
+  }
+  /**
+   * A readback is usable only after the concrete driver has reproved its live
+   * identity and returned every exact root/child projection. Absence is never
+   * inferred from an outage or malformed response.
+   */
+  async load() {
+    if (!this.#ready || this.#recoveryScope === void 0)
+      return { status: "quarantined" };
+    let response;
+    try {
+      response = await this.#driver.discover({
+        identity: this.#identity,
+        prefix: this.#identity.prefix,
+        scope: this.#recoveryScope
+      });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (response.status !== "ok") {
+      this.#revoke();
+      return response.status === "unavailable" ? { status: "unavailable" } : response.status === "ambiguous" ? { status: "ambiguous" } : { status: "quarantined" };
+    }
+    const parsed = parseDiscovery(
+      response.value,
+      this.#identity.prefix,
+      this.#recoveryScope
+    );
+    if (parsed === void 0) {
+      this.#revoke();
+      return { status: "corrupt" };
+    }
+    if ("status" in parsed) return { status: "absent" };
+    const root = validateRootProjection(parsed.root);
+    if (!root.ok) {
+      this.#revoke();
+      return { status: "corrupt" };
+    }
+    const children = [];
+    for (const child of parsed.children) {
+      const parsedChild = validateChildProjection(child);
+      if (!parsedChild.ok) {
+        this.#revoke();
+        return { status: "corrupt" };
+      }
+      children.push(parsedChild.value);
+    }
+    if (children.length !== root.value.childRows.length) {
+      this.#revoke();
+      return { status: "corrupt" };
+    }
+    return {
+      status: "observed",
+      value: {
+        children,
+        root: root.value
+      }
+    };
+  }
+  async preflight() {
+    this.#revoke();
+    if (this.#identity.topology === "managed_local_shared_server" && !this.#started) {
+      if (this.#process === void 0)
+        return { status: "refused", code: "BS_SERVER_REFUSED" };
+      let started;
+      try {
+        started = await this.#process.start();
+      } catch {
+        this.#revoke();
+        return { status: "unavailable", code: "BS_SERVER_UNAVAILABLE" };
+      }
+      if (started.status !== "ok") {
+        this.#revoke();
+        return this.#preflightFailure(started.status);
+      }
+      this.#started = true;
+    }
+    let probe;
+    try {
+      probe = await this.#driver.probe(this.#identity);
+    } catch {
+      this.#revoke();
+      return { status: "unavailable", code: "BS_SERVER_UNAVAILABLE" };
+    }
+    if (probe.status !== "ok") {
+      this.#revoke();
+      return this.#preflightFailure(probe.status);
+    }
+    const parsed = parseProbe(probe.value);
+    if (parsed === void 0 || !sameServerIdentity(this.#identity, parsed)) {
+      this.#revoke();
+      return { status: "refused", code: "BS_IDENTITY_MISMATCH" };
+    }
+    if (!parsed.workerGrant.serverEnforced || !parsed.workerGrant.writeDenied) {
+      this.#revoke();
+      return { status: "refused", code: "BS_READ_ONLY_NOT_ENFORCED" };
+    }
+    this.#ready = true;
+    return { status: "ready", identity: this.#identity };
+  }
+  async dispose() {
+    this.#revoke();
+    this.#started = false;
+  }
+  async acquire(input) {
+    this.#lastDiscovery = void 0;
+    if (!this.#ready) return { status: "quarantined" };
+    let checked;
+    try {
+      checked = await this.#driver.mergeSlotCheck({
+        actor: input.knownHolder ?? input.holder,
+        prefix: input.prefix,
+        scope: input.scope
+      });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (checked.status !== "ok") {
+      this.#revoke();
+      return { status: mapFailure(checked.status) };
+    }
+    const before = parseSlotReadback(checked.value, input.prefix, input.scope);
+    if (before === void 0) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    const decision = decideControllerSlot(
+      input.prefix,
+      input.scope,
+      input.holder,
+      input.knownHolder,
+      before,
+      input.continuationEvidence,
+      input.releaseEvidence
+    );
+    if (decision.kind === "resume" || decision.kind === "continue")
+      return { status: decision.kind, slot: before };
+    if (decision.kind === "blocked") return { status: "blocked" };
+    if (decision.kind === "quarantined") {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    let result2;
+    try {
+      result2 = await this.#driver.mergeSlotAcquire({
+        actor: input.holder,
+        prefix: input.prefix,
+        scope: input.scope
+      });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (result2.status !== "ok") {
+      this.#revoke();
+      return { status: mapFailure(result2.status) };
+    }
+    const after = parseSlotReadback(result2.value, input.prefix, input.scope);
+    if (after === void 0) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    if (after.status === "acquired" && after.holder === input.holder && after.actor === input.holder)
+      return { status: "acquired", slot: after };
+    if (after.status === "acquired") return { status: "blocked" };
+    this.#revoke();
+    return { status: "quarantined" };
+  }
+  async check(input) {
+    this.#lastDiscovery = void 0;
+    if (!this.#ready) return { status: "quarantined" };
+    let result2;
+    try {
+      result2 = await this.#driver.mergeSlotCheck({
+        actor: input.holder,
+        prefix: input.prefix,
+        scope: input.scope
+      });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (result2.status !== "ok") {
+      this.#revoke();
+      return { status: mapFailure(result2.status) };
+    }
+    const parsed = parseSlotReadback(result2.value, input.prefix, input.scope);
+    if (parsed === void 0) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    return parsed.status === "acquired" && parsed.holder === input.holder ? { status: "resume", slot: parsed } : { status: "blocked" };
+  }
+  async release(input) {
+    this.#lastDiscovery = void 0;
+    if (!this.#ready) return { status: "quarantined" };
+    let result2;
+    try {
+      result2 = await this.#driver.mergeSlotRelease({
+        actor: input.holder,
+        prefix: input.prefix,
+        scope: input.scope
+      });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (result2.status !== "ok") {
+      this.#revoke();
+      return { status: mapFailure(result2.status) };
+    }
+    const evidence = validateSlotRelease(
+      input.prefix,
+      input.scope,
+      input.holder,
+      {
+        holder: input.holder,
+        readback: result2.value.observation
+      }
+    );
+    if (!evidence.ok) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    return { status: "released", slot: result2.value.observation };
+  }
+  /** Read-only topology planning for a fresh persisted controller intent. */
+  async prepareControllerTransition(input) {
+    this.#lastDiscovery = void 0;
+    if (!this.#ready || this.#recoveryScope === void 0 || !exact(input.scope, this.#recoveryScope))
+      return { status: "quarantined" };
+    let result2;
+    try {
+      result2 = await this.#driver.mergeSlotCheck({
+        actor: input.holder,
+        prefix: this.#identity.prefix,
+        scope: input.scope
+      });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (result2.status !== "ok") {
+      this.#revoke();
+      return {
+        status: result2.status === "unavailable" ? "unavailable" : "ambiguous"
+      };
+    }
+    const before = parseSlotReadback(
+      result2.value,
+      this.#identity.prefix,
+      input.scope
+    );
+    if (before === void 0 || input.kind === "acquire" && before.status !== "available" || input.kind === "release" && (before.status !== "acquired" || before.holder !== input.holder))
+      return before?.status === "acquired" ? { status: "blocked" } : { status: "ambiguous" };
+    const withoutHash = {
+      ...before,
+      actor: input.holder,
+      ...input.kind === "acquire" ? { holder: input.holder } : {},
+      status: input.kind === "acquire" ? "acquired" : "available"
+    };
+    if (input.kind === "release")
+      delete withoutHash.holder;
+    const { readbackHash: _ignored, ...hashInput } = withoutHash;
+    const after = {
+      ...hashInput,
+      readbackHash: deriveSlotReadbackHash(hashInput)
+    };
+    const transition = makeServerSlotTransitionIntent({
+      after,
+      before,
+      holder: input.holder,
+      kind: input.kind,
+      scope: input.scope
+    });
+    return transition === void 0 ? { status: "quarantined" } : { status: "planned", transition };
+  }
+  /**
+   * Read-only reconciliation of an already-persisted server transition.
+   * Exact `before` is positive retry authority; exact `after` is completion.
+   * No acquire or release command is reachable from this method.
+   */
+  async reconcileControllerTransition(transition) {
+    this.#lastDiscovery = void 0;
+    if (!this.#ready || !validateServerSlotTransitionIntent(
+      transition,
+      this.#identity.prefix,
+      transition.scope,
+      transition.holder,
+      transition.kind
+    ))
+      return { status: "ambiguous" };
+    let result2;
+    try {
+      result2 = await this.#driver.mergeSlotCheck({
+        actor: transition.holder,
+        prefix: this.#identity.prefix,
+        scope: transition.scope
+      });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (result2.status !== "ok") {
+      this.#revoke();
+      return {
+        status: result2.status === "unavailable" ? "unavailable" : "ambiguous"
+      };
+    }
+    const current = parseSlotReadback(
+      result2.value,
+      this.#identity.prefix,
+      transition.scope
+    );
+    if (current === void 0) {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (exact(current, transition.after)) return { status: "observed" };
+    if (exact(current, transition.before)) return { status: "absent" };
+    return current.status === "acquired" && current.holder !== transition.holder ? { status: "blocked" } : { status: "ambiguous" };
+  }
+  /**
+   * Execute only the exact server transition which survived journal
+   * validation. The coordinator calls this solely after read-only reconcile
+   * proved the exact `before` observation.
+   */
+  async executeControllerTransition(transition) {
+    this.#lastDiscovery = void 0;
+    if (!this.#ready || !validateServerSlotTransitionIntent(
+      transition,
+      this.#identity.prefix,
+      transition.scope,
+      transition.holder,
+      transition.kind
+    ))
+      return { status: "ambiguous" };
+    let result2;
+    try {
+      result2 = transition.kind === "acquire" ? await this.#driver.mergeSlotAcquire({
+        actor: transition.holder,
+        prefix: this.#identity.prefix,
+        scope: transition.scope
+      }) : await this.#driver.mergeSlotRelease({
+        actor: transition.holder,
+        prefix: this.#identity.prefix,
+        scope: transition.scope
+      });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (result2.status !== "ok") {
+      this.#revoke();
+      return {
+        status: result2.status === "unavailable" ? "unavailable" : "ambiguous"
+      };
+    }
+    const after = parseSlotReadback(
+      result2.value,
+      this.#identity.prefix,
+      transition.scope
+    );
+    if (after === void 0) {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (exact(after, transition.after)) return { status: "observed" };
+    return after.status === "acquired" && after.holder !== transition.holder ? { status: "blocked" } : { status: "ambiguous" };
+  }
+  /** Exact server readback used to reconcile, never to blindly retry a commit. */
+  async discover(scope) {
+    this.#lastDiscovery = void 0;
+    try {
+      const response = await this.#driver.discover({
+        identity: this.#identity,
+        prefix: this.#identity.prefix,
+        scope
+      });
+      if (response.status !== "ok") {
+        this.#revoke();
+        return void 0;
+      }
+      const parsed = parseDiscovery(
+        response.value,
+        this.#identity.prefix,
+        scope
+      );
+      if (parsed === void 0) {
+        this.#revoke();
+        return void 0;
+      }
+      if ("status" in parsed) return void 0;
+      this.#lastDiscovery = parsed;
+      return parsed;
+    } catch {
+      this.#revoke();
+      return void 0;
+    }
+  }
+  get lastDiscovery() {
+    return this.#lastDiscovery;
+  }
+  async compareAndSet(batchInput) {
+    this.#lastDiscovery = void 0;
+    if (!this.#ready) return { status: "quarantined" };
+    const batch = validateMutationBatch(batchInput);
+    if (!batch.ok || !boundedMutationBatch(batch.value)) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    let response;
+    try {
+      response = await this.#driver.mutate({
+        batch: batch.value,
+        identity: this.#identity
+      });
+    } catch {
+      this.#revoke();
+      await this.discover(batch.value.scope);
+      return { status: "ambiguous" };
+    }
+    if (response.status !== "ok") {
+      this.#revoke();
+      await this.discover(batch.value.scope);
+      return {
+        status: response.phase === "before_transaction" && response.status === "unavailable" ? "unavailable" : "ambiguous"
+      };
+    }
+    const commit2 = parseCommit(response.value.commit);
+    const result2 = parseResult(response.value.result);
+    if (commit2 === void 0 || result2 === void 0 || !this.#durable(commit2)) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    if (result2.status !== "applied") return result2;
+    if (result2.affectedRowCount !== batch.value.changedRows.length + 1 || !exact(result2.root, batch.value.next.root) || !exact(result2.children, batch.value.next.children) || !exact(result2.checkpoint, batch.value.checkpoint)) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    return result2;
+  }
+  /**
+   * The sole existing-root pre-ownership write.  It intentionally does not
+   * delegate to compareAndSet: ordinary CAS predicates require the slot to be
+   * acquired, whereas this operation proves it remains exactly available.
+   */
+  async persistControllerAcquireIntent(batchInput) {
+    this.#lastDiscovery = void 0;
+    if (!this.#ready || this.#driver.preOwnershipMutate === void 0)
+      return { status: "quarantined" };
+    const batch = validateMutationBatch(batchInput);
+    if (!batch.ok || !boundedMutationBatch(batch.value)) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    const prior = batch.value.next.root.run;
+    const transition = prior.effectJournal.at(-1)?.slotTransition;
+    if (prior.state !== "initializing" || prior.controller.state !== "acquire_intent" || prior.effectJournal.at(-1)?.kind !== "controller_acquire" || prior.effectJournal.at(-1)?.status !== "intended" || !validateServerSlotTransitionIntent(
+      transition,
+      this.#identity.prefix,
+      batch.value.scope,
+      batch.value.expectedHolder,
+      "acquire"
+    )) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    return this.#preOwnershipResult(
+      { kind: "existing", batch: batch.value },
+      batch.value
+    );
+  }
+  /**
+   * Atomic bootstrap used only when authoritative discovery proved every SCE
+   * projection absent. The concrete driver checks those absences and the
+   * available slot in the same SQL transaction, then readbacks the exact
+   * intended projection before returning applied.
+   */
+  async createControllerAcquireIntent(input) {
+    this.#lastDiscovery = void 0;
+    if (!this.#ready || this.#driver.preOwnershipMutate === void 0)
+      return { status: "quarantined" };
+    const initial = validate(
+      InitialControllerAcquireSchema,
+      input
+    );
+    if (!initial.ok || initial.value === void 0) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    const candidate = initial.value;
+    const transition = candidate.next.root.run.effectJournal[0]?.slotTransition;
+    if (!exact(candidate.expected.scope, candidate.next.root.scope) || candidate.expected.holder !== candidate.next.root.holder || candidate.next.root.run.state !== "initializing" || candidate.next.root.run.controller.state !== "acquire_intent" || candidate.next.root.run.effectJournal.length !== 1 || candidate.next.root.run.effectJournal[0]?.kind !== "controller_acquire" || !validateServerSlotTransitionIntent(
+      transition,
+      this.#identity.prefix,
+      candidate.expected.scope,
+      candidate.expected.holder,
+      "acquire"
+    )) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    const expected = {
+      changedRows: candidate.next.children.map((child) => ({
+        expectedCommitment: child.commitment,
+        expectedRevision: child.revision,
+        nextCommitment: child.commitment,
+        nextRevision: child.revision,
+        unitId: child.unitId
+      })),
+      checkpoint: candidate.next.root.checkpoint,
+      next: candidate.next
+    };
+    return this.#preOwnershipResult(
+      { kind: "initial", initial: candidate },
+      expected
+    );
+  }
+  async #preOwnershipResult(mutation, expected) {
+    let response;
+    try {
+      response = await this.#driver.preOwnershipMutate({
+        identity: this.#identity,
+        mutation
+      });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (response.status !== "ok") {
+      this.#revoke();
+      return response.phase === "before_transaction" && response.status === "unavailable" ? { status: "unavailable" } : { status: "ambiguous" };
+    }
+    const commit2 = parseCommit(response.value.commit);
+    const result2 = parseResult(response.value.result);
+    if (commit2 === void 0 || result2 === void 0 || !this.#durable(commit2)) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    if (result2.status !== "applied") return result2;
+    if (result2.affectedRowCount !== expected.changedRows.length + 1 || !exact(result2.root, expected.next.root) || !exact(result2.children, expected.next.children) || !exact(result2.checkpoint, expected.checkpoint)) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    return result2;
+  }
+  #durable(commit2) {
+    if (commit2.autoCommitPolicy !== this.#identity.autoCommitPolicy || commit2.workingSet !== "clean")
+      return false;
+    return this.#identity.autoCommitPolicy === "on" ? commit2.commit === "auto" : commit2.commit === "explicit";
+  }
+  #preflightFailure(failure2) {
+    if (failure2 === "unavailable")
+      return { status: "unavailable", code: "BS_SERVER_UNAVAILABLE" };
+    if (failure2 === "ambiguous")
+      return { status: "ambiguous", code: "BS_SERVER_AMBIGUOUS" };
+    return { status: "refused", code: "BS_SERVER_REFUSED" };
+  }
+  #revoke() {
+    this.#ready = false;
+    this.#lastDiscovery = void 0;
+    try {
+      this.#driver.disarm();
+    } catch {
+    }
+  }
+};
+function quotedIdentifier(value) {
+  return validIdentifier(value) ? `\`${value}\`` : void 0;
+}
+function sqlLiteral(value) {
+  if (typeof value === "number") return String(value);
+  return `CONVERT(0x${Buffer.from(value, "utf8").toString("hex")} USING utf8mb4)`;
+}
+function sqlJson(value) {
+  const encoded = JSON.stringify(value);
+  if (encoded === void 0) throw new Error("invalid SQL JSON value");
+  return `CAST(${sqlLiteral(encoded)} AS JSON)`;
+}
+function jsonRecord(value) {
+  let parsed = value;
+  try {
+    if (typeof parsed === "string") parsed = JSON.parse(parsed);
+  } catch {
+    return void 0;
+  }
+  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : void 0;
+}
+function exactWorkerSelectGrants(rows, user, database) {
+  const key = `Grants for ${user}@%`;
+  const values = rows.map((row) => row[key]);
+  const principal = `\`${user}\`@\`%\``;
+  const expected = /* @__PURE__ */ new Set([
+    `GRANT USAGE ON *.* TO ${principal}`,
+    `GRANT SELECT ON \`${database}\`.* TO ${principal}`
+  ]);
+  return rows.length === expected.size && values.every(
+    (value) => typeof value === "string" && expected.delete(value)
+  ) && expected.size === 0;
+}
+var DoltBeadsServerDriver = class {
+  #identity;
+  #rows;
+  #slotProcess;
+  #worker;
+  #writer;
+  #autoCommitObserved = false;
+  #doltTransactionCommitObserved = false;
+  #ready = false;
+  #readyIdentity;
+  constructor(input) {
+    if (!validIdentifier(input.rows.rootBeadId) || Object.values(input.rows.childBeadIds).some((id) => !validIdentifier(id)))
+      throw new Error("invalid server bead rows");
+    this.#identity = input.identity;
+    this.#rows = input.rows;
+    this.#slotProcess = input.slotProcess;
+    this.#worker = input.worker;
+    this.#writer = input.writer;
+  }
+  disarm() {
+    this.#ready = false;
+    this.#readyIdentity = void 0;
+    this.#autoCommitObserved = false;
+    this.#doltTransactionCommitObserved = false;
+  }
+  async probe(expectedIdentity) {
+    this.disarm();
+    const expected = normalizedServerIdentity(expectedIdentity);
+    if (expected === void 0 || !exact(expected, this.#identity))
+      return { status: "refused" };
+    const liveBinding = await this.#liveDiscoveryBinding();
+    if (liveBinding.status !== "ok") return liveBinding;
+    const issuesTable = await executeDoltSqlRead(
+      this.#writer,
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = ${sqlLiteral(this.#identity.database)} AND table_name = 'issues'`
+    );
+    if (issuesTable.status !== "ok") return { status: issuesTable.status };
+    if (issuesTable.rows.length !== 1 || issuesTable.rows[0]?.table_name !== "issues" && issuesTable.rows[0]?.TABLE_NAME !== "issues")
+      return { status: "refused" };
+    const labelsTable = await executeDoltSqlRead(
+      this.#writer,
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = ${sqlLiteral(this.#identity.database)} AND table_name = 'labels'`
+    );
+    if (labelsTable.status !== "ok") return { status: labelsTable.status };
+    if (labelsTable.rows.length !== 1 || labelsTable.rows[0]?.table_name !== "labels" && labelsTable.rows[0]?.TABLE_NAME !== "labels")
+      return { status: "refused" };
+    const columns = await executeDoltSqlRead(
+      this.#writer,
+      `SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = ${sqlLiteral(this.#identity.database)} AND table_name = 'issues'`
+    );
+    if (columns.status !== "ok") return { status: columns.status };
+    const requiredColumns = /* @__PURE__ */ new Map([
+      ["id", "varchar"],
+      ["status", "varchar"],
+      ["metadata", "json"],
+      ["external_ref", "varchar"],
+      ["title", "varchar"],
+      ["design", "longtext"]
+    ]);
+    for (const row of columns.rows) {
+      const name = String(
+        row.column_name ?? row.COLUMN_NAME ?? ""
+      ).toLowerCase();
+      const type = String(row.data_type ?? row.DATA_TYPE ?? "").toLowerCase();
+      if (requiredColumns.get(name) === type) requiredColumns.delete(name);
+    }
+    if (requiredColumns.size !== 0) return { status: "refused" };
+    const labelColumns = await executeDoltSqlRead(
+      this.#writer,
+      `SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = ${sqlLiteral(this.#identity.database)} AND table_name = 'labels'`
+    );
+    if (labelColumns.status !== "ok") return { status: labelColumns.status };
+    const requiredLabelColumns = /* @__PURE__ */ new Map([
+      ["issue_id", "varchar"],
+      ["label", "varchar"]
+    ]);
+    for (const row of labelColumns.rows) {
+      const name = String(
+        row.column_name ?? row.COLUMN_NAME ?? ""
+      ).toLowerCase();
+      const type = String(row.data_type ?? row.DATA_TYPE ?? "").toLowerCase();
+      if (requiredLabelColumns.get(name) === type)
+        requiredLabelColumns.delete(name);
+    }
+    if (requiredLabelColumns.size !== 0) return { status: "refused" };
+    const autoCommit2 = await executeDoltSqlRead(
+      this.#writer,
+      "SELECT @@autocommit AS auto_commit"
+    );
+    if (autoCommit2.status !== "ok" || autoCommit2.rows.length !== 1 || String(autoCommit2.rows[0]?.auto_commit) !== "1")
+      return { status: "refused" };
+    const doltTransactionCommit = await executeDoltSqlProgram(
+      this.#writer,
+      "SET @@SESSION.dolt_transaction_commit = 1; SELECT @@SESSION.dolt_transaction_commit AS dolt_transaction_commit"
+    );
+    if (doltTransactionCommit.status !== "ok" || doltTransactionCommit.results.at(-1)?.length !== 1 || String(
+      doltTransactionCommit.results.at(-1)?.[0]?.dolt_transaction_commit
+    ) !== "1")
+      return { status: "refused" };
+    const initialCommit = await this.#doltCommitEvidence();
+    if (initialCommit.status !== "ok") return initialCommit;
+    this.#autoCommitObserved = true;
+    this.#doltTransactionCommitObserved = true;
+    if (this.#worker === void 0) return { status: "refused" };
+    const issues = quotedIdentifier(this.#identity.database);
+    if (issues === void 0) return { status: "refused" };
+    const workerRead = await executeDoltSqlRead(
+      this.#worker,
+      `SELECT id FROM ${issues}.issues LIMIT 1`
+    );
+    if (workerRead.status !== "ok") return { status: workerRead.status };
+    const workerBinding = doltSqlTransportBinding(this.#worker);
+    if (workerBinding === void 0) return { status: "refused" };
+    const currentWorker = await executeDoltSqlRead(
+      this.#worker,
+      "SELECT CURRENT_USER() AS current_principal"
+    );
+    if (currentWorker.status !== "ok" || currentWorker.rows.length !== 1 || currentWorker.rows[0]?.current_principal !== `${workerBinding.user}@%`)
+      return currentWorker.status === "ok" ? { status: "refused" } : currentWorker;
+    const grants = await executeDoltSqlRead(
+      this.#writer,
+      `SHOW GRANTS FOR '${workerBinding.user}'@'%'`
+    );
+    if (grants.status !== "ok" || !exactWorkerSelectGrants(
+      grants.rows,
+      workerBinding.user,
+      this.#identity.database
+    ))
+      return grants.status === "ok" ? { status: "refused" } : grants;
+    const workerProbe = await probeDoltSqlWorkerWrite(this.#worker);
+    if (workerProbe === "allowed") return { status: "refused" };
+    if (workerProbe !== "denied")
+      return {
+        status: workerProbe === "unavailable" ? "unavailable" : "refused"
+      };
+    const probe = {
+      status: "ok",
+      value: {
+        autoCommitPolicy: this.#identity.autoCommitPolicy,
+        credentialReference: this.#identity.credentialReference,
+        database: this.#identity.database,
+        endpoint: this.#identity.endpoint,
+        schema: this.#identity.schema,
+        workerGrant: {
+          credentialReference: this.#identity.workerCredentialReference,
+          serverEnforced: true,
+          writeDenied: true
+        }
+      }
+    };
+    this.#readyIdentity = expected;
+    this.#ready = true;
+    return probe;
+  }
+  async mergeSlotAcquire(input) {
+    const slotInput = this.#slotInput(input, false);
+    if (slotInput === void 0) return this.#invalidate({ status: "refused" });
+    if (!this.#isReady() || this.#slotProcess === void 0)
+      return { status: "refused" };
+    const binding = await this.#slotProcess.matchesIdentity(this.#identity);
+    if (binding.status !== "ok") {
+      this.disarm();
+      return binding;
+    }
+    const precheck = await this.#slotReadback(
+      slotInput.prefix,
+      slotInput.scope,
+      slotInput.actor
+    );
+    if (precheck.status !== "ok") {
+      this.disarm();
+      return precheck;
+    }
+    const attempt = await this.#slotProcess.acquire(slotInput.actor);
+    const result2 = await this.#slotAfterCommand("acquire", attempt, slotInput);
+    if (result2.status !== "ok") this.disarm();
+    return result2;
+  }
+  async mergeSlotCheck(input) {
+    const slotInput = this.#slotInput(input, true);
+    if (slotInput === void 0) return this.#invalidate({ status: "refused" });
+    if (!this.#isReady() || this.#slotProcess === void 0)
+      return { status: "refused" };
+    const binding = await this.#slotProcess.matchesIdentity(this.#identity);
+    if (binding.status !== "ok") {
+      this.disarm();
+      return binding;
+    }
+    const precheck = await this.#slotReadback(
+      slotInput.prefix,
+      slotInput.scope,
+      slotInput.actor
+    );
+    if (precheck.status !== "ok") {
+      this.disarm();
+      return precheck;
+    }
+    const attempt = await this.#slotProcess.check(slotInput.actor);
+    const result2 = await this.#slotAfterCommand("check", attempt, slotInput);
+    if (result2.status !== "ok") this.disarm();
+    return result2;
+  }
+  async mergeSlotRelease(input) {
+    const slotInput = this.#slotInput(input, false);
+    if (slotInput === void 0) return this.#invalidate({ status: "refused" });
+    if (!this.#isReady() || this.#slotProcess === void 0)
+      return { status: "refused" };
+    const binding = await this.#slotProcess.matchesIdentity(this.#identity);
+    if (binding.status !== "ok") {
+      this.disarm();
+      return binding;
+    }
+    const precheck = await this.#slotReadback(
+      slotInput.prefix,
+      slotInput.scope,
+      slotInput.actor
+    );
+    if (precheck.status !== "ok" || precheck.value.observation.status !== "acquired" || precheck.value.observation.holder !== slotInput.actor)
+      return precheck.status === "ok" ? this.#invalidate({ status: "refused" }) : this.#invalidate(precheck);
+    const attempt = await this.#slotProcess.release(slotInput.actor);
+    const result2 = await this.#slotAfterCommand("release", attempt, slotInput);
+    if (result2.status !== "ok") this.disarm();
+    return result2;
+  }
+  async initializeEnvelope(input) {
+    const initialization = this.#initializationInput(input);
+    if (initialization === void 0) {
+      this.disarm();
+      return { status: "refused" };
+    }
+    if (!this.#isReady() || initialization.authority !== "authorized_initialization")
+      return { status: "refused" };
+    if (this.#slotProcess === void 0) return { status: "refused" };
+    const binding = await this.#slotProcess.matchesIdentity(this.#identity);
+    if (binding.status !== "ok") {
+      this.disarm();
+      return binding;
+    }
+    const affected = await this.#mutateAffected(
+      `UPDATE ${this.#issues()} SET metadata = JSON_SET(metadata, '$.sce', ${sqlJson(initialization.envelope)}) WHERE id = ${sqlLiteral(initialization.issueId)} AND JSON_EXTRACT(metadata, '$.sce') IS NULL`,
+      1
+    );
+    if (affected.status !== "ok") {
+      this.disarm();
+      return { status: affected.status };
+    }
+    if (affected.rows === 0) return { status: "already_initialized" };
+    return affected.rows === 1 ? { status: "initialized" } : { status: "refused" };
+  }
+  async mutate(input) {
+    const mutation = this.#mutationInput(input);
+    const batch = mutation === void 0 ? void 0 : normalizedMutationBatch(mutation.batch);
+    if (mutation === void 0 || batch === void 0) {
+      this.disarm();
+      return { phase: "before_transaction", status: "refused" };
+    }
+    if (!this.#isReady(mutation.identity)) {
+      this.disarm();
+      return { phase: "before_transaction", status: "refused" };
+    }
+    if (this.#slotProcess === void 0)
+      return { phase: "before_transaction", status: "refused" };
+    const binding = await this.#slotProcess.matchesIdentity(this.#identity);
+    if (binding.status !== "ok") {
+      this.disarm();
+      return { phase: "before_transaction", status: binding.status };
+    }
+    if (this.#identity.autoCommitPolicy !== "on" || !this.#autoCommitObserved || !this.#doltTransactionCommitObserved)
+      return { phase: "before_transaction", status: "refused" };
+    const statement = this.#casStatement(batch);
+    if (statement === void 0)
+      return { phase: "before_transaction", status: "refused" };
+    const affected = await this.#mutateAffected(
+      statement,
+      batch.changedRows.length + 1
+    );
+    if (affected.status !== "ok") {
+      this.disarm();
+      return { phase: "commit_unknown", status: affected.status };
+    }
+    if (affected.rows === 0) {
+      const afterStale = await this.#doltCommitEvidence();
+      if (afterStale.status !== "ok") {
+        this.disarm();
+        return {
+          phase: "commit_unknown",
+          status: afterStale.status
+        };
+      }
+      return {
+        status: "ok",
+        value: {
+          commit: afterStale.value,
+          result: { status: "stale" }
+        }
+      };
+    }
+    if (affected.rows !== batch.changedRows.length + 1) {
+      this.disarm();
+      return { phase: "commit_unknown", status: "ambiguous" };
+    }
+    if (affected.committedHead === void 0) {
+      this.disarm();
+      return { phase: "commit_unknown", status: "ambiguous" };
+    }
+    try {
+      await doltBeadsServerDriverPostTransactionTestHook?.({
+        committedHead: affected.committedHead
+      });
+    } catch {
+      this.disarm();
+      return { phase: "commit_unknown", status: "ambiguous" };
+    }
+    const readback = await this.#readback(batch);
+    if (readback.status !== "ok") {
+      this.disarm();
+      return { phase: "commit_unknown", status: readback.status };
+    }
+    return {
+      status: "ok",
+      value: {
+        // The transaction child observed this head and clean working set in
+        // the very session that sent COMMIT. A later shared-server head may
+        // legitimately advance because of unrelated writers, so it is not a
+        // substitute for this commit witness.
+        commit: {
+          autoCommitPolicy: this.#identity.autoCommitPolicy,
+          commit: "auto",
+          head: affected.committedHead,
+          workingSet: "clean"
+        },
+        result: {
+          affectedRowCount: affected.rows,
+          checkpoint: batch.checkpoint,
+          children: batch.next.children,
+          root: batch.next.root,
+          status: "applied"
+        }
+      }
+    };
+  }
+  async preOwnershipMutate(input) {
+    const parsed = this.#preOwnershipInput(input);
+    const plan = parsed === void 0 ? void 0 : this.#preOwnershipPlan(parsed.mutation);
+    if (parsed === void 0 || plan === void 0) {
+      this.disarm();
+      return { phase: "before_transaction", status: "refused" };
+    }
+    if (!this.#isReady(parsed.identity)) {
+      this.disarm();
+      return { phase: "before_transaction", status: "refused" };
+    }
+    if (this.#slotProcess === void 0)
+      return { phase: "before_transaction", status: "refused" };
+    const binding = await this.#slotProcess.matchesIdentity(this.#identity);
+    if (binding.status !== "ok") {
+      this.disarm();
+      return { phase: "before_transaction", status: binding.status };
+    }
+    if (this.#identity.autoCommitPolicy !== "on" || !this.#autoCommitObserved || !this.#doltTransactionCommitObserved)
+      return { phase: "before_transaction", status: "refused" };
+    const affected = await this.#mutateAffected(
+      plan.statement,
+      plan.expectedRows
+    );
+    if (affected.status !== "ok") {
+      this.disarm();
+      return { phase: "commit_unknown", status: affected.status };
+    }
+    if (affected.rows === 0) {
+      const afterStale = await this.#doltCommitEvidence();
+      if (afterStale.status !== "ok") {
+        this.disarm();
+        return { phase: "commit_unknown", status: afterStale.status };
+      }
+      return {
+        status: "ok",
+        value: {
+          commit: afterStale.value,
+          result: { status: "stale" }
+        }
+      };
+    }
+    if (affected.rows !== plan.expectedRows || affected.committedHead === void 0) {
+      this.disarm();
+      return { phase: "commit_unknown", status: "ambiguous" };
+    }
+    try {
+      await doltBeadsServerDriverPostTransactionTestHook?.({
+        committedHead: affected.committedHead
+      });
+    } catch {
+      this.disarm();
+      return { phase: "commit_unknown", status: "ambiguous" };
+    }
+    const readback = await this.#readbackNext(plan.next);
+    if (readback.status !== "ok") {
+      this.disarm();
+      return { phase: "commit_unknown", status: readback.status };
+    }
+    return {
+      status: "ok",
+      value: {
+        commit: {
+          autoCommitPolicy: this.#identity.autoCommitPolicy,
+          commit: "auto",
+          head: affected.committedHead,
+          workingSet: "clean"
+        },
+        result: {
+          affectedRowCount: affected.rows,
+          checkpoint: plan.checkpoint,
+          children: plan.next.children,
+          root: plan.next.root,
+          status: "applied"
+        }
+      }
+    };
+  }
+  async discover(input) {
+    const discovery = this.#discoveryInput(input);
+    if (discovery === void 0 || discovery.prefix !== this.#identity.prefix || !exact(discovery.identity, this.#identity))
+      return this.#invalidate({ status: "refused" });
+    const liveBinding = await this.#liveDiscoveryBinding();
+    if (liveBinding.status !== "ok") return this.#invalidate(liveBinding);
+    const slot = await this.#slotReadback(discovery.prefix, discovery.scope);
+    if (slot.status !== "ok") return this.#invalidate(slot);
+    const metadata = await this.#metadata([
+      this.#rows.rootBeadId,
+      ...Object.values(this.#rows.childBeadIds)
+    ]);
+    if (metadata.status !== "ok")
+      return this.#invalidate({ status: metadata.status });
+    const configuredIds = [
+      this.#rows.rootBeadId,
+      ...Object.values(this.#rows.childBeadIds)
+    ];
+    const presence = configuredIds.map(
+      (id) => Object.prototype.hasOwnProperty.call(metadata.value.get(id) ?? {}, "sce")
+    );
+    if (presence.every((present) => !present))
+      return slot.value.observation.status === "available" ? {
+        status: "ok",
+        value: { status: "absent", slot: slot.value.observation }
+      } : this.#invalidate({ status: "refused" });
+    if (presence.some((present) => !present))
+      return this.#invalidate({ status: "refused" });
+    const root = metadata.value.get(this.#rows.rootBeadId)?.sce;
+    const parsedRoot = validateRootProjection(root);
+    if (!parsedRoot.ok) return this.#invalidate({ status: "refused" });
+    const children = Object.values(this.#rows.childBeadIds).map(
+      (id) => metadata.value.get(id)?.sce
+    );
+    if (children.length !== parsedRoot.value.childRows.length || children.some((child) => !validateChildProjection(child).ok))
+      return this.#invalidate({ status: "refused" });
+    return {
+      status: "ok",
+      value: {
+        checkpoint: parsedRoot.value.checkpoint,
+        children,
+        root: parsedRoot.value,
+        slot: slot.value.observation
+      }
+    };
+  }
+  async #doltCommitEvidence() {
+    const status = await executeDoltSqlRead(
+      this.#writer,
+      "SELECT * FROM dolt_status"
+    );
+    if (status.status !== "ok") return status;
+    if (status.rows.length !== 0) return { status: "refused" };
+    const head3 = await executeDoltSqlRead(
+      this.#writer,
+      "SELECT DOLT_HASHOF('HEAD') AS head"
+    );
+    const value = head3.status === "ok" ? head3.rows[0]?.head : void 0;
+    if (head3.status !== "ok" || head3.rows.length !== 1 || typeof value !== "string" || !/^[0-9a-z]{20,64}$/u.test(value))
+      return head3.status === "ok" ? { status: "refused" } : head3;
+    return {
+      status: "ok",
+      value: {
+        autoCommitPolicy: this.#identity.autoCommitPolicy,
+        commit: "auto",
+        head: value,
+        workingSet: "clean"
+      }
+    };
+  }
+  #transportsMatchIdentity() {
+    const writer = doltSqlTransportBinding(this.#writer);
+    const worker = this.#worker === void 0 ? void 0 : doltSqlTransportBinding(this.#worker);
+    return writer !== void 0 && worker !== void 0 && exact(writer.identity, this.#identity) && exact(worker.identity, this.#identity) && writer.role === "writer" && worker.role === "worker" && writer.credentialReference === this.#identity.credentialReference && worker.credentialReference === this.#identity.workerCredentialReference;
+  }
+  /**
+   * A non-mutating identity proof shared by preflight and fault
+   * reconciliation. The public driver can be called directly, so discovery
+   * cannot trust a caller-supplied identity or a formerly-ready flag: it must
+   * bind the exact configured transports to the live server and pinned bd
+   * workspace each time before it reads an authoritative row.
+   */
+  async #liveDiscoveryBinding() {
+    if (this.#identity.autoCommitPolicy !== "on" || !this.#transportsMatchIdentity() || this.#slotProcess === void 0)
+      return { status: "refused" };
+    const slotBinding = await this.#slotProcess.matchesIdentity(this.#identity);
+    if (slotBinding.status !== "ok") return slotBinding;
+    const database = await executeDoltSqlRead(
+      this.#writer,
+      "SELECT DATABASE() AS current_database"
+    );
+    if (database.status !== "ok") return { status: database.status };
+    if (database.rows.length !== 1 || database.rows[0]?.current_database !== this.#identity.database)
+      return { status: "refused" };
+    const serverVersion = await executeDoltSqlRead(
+      this.#writer,
+      "SELECT DOLT_VERSION() AS dolt_version"
+    );
+    if (serverVersion.status !== "ok" || serverVersion.rows.length !== 1 || serverVersion.rows[0]?.dolt_version !== "2.2.1")
+      return serverVersion.status === "ok" ? { status: "refused" } : serverVersion;
+    const writer = doltSqlTransportBinding(this.#writer);
+    if (writer === void 0 || writer.role !== "writer")
+      return { status: "refused" };
+    const currentWriter = await executeDoltSqlRead(
+      this.#writer,
+      "SELECT CURRENT_USER() AS current_principal"
+    );
+    if (currentWriter.status !== "ok" || currentWriter.rows.length !== 1 || currentWriter.rows[0]?.current_principal !== `${writer.user}@%`)
+      return currentWriter.status === "ok" ? { status: "refused" } : currentWriter;
+    return { status: "ok", value: void 0 };
+  }
+  #isReady(identity2 = this.#identity) {
+    if (identity2 === void 0) return false;
+    try {
+      return this.#ready && this.#readyIdentity !== void 0 && exact(identity2, this.#identity) && exact(this.#readyIdentity, this.#identity);
+    } catch {
+      return false;
+    }
+  }
+  #slotInput(input, actorOptional) {
+    const value = actorOptional ? safeOptionalRecord(input, ["prefix", "scope"], ["actor"]) : safeRecord(input, ["actor", "prefix", "scope"]);
+    if (value === void 0 || typeof value.prefix !== "string")
+      return void 0;
+    const actor = value.actor ?? (actorOptional ? "slot-observer" : void 0);
+    const scope = normalizedScope(value.scope);
+    return value.prefix === this.#identity.prefix && typeof actor === "string" && validIdentifier(actor) && scope !== void 0 ? { actor, prefix: value.prefix, scope } : void 0;
+  }
+  #initializationInput(input) {
+    const value = safeRecord(input, ["authority", "envelope", "issueId"]);
+    const envelope = value === void 0 ? void 0 : normalizedJsonValue(value.envelope);
+    try {
+      return value?.authority === "authorized_initialization" && typeof value.issueId === "string" && validIdentifier(value.issueId) && envelope !== void 0 && !containsSecretShape(envelope) ? {
+        authority: value.authority,
+        envelope,
+        issueId: value.issueId
+      } : void 0;
+    } catch {
+      return void 0;
+    }
+  }
+  #mutationInput(input) {
+    const value = safeRecord(input, ["batch", "identity"]);
+    const identity2 = value === void 0 ? void 0 : normalizedServerIdentity(value.identity);
+    return value !== void 0 && identity2 !== void 0 ? { batch: value.batch, identity: identity2 } : void 0;
+  }
+  #preOwnershipInput(input) {
+    const value = safeRecord(input, ["identity", "mutation"]);
+    const identity2 = value === void 0 ? void 0 : normalizedServerIdentity(value.identity);
+    return value !== void 0 && identity2 !== void 0 ? { identity: identity2, mutation: value.mutation } : void 0;
+  }
+  #discoveryInput(input) {
+    const value = safeRecord(input, ["identity", "prefix", "scope"]);
+    const identity2 = value === void 0 ? void 0 : normalizedServerIdentity(value.identity);
+    const scope = value === void 0 ? void 0 : normalizedScope(value.scope);
+    return value !== void 0 && identity2 !== void 0 && typeof value.prefix === "string" && scope !== void 0 ? { identity: identity2, prefix: value.prefix, scope } : void 0;
+  }
+  #invalidate(value) {
+    this.disarm();
+    return value;
+  }
+  #issues() {
+    const database = quotedIdentifier(this.#identity.database);
+    if (database === void 0) throw new Error("invalid server database");
+    return `${database}.issues`;
+  }
+  #labels() {
+    const database = quotedIdentifier(this.#identity.database);
+    if (database === void 0) throw new Error("invalid server database");
+    return `${database}.labels`;
+  }
+  #slotDesign(prefix, scope) {
+    const slotId2 = sqlLiteral(`${prefix}-merge-slot`);
+    return `id = ${slotId2} AND external_ref = ${sqlLiteral(slotScopeReference(scope))} AND design = ${sqlLiteral(canonicalJson(scope))} AND title = 'Merge Slot' AND (SELECT COUNT(*) FROM ${this.#labels()} WHERE issue_id = ${slotId2}) = 1 AND EXISTS (SELECT 1 FROM ${this.#labels()} WHERE issue_id = ${slotId2} AND label = 'gt:slot')`;
+  }
+  #slot(status, holder4, actor, scope) {
+    if (!validIdentifier(actor)) return void 0;
+    const withoutHash = {
+      actor,
+      ...holder4 === void 0 ? {} : { holder: holder4 },
+      label: "gt:slot",
+      scope,
+      scopeCommitment: deriveScopeCommitment(scope),
+      slotId: `${this.#identity.prefix}-merge-slot`,
+      status,
+      title: "Merge Slot",
+      version: 1
+    };
+    return {
+      ...withoutHash,
+      readbackHash: deriveSlotReadbackHash(withoutHash)
+    };
+  }
+  async #slotAfterCommand(command, attempt, input) {
+    if (attempt.status === "unavailable" || attempt.status === "refused")
+      return attempt;
+    if (attempt.status === "ambiguous") return { status: "ambiguous" };
+    const readback = await this.#slotReadback(
+      input.prefix,
+      input.scope,
+      input.actor
+    );
+    if (readback.status !== "ok") return readback;
+    const observation = readback.value.observation;
+    if (attempt.status === "rejected") {
+      return command === "acquire" && observation.status === "acquired" && observation.holder !== input.actor ? readback : { status: "ambiguous" };
+    }
+    if (command === "acquire" && (observation.status !== "acquired" || observation.holder !== input.actor) || command === "release" && observation.status !== "available")
+      return { status: "ambiguous" };
+    return readback;
+  }
+  async #slotReadback(prefix, scope, actor = "slot-observer/0") {
+    if (prefix !== this.#identity.prefix || !isSchema(FencingScopeSchema, scope) || !validIdentifier(actor))
+      return { status: "refused" };
+    const result2 = await executeDoltSqlRead(
+      this.#writer,
+      `SELECT status, metadata, external_ref, title, design FROM ${this.#issues()} WHERE id = ${sqlLiteral(`${prefix}-merge-slot`)}`
+    );
+    if (result2.status !== "ok") return { status: result2.status };
+    if (result2.rows.length !== 1 || result2.rows[0]?.external_ref !== slotScopeReference(scope) || result2.rows[0]?.title !== "Merge Slot" || result2.rows[0]?.design !== canonicalJson(scope))
+      return { status: "refused" };
+    const labels = await executeDoltSqlRead(
+      this.#writer,
+      `SELECT label FROM ${this.#labels()} WHERE issue_id = ${sqlLiteral(`${prefix}-merge-slot`)}`
+    );
+    if (labels.status !== "ok") return { status: labels.status };
+    if (labels.rows.length !== 1 || labels.rows[0]?.label !== "gt:slot")
+      return { status: "refused" };
+    const metadata = jsonRecord(result2.rows[0]?.metadata);
+    const metadataKeys = metadata === void 0 ? [] : Object.keys(metadata).sort();
+    const holder4 = metadata?.holder;
+    const acquired = result2.rows[0]?.status === "in_progress";
+    if (result2.rows[0]?.status !== "open" && !acquired || acquired && typeof holder4 !== "string" || !acquired && holder4 !== void 0 || acquired && metadataKeys.join(",") !== "holder" || !acquired && metadataKeys.length !== 0)
+      return { status: "refused" };
+    const observation = this.#slot(
+      acquired ? "acquired" : "available",
+      acquired && typeof holder4 === "string" ? holder4 : void 0,
+      acquired && typeof holder4 === "string" ? holder4 : actor,
+      scope
+    );
+    const parsed = validateMergeSlotObservation(observation, prefix, scope);
+    return parsed.ok ? {
+      status: "ok",
+      value: {
+        observation: parsed.value,
+        scopeReference: slotScopeReference(scope)
+      }
+    } : { status: "refused" };
+  }
+  async #mutateAffected(statement, expectedRows) {
+    const response = await executeDoltSqlTransaction(
+      this.#writer,
+      statement,
+      expectedRows
+    );
+    if (response.status !== "ok") return response;
+    return {
+      status: "ok",
+      rows: response.rows,
+      ...response.committedHead === void 0 ? {} : { committedHead: response.committedHead }
+    };
+  }
+  async #metadata(ids) {
+    if (ids.length === 0 || ids.some((id) => !validIdentifier(id)))
+      return { status: "refused" };
+    const result2 = await executeDoltSqlRead(
+      this.#writer,
+      `SELECT id, JSON_UNQUOTE(JSON_EXTRACT(metadata, '$')) AS metadata FROM ${this.#issues()} WHERE id IN (${ids.map(sqlLiteral).join(",")}) ORDER BY id`
+    );
+    if (result2.status !== "ok") return { status: result2.status };
+    if (result2.rows.length !== ids.length) return { status: "refused" };
+    const value = /* @__PURE__ */ new Map();
+    for (const row of result2.rows) {
+      if (typeof row.id !== "string") return { status: "refused" };
+      const metadata = jsonRecord(row.metadata);
+      if (metadata === void 0 || value.has(row.id))
+        return { status: "refused" };
+      value.set(row.id, metadata);
+    }
+    return { status: "ok", value };
+  }
+  async #readback(batch) {
+    return await this.#readbackNext(batch.next);
+  }
+  async #readbackNext(next) {
+    const metadata = await this.#metadata([
+      this.#rows.rootBeadId,
+      ...next.children.map((child) => this.#rows.childBeadIds[child.unitId])
+    ]);
+    if (metadata.status !== "ok") return { status: metadata.status };
+    const root = metadata.value.get(this.#rows.rootBeadId)?.sce;
+    const children = next.children.map(
+      (child) => metadata.value.get(this.#rows.childBeadIds[child.unitId])?.sce
+    );
+    return exact(root, next.root) && exact(children, next.children) ? { status: "ok" } : { status: "ambiguous" };
+  }
+  #preOwnershipPlan(input) {
+    const existing = safeRecord(input, ["batch", "kind"]);
+    if (existing?.kind === "existing") {
+      const batch = normalizedMutationBatch(existing.batch);
+      if (batch === void 0) return void 0;
+      const run2 = batch.next.root.run;
+      const transition2 = run2.effectJournal.at(-1)?.slotTransition;
+      if (run2.state !== "initializing" || run2.controller.state !== "acquire_intent" || run2.controller.holder !== batch.expectedHolder || batch.holder !== batch.expectedHolder || !exact(batch.scope, batch.next.root.scope) || run2.effectJournal.at(-1)?.kind !== "controller_acquire" || run2.effectJournal.at(-1)?.status !== "intended" || !validateServerSlotTransitionIntent(
+        transition2,
+        this.#identity.prefix,
+        batch.scope,
+        batch.expectedHolder,
+        "acquire"
+      ))
+        return void 0;
+      const statement2 = this.#preOwnershipExistingStatement(batch);
+      return statement2 === void 0 ? void 0 : {
+        checkpoint: batch.checkpoint,
+        expectedRows: batch.changedRows.length + 1,
+        next: batch.next,
+        statement: statement2
+      };
+    }
+    const initialRecord = safeRecord(input, ["initial", "kind"]);
+    if (initialRecord?.kind !== "initial") return void 0;
+    const parsed = validate(
+      InitialControllerAcquireSchema,
+      initialRecord.initial
+    );
+    if (!parsed.ok || parsed.value === void 0) return void 0;
+    const initial = parsed.value;
+    const root = validateRootProjection(initial.next.root);
+    const configuredUnits = Object.keys(this.#rows.childBeadIds).sort();
+    const childUnits = initial.next.children.map((child) => child.unitId).sort();
+    const transition = initial.next.root.run.effectJournal[0]?.slotTransition;
+    if (!root.ok || !exact(configuredUnits, childUnits) || !exact(
+      configuredUnits,
+      initial.next.root.childRows.map((row) => row.unitId).sort()
+    ) || initial.expected.holder !== initial.next.root.holder || !exact(initial.expected.scope, initial.next.root.scope) || initial.next.root.run.revision !== 1 || initial.next.root.run.state !== "initializing" || initial.next.root.run.controller.state !== "acquire_intent" || initial.next.root.run.controller.holder !== initial.expected.holder || initial.next.root.run.effectJournal.length !== 1 || initial.next.root.run.effectJournal[0]?.kind !== "controller_acquire" || initial.next.root.run.effectJournal[0]?.status !== "intended" || !validateServerSlotTransitionIntent(
+      transition,
+      this.#identity.prefix,
+      initial.expected.scope,
+      initial.expected.holder,
+      "acquire"
+    ) || initial.next.children.some((child) => {
+      const parsedChild = validateChildProjection(child);
+      const reference = initial.next.root.childRows.find(
+        (row) => row.unitId === child.unitId
+      );
+      return !parsedChild.ok || reference?.revision !== child.revision || reference.commitment !== child.commitment || child.holder !== initial.expected.holder || !exact(child.scope, initial.expected.scope);
+    }))
+      return void 0;
+    const statement = this.#preOwnershipInitialStatement(initial);
+    return statement === void 0 ? void 0 : {
+      checkpoint: initial.next.root.checkpoint,
+      expectedRows: initial.next.children.length + 1,
+      next: initial.next,
+      statement
+    };
+  }
+  #preOwnershipExistingStatement(batch) {
+    const children = batch.next.children.map((child) => {
+      const expected = batch.expectedChildren.find(
+        (value) => value.unitId === child.unitId
+      );
+      const id = this.#rows.childBeadIds[child.unitId];
+      return expected === void 0 || id === void 0 || !validIdentifier(id) ? void 0 : { child, expected, id };
+    });
+    if (children.some((child) => child === void 0)) return void 0;
+    const mapped = children;
+    const ids = [this.#rows.rootBeadId, ...mapped.map((child) => child.id)];
+    if (new Set(ids).size !== ids.length) return void 0;
+    const scope = sqlJson(batch.scope);
+    const eligibility = [
+      `${this.#slotDesign(this.#identity.prefix, batch.scope)} AND status = 'open' AND JSON_LENGTH(metadata) = 0`,
+      `id = ${sqlLiteral(this.#rows.rootBeadId)} AND JSON_EXTRACT(metadata, '$.sce') IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.aggregateRevision')) = ${sqlLiteral(batch.expectedAggregateRevision)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.aggregateCommitment')) = ${sqlLiteral(batch.expectedAggregateCommitment)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.holder')) = ${sqlLiteral(batch.expectedHolder)} AND JSON_EXTRACT(metadata, '$.sce.scope') = ${scope}`,
+      ...mapped.map(
+        ({ expected, id }) => `id = ${sqlLiteral(id)} AND JSON_EXTRACT(metadata, '$.sce') IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.revision')) = ${sqlLiteral(expected.expectedRevision)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.commitment')) = ${sqlLiteral(expected.expectedCommitment)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.holder')) = ${sqlLiteral(batch.expectedHolder)} AND JSON_EXTRACT(metadata, '$.sce.scope') = ${scope}`
+      )
+    ];
+    const cases = [
+      `WHEN ${sqlLiteral(this.#rows.rootBeadId)} THEN JSON_SET(target.metadata, '$.sce', ${sqlJson(batch.next.root)})`,
+      ...mapped.map(
+        ({ child, id }) => `WHEN ${sqlLiteral(id)} THEN JSON_SET(target.metadata, '$.sce', ${sqlJson(child)})`
+      )
+    ];
+    return `UPDATE ${this.#issues()} AS target JOIN (SELECT COUNT(*) AS eligible FROM ${this.#issues()} WHERE ${eligibility.map((item) => `(${item})`).join(" OR ")}) AS gate SET target.metadata = CASE target.id ${cases.join(" ")} ELSE target.metadata END WHERE target.id IN (${ids.map(sqlLiteral).join(",")}) AND gate.eligible = ${ids.length + 1}`;
+  }
+  #preOwnershipInitialStatement(initial) {
+    const children = initial.next.children.map((child) => {
+      const id = this.#rows.childBeadIds[child.unitId];
+      return id === void 0 || !validIdentifier(id) ? void 0 : { child, id };
+    });
+    if (children.some((child) => child === void 0)) return void 0;
+    const mapped = children;
+    const ids = [this.#rows.rootBeadId, ...mapped.map((child) => child.id)];
+    if (new Set(ids).size !== ids.length) return void 0;
+    const eligibility = [
+      `${this.#slotDesign(this.#identity.prefix, initial.expected.scope)} AND status = 'open' AND JSON_LENGTH(metadata) = 0`,
+      ...ids.map(
+        (id) => `id = ${sqlLiteral(id)} AND JSON_EXTRACT(metadata, '$.sce') IS NULL`
+      )
+    ];
+    const cases = [
+      `WHEN ${sqlLiteral(this.#rows.rootBeadId)} THEN JSON_SET(target.metadata, '$.sce', ${sqlJson(initial.next.root)})`,
+      ...mapped.map(
+        ({ child, id }) => `WHEN ${sqlLiteral(id)} THEN JSON_SET(target.metadata, '$.sce', ${sqlJson(child)})`
+      )
+    ];
+    return `UPDATE ${this.#issues()} AS target JOIN (SELECT COUNT(*) AS eligible FROM ${this.#issues()} WHERE ${eligibility.map((item) => `(${item})`).join(" OR ")}) AS gate SET target.metadata = CASE target.id ${cases.join(" ")} ELSE target.metadata END WHERE target.id IN (${ids.map(sqlLiteral).join(",")}) AND gate.eligible = ${ids.length + 1}`;
+  }
+  #casStatement(batch) {
+    const children = batch.next.children.map((child) => {
+      const expected = batch.expectedChildren.find(
+        (value) => value.unitId === child.unitId
+      );
+      const id = this.#rows.childBeadIds[child.unitId];
+      return expected === void 0 || id === void 0 || !validIdentifier(id) ? void 0 : { child, expected, id };
+    });
+    if (children.some((child) => child === void 0)) return void 0;
+    const mapped = children;
+    const ids = [this.#rows.rootBeadId, ...mapped.map((child) => child.id)];
+    if (new Set(ids).size !== ids.length) return void 0;
+    const scope = sqlJson(batch.scope);
+    const eligibility = [
+      `${this.#slotDesign(this.#identity.prefix, batch.scope)} AND status = 'in_progress' AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.holder')) = ${sqlLiteral(batch.expectedHolder)}`,
+      `id = ${sqlLiteral(this.#rows.rootBeadId)} AND JSON_EXTRACT(metadata, '$.sce') IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.aggregateRevision')) = ${sqlLiteral(batch.expectedAggregateRevision)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.aggregateCommitment')) = ${sqlLiteral(batch.expectedAggregateCommitment)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.holder')) = ${sqlLiteral(batch.expectedHolder)} AND JSON_EXTRACT(metadata, '$.sce.scope') = ${scope}`,
+      ...mapped.map(
+        ({ expected, id }) => `id = ${sqlLiteral(id)} AND JSON_EXTRACT(metadata, '$.sce') IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.revision')) = ${sqlLiteral(expected.expectedRevision)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.commitment')) = ${sqlLiteral(expected.expectedCommitment)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.holder')) = ${sqlLiteral(batch.expectedHolder)} AND JSON_EXTRACT(metadata, '$.sce.scope') = ${scope}`
+      )
+    ];
+    const cases = [
+      `WHEN ${sqlLiteral(this.#rows.rootBeadId)} THEN JSON_SET(target.metadata, '$.sce', ${sqlJson(batch.next.root)})`,
+      ...mapped.map(
+        ({ child, id }) => `WHEN ${sqlLiteral(id)} THEN JSON_SET(target.metadata, '$.sce', ${sqlJson(child)})`
+      )
+    ];
+    return `UPDATE ${this.#issues()} AS target JOIN (SELECT COUNT(*) AS eligible FROM ${this.#issues()} WHERE ${eligibility.map((item) => `(${item})`).join(" OR ")}) AS gate SET target.metadata = CASE target.id ${cases.join(" ")} ELSE target.metadata END WHERE target.id IN (${ids.map(sqlLiteral).join(",")}) AND gate.eligible = ${ids.length + 1}`;
+  }
+};
+
+// src/controller-config.ts
+var MAX_CONFIG_BYTES = 256 * 1024;
+var ENVIRONMENT_NAME = /^[A-Z_][A-Z0-9_]{0,159}$/u;
+var SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u;
+function record(input, keys) {
+  if (input === null || typeof input !== "object" || Array.isArray(input))
+    return void 0;
+  const value = input;
+  return Object.keys(value).sort().join(",") === [...keys].sort().join(",") ? value : void 0;
+}
+function text3(value, limit = 4096) {
+  return typeof value === "string" && value.length > 0 && value.length <= limit && !value.includes("\0") ? value : void 0;
+}
+function absolutePath2(value) {
+  const path2 = text3(value);
+  if (path2 === void 0 || !isAbsolute6(path2)) return void 0;
+  const canonical2 = normalize3(resolve3(path2));
+  return canonical2 === "/" ? void 0 : canonical2;
+}
+function identifier4(value) {
+  const candidate = text3(value, 160);
+  return candidate !== void 0 && SAFE_IDENTIFIER.test(candidate) ? candidate : void 0;
+}
+function environmentName(value) {
+  const candidate = text3(value, 160);
+  return candidate !== void 0 && ENVIRONMENT_NAME.test(candidate) ? candidate : void 0;
+}
+function childRows2(value) {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return void 0;
+  const entries = Object.entries(value);
+  if (entries.length > 64 || entries.some(
+    ([unit, row]) => identifier4(unit) === void 0 || identifier4(row) === void 0
+  ))
+    return void 0;
+  return Object.freeze(Object.fromEntries(entries));
+}
+function embeddedTopology(value) {
+  const base = record(value, [
+    "bdExecutable",
+    "childBeadIds",
+    "databaseDirectory",
+    "doltExecutable",
+    "kind",
+    "mode",
+    "prefix",
+    "preflight",
+    "remote",
+    "rootBeadId"
+  ]);
+  const noRemote = record(value, [
+    "bdExecutable",
+    "childBeadIds",
+    "databaseDirectory",
+    "doltExecutable",
+    "kind",
+    "mode",
+    "prefix",
+    "preflight",
+    "rootBeadId"
+  ]);
+  const item = base ?? noRemote;
+  if (item === void 0 || item.kind !== "embedded" || item.mode !== "local-only" && item.mode !== "git-sync" || !isSchema(PreflightEnvelopeSchema, item.preflight))
+    return void 0;
+  const remote2 = item.remote;
+  const parsedRemote = remote2 === void 0 ? void 0 : record(remote2, ["name", "ref", "url"]);
+  if (item.mode === "git-sync" && parsedRemote === void 0 || item.mode === "local-only" && parsedRemote !== void 0)
+    return void 0;
+  const bdExecutable = absolutePath2(item.bdExecutable);
+  const doltExecutable = absolutePath2(item.doltExecutable);
+  const databaseDirectory = absolutePath2(item.databaseDirectory);
+  const rootBeadId = identifier4(item.rootBeadId);
+  const prefix = identifier4(item.prefix);
+  const mapped = childRows2(item.childBeadIds);
+  const preflight = item.preflight;
+  if (bdExecutable === void 0 || doltExecutable === void 0 || databaseDirectory === void 0 || rootBeadId === void 0 || prefix === void 0 || mapped === void 0 || preflight.payload.status !== "ready" || preflight.payload.beads.mode !== "embedded" || preflight.payload.beads.prefix !== prefix || parsedRemote !== void 0 && (identifier4(parsedRemote.name) === void 0 || parsedRemote.ref !== "refs/dolt/data" || text3(parsedRemote.url, 1024) === void 0))
+    return void 0;
+  return {
+    bdExecutable,
+    childBeadIds: mapped,
+    databaseDirectory,
+    doltExecutable,
+    kind: "embedded",
+    mode: item.mode,
+    prefix,
+    preflight,
+    ...parsedRemote === void 0 ? {} : {
+      remote: {
+        name: parsedRemote.name,
+        ref: parsedRemote.ref,
+        url: parsedRemote.url
+      }
+    },
+    rootBeadId
+  };
+}
+function sharedServerTopology(value) {
+  const external = record(value, [
+    "bdExecutable",
+    "doltExecutable",
+    "identity",
+    "kind",
+    "rows",
+    "workerEnvironment",
+    "workerUser",
+    "workspace",
+    "writerEnvironment",
+    "writerUser"
+  ]);
+  const managed = record(value, [
+    "bdExecutable",
+    "dataDirectory",
+    "doltExecutable",
+    "identity",
+    "kind",
+    "rows",
+    "runtimeConfigHome",
+    "runtimeHome",
+    "workerEnvironment",
+    "workerUser",
+    "workspace",
+    "writerEnvironment",
+    "writerUser"
+  ]);
+  const item = external ?? managed;
+  if (item === void 0 || item.kind !== "shared-server") return void 0;
+  const rows = record(item.rows, ["childBeadIds", "rootBeadId"]);
+  const identity2 = item.identity;
+  if (rows === void 0 || identity2 === null || typeof identity2 !== "object" || Array.isArray(identity2))
+    return void 0;
+  const bdExecutable = absolutePath2(item.bdExecutable);
+  const doltExecutable = absolutePath2(item.doltExecutable);
+  const workspace = absolutePath2(item.workspace);
+  const rootBeadId = identifier4(rows.rootBeadId);
+  const mapped = childRows2(rows.childBeadIds);
+  const writerEnvironment = environmentName(item.writerEnvironment);
+  const workerEnvironment = environmentName(item.workerEnvironment);
+  const writerUser = identifier4(item.writerUser);
+  const workerUser = identifier4(item.workerUser);
+  const server = parseServerIdentity(identity2);
+  if (bdExecutable === void 0 || doltExecutable === void 0 || workspace === void 0 || rootBeadId === void 0 || mapped === void 0 || writerEnvironment === void 0 || workerEnvironment === void 0 || writerEnvironment === workerEnvironment || writerUser === void 0 || workerUser === void 0 || server === void 0)
+    return void 0;
+  if (external !== void 0) {
+    if (server.topology !== "external_server") return void 0;
+    return {
+      bdExecutable,
+      doltExecutable,
+      identity: server,
+      kind: "shared-server",
+      managed: false,
+      rows: { childBeadIds: mapped, rootBeadId },
+      workerEnvironment,
+      workerUser,
+      workspace,
+      writerEnvironment,
+      writerUser
+    };
+  }
+  const dataDirectory = absolutePath2(managed?.dataDirectory);
+  const runtimeHome = absolutePath2(managed?.runtimeHome);
+  const runtimeConfigHome = absolutePath2(managed?.runtimeConfigHome);
+  if (server.topology !== "managed_local_shared_server" || server.credentialProvenance !== "managed_local_runtime" || dataDirectory === void 0 || runtimeHome === void 0 || runtimeConfigHome === void 0)
+    return void 0;
+  return {
+    bdExecutable,
+    dataDirectory,
+    doltExecutable,
+    identity: server,
+    kind: "shared-server",
+    managed: true,
+    rows: { childBeadIds: mapped, rootBeadId },
+    runtimeConfigHome,
+    runtimeHome,
+    workerEnvironment,
+    workerUser,
+    workspace,
+    writerEnvironment,
+    writerUser
+  };
+}
+function parseServerIdentity(value) {
+  const item = record(value, [
+    "autoCommitPolicy",
+    "credentialProvenance",
+    "credentialReference",
+    "database",
+    "endpoint",
+    "prefix",
+    "schema",
+    "topology",
+    "transportSecurity",
+    "workerCredentialReference"
+  ]);
+  if (item === void 0) return void 0;
+  const autoCommitPolicy = item.autoCommitPolicy;
+  const credentialProvenance = item.credentialProvenance;
+  const topology = item.topology;
+  const transportSecurity = item.transportSecurity;
+  if (autoCommitPolicy !== "on" && autoCommitPolicy !== "off" && autoCommitPolicy !== "batch" || credentialProvenance !== "environment" && credentialProvenance !== "managed_local_runtime" || topology !== "external_server" && topology !== "managed_local_shared_server" || transportSecurity !== "tls" && transportSecurity !== "loopback_plaintext")
+    return void 0;
+  const credentialReference = identifier4(item.credentialReference);
+  const workerCredentialReference = identifier4(item.workerCredentialReference);
+  const database = identifier4(item.database);
+  const prefix = identifier4(item.prefix);
+  const schema = identifier4(item.schema);
+  const endpoint = text3(item.endpoint, 320);
+  if (credentialReference === void 0 || workerCredentialReference === void 0 || credentialReference === workerCredentialReference || database === void 0 || prefix === void 0 || schema === void 0 || endpoint === void 0)
+    return void 0;
+  return {
+    autoCommitPolicy,
+    credentialProvenance,
+    credentialReference,
+    database,
+    endpoint,
+    prefix,
+    schema,
+    topology,
+    transportSecurity,
+    workerCredentialReference
+  };
+}
+function parseControllerConfig(input) {
+  if (containsSecretShape(input)) return void 0;
+  const value = record(input, [
+    "git",
+    "initialRun",
+    "nonce",
+    "schema",
+    "scope",
+    "topology",
+    "version"
+  ]);
+  if (value === void 0 || value.schema !== "sce.controller-config" || value.version !== 1 || !isSchema(RepositoryRunSchema, value.initialRun) || !isSchema(FencingScopeSchema, value.scope))
+    return void 0;
+  const git = record(value.git, ["remote", "repository"]) ?? record(value.git, ["repository"]);
+  if (git === void 0 || !isSchema2(GitRepositorySchema, git.repository))
+    return void 0;
+  const nonce = identifier4(value.nonce);
+  const remote2 = git.remote === void 0 ? void 0 : identifier4(git.remote);
+  const topology = embeddedTopology(value.topology) ?? sharedServerTopology(value.topology);
+  const run2 = value.initialRun;
+  const scope = value.scope;
+  const repository = git.repository;
+  if (nonce === void 0 || git.remote !== void 0 && remote2 === void 0 || topology === void 0 || canonicalGitCommonDir(repository.commonDir) !== repository.commonDir || absolutePath2(repository.cwd) !== repository.cwd || run2.controller.holder.length === 0 || run2.repositoryIdentity !== repository.identity || run2.repositoryIdentity !== scope.gitRepositoryIdentity || run2.storeIdentity !== scope.beadsStoreIdentity || run2.integrationBranch !== scope.integrationBranch)
+    return void 0;
+  if (topology.kind === "embedded" && (topology.preflight.payload.status !== "ready" || topology.preflight.payload.git.commonDir !== repository.commonDir || topology.preflight.payload.git.identity !== repository.identity || topology.preflight.payload.git.objectFormat !== repository.objectFormat))
+    return void 0;
+  return {
+    git: { repository, ...remote2 === void 0 ? {} : { remote: remote2 } },
+    initialRun: run2,
+    nonce,
+    scope,
+    schema: "sce.controller-config",
+    topology,
+    version: 1
+  };
+}
+async function topologyProof(config) {
+  const commonDir = canonicalGitCommonDir(config.git.repository.commonDir);
+  if (commonDir === void 0 || commonDir !== config.git.repository.commonDir)
+    return void 0;
+  const verified = await verifyRepository(nodeGitRunner, config.git.repository);
+  if (verified.state !== "observed") return void 0;
+  return {
+    commonDir,
+    holder: config.initialRun.controller.holder,
+    scope: config.scope
+  };
+}
+function runtimeEnvironment(topology) {
+  return () => ({
+    HOME: topology.runtimeHome,
+    XDG_CONFIG_HOME: topology.runtimeConfigHome
+  });
+}
+async function embeddedTopologyProof(config, process2) {
+  try {
+    const state = await process2.execute({ kind: "state" });
+    return state.kind === "state" && state.value.reachable ? await topologyProof(config) : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function embeddedRunner(config, topology) {
+  const projections = new DoltProjectionPersistence({
+    childIssueId: (unitId) => topology.childBeadIds[unitId],
+    databaseDirectory: topology.databaseDirectory,
+    doltExecutable: topology.doltExecutable,
+    rootIssueId: topology.rootBeadId
+  });
+  const process2 = new PinnedBdEmbeddedProcess({
+    bdExecutable: topology.bdExecutable,
+    cwd: config.git.repository.cwd,
+    databaseDirectory: topology.databaseDirectory,
+    doltExecutable: topology.doltExecutable,
+    prefix: topology.prefix,
+    projections,
+    scope: config.scope,
+    ...topology.remote === void 0 ? {} : { remote: topology.remote }
+  });
+  const adapter = new EmbeddedBeadsAdapter({
+    holder: config.initialRun.controller.holder,
+    mode: topology.mode,
+    prefix: topology.prefix,
+    preflight: topology.preflight,
+    process: process2,
+    scope: config.scope
+  });
+  return createProductionRecoveryCommandRunner({
+    git: { ...config.git, runner: nodeGitRunner },
+    initialRun: config.initialRun,
+    nonce: config.nonce,
+    preOwnership: adapter,
+    proveTopology: async () => await embeddedTopologyProof(config, process2),
+    store: adapter,
+    topology: adapter
+  });
+}
+async function sharedServerRunner(config, topology, environment = (name) => process.env[name]) {
+  const writerPassword = environment(topology.writerEnvironment);
+  const workerPassword = environment(topology.workerEnvironment);
+  if (writerPassword === void 0 || workerPassword === void 0)
+    return void 0;
+  try {
+    const writer = new DoltSqlTransport({
+      executable: topology.doltExecutable,
+      identity: topology.identity,
+      password: writerPassword,
+      user: topology.writerUser
+    });
+    const worker = new DoltSqlTransport({
+      executable: topology.doltExecutable,
+      identity: topology.identity,
+      password: workerPassword,
+      user: topology.workerUser
+    });
+    const childRuntime = topology.managed ? runtimeEnvironment(topology) : void 0;
+    const slotProcess = new PinnedBdServerProcess({
+      credentialEnvironment: () => ({ BEADS_DOLT_PASSWORD: writerPassword }),
+      executable: topology.bdExecutable,
+      identity: topology.identity,
+      ...childRuntime === void 0 ? {} : { runtimeEnvironment: childRuntime },
+      workspace: topology.workspace
+    });
+    const managedProcess = topology.managed ? new PinnedBdManagedServerProcess({
+      dataDirectory: topology.dataDirectory,
+      doltExecutable: topology.doltExecutable,
+      executable: topology.bdExecutable,
+      runtimeEnvironment: runtimeEnvironment(topology),
+      workspace: topology.workspace
+    }) : void 0;
+    const driver = new DoltBeadsServerDriver({
+      identity: topology.identity,
+      rows: topology.rows,
+      slotProcess,
+      worker,
+      writer
+    });
+    const adapter = new BeadsServerAdapter({
+      driver,
+      identity: topology.identity,
+      recoveryScope: config.scope,
+      ...managedProcess === void 0 ? {} : { process: managedProcess }
+    });
+    if ((await adapter.preflight()).status !== "ready") return void 0;
+    return createProductionRecoveryCommandRunner({
+      git: { ...config.git, runner: nodeGitRunner },
+      initialRun: config.initialRun,
+      nonce: config.nonce,
+      preOwnership: adapter,
+      proveTopology: async () => await topologyProof(config),
+      store: adapter,
+      topology: adapter
+    });
+  } catch {
+    return void 0;
+  }
+}
+async function createControllerConfigRunner(path2, dependencies = {}) {
+  if (!isAbsolute6(path2)) return void 0;
+  let source;
+  try {
+    source = await readFile(path2, "utf8");
+  } catch {
+    return void 0;
+  }
+  if (Buffer.byteLength(source, "utf8") > MAX_CONFIG_BYTES) return void 0;
+  let input;
+  try {
+    input = JSON.parse(source);
+  } catch {
+    return void 0;
+  }
+  const config = parseControllerConfig(input);
+  if (config === void 0) return void 0;
+  const topology = config.topology;
+  if (topology.kind === "embedded")
+    return dependencies.composeEmbedded?.(config, topology) ?? embeddedRunner(config, topology);
+  const environment = dependencies.environment ?? ((name) => process.env[name]);
+  const writerPassword = environment(topology.writerEnvironment);
+  const workerPassword = environment(topology.workerEnvironment);
+  if (writerPassword === void 0 || workerPassword === void 0)
+    return void 0;
+  if (dependencies.composeShared !== void 0)
+    return await dependencies.composeShared(config, topology, {
+      workerPassword,
+      writerPassword
+    });
+  return await sharedServerRunner(
+    config,
+    topology,
+    (name) => name === topology.writerEnvironment ? writerPassword : name === topology.workerEnvironment ? workerPassword : void 0
+  );
+}
+
 // src/cli.ts
 var CLI_VERSION = "0.1.0";
 var REQUEST_SCHEMA = "sce.command.request";
@@ -13022,6 +23196,7 @@ var EXIT_USAGE = 64;
 var EXIT_UNAVAILABLE = 69;
 var EXIT_SOFTWARE = 70;
 var knownOptions = /* @__PURE__ */ new Set([
+  "--controller-config",
   "--expected-revision",
   "--help",
   "--idempotency-key",
@@ -13138,7 +23313,12 @@ function parseCommand(command, argv) {
       "SCE_INVALID_REQUEST",
       "The command request is invalid."
     );
-  return { kind: "command", request };
+  const controllerConfig = optionValue(values, "--controller-config");
+  return {
+    ...controllerConfig === void 0 ? {} : { controllerConfig: parseControllerConfigPath(controllerConfig) },
+    kind: "command",
+    request
+  };
 }
 function splitOption(token) {
   const equalsIndex = token.indexOf("=");
@@ -13185,6 +23365,20 @@ function parseOptions(values) {
     json: values.has("--json"),
     ...request === void 0 ? {} : { request: parseRequest(request) }
   };
+}
+function parseControllerConfigPath(value) {
+  if (!isAbsolute7(value) || value.length > 4096 || value.includes("\0"))
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      "--controller-config must be an absolute path."
+    );
+  const path2 = normalize4(resolve4(value));
+  if (path2 === "/")
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      "--controller-config must be an absolute path."
+    );
+  return path2;
 }
 function optionValue(values, option) {
   const value = values.get(option);
@@ -13245,7 +23439,14 @@ async function runCli(argv, dependencies = {}) {
     if (invocation.kind === "version") {
       return success({ version: dependencies.version ?? CLI_VERSION });
     }
-    const runner = dependencies.runner ?? stateOnlyCommandRunner;
+    const runner = invocation.controllerConfig === void 0 ? dependencies.runner ?? stateOnlyCommandRunner : await (dependencies.controllerConfigRunner ?? createControllerConfigRunner)(invocation.controllerConfig);
+    if (runner === void 0)
+      return failure(
+        "SCE_CONTROLLER_CONFIG_UNAVAILABLE",
+        "The explicit controller configuration is unavailable.",
+        EXIT_UNAVAILABLE,
+        invocation.request.command
+      );
     let outcome;
     try {
       outcome = await runner(invocation.request);
@@ -13306,12 +23507,12 @@ async function main(argv, dependencies = {}, write = (value) => process.stdout.w
   write(execution2.stdout);
   return execution2.exitCode;
 }
-function success(result, command) {
+function success(result2, command) {
   return execution(
     {
       ...command === void 0 ? {} : { command },
       ok: true,
-      result,
+      result: result2,
       schema: RESPONSE_SCHEMA,
       version: SCHEMA_VERSION2
     },
@@ -13356,14 +23557,14 @@ function helpResult(command, version) {
     return {
       commands: [...commandNames],
       name: "sce",
-      usage: "sce <command> [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]",
+      usage: "sce <command> [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]",
       version
     };
   }
   return {
     ...command === "feedback" ? { actions: [...feedbackActions] } : {},
     command,
-    usage: command === "feedback" ? "sce feedback <prepare|preview|submit|flush> [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]" : `sce ${command} [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]`
+    usage: command === "feedback" ? "sce feedback <prepare|preview|submit|flush> [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]" : `sce ${command} [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]`
   };
 }
 function canonicalJson2(value) {
@@ -13382,8 +23583,8 @@ function canonicalJson2(value) {
   if (typeof value !== "object") {
     throw new TypeError("Value is not JSON serializable.");
   }
-  const object = value;
-  return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson2(object[key])}`).join(",")}}`;
+  const object5 = value;
+  return `{${Object.keys(object5).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson2(object5[key])}`).join(",")}}`;
 }
 function isEntrypoint() {
   const entrypoint = process.argv[1];
@@ -13391,7 +23592,7 @@ function isEntrypoint() {
     return false;
   }
   try {
-    return import.meta.url === pathToFileURL(realpathSync(entrypoint)).href;
+    return import.meta.url === pathToFileURL(realpathSync5(entrypoint)).href;
   } catch {
     return false;
   }

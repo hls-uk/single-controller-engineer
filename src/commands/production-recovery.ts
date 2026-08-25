@@ -15,6 +15,7 @@ import {
   integrateLocalFastForward,
   integrateRemoteFastForward,
   publishCandidate,
+  verifyRepository,
   type GitEffect,
   type GitRepository,
   type GitRunner,
@@ -215,6 +216,46 @@ function remote(
   return options.git.remote;
 }
 
+/**
+ * A durable run, not caller-selected adapter configuration, authorizes Git
+ * recovery.  The Git adapter repeats its own live identity verification for
+ * each operation; this binds that verified repository to the loaded run.
+ */
+function gitMatchesRun(repository: GitRepository, run: RepositoryRun): boolean {
+  return (
+    repository.identity === run.repositoryIdentity &&
+    repository.objectFormat === run.gitObjectFormat
+  );
+}
+
+function transitionMatchesRun(
+  effect: ProtocolEffect,
+  run: RepositoryRun,
+): boolean {
+  const transition = controllerTransition(effect);
+  if (
+    transition === undefined ||
+    transition === null ||
+    typeof transition !== "object" ||
+    !("scope" in transition) ||
+    !("holder" in transition)
+  )
+    return false;
+  const scope = transition.scope;
+  if (
+    scope.beadsStoreIdentity !== run.storeIdentity ||
+    scope.gitRepositoryIdentity !== run.repositoryIdentity ||
+    scope.integrationBranch !== run.integrationBranch ||
+    transition.holder !== run.controller.holder
+  )
+    return false;
+  return effect.kind === "controller_acquire" ||
+    effect.kind === "controller_release"
+    ? effect.params.controllerFencingToken === run.controllerFencingToken &&
+        effect.params.holder === run.controller.holder
+    : false;
+}
+
 function localIntegrationRef(branch: string): string {
   return `refs/heads/${branch}`;
 }
@@ -234,6 +275,15 @@ export function createProductionRecoveryEffectAdapter(
   ): Promise<ReconcileResult> {
     const done = observed(effect, run);
     if (done === undefined) return ambiguous();
+    if (
+      (effect.kind !== "controller_acquire" &&
+        effect.kind !== "controller_release" &&
+        !gitMatchesRun(git.repository, run)) ||
+      ((effect.kind === "controller_acquire" ||
+        effect.kind === "controller_release") &&
+        !transitionMatchesRun(effect, run))
+    )
+      return ambiguous();
     try {
       switch (effect.kind) {
         case "controller_acquire":
@@ -324,6 +374,15 @@ export function createProductionRecoveryEffectAdapter(
   ): Promise<ExecuteResult> {
     const done = observed(effect, run);
     if (done === undefined) return ambiguous();
+    if (
+      (effect.kind !== "controller_acquire" &&
+        effect.kind !== "controller_release" &&
+        !gitMatchesRun(git.repository, run)) ||
+      ((effect.kind === "controller_acquire" ||
+        effect.kind === "controller_release") &&
+        !transitionMatchesRun(effect, run))
+    )
+      return ambiguous();
     try {
       switch (effect.kind) {
         case "controller_acquire":
@@ -437,6 +496,34 @@ export function createProductionRecoveryRunner(
               scope: input.scope,
             }),
         }),
+    proveTopology: async () => {
+      let proof;
+      try {
+        proof = await recovery.proveTopology();
+      } catch {
+        return undefined;
+      }
+      if (
+        proof === undefined ||
+        proof.commonDir !== git.repository.commonDir ||
+        proof.scope.gitRepositoryIdentity !== git.repository.identity
+      )
+        return undefined;
+      if (
+        recovery.initialRun !== undefined &&
+        (recovery.initialRun.controller.holder !== proof.holder ||
+          recovery.initialRun.repositoryIdentity !==
+            proof.scope.gitRepositoryIdentity ||
+          recovery.initialRun.gitObjectFormat !== git.repository.objectFormat ||
+          recovery.initialRun.storeIdentity !==
+            proof.scope.beadsStoreIdentity ||
+          recovery.initialRun.integrationBranch !==
+            proof.scope.integrationBranch)
+      )
+        return undefined;
+      const verified = await verifyRepository(git.runner, git.repository);
+      return verified.state === "observed" ? proof : undefined;
+    },
   });
 }
 
