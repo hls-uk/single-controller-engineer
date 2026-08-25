@@ -6,6 +6,7 @@ import {
   mkdir,
   mkdtemp,
   open,
+  realpath,
   rm,
   stat,
   symlink,
@@ -561,32 +562,90 @@ async function runBd(
   });
 }
 
-async function stopPrivateBdServer(
-  input: Readonly<{
-    executable: string;
-    runtime: Readonly<{ config: string; home: string }>;
-    workspace: string;
-  }>,
-): Promise<void> {
+type PrivateBdServerTeardownAuthority = Readonly<{
+  dataDirectory: string;
+  pid: number;
+  port: number;
+}>;
+
+type PrivateBdServerControl = Readonly<{
+  dataDirectory: string;
+  executable: string;
+  runtime: Readonly<{ config: string; home: string }>;
+  workspace: string;
+}>;
+
+async function privateBdServerStatus(
+  input: PrivateBdServerControl,
+): Promise<Record<string, unknown>> {
   const status = JSON.parse(
     await runBd(["-C", input.workspace, "dolt", "status", "--json"], {
       cwd: input.workspace,
       executable: input.executable,
       runtime: input.runtime,
     }),
-  ) as Record<string, unknown>;
-  if (status.running === false) return;
-  assert.equal(status.running, true);
-  assert.equal(typeof status.data_dir, "string");
-  assert.equal(
-    (status.data_dir as string).startsWith(input.runtime.home),
-    true,
-  );
+  ) as unknown;
+  if (status === null || typeof status !== "object" || Array.isArray(status))
+    throw new Error("invalid private bd server status");
+  return status as Record<string, unknown>;
+}
+
+async function privateBdServerTeardownAuthority(
+  input: PrivateBdServerControl,
+): Promise<PrivateBdServerTeardownAuthority> {
+  const status = await privateBdServerStatus(input);
+  if (
+    status.running !== true ||
+    typeof status.data_dir !== "string" ||
+    !Number.isSafeInteger(status.pid) ||
+    (status.pid as number) <= 0 ||
+    !Number.isSafeInteger(status.port) ||
+    (status.port as number) < 1 ||
+    (status.port as number) > 65_535
+  )
+    throw new Error("private bd server did not report an owned running status");
+  const [actual, expected] = await Promise.all([
+    realpath(status.data_dir),
+    realpath(input.dataDirectory),
+  ]);
+  if (actual !== expected)
+    throw new Error("private bd server data directory identity mismatch");
+  return {
+    dataDirectory: expected,
+    pid: status.pid as number,
+    port: status.port as number,
+  };
+}
+
+async function stopPrivateBdServer(
+  input: PrivateBdServerControl,
+  authority?: PrivateBdServerTeardownAuthority,
+): Promise<void> {
+  const status = await privateBdServerStatus(input);
+  if (status.running === false) {
+    assert.equal(status.data_dir, "");
+    assert.equal(status.pid, 0);
+    assert.equal(status.port, 0);
+    return;
+  }
+  const observed = await privateBdServerTeardownAuthority(input);
+  if (
+    authority !== undefined &&
+    (authority.dataDirectory !== observed.dataDirectory ||
+      authority.pid !== observed.pid ||
+      authority.port !== observed.port)
+  )
+    throw new Error("private bd server teardown authority changed");
   await runBd(["-C", input.workspace, "dolt", "stop", "--force"], {
     cwd: input.workspace,
     executable: input.executable,
     runtime: input.runtime,
   });
+  const stopped = await privateBdServerStatus(input);
+  assert.equal(stopped.running, false);
+  assert.equal(stopped.data_dir, "");
+  assert.equal(stopped.pid, 0);
+  assert.equal(stopped.port, 0);
 }
 
 async function initializeFixtureGitWorkspace(cwd: string): Promise<void> {
@@ -789,7 +848,17 @@ async function startRealDoltServer(
 }
 
 /** Real bd 1.1.0 managed shared-server fixture, isolated below `directory`. */
-async function createManagedBdServer(): Promise<ManagedBdServer> {
+async function createManagedBdServer(
+  input: Readonly<{
+    /** Test-only fault point after init owns and verifies its private server. */
+    afterOwnedInit?: (
+      value: Readonly<{
+        directory: string;
+        teardown: PrivateBdServerTeardownAuthority;
+      }>,
+    ) => void | Promise<void>;
+  }> = {},
+): Promise<ManagedBdServer> {
   const executable =
     process.env.DOLT_TEST_EXECUTABLE ?? "/opt/homebrew/bin/dolt";
   const bdExecutable = process.env.BD_TEST_EXECUTABLE ?? "/opt/homebrew/bin/bd";
@@ -799,9 +868,10 @@ async function createManagedBdServer(): Promise<ManagedBdServer> {
   const home = join(directory, "home");
   const runtime = { config: join(directory, "config"), home };
   const workspace = join(directory, "workspace");
+  const dataDirectory = join(home, ".beads", "shared-server", "dolt");
   const writerPassword = randomBytes(18).toString("hex");
   const workerPassword = randomBytes(18).toString("hex");
-  let lifecycle: PinnedBdManagedServerProcess | undefined;
+  let teardown: PrivateBdServerTeardownAuthority | undefined;
   try {
     await mkdir(home);
     await mkdir(runtime.config);
@@ -819,6 +889,16 @@ async function createManagedBdServer(): Promise<ManagedBdServer> {
       ],
       { cwd: workspace, executable: bdExecutable, runtime },
     );
+    // `bd init --shared-server` has started a process at this point. Verify
+    // the exact private data-dir/pid/port before any other fixture setup so
+    // every later failure can stop only this fixture-owned server.
+    teardown = await privateBdServerTeardownAuthority({
+      dataDirectory,
+      executable: bdExecutable,
+      runtime,
+      workspace,
+    });
+    await input.afterOwnedInit?.({ directory, teardown });
     const context = JSON.parse(
       await runBd(["-C", workspace, "context", "--json"], {
         cwd: workspace,
@@ -926,8 +1006,8 @@ async function createManagedBdServer(): Promise<ManagedBdServer> {
         { cwd: workspace, executable: bdExecutable, runtime },
       );
     }
-    lifecycle = new PinnedBdManagedServerProcess({
-      dataDirectory: join(home, ".beads", "shared-server", "dolt"),
+    const lifecycle = new PinnedBdManagedServerProcess({
+      dataDirectory,
       doltExecutable: executable,
       executable: bdExecutable,
       runtimeEnvironment: () => ({
@@ -969,6 +1049,7 @@ async function createManagedBdServer(): Promise<ManagedBdServer> {
         ),
       stop: () =>
         stopPrivateBdServer({
+          dataDirectory,
           executable: bdExecutable,
           runtime,
           workspace,
@@ -980,13 +1061,15 @@ async function createManagedBdServer(): Promise<ManagedBdServer> {
       writerPassword,
     };
   } catch (error) {
-    if (lifecycle !== undefined)
-      await stopPrivateBdServer({
-        executable: bdExecutable,
-        runtime,
-        workspace,
-      });
-    await removeFixtureDirectory(directory);
+    try {
+      if (teardown !== undefined)
+        await stopPrivateBdServer(
+          { dataDirectory, executable: bdExecutable, runtime, workspace },
+          teardown,
+        );
+    } finally {
+      await removeFixtureDirectory(directory);
+    }
     throw error;
   }
 }
@@ -1135,6 +1218,7 @@ class FakeServer implements BeadsServerDriver {
   discoveryCalls = 0;
   disarmCalls = 0;
   discoveryChildren: readonly unknown[] | undefined;
+  discoveryMode: "malformed" | "misbound" | "ok" | "outage" | "throw" = "ok";
 
   constructor(
     serverIdentity: ServerIdentity,
@@ -1292,6 +1376,19 @@ class FakeServer implements BeadsServerDriver {
     }>
   > {
     this.discoveryCalls += 1;
+    if (this.discoveryMode === "throw") throw new Error("fixture outage");
+    if (this.discoveryMode === "outage") return { status: "unavailable" };
+    if (this.discoveryMode === "misbound") return { status: "refused" };
+    if (this.discoveryMode === "malformed")
+      return {
+        status: "ok",
+        value: {},
+      } as ServerDriverResponse<{
+        checkpoint: unknown;
+        children: readonly unknown[];
+        root: unknown;
+        slot: unknown;
+      }>;
     return {
       status: "ok",
       value: {
@@ -3624,6 +3721,90 @@ test("discovery rejects duplicate or missing child unit projections", async () =
   assert.ok(await adapter.discover(scope));
 });
 
+test("adapter discovery cache retains only a current exact readback", async () => {
+  for (const mode of ["outage", "misbound", "malformed", "throw"] as const) {
+    const server = new FakeServer(identity());
+    const adapter = new BeadsServerAdapter({
+      driver: server,
+      identity: identity(),
+      process: fakeManagedProcess,
+    });
+    assert.equal((await adapter.preflight()).status, "ready", mode);
+    const initial = await adapter.discover(scope);
+    assert.ok(initial, `${mode}: initial discovery`);
+    assert.deepEqual(adapter.lastDiscovery, initial, `${mode}: initial cache`);
+    const mutationsBefore = server.mutationCalls;
+    server.discoveryMode = mode;
+    assert.equal(await adapter.discover(scope), undefined, mode);
+    assert.equal(
+      adapter.lastDiscovery,
+      undefined,
+      `${mode}: stale cache cleared`,
+    );
+    assert.equal(
+      server.mutationCalls,
+      mutationsBefore,
+      `${mode}: discovery never writes`,
+    );
+  }
+
+  const reset = new FakeServer(identity());
+  const resetAdapter = new BeadsServerAdapter({
+    driver: reset,
+    identity: identity(),
+    process: fakeManagedProcess,
+  });
+  assert.equal((await resetAdapter.preflight()).status, "ready");
+  assert.ok(await resetAdapter.discover(scope));
+  assert.ok(resetAdapter.lastDiscovery);
+  assert.equal((await resetAdapter.preflight()).status, "ready");
+  assert.equal(
+    resetAdapter.lastDiscovery,
+    undefined,
+    "preflight reset clears cache",
+  );
+  assert.ok(await resetAdapter.discover(scope));
+  await resetAdapter.dispose();
+  assert.equal(resetAdapter.lastDiscovery, undefined, "dispose clears cache");
+});
+
+test("commit-unknown reconciliation replaces or clears prior discovery", async () => {
+  for (const discoveryMode of ["outage", "ok"] as const) {
+    const server = new FakeServer(identity());
+    server.outage = "after";
+    const adapter = new BeadsServerAdapter({
+      driver: server,
+      identity: identity(),
+      process: fakeManagedProcess,
+    });
+    assert.equal((await adapter.preflight()).status, "ready", discoveryMode);
+    assert.equal(
+      (await adapter.acquire({ holder, prefix: "sce", scope })).status,
+      "acquired",
+      discoveryMode,
+    );
+    const initial = await adapter.discover(scope);
+    assert.ok(initial, `${discoveryMode}: initial discovery`);
+    server.discoveryMode = discoveryMode;
+    assert.deepEqual(await adapter.compareAndSet(batch()), {
+      status: "ambiguous",
+    });
+    assert.equal(server.mutationCalls, 1, `${discoveryMode}: no retry`);
+    if (discoveryMode === "outage") {
+      assert.equal(
+        adapter.lastDiscovery,
+        undefined,
+        "failed reconciliation clears cache",
+      );
+    } else {
+      const reconciled = adapter.lastDiscovery;
+      assert.ok(reconciled, "successful reconciliation is cached");
+      assert.deepEqual(reconciled.root, server.root);
+      assert.notDeepEqual(reconciled, initial, "old snapshot was replaced");
+    }
+  }
+});
+
 test("adapter admits the schema-valid near-limit batch and refuses max-plus-one before CAS", async () => {
   const nearLimit = schemaValidBoundaryBatch(39);
   const overLimit = schemaValidBoundaryBatch(40);
@@ -4829,6 +5010,32 @@ test("real Dolt transaction child faults remain ambiguous until authoritative di
   }
 });
 
+test("managed fixture tears down its init-owned server on pre-lifecycle setup failure", async () => {
+  let fixtureDirectory: string | undefined;
+  let teardown: PrivateBdServerTeardownAuthority | undefined;
+  await assert.rejects(
+    createManagedBdServer({
+      afterOwnedInit: ({ directory, teardown: authority }) => {
+        fixtureDirectory = directory;
+        teardown = authority;
+        throw new Error("forced pre-lifecycle fixture setup failure");
+      },
+    }),
+    /forced pre-lifecycle fixture setup failure/u,
+  );
+  assert.ok(fixtureDirectory);
+  assert.ok(teardown);
+  if (fixtureDirectory === undefined || teardown === undefined)
+    throw new Error("managed fixture teardown was not observed");
+  const ownedTeardown = teardown;
+  assert.equal(
+    ownedTeardown.dataDirectory,
+    join(fixtureDirectory, "home", ".beads", "shared-server", "dolt"),
+  );
+  await assert.rejects(stat(fixtureDirectory), { code: "ENOENT" });
+  assert.throws(() => process.kill(ownedTeardown.pid, 0), { code: "ESRCH" });
+});
+
 test("managed bd shared-server lifecycle owns its isolated topology and recovers", async () => {
   const fixture = await createManagedBdServer();
   const serverIdentity = identity("on", fixture.endpoint);
@@ -5035,11 +5242,7 @@ test("managed bd shared-server lifecycle owns its isolated topology and recovers
     assert.equal((await fixture.readWriter("SELECT 1")).status, "ok");
     // The fixture explicitly owns its init-created private process; stop it
     // outside the adapter, then prove a fresh adapter owns its restart.
-    await stopPrivateBdServer({
-      executable: fixture.bdExecutable,
-      runtime: fixture.runtime,
-      workspace: fixture.workspace,
-    });
+    await fixture.stop();
     assert.deepEqual(await fixture.readWriter("SELECT 1"), {
       status: "unavailable",
     });
@@ -5079,11 +5282,7 @@ test("managed bd shared-server lifecycle owns its isolated topology and recovers
     });
     await recovery.dispose();
     assert.equal((await fixture.readWriter("SELECT 1")).status, "ok");
-    await stopPrivateBdServer({
-      executable: fixture.bdExecutable,
-      runtime: fixture.runtime,
-      workspace: fixture.workspace,
-    });
+    await fixture.stop();
     assert.deepEqual(await fixture.readWriter("SELECT 1"), {
       status: "unavailable",
     });

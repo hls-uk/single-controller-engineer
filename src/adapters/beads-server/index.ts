@@ -2295,6 +2295,7 @@ export class BeadsServerAdapter implements RunStorePort {
       scope: FencingScope;
     }>,
   ): Promise<ServerSlotResult> {
+    this.#lastDiscovery = undefined;
     if (!this.#ready) return { status: "quarantined" };
     let result: ServerDriverResponse<ServerSlotReadback>;
     try {
@@ -2357,6 +2358,7 @@ export class BeadsServerAdapter implements RunStorePort {
       scope: FencingScope;
     }>,
   ): Promise<ServerSlotResult> {
+    this.#lastDiscovery = undefined;
     if (!this.#ready) return { status: "quarantined" };
     let result: ServerDriverResponse<ServerSlotReadback>;
     try {
@@ -2390,6 +2392,7 @@ export class BeadsServerAdapter implements RunStorePort {
       scope: FencingScope;
     }>,
   ): Promise<ServerSlotResult> {
+    this.#lastDiscovery = undefined;
     if (!this.#ready) return { status: "quarantined" };
     let result: ServerDriverResponse<ServerSlotReadback>;
     try {
@@ -2424,6 +2427,9 @@ export class BeadsServerAdapter implements RunStorePort {
 
   /** Exact server readback used to reconcile, never to blindly retry a commit. */
   async discover(scope: FencingScope): Promise<ServerDiscovery | undefined> {
+    // A prior read is never evidence for a new reconciliation attempt. Only
+    // publish this cache after the current response passes exact parsing.
+    this.#lastDiscovery = undefined;
     try {
       const response = await this.#driver.discover({
         identity: this.#identity,
@@ -2456,6 +2462,10 @@ export class BeadsServerAdapter implements RunStorePort {
   }
 
   async compareAndSet(batchInput: MutationBatch): Promise<RunStoreResult> {
+    // Any attempted write can make a prior discovery stale, including an
+    // ambiguous child/process outcome. Reconciliation below repopulates it
+    // only from a fresh exact discovery.
+    this.#lastDiscovery = undefined;
     if (!this.#ready) return { status: "quarantined" };
     const batch = validateMutationBatch(batchInput);
     if (!batch.ok || !boundedMutationBatch(batch.value)) {
@@ -2531,6 +2541,7 @@ export class BeadsServerAdapter implements RunStorePort {
 
   #revoke(): void {
     this.#ready = false;
+    this.#lastDiscovery = undefined;
     try {
       this.#driver.disarm();
     } catch {
