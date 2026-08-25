@@ -3,6 +3,14 @@
 **Date:** 2026-08-24
 **Status:** Reviewed twice and amended
 **Seed:** `../../incept5/beta-factory/agents/skills/controlled-bootstrap-development`
+**Delivery companion:**
+[Accelerated Beta Engineering](2026-08-25-accelerated-beta-engineering.md)
+**Controller decisions:** [Decision records](../decisions/README.md)
+
+The delivery companion is normative for beta cadence, test tiers, review
+frequency, and severity-based acceptance. This document remains authoritative
+for architecture, authority, privacy, secrets, fencing, integration safety,
+and topology correctness.
 
 Two independent fresh-agent reviews were completed on 2026-08-24. Their
 supported findings are incorporated below. The first drove the repository-wide
@@ -554,8 +562,11 @@ Each child Bead records:
 - decisions, rejected alternatives, residual risks, and discovered work.
 
 Use Beads metadata for compact machine-readable phase and identity fields and
-notes for append-only human-readable evidence. Avoid creating a mandatory
-controller document inside every adopting repository.
+notes for compact human-readable execution evidence. Substantive human
+controller decisions live in the adopting repository's established decision
+records and are linked from Beads. This repository uses
+[`wiki/decisions`](../decisions/README.md). Avoid creating a second decision
+database inside every adopting repository.
 
 The root's versioned metadata envelope is the authoritative aggregate header;
 child envelopes are its unit projections. A transition writes the expected and
