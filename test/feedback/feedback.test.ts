@@ -408,21 +408,21 @@ test("post-create readback must retain the exact authorized body", async () => {
   assert.deepEqual(result, { status: "ambiguous", code: "GITHUB_REJECTED" });
 });
 
-test("exact marker discovery and target duplicate reconciliation use the lowest issue number", () => {
+test("duplicate reconciliation ignores copied markers and ranks only exact controlled bodies", () => {
   const value = packet();
   const result = reconcileExactDuplicates(value, [
     {
       repositoryId: "R_kgDOUCvUmw",
       number: 20,
       url: "https://github.com/hls-uk/single-controller-engineer/issues/20",
-      body: value.marker,
+      body: value.body,
       open: true,
     },
     {
       repositoryId: "R_kgDOUCvUmw",
       number: 3,
       url: "https://github.com/hls-uk/single-controller-engineer/issues/3",
-      body: `x\n${value.marker}`,
+      body: value.marker,
       open: true,
     },
     {
@@ -434,15 +434,8 @@ test("exact marker discovery and target duplicate reconciliation use the lowest 
     },
   ]);
   const reconciliation = requireValue(result);
-  assert.equal(reconciliation.canonical.number, 3);
-  assert.deepEqual(reconciliation.duplicates, [
-    {
-      number: 20,
-      label: "duplicate",
-      comment:
-        "Duplicate feedback report; canonical issue: https://github.com/hls-uk/single-controller-engineer/issues/3",
-    },
-  ]);
+  assert.equal(reconciliation.canonical.number, 20);
+  assert.deepEqual(reconciliation.duplicates, []);
 });
 
 test("outbox enforces private modes, no-follow symlink refusal, locking, quota and atomic crash boundaries", () => {

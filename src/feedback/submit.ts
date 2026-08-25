@@ -59,27 +59,43 @@ function canonicalIssueUrl(number: number): string {
   return `https://github.com/hls-uk/single-controller-engineer/issues/${number}`;
 }
 
-function validIssue(
+function validIssueReadback(
   packet: FeedbackPacket,
   value: unknown,
-  exactBody: boolean,
+  bodyProof: "marker" | "exact_generated",
 ): value is GitHubIssue {
   return (
     isFeedbackSchema<GitHubIssue>(GitHubIssueSchema, value) &&
     value.repositoryId === packet.target.repositoryId &&
     value.url === canonicalIssueUrl(value.number) &&
-    (exactBody
+    (bodyProof === "exact_generated"
       ? value.body === packet.body
       : value.body.includes(packet.marker))
   );
 }
 
-function exactMatches(
+/** Discovery's exact marker is a best-effort existence hint, never triage proof. */
+function discoveredMarkerMatches(
   packet: FeedbackPacket,
   issues: readonly GitHubIssue[],
 ): GitHubIssue[] {
   return issues
-    .filter((issue) => issue.open && validIssue(packet, issue, false))
+    .filter(
+      (issue) => issue.open && validIssueReadback(packet, issue, "marker"),
+    )
+    .sort((left, right) => left.number - right.number);
+}
+
+/** Triage acts only on a byte-exact regenerated controlled report. */
+function exactControlledMatches(
+  packet: FeedbackPacket,
+  issues: readonly GitHubIssue[],
+): GitHubIssue[] {
+  return issues
+    .filter(
+      (issue) =>
+        issue.open && validIssueReadback(packet, issue, "exact_generated"),
+    )
     .sort((left, right) => left.number - right.number);
 }
 
@@ -100,7 +116,7 @@ export async function discoverExisting(
     return { status: "invalid" };
   if (raw.repositoryId !== valid.target.repositoryId)
     return { status: "invalid" };
-  const matches = exactMatches(valid, raw.issues);
+  const matches = discoveredMarkerMatches(valid, raw.issues);
   return matches[0] === undefined
     ? { status: "absent" }
     : { status: "existing", issue: matches[0] };
@@ -138,7 +154,7 @@ export async function executeDurableIntent(
     )
       return { status: "ambiguous", code: "GITHUB_REJECTED" };
     const issue = await transport.createIssue(request);
-    return validIssue(valid, issue, true)
+    return validIssueReadback(valid, issue, "exact_generated")
       ? { status: "submitted", issue }
       : { status: "ambiguous", code: "GITHUB_REJECTED" };
   } catch (error) {
@@ -169,7 +185,7 @@ export function reconcileExactDuplicates(
 ): DuplicateReconciliation | undefined {
   const valid = validateFeedbackPacket(packet);
   if (valid === undefined) return undefined;
-  const matches = exactMatches(valid, issues);
+  const matches = exactControlledMatches(valid, issues);
   const canonical = matches[0];
   if (canonical === undefined) return undefined;
   return {
