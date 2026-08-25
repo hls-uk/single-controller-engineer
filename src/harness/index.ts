@@ -321,7 +321,7 @@ export function acknowledgeVerificationTool(
     (candidate) =>
       candidate.effectId === acknowledgement.effectId &&
       candidate.kind === "verify" &&
-      (candidate.status === "intended" || candidate.status === "ambiguous"),
+      candidate.status === "ambiguous",
   );
   const effect = entry === undefined ? undefined : rehydrateEffect(run, entry);
   if (

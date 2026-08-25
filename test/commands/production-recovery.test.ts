@@ -401,6 +401,27 @@ test("production candidate collection and manual verification bind exact durable
   assert.deepEqual((requested.toolRequest as { commands: string[] }).commands, [
     "npm test",
   ]);
+  assert.equal(
+    (
+      await adapter.acknowledge!(
+        {
+          baseOid: OID_A,
+          commands: ["npm test"],
+          effectId: verify.effectId,
+          evidenceDigest: HASH,
+          headOid: OID_B,
+          kind: "verified",
+          passed: true,
+          schema: "sce.harness-tool-acknowledgement",
+          treeOid: OID_A,
+          version: 1,
+          worktreePath: "/task",
+        },
+        state,
+      )
+    ).status,
+    "ambiguous",
+  );
   const ambiguousVerify = transition(
     state,
     event(state, "effect_ambiguous", {

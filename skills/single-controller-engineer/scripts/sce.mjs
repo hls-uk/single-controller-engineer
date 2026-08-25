@@ -14409,7 +14409,7 @@ function acknowledgeVerificationTool(raw, run2) {
     return void 0;
   const acknowledgement = parsed.value;
   const entry = run2.effectJournal.find(
-    (candidate) => candidate.effectId === acknowledgement.effectId && candidate.kind === "verify" && (candidate.status === "intended" || candidate.status === "ambiguous")
+    (candidate) => candidate.effectId === acknowledgement.effectId && candidate.kind === "verify" && candidate.status === "ambiguous"
   );
   const effect2 = entry === void 0 ? void 0 : rehydrateEffect(run2, entry);
   if (effect2 === void 0 || effect2.kind !== "verify" || effect2.unitId === null || acknowledgement.baseOid !== effect2.params.candidate.baseOid || acknowledgement.headOid !== effect2.params.candidate.headOid || acknowledgement.treeOid !== effect2.params.candidate.treeOid || acknowledgement.worktreePath !== canonicalAbsolutePath(effect2.params.worktreePath) || acknowledgement.commands.length !== effect2.params.commands.length || acknowledgement.commands.some(
@@ -16266,18 +16266,19 @@ async function observeCandidate(runner, repository, input) {
   const finalHeadOid = oneLine(finalHead.stdout);
   if (!commandOk(finalHead) || finalHeadOid === void 0 || finalHeadOid !== head3)
     return effect("refused", "GIT_REFUSED");
-  const [finalTree, finalStatus, finalRef, finalIndex] = await Promise.all([
+  const [finalTree, finalStatus, finalRef] = await Promise.all([
     runAt(runner, wantedPath, [
       "rev-parse",
       "--verify",
       `${finalHeadOid}^{tree}`
     ]),
     runAt(runner, wantedPath, ["status", "--porcelain=v1", "-z"]),
-    runAt(runner, wantedPath, ["symbolic-ref", "-q", "HEAD"]),
-    verifyOrdinaryTrackedIndex(runner, wantedPath)
+    runAt(runner, wantedPath, ["symbolic-ref", "-q", "HEAD"])
   ]);
-  if (!commandOk(finalTree) || !commandOk(finalStatus) || !commandOk(finalRef) || finalIndex.state !== "observed" || oneLine(finalTree.stdout) !== tree || finalStatus.stdout.length !== 0 || oneLine(finalRef.stdout) !== `refs/heads/${input.branch}`)
+  if (!commandOk(finalTree) || !commandOk(finalStatus) || !commandOk(finalRef) || oneLine(finalTree.stdout) !== tree || finalStatus.stdout.length !== 0 || oneLine(finalRef.stdout) !== `refs/heads/${input.branch}`)
     return effect("refused", "GIT_REFUSED");
+  const finalIndex = await verifyOrdinaryTrackedIndex(runner, wantedPath);
+  if (finalIndex.state !== "observed") return finalIndex;
   const canonicalChangedPaths = [...new Set(changedPaths)].sort();
   if (canonicalChangedPaths.some(
     (path2) => !input.allowedPaths.some((scope) => containedBy(scope, path2))
@@ -16326,13 +16327,15 @@ async function verifyCandidateWorktree(runner, repository, input) {
   ]);
   if (!commandOk(head3) || oneLine(head3.stdout) !== input.head)
     return effect("refused", "GIT_REFUSED");
-  const [tree, status, ref, finalIndex] = await Promise.all([
+  const [tree, status, ref] = await Promise.all([
     runAt(runner, path2, ["rev-parse", "--verify", `${input.head}^{tree}`]),
     runAt(runner, path2, ["status", "--porcelain=v1", "-z"]),
-    runAt(runner, path2, ["symbolic-ref", "-q", "HEAD"]),
-    verifyOrdinaryTrackedIndex(runner, path2)
+    runAt(runner, path2, ["symbolic-ref", "-q", "HEAD"])
   ]);
-  return commandOk(tree) && commandOk(status) && commandOk(ref) && finalIndex.state === "observed" && oneLine(tree.stdout) === input.tree && status.stdout.length === 0 && oneLine(ref.stdout) === `refs/heads/${input.branch}` ? effect("observed", "GIT_OK") : effect("refused", "GIT_REFUSED");
+  if (!commandOk(tree) || !commandOk(status) || !commandOk(ref) || oneLine(tree.stdout) !== input.tree || status.stdout.length !== 0 || oneLine(ref.stdout) !== `refs/heads/${input.branch}`)
+    return effect("refused", "GIT_REFUSED");
+  const finalIndex = await verifyOrdinaryTrackedIndex(runner, path2);
+  return finalIndex.state === "observed" ? effect("observed", "GIT_OK") : effect("refused", "GIT_REFUSED");
 }
 async function ensureBranch(runner, repository, input) {
   if (!safeRef(input.branch) || !exactOid(repository.objectFormat, input.base))

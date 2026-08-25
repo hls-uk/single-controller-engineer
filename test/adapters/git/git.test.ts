@@ -65,6 +65,61 @@ function identityResults(): GitResult[] {
   ];
 }
 
+/**
+ * The final clean status completes on the next microtask. An index read begun
+ * concurrently would still see H, while a read begun after it sees S.
+ */
+function flagAfterFinalStatus(
+  head: string,
+  tree: string,
+  finalStatusCall: number,
+): GitRunner {
+  let indexCalls = 0;
+  let statusCalls = 0;
+  let finalStatusComplete = false;
+  return async ({ argv }) => {
+    if (argv[0] === "config")
+      return argv.at(-1) === "^remote\\..*\\.url$"
+        ? ok("remote.origin.url\nhttps://example.invalid/repo.git\u0000")
+        : failed();
+    if (argv[0] === "worktree")
+      return ok(`worktree /task\nHEAD ${head}\nbranch refs/heads/sce/task\n\n`);
+    if (argv[0] === "ls-files") {
+      indexCalls += 1;
+      return indexCalls === 2 && finalStatusComplete
+        ? ok("S src/file.ts\u0000")
+        : ok("H src/file.ts\u0000");
+    }
+    if (argv[0] === "status") {
+      statusCalls += 1;
+      if (statusCalls !== finalStatusCall) return ok();
+      await Promise.resolve();
+      finalStatusComplete = true;
+      return ok();
+    }
+    if (argv[0] === "symbolic-ref") return ok("refs/heads/sce/task\n");
+    if (argv[0] === "merge-base") return ok();
+    if (argv[0] === "diff")
+      return ok(
+        argv.includes("--name-only")
+          ? "src/file.ts\u0000"
+          : "diff --git a/src/file.ts b/src/file.ts\n",
+      );
+    if (argv[0] === "-c" && argv.includes("diff"))
+      return ok(
+        argv.includes("--name-only")
+          ? "src/file.ts\u0000"
+          : "diff --git a/src/file.ts b/src/file.ts\n",
+      );
+    if (argv[0] === "rev-parse") {
+      if (argv[1] === "--git-common-dir") return ok("/repo/.git\n");
+      if (argv[1] === "--show-object-format") return ok("sha1\n");
+      return ok(argv[2] === "HEAD^{commit}" ? `${head}\n` : `${tree}\n`);
+    }
+    return failed();
+  };
+}
+
 test("candidate observation binds the owned worktree and exact diff bytes", async () => {
   const base = sha1("1");
   const head = sha1("2");
@@ -176,6 +231,37 @@ test("candidate observation rejects a head or clean-state race after diff captur
       })
     ).code,
     "GIT_REFUSED",
+  );
+});
+
+test("candidate evidence ends with ordinary-index validation after final status", async () => {
+  const base = sha1("1");
+  const head = sha1("2");
+  const tree = sha1("3");
+  assert.equal(
+    (
+      await observeCandidate(
+        flagAfterFinalStatus(head, tree, 2),
+        repository(),
+        {
+          allowedPaths: ["src"],
+          base,
+          branch: "sce/task",
+          worktreePath: "/task",
+        },
+      )
+    ).state,
+    "refused",
+  );
+  assert.equal(
+    (
+      await verifyCandidateWorktree(
+        flagAfterFinalStatus(head, tree, 1),
+        repository(),
+        { branch: "sce/task", head, path: "/task", tree },
+      )
+    ).state,
+    "refused",
   );
 });
 

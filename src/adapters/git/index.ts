@@ -943,7 +943,7 @@ export async function observeCandidate(
     finalHeadOid !== head
   )
     return effect("refused", "GIT_REFUSED");
-  const [finalTree, finalStatus, finalRef, finalIndex] = await Promise.all([
+  const [finalTree, finalStatus, finalRef] = await Promise.all([
     runAt(runner, wantedPath, [
       "rev-parse",
       "--verify",
@@ -951,18 +951,20 @@ export async function observeCandidate(
     ]),
     runAt(runner, wantedPath, ["status", "--porcelain=v1", "-z"]),
     runAt(runner, wantedPath, ["symbolic-ref", "-q", "HEAD"]),
-    verifyOrdinaryTrackedIndex(runner, wantedPath),
   ]);
   if (
     !commandOk(finalTree) ||
     !commandOk(finalStatus) ||
     !commandOk(finalRef) ||
-    finalIndex.state !== "observed" ||
     oneLine(finalTree.stdout) !== tree ||
     finalStatus.stdout.length !== 0 ||
     oneLine(finalRef.stdout) !== `refs/heads/${input.branch}`
   )
     return effect("refused", "GIT_REFUSED");
+  // This must be the final observation: status can hide bytes after a tracked
+  // path is flagged, so validate the index only after clean evidence closes.
+  const finalIndex = await verifyOrdinaryTrackedIndex(runner, wantedPath);
+  if (finalIndex.state !== "observed") return finalIndex;
   const canonicalChangedPaths = [...new Set(changedPaths)].sort();
   if (
     canonicalChangedPaths.some(
@@ -1035,19 +1037,23 @@ export async function verifyCandidateWorktree(
   ]);
   if (!commandOk(head) || oneLine(head.stdout) !== input.head)
     return effect("refused", "GIT_REFUSED");
-  const [tree, status, ref, finalIndex] = await Promise.all([
+  const [tree, status, ref] = await Promise.all([
     runAt(runner, path, ["rev-parse", "--verify", `${input.head}^{tree}`]),
     runAt(runner, path, ["status", "--porcelain=v1", "-z"]),
     runAt(runner, path, ["symbolic-ref", "-q", "HEAD"]),
-    verifyOrdinaryTrackedIndex(runner, path),
   ]);
-  return commandOk(tree) &&
-    commandOk(status) &&
-    commandOk(ref) &&
-    finalIndex.state === "observed" &&
-    oneLine(tree.stdout) === input.tree &&
-    status.stdout.length === 0 &&
-    oneLine(ref.stdout) === `refs/heads/${input.branch}`
+  if (
+    !commandOk(tree) ||
+    !commandOk(status) ||
+    !commandOk(ref) ||
+    oneLine(tree.stdout) !== input.tree ||
+    status.stdout.length !== 0 ||
+    oneLine(ref.stdout) !== `refs/heads/${input.branch}`
+  )
+    return effect("refused", "GIT_REFUSED");
+  // Finish with the tracked-index read after status, not concurrently with it.
+  const finalIndex = await verifyOrdinaryTrackedIndex(runner, path);
+  return finalIndex.state === "observed"
     ? effect("observed", "GIT_OK")
     : effect("refused", "GIT_REFUSED");
 }
