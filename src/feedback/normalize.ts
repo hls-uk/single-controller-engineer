@@ -12,7 +12,12 @@ export function normalizedText(
   value: string,
   maxBytes: number,
 ): string | undefined {
-  if (typeof value !== "string" || value.includes("\r")) return undefined;
+  if (
+    typeof value !== "string" ||
+    value.includes("\r") ||
+    hasUnpairedSurrogate(value)
+  )
+    return undefined;
   const normalized = value.normalize("NFC");
   if (
     DISALLOWED.test(normalized) ||
@@ -20,6 +25,19 @@ export function normalizedText(
   )
     return undefined;
   return normalized;
+}
+
+function hasUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!Number.isInteger(next) || next < 0xdc00 || next > 0xdfff)
+        return true;
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) return true;
+  }
+  return false;
 }
 
 export function normalizedSingleLine(

@@ -234,6 +234,22 @@ test("narrative is explicitly reviewed, bounded, and warning-bearing previews bl
     undefined,
   );
   assert.equal(
+    prepareFeedback(
+      {
+        kind: "bug",
+        component: "runtime",
+        toolVersion: "1.2.3",
+        toolchain: "node-22",
+        requestedModelTier: "workhorse",
+        protocolState: "failed",
+        stableErrorCode: "SCE_FAILURE",
+        capabilityId: "feedback.submit",
+      },
+      { observed: "\ud800" },
+    ),
+    undefined,
+  );
+  assert.equal(
     requireValue(
       authorityFor(
         reviewedPacket,
@@ -427,6 +443,13 @@ test("duplicate reconciliation ignores copied markers and ranks only exact contr
     },
     {
       repositoryId: "R_kgDOUCvUmw",
+      number: 30,
+      url: "https://github.com/hls-uk/single-controller-engineer/issues/30",
+      body: value.body,
+      open: true,
+    },
+    {
+      repositoryId: "R_kgDOUCvUmw",
       number: 1,
       url: "https://github.com/hls-uk/single-controller-engineer/issues/1",
       body: value.marker.replace("fingerprint", "fingerprints"),
@@ -435,7 +458,40 @@ test("duplicate reconciliation ignores copied markers and ranks only exact contr
   ]);
   const reconciliation = requireValue(result);
   assert.equal(reconciliation.canonical.number, 20);
-  assert.deepEqual(reconciliation.duplicates, []);
+  assert.deepEqual(reconciliation.duplicates, [
+    {
+      number: 30,
+      label: "duplicate",
+      comment:
+        "Duplicate feedback report; canonical issue: https://github.com/hls-uk/single-controller-engineer/issues/20",
+    },
+  ]);
+  assert.equal(
+    reconcileExactDuplicates(value, [
+      {
+        repositoryId: "R_kgDOUCvUmw",
+        number: 20,
+        url: "https://github.com/hls-uk/single-controller-engineer/issues/20",
+        body: value.body,
+        open: true,
+      },
+      {
+        repositoryId: "R_kgDOUCvUmw",
+        number: 20,
+        url: "https://github.com/hls-uk/single-controller-engineer/issues/20",
+        body: value.body,
+        open: true,
+      },
+      {
+        repositoryId: "R_kgDOUCvUmw",
+        number: 30,
+        url: "https://github.com/hls-uk/single-controller-engineer/issues/30",
+        body: value.body,
+        open: true,
+      },
+    ]),
+    undefined,
+  );
 });
 
 test("outbox enforces private modes, no-follow symlink refusal, locking, quota and atomic crash boundaries", () => {

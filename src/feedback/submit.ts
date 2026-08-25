@@ -185,15 +185,25 @@ export function reconcileExactDuplicates(
 ): DuplicateReconciliation | undefined {
   const valid = validateFeedbackPacket(packet);
   if (valid === undefined) return undefined;
+  // Provider pagination is untrusted: duplicated rows make ordering and
+  // duplicate actions ambiguous even when their bodies happen to match.
+  const numbers = new Set<number>();
+  for (const issue of issues) {
+    if (numbers.has(issue.number)) return undefined;
+    numbers.add(issue.number);
+  }
   const matches = exactControlledMatches(valid, issues);
   const canonical = matches[0];
   if (canonical === undefined) return undefined;
   return {
     canonical,
-    duplicates: matches.slice(1).map((issue) => ({
-      number: issue.number,
-      label: "duplicate" as const,
-      comment: `Duplicate feedback report; canonical issue: ${canonical.url}`,
-    })),
+    duplicates: matches
+      .slice(1)
+      .filter((issue) => issue.number !== canonical.number)
+      .map((issue) => ({
+        number: issue.number,
+        label: "duplicate" as const,
+        comment: `Duplicate feedback report; canonical issue: ${canonical.url}`,
+      })),
   };
 }
