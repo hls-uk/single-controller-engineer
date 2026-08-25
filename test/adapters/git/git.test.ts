@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
@@ -54,45 +54,58 @@ function identityResults(): GitResult[] {
   ];
 }
 
-test("candidate observation binds exact base/head/tree and refuses dirty or scoped bytes", async () => {
+test("candidate observation binds the owned worktree and exact diff bytes", async () => {
   const base = sha1("1");
   const head = sha1("2");
   const tree = sha1("3");
   const runner = scripted(
     ...identityResults(),
+    ok(`worktree /task\nHEAD ${head}\nbranch refs/heads/sce/task\n\n`),
+    ok("/repo/.git\n"),
     ok(`${head}\n`),
     ok(`${tree}\n`),
     ok(),
+    ok("refs/heads/sce/task\n"),
     ok(),
     ok("src/adapters/git/index.ts\u0000test/adapters/git/git.test.ts\u0000"),
+    ok("diff --git a/src/adapters/git/index.ts b/src/adapters/git/index.ts\n"),
+    ok(`${head}\n`),
+    ok(`${tree}\n`),
+    ok(),
+    ok("refs/heads/sce/task\n"),
   );
   const result = await observeCandidate(runner, repository(), {
     allowedPaths: ["src/adapters/git", "test/adapters/git"],
     base,
-    expectedHead: head,
-    expectedTree: tree,
+    branch: "sce/task",
+    worktreePath: "/task",
   });
   assert.equal(result.state, "observed");
   assert.deepEqual(result.snapshot?.changedPaths, [
     "src/adapters/git/index.ts",
     "test/adapters/git/git.test.ts",
   ]);
+  assert.equal(
+    result.snapshot?.diff,
+    "diff --git a/src/adapters/git/index.ts b/src/adapters/git/index.ts\n",
+  );
 
   const dirty = scripted(
     ...identityResults(),
+    ok(`worktree /task\nHEAD ${head}\nbranch refs/heads/sce/task\n\n`),
+    ok("/repo/.git\n"),
     ok(`${head}\n`),
     ok(`${tree}\n`),
     ok(" M src/adapters/git/index.ts\u0000"),
-    ok(),
-    ok(),
+    ok("refs/heads/sce/task\n"),
   );
   assert.equal(
     (
       await observeCandidate(dirty, repository(), {
         allowedPaths: ["src/adapters/git"],
         base,
-        expectedHead: head,
-        expectedTree: tree,
+        branch: "sce/task",
+        worktreePath: "/task",
       })
     ).code,
     "GIT_DIRTY",
@@ -102,11 +115,45 @@ test("candidate observation binds exact base/head/tree and refuses dirty or scop
       await observeCandidate(scripted(), repository(), {
         allowedPaths: ["src", "src/adapters"],
         base,
-        expectedHead: head,
-        expectedTree: tree,
+        branch: "sce/task",
+        worktreePath: "/task",
       })
     ).code,
     "GIT_BAD_INPUT",
+  );
+});
+
+test("candidate observation rejects a head or clean-state race after diff capture", async () => {
+  const base = sha1("1");
+  const head = sha1("2");
+  const moved = sha1("3");
+  const tree = sha1("4");
+  const raced = scripted(
+    ...identityResults(),
+    ok(`worktree /task\nHEAD ${head}\nbranch refs/heads/sce/task\n\n`),
+    ok("/repo/.git\n"),
+    ok(`${head}\n`),
+    ok(`${tree}\n`),
+    ok(),
+    ok("refs/heads/sce/task\n"),
+    ok(),
+    ok("src/file.ts\u0000"),
+    ok("diff --git a/src/file.ts b/src/file.ts\n"),
+    ok(`${moved}\n`),
+    ok(`${tree}\n`),
+    ok(),
+    ok("refs/heads/sce/task\n"),
+  );
+  assert.equal(
+    (
+      await observeCandidate(raced, repository(), {
+        allowedPaths: ["src"],
+        base,
+        branch: "sce/task",
+        worktreePath: "/task",
+      })
+    ).code,
+    "GIT_REFUSED",
   );
 });
 
@@ -536,6 +583,44 @@ test("real no-remote repository supports the local-only fast-forward profile", a
       })
     ).state,
     "observed",
+  );
+});
+
+test("real worktree candidate observation binds exact committed diff bytes", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "sce-git-candidate-"));
+  const cwd = join(root, "repo");
+  t.after(() => rm(root, { force: true, recursive: true }));
+  await git(root, "init", cwd);
+  await git(cwd, "config", "user.email", "test@example.invalid");
+  await git(cwd, "config", "user.name", "SCE test");
+  await git(cwd, "commit", "--allow-empty", "-m", "base");
+  await git(cwd, "branch", "-M", "main");
+  const base = (await git(cwd, "rev-parse", "HEAD")).trim();
+  const worktree = join(root, "candidate");
+  await git(cwd, "branch", "sce/candidate", base);
+  await git(cwd, "worktree", "add", worktree, "sce/candidate");
+  await writeFile(join(worktree, "candidate.txt"), "candidate\n", "utf8");
+  await git(worktree, "add", "candidate.txt");
+  await git(worktree, "commit", "-m", "candidate");
+  const head = (await git(worktree, "rev-parse", "HEAD")).trim();
+  const tree = (await git(worktree, "rev-parse", "HEAD^{tree}")).trim();
+  const observed = await observeCandidate(
+    nodeGitRunner,
+    await actualRepository(cwd),
+    {
+      allowedPaths: ["candidate.txt"],
+      base,
+      branch: "sce/candidate",
+      worktreePath: worktree,
+    },
+  );
+  assert.equal(observed.state, "observed");
+  assert.deepEqual(observed.snapshot?.changedPaths, ["candidate.txt"]);
+  assert.equal(observed.snapshot?.head, head);
+  assert.equal(observed.snapshot?.tree, tree);
+  assert.match(
+    observed.snapshot?.diff ?? "",
+    /^diff --git a\/candidate.txt b\/candidate.txt/mu,
   );
 });
 

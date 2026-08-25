@@ -280,6 +280,79 @@ test("manual harness acknowledgements cross the CLI as narrow host facts", async
   });
 });
 
+test("qualify accepts only a strict verified acknowledgement", async () => {
+  const verified = {
+    baseOid: "a".repeat(40),
+    commands: ["npm test"],
+    effectId: "verify-1",
+    evidenceDigest: HASH,
+    headOid: "b".repeat(40),
+    kind: "verified",
+    passed: true,
+    schema: "sce.harness-tool-acknowledgement",
+    treeOid: "c".repeat(40),
+    version: 1,
+    worktreePath: "/tmp/unit-1",
+  };
+  let calls = 0;
+  const runner = createRecoveryCommandRunner(async (request) => {
+    calls += 1;
+    assert.deepEqual(request, { harnessAcknowledgement: verified });
+    return {
+      revision: 8,
+      run: run(),
+      status: "tool_request",
+      toolRequest: {
+        operation: "verify",
+        schema: "sce.harness-tool-request",
+        version: 1,
+      },
+    };
+  });
+  const accepted = await runCli(
+    [
+      "qualify",
+      "--json",
+      "--request",
+      JSON.stringify({ harnessAcknowledgement: verified }),
+    ],
+    { runner },
+  );
+  assert.equal(accepted.exitCode, 0);
+  assert.equal(JSON.parse(accepted.stdout).result.status, "tool_request");
+  const rejected = await runCli(
+    [
+      "qualify",
+      "--json",
+      "--request",
+      JSON.stringify({
+        harnessAcknowledgement: {
+          effectId: "verify-1",
+          kind: "launch",
+          schema: "sce.harness-tool-acknowledgement",
+          session: {
+            clientKey: "client-1",
+            fresh: true,
+            harnessFamily: "codex",
+            harnessVersion: 1,
+            promptHash: HASH,
+            readOnly: false,
+            requestedModel: "gpt-5.6-terra",
+            returnedModel: "gpt-5.6-terra",
+            role: "worker",
+            sessionId: "session-1",
+            worktreePath: "/tmp/unit-1",
+          },
+          version: 1,
+        },
+      }),
+    ],
+    { runner },
+  );
+  assert.equal(rejected.exitCode, 64);
+  assert.equal(calls, 1);
+});
+
 test("recovery commands refuse missing mutating payloads before injected runners", async () => {
   let calls = 0;
   const execution = await runCli(["dispatch-request", "--json"], {

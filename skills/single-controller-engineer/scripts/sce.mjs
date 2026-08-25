@@ -14125,6 +14125,8 @@ function exhaustive(value) {
 }
 
 // src/harness/index.ts
+var VERIFY_TOOL_REQUEST_BYTES = 12288;
+var verifyCommand = () => Type.String({ minLength: 1, maxLength: 1024, maxUtf8Bytes: 1024 });
 var HARNESS_VERSION = 1;
 var PACKET_BYTES = HARNESS_PACKET_BYTES;
 var TOOL_REQUEST_BYTES = PACKET_BYTES + 4096;
@@ -14208,7 +14210,8 @@ var HarnessToolRequestBase = {
     Type.Literal("review_dispatch"),
     Type.Literal("review_collect"),
     Type.Literal("repair"),
-    Type.Literal("cancel")
+    Type.Literal("cancel"),
+    Type.Literal("verify")
   ]),
   idempotencyKey: identifier2(),
   schema: Type.Literal("sce.harness-tool-request"),
@@ -14239,6 +14242,27 @@ var HarnessToolRequestSchema = Type.Union([
     ...HarnessToolRequestBase,
     operation: Type.Literal("poll"),
     session: HarnessSessionSchema
+  }),
+  strictObject2({
+    ...HarnessToolRequestBase,
+    baseOid: Type.String({
+      minLength: 40,
+      maxLength: 64,
+      pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    }),
+    commands: Type.Array(verifyCommand(), { minItems: 1, maxItems: 32 }),
+    headOid: Type.String({
+      minLength: 40,
+      maxLength: 64,
+      pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    }),
+    operation: Type.Literal("verify"),
+    treeOid: Type.String({
+      minLength: 40,
+      maxLength: 64,
+      pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    }),
+    worktreePath: absolutePath()
   })
 ]);
 var ToolAcknowledgementBase = {
@@ -14274,8 +14298,102 @@ var HarnessToolAcknowledgementSchema = Type.Union([
     ...ToolAcknowledgementBase,
     kind: Type.Literal("cancelled"),
     sessionId: identifier2()
+  }),
+  strictObject2({
+    ...ToolAcknowledgementBase,
+    baseOid: Type.String({
+      minLength: 40,
+      maxLength: 64,
+      pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    }),
+    commands: Type.Array(verifyCommand(), { minItems: 1, maxItems: 32 }),
+    evidenceDigest: hash2(),
+    headOid: Type.String({
+      minLength: 40,
+      maxLength: 64,
+      pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    }),
+    kind: Type.Literal("verified"),
+    passed: Type.Literal(true),
+    treeOid: Type.String({
+      minLength: 40,
+      maxLength: 64,
+      pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    }),
+    worktreePath: absolutePath()
   })
 ]);
+function verificationToolRequest(effect2, run2) {
+  if (effect2.kind !== "verify" || effect2.unitId === null)
+    return { status: "ambiguous" };
+  const unit = run2.units[effect2.unitId];
+  const worktreePath = canonicalAbsolutePath(unit?.worktreePath);
+  if (unit === void 0 || worktreePath === void 0)
+    return { status: "ambiguous" };
+  const raw = {
+    baseOid: effect2.params.candidate.baseOid,
+    commands: effect2.params.commands,
+    effectId: effect2.effectId,
+    effectKind: "verify",
+    headOid: effect2.params.candidate.headOid,
+    idempotencyKey: effect2.idempotencyKey,
+    operation: "verify",
+    schema: "sce.harness-tool-request",
+    treeOid: effect2.params.candidate.treeOid,
+    version: HARNESS_VERSION,
+    worktreePath
+  };
+  const parsed = validate(HarnessToolRequestSchema, raw);
+  if (!parsed.ok || parsed.value === void 0) return { status: "ambiguous" };
+  try {
+    return new TextEncoder().encode(
+      canonicalJson(parsed.value)
+    ).byteLength <= VERIFY_TOOL_REQUEST_BYTES ? { status: "tool_request", toolRequest: parsed.value } : { status: "ambiguous" };
+  } catch {
+    return { status: "ambiguous" };
+  }
+}
+function acknowledgeVerificationTool(raw, run2) {
+  let parsed;
+  try {
+    parsed = validate(
+      HarnessToolAcknowledgementSchema,
+      raw
+    );
+  } catch {
+    return void 0;
+  }
+  if (!parsed.ok || parsed.value === void 0 || parsed.value.kind !== "verified")
+    return void 0;
+  const acknowledgement = parsed.value;
+  const entry = run2.effectJournal.find(
+    (candidate) => candidate.effectId === acknowledgement.effectId && candidate.kind === "verify" && (candidate.status === "intended" || candidate.status === "ambiguous")
+  );
+  const effect2 = entry === void 0 ? void 0 : rehydrateEffect(run2, entry);
+  if (effect2 === void 0 || effect2.kind !== "verify" || effect2.unitId === null || acknowledgement.baseOid !== effect2.params.candidate.baseOid || acknowledgement.headOid !== effect2.params.candidate.headOid || acknowledgement.treeOid !== effect2.params.candidate.treeOid || acknowledgement.worktreePath !== canonicalAbsolutePath(run2.units[effect2.unitId]?.worktreePath) || acknowledgement.commands.length !== effect2.params.commands.length || acknowledgement.commands.some(
+    (command, index) => command !== effect2.params.commands[index]
+  ))
+    return { status: "ambiguous" };
+  return parsedEvent({
+    baseOid: effect2.params.candidate.baseOid,
+    effectId: effect2.effectId,
+    effectKind: effect2.kind,
+    eventId: `harness-${effect2.effectId}`,
+    expectedRevision: run2.revision,
+    headOid: effect2.params.candidate.headOid,
+    observationHash: sha256(
+      canonicalJson({
+        domain: "sce.harness.verify-evidence/v1",
+        effectId: effect2.effectId,
+        evidenceDigest: acknowledgement.evidenceDigest,
+        paramsHash: effect2.paramsHash
+      })
+    ),
+    treeOid: effect2.params.candidate.treeOid,
+    type: "verification_observed",
+    unitId: effect2.unitId
+  });
+}
 function parseHarnessSupport(input) {
   let parsed;
   try {
@@ -14601,6 +14719,7 @@ function acknowledgeHarnessTool(raw, run2, support, expectedEffectId) {
       acknowledgement.session
     ) : { status: "ambiguous" };
   }
+  if (acknowledgement.kind === "verified") return { status: "ambiguous" };
   const session2 = sessionForEffect(effect2, run2, support);
   if (!session2.ok || acknowledgement.sessionId !== session2.value.sessionId)
     return { status: "ambiguous" };
@@ -15565,6 +15684,7 @@ var GitResultSchema = strictObject4({
   ]),
   signal: ProcessSignalSchema,
   stdout: Type.String({ minLength: 0, maxLength: 65536, maxUtf8Bytes: 65536 }),
+  invalidUtf8: Type.Optional(Type.Boolean()),
   timedOut: Type.Optional(Type.Boolean()),
   unavailable: Type.Optional(Type.Boolean())
 });
@@ -15581,6 +15701,7 @@ var GitRepositorySchema = strictObject4({
 var GitSnapshotSchema = strictObject4({
   changedPaths: Type.Array(path(), { maxItems: 4096 }),
   clean: Type.Boolean(),
+  diff: Type.String({ minLength: 0, maxLength: 65536, maxUtf8Bytes: 65536 }),
   head: oid2(),
   tree: oid2()
 });
@@ -15663,6 +15784,8 @@ function allowedGitArgv(argv) {
   if (command === "diff")
     return args.length === 4 && args[0] === "--name-only" && args[1] === "-z" && args[2] === "--no-renames" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})\.\.(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(
       args[3] ?? ""
+    ) || args.length === 6 && args[0] === "--no-ext-diff" && args[1] === "--no-textconv" && args[2] === "--no-renames" && args[3] === "--no-color" && args[4] === "--binary" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})\.\.(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(
+      args[5] ?? ""
     );
   if (command === "symbolic-ref")
     return args.length === 2 && args[0] === "-q" && args[1] === "HEAD";
@@ -15710,12 +15833,14 @@ function effect(state, code) {
   return { code, state };
 }
 function commandOk(result2) {
-  return result2.exitCode === 0 && result2.signal === null && result2.timedOut !== true && result2.unavailable !== true && Buffer.byteLength(result2.stdout, "utf8") <= MAX_OUTPUT;
+  return result2.exitCode === 0 && result2.signal === null && result2.timedOut !== true && result2.unavailable !== true && result2.invalidUtf8 !== true && Buffer.byteLength(result2.stdout, "utf8") <= MAX_OUTPUT;
 }
 function terminalFailure(result2) {
   if (result2.timedOut === true || result2.signal !== null)
     return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
   if (result2.unavailable === true)
+    return effect("refused", "GIT_COMMAND_FAILED");
+  if (result2.invalidUtf8 === true)
     return effect("refused", "GIT_COMMAND_FAILED");
   if (Buffer.byteLength(result2.stdout, "utf8") > MAX_OUTPUT)
     return effect("refused", "GIT_COMMAND_FAILED");
@@ -15732,6 +15857,13 @@ function oneLine(value) {
   const result2 = lines(value);
   return result2?.length === 1 ? result2[0] : void 0;
 }
+function nulPaths(value) {
+  if (value.length === 0) return [];
+  if (!value.endsWith("\0") || value.length > MAX_OUTPUT) return void 0;
+  const paths2 = value.slice(0, -1).split("\0");
+  if (paths2.some((path2) => !safePath(path2))) return void 0;
+  return paths2;
+}
 function outputResult(result2) {
   return terminalFailure(result2) ?? (commandOk(result2) ? void 0 : effect("refused", "GIT_COMMAND_FAILED"));
 }
@@ -15742,6 +15874,14 @@ function validRepository(repository) {
 }
 function localIdentity(repository) {
   return `local:${canonicalExistingOrLexical(repository.commonDir)}`;
+}
+function validScope(value) {
+  return safePath(value) && !isAbsolute3(value) && value !== "." && !value.endsWith("/") && value.split("/").every((part) => part.length > 0 && part !== "." && part !== "..");
+}
+function disjointScopes(scopes) {
+  return scopes.every(
+    (scope, index) => scopes.findIndex((other) => other === scope) === index && !scopes.some((other) => other !== scope && containedBy(other, scope))
+  );
 }
 function canonicalRemoteAliases(urls) {
   const aliases = urls.map(
@@ -15805,6 +15945,9 @@ async function remoteRefOid(runner, repository, remote2, ref) {
   if (record2 === void 0) return { state: "unreadable" };
   const fields = record2.split("	");
   return fields.length === 2 && fields[0] !== void 0 && fields[1] === ref && exactOid(repository.objectFormat, fields[0]) ? { state: "found", oid: fields[0] } : { state: "unreadable" };
+}
+function containedBy(scope, path2) {
+  return path2 === scope || path2.startsWith(`${scope}/`);
 }
 async function verifyWorktreeOwnership(runner, repository, path2) {
   const result2 = await runAt(runner, path2, ["rev-parse", "--git-common-dir"]);
@@ -15917,6 +16060,103 @@ async function verifyRepository(runner, repository) {
   if (actualAliases.length > 0 && !repository.identity.startsWith("provider:") && (actualAliases.length !== 1 || actualAliases[0] !== repository.identity))
     return effect("refused", "GIT_IDENTITY_MISMATCH");
   return effect("observed", "GIT_OK");
+}
+async function observeCandidate(runner, repository, input) {
+  if (!exactOid(repository.objectFormat, input.base) || !safeRef(input.branch) || !safeAbsolutePath(input.worktreePath) || input.allowedPaths.length === 0 || input.allowedPaths.some((path2) => !validScope(path2)) || !disjointScopes(input.allowedPaths))
+    return effect("refused", "GIT_BAD_INPUT");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
+  const wantedPath = canonicalWorktreePath(input.worktreePath);
+  if (wantedPath === void 0) return effect("refused", "GIT_BAD_INPUT");
+  const listed = await run(runner, repository, [
+    "worktree",
+    "list",
+    "--porcelain"
+  ]);
+  if (!commandOk(listed)) return effect("refused", "GIT_REFUSED");
+  const worktree = parseWorktreeList(
+    listed.stdout,
+    repository.objectFormat
+  )?.find((record2) => record2.path === wantedPath);
+  if (worktree === void 0 || worktree.branch !== `refs/heads/${input.branch}` || worktree.head === void 0)
+    return effect("refused", "GIT_FOREIGN_WORKTREE");
+  const ownership = await verifyWorktreeOwnership(
+    runner,
+    repository,
+    wantedPath
+  );
+  if (ownership.state !== "observed") return ownership;
+  const [headResult, treeResult, statusResult, headRefResult] = await Promise.all([
+    runAt(runner, wantedPath, ["rev-parse", "--verify", "HEAD^{commit}"]),
+    runAt(runner, wantedPath, ["rev-parse", "--verify", "HEAD^{tree}"]),
+    runAt(runner, wantedPath, ["status", "--porcelain=v1", "-z"]),
+    runAt(runner, wantedPath, ["symbolic-ref", "-q", "HEAD"])
+  ]);
+  for (const result2 of [headResult, treeResult, statusResult, headRefResult]) {
+    const failure2 = terminalFailure(result2);
+    if (failure2 !== void 0) return failure2;
+  }
+  if (!commandOk(headResult) || !commandOk(treeResult) || !commandOk(statusResult) || !commandOk(headRefResult))
+    return effect("refused", "GIT_REFUSED");
+  const head3 = oneLine(headResult.stdout);
+  const tree = oneLine(treeResult.stdout);
+  if (head3 === void 0 || tree === void 0 || !exactOid(repository.objectFormat, head3) || !exactOid(repository.objectFormat, tree) || head3 !== worktree.head || oneLine(headRefResult.stdout) !== `refs/heads/${input.branch}`)
+    return effect("refused", "GIT_REFUSED");
+  const clean = statusResult.stdout.length === 0;
+  if (!clean) return effect("refused", "GIT_DIRTY");
+  const [ancestorResult, pathsResult, diffResult] = await Promise.all([
+    runAt(runner, wantedPath, [
+      "merge-base",
+      "--is-ancestor",
+      input.base,
+      head3
+    ]),
+    runAt(runner, wantedPath, [
+      "diff",
+      "--name-only",
+      "-z",
+      "--no-renames",
+      `${input.base}..${head3}`
+    ]),
+    runAt(runner, wantedPath, [
+      "diff",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--no-renames",
+      "--no-color",
+      "--binary",
+      `${input.base}..${head3}`
+    ])
+  ]);
+  if (!commandOk(ancestorResult) || !commandOk(pathsResult) || !commandOk(diffResult) || Buffer.byteLength(diffResult.stdout, "utf8") > MAX_OUTPUT)
+    return effect("refused", "GIT_REFUSED");
+  const changedPaths = nulPaths(pathsResult.stdout);
+  if (changedPaths === void 0 || diffResult.stdout.includes("\0"))
+    return effect("refused", "GIT_REFUSED");
+  const [finalHead, finalTree, finalStatus, finalRef] = await Promise.all([
+    runAt(runner, wantedPath, ["rev-parse", "--verify", "HEAD^{commit}"]),
+    runAt(runner, wantedPath, ["rev-parse", "--verify", "HEAD^{tree}"]),
+    runAt(runner, wantedPath, ["status", "--porcelain=v1", "-z"]),
+    runAt(runner, wantedPath, ["symbolic-ref", "-q", "HEAD"])
+  ]);
+  if (!commandOk(finalHead) || !commandOk(finalTree) || !commandOk(finalStatus) || !commandOk(finalRef) || oneLine(finalHead.stdout) !== head3 || oneLine(finalTree.stdout) !== tree || finalStatus.stdout.length !== 0 || oneLine(finalRef.stdout) !== `refs/heads/${input.branch}`)
+    return effect("refused", "GIT_REFUSED");
+  const canonicalChangedPaths = [...new Set(changedPaths)].sort();
+  if (canonicalChangedPaths.some(
+    (path2) => !input.allowedPaths.some((scope) => containedBy(scope, path2))
+  ))
+    return effect("refused", "GIT_REFUSED");
+  return {
+    code: "GIT_OK",
+    snapshot: {
+      changedPaths: canonicalChangedPaths,
+      clean,
+      diff: diffResult.stdout,
+      head: head3,
+      tree
+    },
+    state: "observed"
+  };
 }
 async function ensureBranch(runner, repository, input) {
   if (!safeRef(input.branch) || !exactOid(repository.objectFormat, input.base))
@@ -16212,13 +16452,22 @@ var nodeGitRunner = async ({ argv, cwd }) => {
   if (!safeAbsolutePath(cwd) || !allowedGitArgv(argv))
     return { exitCode: null, signal: null, stdout: "", unavailable: true };
   return new Promise((done) => {
-    let stdout = "";
+    const stdoutChunks = [];
     let outputBytes = 0;
     let timedOut = false;
     let unavailable3 = false;
     const child = spawn("/usr/bin/git", argv, {
       cwd,
-      env: { LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin", TZ: "UTC" },
+      env: {
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+        HOME: "/nonexistent",
+        LANG: "C",
+        LC_ALL: "C",
+        PATH: "/usr/bin:/bin",
+        TZ: "UTC",
+        XDG_CONFIG_HOME: "/nonexistent"
+      },
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true
@@ -16226,7 +16475,7 @@ var nodeGitRunner = async ({ argv, cwd }) => {
     const consume = (isStdout, chunk) => {
       outputBytes += chunk.byteLength;
       if (outputBytes > MAX_OUTPUT) child.kill("SIGKILL");
-      else if (isStdout) stdout += chunk.toString("utf8");
+      else if (isStdout) stdoutChunks.push(chunk);
     };
     child.stdout.on("data", (chunk) => consume(true, chunk));
     child.stderr.on("data", (chunk) => consume(false, chunk));
@@ -16239,7 +16488,16 @@ var nodeGitRunner = async ({ argv, cwd }) => {
     });
     child.once("close", (exitCode, signal) => {
       clearTimeout(timer);
-      done({ exitCode, signal, stdout, timedOut, unavailable: unavailable3 });
+      let stdout = "";
+      let invalidUtf8 = false;
+      try {
+        stdout = new TextDecoder("utf-8", { fatal: true }).decode(
+          Buffer.concat(stdoutChunks)
+        );
+      } catch {
+        invalidUtf8 = true;
+      }
+      done({ exitCode, invalidUtf8, signal, stdout, timedOut, unavailable: unavailable3 });
     });
   });
 };
@@ -17600,6 +17858,34 @@ function controllerTransition(effect2) {
 function worktreeBase(effect2, run2) {
   return effect2.kind === "worktree_create" && effect2.unitId !== null ? run2.units[effect2.unitId]?.baseOid : void 0;
 }
+function candidateInput(effect2, run2) {
+  const unit = run2.units[effect2.unitId];
+  if (unit === void 0 || unit.branchRef !== effect2.params.branchRef || unit.worktreePath !== effect2.params.worktreePath || unit.taskMetadata === void 0 || unit.taskMetadata.unitId !== unit.id)
+    return void 0;
+  return {
+    allowedPaths: unit.taskMetadata.ownedPaths,
+    base: unit.baseOid,
+    branch: effect2.params.branchRef,
+    worktreePath: effect2.params.worktreePath
+  };
+}
+async function candidateObserved(effect2, run2, git) {
+  const input = candidateInput(effect2, run2);
+  if (input === void 0) return ambiguous();
+  const result2 = await observeCandidate(git.runner, git.repository, input);
+  if (result2.state !== "observed" || result2.snapshot === void 0)
+    return ambiguous();
+  return {
+    observation: {
+      ...eventBase2(effect2, run2),
+      candidateDiffHash: deriveCandidateDiffHash(result2.snapshot.diff),
+      headOid: result2.snapshot.head,
+      treeOid: result2.snapshot.tree,
+      type: "candidate_observed"
+    },
+    status: "observed"
+  };
+}
 function canPublish(effect2) {
   return effect2.params.completionBoundary !== "pr-handoff" && effect2.params.authorityProfile !== "local-change-only";
 }
@@ -17628,8 +17914,17 @@ function createProductionRecoveryEffectAdapter(options) {
     options.harness.port
   );
   async function discover(effect2, run2) {
+    if (effect2.kind === "verify") return verificationToolRequest(effect2, run2);
     if (harness?.canReconcile?.(effect2))
       return await harness.reconcile(effect2, run2);
+    if (effect2.kind === "candidate_collect") {
+      if (!gitMatchesRun(git.repository, run2)) return ambiguous();
+      try {
+        return await candidateObserved(effect2, run2, git);
+      } catch {
+        return ambiguous();
+      }
+    }
     const done = observed(effect2, run2);
     if (done === void 0) return ambiguous();
     if (effect2.kind !== "controller_acquire" && effect2.kind !== "controller_release" && !gitMatchesRun(git.repository, run2) || (effect2.kind === "controller_acquire" || effect2.kind === "controller_release") && !transitionMatchesRun(effect2, run2))
@@ -17704,10 +17999,6 @@ function createProductionRecoveryEffectAdapter(options) {
             })
           );
         }
-        // The durable candidate intent has no exact candidate OID/tree/scope
-        // binding.  Never infer those values from a worktree during recovery.
-        case "candidate_collect":
-          return ambiguous();
         default:
           return ambiguous();
       }
@@ -17716,8 +18007,17 @@ function createProductionRecoveryEffectAdapter(options) {
     }
   }
   async function execute2(effect2, run2) {
+    if (effect2.kind === "verify") return verificationToolRequest(effect2, run2);
     if (harness?.canExecute?.(effect2))
       return await harness.execute(effect2, run2);
+    if (effect2.kind === "candidate_collect") {
+      if (!gitMatchesRun(git.repository, run2)) return ambiguous();
+      try {
+        return await candidateObserved(effect2, run2, git);
+      } catch {
+        return ambiguous();
+      }
+    }
     const done = observed(effect2, run2);
     if (done === void 0) return ambiguous();
     if (effect2.kind !== "controller_acquire" && effect2.kind !== "controller_release" && !gitMatchesRun(git.repository, run2) || (effect2.kind === "controller_acquire" || effect2.kind === "controller_release") && !transitionMatchesRun(effect2, run2))
@@ -17791,7 +18091,6 @@ function createProductionRecoveryEffectAdapter(options) {
             })
           );
         }
-        case "candidate_collect":
         default:
           return ambiguous();
       }
@@ -17800,9 +18099,13 @@ function createProductionRecoveryEffectAdapter(options) {
     }
   }
   return {
-    canExecute: (effect2) => harness?.canExecute?.(effect2) ?? false,
-    canReconcile: (effect2) => harness?.canReconcile?.(effect2) ?? false,
-    acknowledge: async (acknowledgement, run2) => harness?.acknowledge === void 0 ? ambiguous() : await harness.acknowledge(acknowledgement, run2),
+    canExecute: (effect2) => effect2.kind === "verify" || (harness?.canExecute?.(effect2) ?? false),
+    canReconcile: (effect2) => effect2.kind === "verify" || (harness?.canReconcile?.(effect2) ?? false),
+    acknowledge: async (acknowledgement, run2) => {
+      const verified = acknowledgeVerificationTool(acknowledgement, run2);
+      if (verified !== void 0) return verified;
+      return harness?.acknowledge === void 0 ? ambiguous() : await harness.acknowledge(acknowledgement, run2);
+    },
     execute: execute2,
     reconcile: discover
   };
@@ -18163,7 +18466,7 @@ function createRecoveryCommandRunner(runner) {
     const event = payload !== void 0 && "event" in payload ? payload.event : void 0;
     const acknowledgement = payload !== void 0 && "harnessAcknowledgement" in payload ? payload.harnessAcknowledgement : void 0;
     const expected = commandEvent[request.command];
-    const acknowledgementCommand = request.command === "record-dispatch" || request.command === "collect-candidate" || request.command === "review-record";
+    const acknowledgementCommand = request.command === "record-dispatch" || request.command === "collect-candidate" || request.command === "review-record" || request.command === "qualify" && isVerifiedAcknowledgement(acknowledgement);
     if (acknowledgement !== void 0 && !acknowledgementCommand)
       return invalidStateRequest();
     if (expected !== void 0 && acknowledgement === void 0 && (event === void 0 || !expected.includes(event.type)))
@@ -18188,6 +18491,13 @@ function createRecoveryCommandRunner(runner) {
       version: 1
     };
   };
+}
+function isVerifiedAcknowledgement(value) {
+  const parsed = validate(
+    HarnessToolAcknowledgementSchema,
+    value
+  );
+  return parsed.ok && parsed.value?.kind === "verified";
 }
 function createProductionRecoveryCommandRunner(options) {
   return createRecoveryCommandRunner(createProductionRecoveryRunner(options));

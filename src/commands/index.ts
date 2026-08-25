@@ -1,6 +1,10 @@
 import { Type, type Static, type TProperties } from "@sinclair/typebox";
 import { Ajv, type ValidateFunction } from "ajv";
-import { createPacket } from "../harness/index.js";
+import {
+  createPacket,
+  HarnessToolAcknowledgementSchema,
+  type HarnessToolAcknowledgement,
+} from "../harness/index.js";
 
 import {
   RepositoryRunSchema,
@@ -439,7 +443,9 @@ export function createRecoveryCommandRunner(
     const acknowledgementCommand =
       request.command === "record-dispatch" ||
       request.command === "collect-candidate" ||
-      request.command === "review-record";
+      request.command === "review-record" ||
+      (request.command === "qualify" &&
+        isVerifiedAcknowledgement(acknowledgement));
     if (acknowledgement !== undefined && !acknowledgementCommand)
       return invalidStateRequest();
     if (
@@ -484,6 +490,14 @@ export function createRecoveryCommandRunner(
       version: 1,
     };
   };
+}
+
+function isVerifiedAcknowledgement(value: unknown): boolean {
+  const parsed = validate<HarnessToolAcknowledgement>(
+    HarnessToolAcknowledgementSchema,
+    value,
+  );
+  return parsed.ok && parsed.value?.kind === "verified";
 }
 
 /** Exact production composition used by hosts after their topology preflight. */

@@ -14,6 +14,7 @@ import {
   type MutationBatch,
 } from "../../src/fencing/index.js";
 import {
+  deriveCandidateDiffHash,
   reduce,
   runInvariantErrors,
   type ProtocolEffect,
@@ -49,7 +50,7 @@ function branchEffect(): ProtocolEffect {
     kind: "branch_create",
     params: { baseOid: OID_A, branchRef: "sce/unit-1" },
     paramsHash: HASH,
-    schemaVersion: 1,
+    schemaVersion: 1 as const,
     unitId: "unit-1",
   } as ProtocolEffect;
 }
@@ -240,6 +241,302 @@ test("branch reconciliation is read-only and classifies positive absence", async
     calls.some((call) => call.startsWith("push ")),
     false,
   );
+});
+
+test("production candidate collection and manual verification bind exact durable facts", async () => {
+  let state = localRun();
+  const observe = (
+    type: Parameters<typeof event>[1],
+    kind: string,
+    fields: Record<string, unknown> = {},
+  ) => {
+    state = transition(
+      state,
+      event(state, type, {
+        effectId: state.effectJournal.at(-1)!.effectId,
+        effectKind: kind,
+        observationHash: HASH,
+        ...fields,
+      }),
+      reduce,
+    );
+  };
+  state = transition(
+    state,
+    event(state, "reservation_intent", {
+      reservations: [{ id: "res-1", namespace: "path", resource: "src" }],
+    }),
+    reduce,
+  );
+  observe("reservation_observed", "reservation_acquire");
+  state = transition(
+    state,
+    event(state, "branch_intent", { branchRef: "sce/unit-1" }),
+    reduce,
+  );
+  observe("branch_observed", "branch_create", { branchRef: "sce/unit-1" });
+  state = transition(
+    state,
+    event(state, "worktree_intent", { worktreePath: "/task" }),
+    reduce,
+  );
+  observe("worktree_observed", "worktree_create", { worktreePath: "/task" });
+  state = transition(state, event(state, "dispatch_intent"), reduce);
+  observe("dispatch_observed", "dispatch", {
+    promptHash: HASH,
+    requestedModel: "workhorse",
+    returnedModel: "workhorse-1",
+    sessionId: "worker-1",
+  });
+  state = transition(state, event(state, "collect_intent"), reduce);
+  observe("worker_collected", "worker_collect", {
+    workerResult: { residualRisks: [], status: "completed", summary: "done" },
+  });
+  state = transition(state, event(state, "candidate_intent"), reduce);
+  const candidateEffect = state.effectJournal.at(-1)!;
+  const calls: string[] = [];
+  const adapter = createProductionRecoveryEffectAdapter({
+    git: {
+      repository,
+      runner: async ({ argv, cwd }) => {
+        calls.push(argv.join(" "));
+        if (argv[0] === "config")
+          return { exitCode: 1, signal: null, stdout: "" };
+        if (argv[0] === "worktree")
+          return {
+            exitCode: 0,
+            signal: null,
+            stdout: `worktree /task\nHEAD ${OID_B}\nbranch refs/heads/sce/unit-1\n\n`,
+          };
+        if (argv[0] === "status")
+          return { exitCode: 0, signal: null, stdout: "" };
+        if (argv[0] === "symbolic-ref")
+          return {
+            exitCode: 0,
+            signal: null,
+            stdout: "refs/heads/sce/unit-1\n",
+          };
+        if (argv[0] === "merge-base")
+          return { exitCode: 0, signal: null, stdout: "" };
+        if (argv[0] === "diff")
+          return {
+            exitCode: 0,
+            signal: null,
+            stdout:
+              argv[1] === "--name-only"
+                ? "src/file.ts\u0000"
+                : "diff --git a/src/file.ts b/src/file.ts\n",
+          };
+        if (argv[0] === "rev-parse")
+          return {
+            exitCode: 0,
+            signal: null,
+            stdout:
+              argv[1] === "--git-common-dir"
+                ? cwd === "/task"
+                  ? "/repo/.git\n"
+                  : ".git\n"
+                : argv[1] === "--show-object-format"
+                  ? "sha1\n"
+                  : argv[2] === "HEAD^{commit}"
+                    ? `${OID_B}\n`
+                    : `${OID_A}\n`,
+          };
+        return { exitCode: 1, signal: null, stdout: "" };
+      },
+    },
+  });
+  const collected = await adapter.reconcile(
+    {
+      effectId: candidateEffect.effectId,
+      idempotencyKey: candidateEffect.idempotencyKey,
+      kind: "candidate_collect",
+      params: { branchRef: "sce/unit-1", worktreePath: "/task" },
+      paramsHash: candidateEffect.paramsHash,
+      schemaVersion: 1,
+      unitId: "unit-1",
+    },
+    state,
+  );
+  assert.equal(collected.status, "observed");
+  if (collected.status !== "observed") return;
+  assert.equal(
+    (collected.observation as { candidateDiffHash: string }).candidateDiffHash,
+    deriveCandidateDiffHash("diff --git a/src/file.ts b/src/file.ts\n"),
+  );
+  assert.equal(
+    calls.some((call) => call.startsWith("branch ")),
+    false,
+  );
+  assert.equal(
+    calls.some((call) => call.startsWith("worktree add")),
+    false,
+  );
+
+  state = transition(state, collected.observation, reduce);
+  state = transition(
+    state,
+    event(state, "verification_intent", { commands: ["npm test"] }),
+    reduce,
+  );
+  const verify = state.effectJournal.at(-1)!;
+  const verifyEffect = {
+    effectId: verify.effectId,
+    idempotencyKey: verify.idempotencyKey,
+    kind: "verify" as const,
+    params: {
+      candidate: { baseOid: OID_A, headOid: OID_B, treeOid: OID_A },
+      commands: ["npm test"],
+    },
+    paramsHash: verify.paramsHash,
+    schemaVersion: 1 as const,
+    unitId: "unit-1",
+  };
+  const requested = await adapter.reconcile(verifyEffect, state);
+  assert.equal(requested.status, "tool_request");
+  if (requested.status !== "tool_request") return;
+  assert.deepEqual((requested.toolRequest as { commands: string[] }).commands, [
+    "npm test",
+  ]);
+  assert.equal(
+    (
+      await adapter.acknowledge!(
+        {
+          baseOid: OID_A,
+          commands: ["npm run substituted"],
+          effectId: verify.effectId,
+          evidenceDigest: HASH,
+          headOid: OID_B,
+          kind: "verified",
+          passed: true,
+          schema: "sce.harness-tool-acknowledgement",
+          treeOid: OID_A,
+          version: 1,
+          worktreePath: "/foreign",
+        },
+        state,
+      )
+    ).status,
+    "ambiguous",
+  );
+  assert.equal(
+    (
+      await adapter.acknowledge!(
+        {
+          baseOid: OID_A,
+          commands: ["npm test"],
+          effectId: verify.effectId,
+          evidenceDigest: HASH,
+          headOid: OID_B,
+          kind: "verified",
+          passed: true,
+          schema: "sce.harness-tool-acknowledgement",
+          treeOid: OID_A,
+          version: 1,
+          worktreePath: "/foreign",
+        },
+        state,
+      )
+    ).status,
+    "ambiguous",
+  );
+  const acknowledged = await adapter.acknowledge!(
+    {
+      baseOid: OID_A,
+      commands: ["npm test"],
+      effectId: verify.effectId,
+      evidenceDigest: HASH,
+      headOid: OID_B,
+      kind: "verified",
+      passed: true,
+      schema: "sce.harness-tool-acknowledgement",
+      treeOid: OID_A,
+      version: 1,
+      worktreePath: "/task",
+    },
+    state,
+  );
+  assert.equal(acknowledged.status, "observed");
+  assert.equal(
+    calls.some((call) => call.startsWith("merge ")),
+    false,
+  );
+
+  let root = makeRootProjection(state);
+  let children = [makeChildProjection(root, "unit-1")!];
+  const store = {
+    async compareAndSet(batch: MutationBatch) {
+      root = batch.next.root;
+      children = [...batch.next.children];
+      return {
+        affectedRowCount: batch.changedRows.length + 1,
+        checkpoint: batch.checkpoint,
+        children,
+        root,
+        status: "applied" as const,
+      };
+    },
+    async load() {
+      return { status: "observed" as const, value: { children, root } };
+    },
+    async persistControllerAcquireIntent(batch: MutationBatch) {
+      return await this.compareAndSet(batch);
+    },
+  };
+  const recovery = createProductionRecoveryRunner({
+    acquireOperationLock: async () => ({
+      status: "acquired" as const,
+      lock: { release: async () => ({ status: "released" as const }) },
+    }),
+    git: {
+      repository,
+      runner: async ({ argv }) => {
+        if (argv[0] === "config")
+          return { exitCode: 1, signal: null, stdout: "" };
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: argv[1] === "--git-common-dir" ? ".git\n" : "sha1\n",
+        };
+      },
+    },
+    nonce: "verify-manual-resume",
+    preOwnership: store,
+    proveTopology: async () => ({
+      commonDir: repository.commonDir,
+      holder: state.controller.holder,
+      scope: {
+        beadsStoreIdentity: state.storeIdentity,
+        gitRepositoryIdentity: repository.identity,
+        integrationBranch: state.integrationBranch,
+      },
+    }),
+    store,
+  });
+  assert.equal((await recovery()).status, "tool_request");
+  assert.equal((await recovery()).status, "tool_request");
+  assert.equal(
+    (
+      await recovery({
+        harnessAcknowledgement: {
+          baseOid: OID_A,
+          commands: ["npm test"],
+          effectId: verify.effectId,
+          evidenceDigest: HASH,
+          headOid: OID_B,
+          kind: "verified",
+          passed: true,
+          schema: "sce.harness-tool-acknowledgement",
+          treeOid: OID_A,
+          version: 1,
+          worktreePath: "/task",
+        },
+      })
+    ).status,
+    "applied",
+  );
+  assert.equal(root.run.units["unit-1"]?.state, "qualified");
+  assert.equal((await recovery()).status, "idle");
 });
 
 test("foreign and unreadable branch discoveries are privacy-safe ambiguity", async () => {

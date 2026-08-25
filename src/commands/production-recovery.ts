@@ -15,16 +15,22 @@ import {
   integrateLocalFastForward,
   integrateRemoteFastForward,
   publishCandidate,
+  observeCandidate,
   verifyRepository,
   type GitEffect,
   type GitRepository,
   type GitRunner,
 } from "../adapters/git/index.js";
 import {
+  acknowledgeVerificationTool,
   createHarnessRecoveryEffectAdapter,
   type HarnessPort,
+  verificationToolRequest,
 } from "../harness/index.js";
-import type { ProtocolEffect } from "../protocol/reducer.js";
+import {
+  deriveCandidateDiffHash,
+  type ProtocolEffect,
+} from "../protocol/reducer.js";
 import type { FencingScope } from "../fencing/index.js";
 import type {
   ProtocolEvent,
@@ -207,6 +213,59 @@ function worktreeBase(
     : undefined;
 }
 
+function candidateInput(
+  effect: Extract<ProtocolEffect, { kind: "candidate_collect" }>,
+  run: RepositoryRun,
+):
+  | Readonly<{
+      allowedPaths: readonly string[];
+      base: string;
+      branch: string;
+      worktreePath: string;
+    }>
+  | undefined {
+  const unit = run.units[effect.unitId];
+  if (
+    unit === undefined ||
+    unit.branchRef !== effect.params.branchRef ||
+    unit.worktreePath !== effect.params.worktreePath ||
+    unit.taskMetadata === undefined ||
+    unit.taskMetadata.unitId !== unit.id
+  )
+    return undefined;
+  return {
+    allowedPaths: unit.taskMetadata.ownedPaths,
+    base: unit.baseOid,
+    branch: effect.params.branchRef,
+    worktreePath: effect.params.worktreePath,
+  };
+}
+
+async function candidateObserved(
+  effect: Extract<ProtocolEffect, { kind: "candidate_collect" }>,
+  run: RepositoryRun,
+  git: ProductionRecoveryEffectAdapterOptions["git"],
+): Promise<
+  | Extract<ReconcileResult, { status: "observed" }>
+  | Readonly<{ status: "ambiguous" }>
+> {
+  const input = candidateInput(effect, run);
+  if (input === undefined) return ambiguous();
+  const result = await observeCandidate(git.runner, git.repository, input);
+  if (result.state !== "observed" || result.snapshot === undefined)
+    return ambiguous();
+  return {
+    observation: {
+      ...eventBase(effect, run),
+      candidateDiffHash: deriveCandidateDiffHash(result.snapshot.diff),
+      headOid: result.snapshot.head,
+      treeOid: result.snapshot.tree,
+      type: "candidate_observed",
+    } as ProtocolEvent,
+    status: "observed",
+  };
+}
+
 function canPublish(
   effect: Extract<ProtocolEffect, { kind: "publish" }>,
 ): boolean {
@@ -286,8 +345,17 @@ export function createProductionRecoveryEffectAdapter(
     effect: ProtocolEffect,
     run: RepositoryRun,
   ): Promise<ReconcileResult> {
+    if (effect.kind === "verify") return verificationToolRequest(effect, run);
     if (harness?.canReconcile?.(effect))
       return await harness.reconcile(effect, run);
+    if (effect.kind === "candidate_collect") {
+      if (!gitMatchesRun(git.repository, run)) return ambiguous();
+      try {
+        return await candidateObserved(effect, run, git);
+      } catch {
+        return ambiguous();
+      }
+    }
     const done = observed(effect, run);
     if (done === undefined) return ambiguous();
     if (
@@ -373,10 +441,6 @@ export function createProductionRecoveryEffectAdapter(
             }),
           );
         }
-        // The durable candidate intent has no exact candidate OID/tree/scope
-        // binding.  Never infer those values from a worktree during recovery.
-        case "candidate_collect":
-          return ambiguous();
         default:
           return ambiguous();
       }
@@ -389,8 +453,17 @@ export function createProductionRecoveryEffectAdapter(
     effect: ProtocolEffect,
     run: RepositoryRun,
   ): Promise<ExecuteResult> {
+    if (effect.kind === "verify") return verificationToolRequest(effect, run);
     if (harness?.canExecute?.(effect))
       return await harness.execute(effect, run);
+    if (effect.kind === "candidate_collect") {
+      if (!gitMatchesRun(git.repository, run)) return ambiguous();
+      try {
+        return await candidateObserved(effect, run, git);
+      } catch {
+        return ambiguous();
+      }
+    }
     const done = observed(effect, run);
     if (done === undefined) return ambiguous();
     if (
@@ -478,7 +551,6 @@ export function createProductionRecoveryEffectAdapter(
             }),
           );
         }
-        case "candidate_collect":
         default:
           return ambiguous();
       }
@@ -488,12 +560,17 @@ export function createProductionRecoveryEffectAdapter(
   }
 
   return {
-    canExecute: (effect) => harness?.canExecute?.(effect) ?? false,
-    canReconcile: (effect) => harness?.canReconcile?.(effect) ?? false,
-    acknowledge: async (acknowledgement, run) =>
-      harness?.acknowledge === undefined
+    canExecute: (effect) =>
+      effect.kind === "verify" || (harness?.canExecute?.(effect) ?? false),
+    canReconcile: (effect) =>
+      effect.kind === "verify" || (harness?.canReconcile?.(effect) ?? false),
+    acknowledge: async (acknowledgement, run) => {
+      const verified = acknowledgeVerificationTool(acknowledgement, run);
+      if (verified !== undefined) return verified;
+      return harness?.acknowledge === undefined
         ? ambiguous()
-        : await harness.acknowledge(acknowledgement, run),
+        : await harness.acknowledge(acknowledgement, run);
+    },
     execute,
     reconcile: discover,
   };

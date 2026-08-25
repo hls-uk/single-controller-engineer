@@ -60,6 +60,7 @@ export const GitResultSchema = strictObject({
   ]),
   signal: ProcessSignalSchema,
   stdout: Type.String({ minLength: 0, maxLength: 65536, maxUtf8Bytes: 65536 }),
+  invalidUtf8: Type.Optional(Type.Boolean()),
   timedOut: Type.Optional(Type.Boolean()),
   unavailable: Type.Optional(Type.Boolean()),
 });
@@ -78,6 +79,7 @@ export const GitRepositorySchema = strictObject({
 export const GitSnapshotSchema = strictObject({
   changedPaths: Type.Array(path(), { maxItems: 4096 }),
   clean: Type.Boolean(),
+  diff: Type.String({ minLength: 0, maxLength: 65536, maxUtf8Bytes: 65536 }),
   head: oid(),
   tree: oid(),
 });

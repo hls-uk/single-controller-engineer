@@ -27,6 +27,10 @@ import {
   type RuntimeEffect,
 } from "../protocol/schemas.js";
 
+const VERIFY_TOOL_REQUEST_BYTES = 12_288;
+const verifyCommand = () =>
+  Type.String({ minLength: 1, maxLength: 1_024, maxUtf8Bytes: 1_024 });
+
 export const HARNESS_VERSION = 1 as const;
 export const PACKET_BYTES = HARNESS_PACKET_BYTES;
 const TOOL_REQUEST_BYTES = PACKET_BYTES + 4_096;
@@ -130,6 +134,7 @@ const HarnessToolRequestBase = {
     Type.Literal("review_collect"),
     Type.Literal("repair"),
     Type.Literal("cancel"),
+    Type.Literal("verify"),
   ]),
   idempotencyKey: identifier(),
   schema: Type.Literal("sce.harness-tool-request"),
@@ -160,6 +165,27 @@ export const HarnessToolRequestSchema = Type.Union([
     ...HarnessToolRequestBase,
     operation: Type.Literal("poll"),
     session: HarnessSessionSchema,
+  }),
+  strictObject({
+    ...HarnessToolRequestBase,
+    baseOid: Type.String({
+      minLength: 40,
+      maxLength: 64,
+      pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+    }),
+    commands: Type.Array(verifyCommand(), { minItems: 1, maxItems: 32 }),
+    headOid: Type.String({
+      minLength: 40,
+      maxLength: 64,
+      pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+    }),
+    operation: Type.Literal("verify"),
+    treeOid: Type.String({
+      minLength: 40,
+      maxLength: 64,
+      pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+    }),
+    worktreePath: absolutePath(),
   }),
 ]);
 export type HarnessToolRequest = Static<typeof HarnessToolRequestSchema>;
@@ -198,10 +224,137 @@ export const HarnessToolAcknowledgementSchema = Type.Union([
     kind: Type.Literal("cancelled"),
     sessionId: identifier(),
   }),
+  strictObject({
+    ...ToolAcknowledgementBase,
+    baseOid: Type.String({
+      minLength: 40,
+      maxLength: 64,
+      pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+    }),
+    commands: Type.Array(verifyCommand(), { minItems: 1, maxItems: 32 }),
+    evidenceDigest: hash(),
+    headOid: Type.String({
+      minLength: 40,
+      maxLength: 64,
+      pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+    }),
+    kind: Type.Literal("verified"),
+    passed: Type.Literal(true),
+    treeOid: Type.String({
+      minLength: 40,
+      maxLength: 64,
+      pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+    }),
+    worktreePath: absolutePath(),
+  }),
 ]);
 export type HarnessToolAcknowledgement = Static<
   typeof HarnessToolAcknowledgementSchema
 >;
+
+/**
+ * Verification is deliberately a manual-tool boundary: no harness port is
+ * given shell authority. Both request and acknowledgement bind the persisted
+ * command list and exact candidate objects, and the reducer event is made here.
+ */
+export function verificationToolRequest(
+  effect: ProtocolEffect,
+  run: RepositoryRun,
+): ExecuteResult {
+  if (effect.kind !== "verify" || effect.unitId === null)
+    return { status: "ambiguous" };
+  const unit = run.units[effect.unitId];
+  const worktreePath = canonicalAbsolutePath(unit?.worktreePath);
+  if (unit === undefined || worktreePath === undefined)
+    return { status: "ambiguous" };
+  const raw = {
+    baseOid: effect.params.candidate.baseOid,
+    commands: effect.params.commands,
+    effectId: effect.effectId,
+    effectKind: "verify" as const,
+    headOid: effect.params.candidate.headOid,
+    idempotencyKey: effect.idempotencyKey,
+    operation: "verify" as const,
+    schema: "sce.harness-tool-request" as const,
+    treeOid: effect.params.candidate.treeOid,
+    version: HARNESS_VERSION,
+    worktreePath,
+  };
+  const parsed = validate<HarnessToolRequest>(HarnessToolRequestSchema, raw);
+  if (!parsed.ok || parsed.value === undefined) return { status: "ambiguous" };
+  try {
+    return new TextEncoder().encode(
+      canonicalJson(parsed.value as unknown as JsonValue),
+    ).byteLength <= VERIFY_TOOL_REQUEST_BYTES
+      ? { status: "tool_request", toolRequest: parsed.value }
+      : { status: "ambiguous" };
+  } catch {
+    return { status: "ambiguous" };
+  }
+}
+
+export function acknowledgeVerificationTool(
+  raw: unknown,
+  run: RepositoryRun,
+): ExecuteResult | undefined {
+  let parsed: ReturnType<typeof validate<HarnessToolAcknowledgement>>;
+  try {
+    parsed = validate<HarnessToolAcknowledgement>(
+      HarnessToolAcknowledgementSchema,
+      raw,
+    );
+  } catch {
+    return undefined;
+  }
+  if (
+    !parsed.ok ||
+    parsed.value === undefined ||
+    parsed.value.kind !== "verified"
+  )
+    return undefined;
+  const acknowledgement = parsed.value;
+  const entry = run.effectJournal.find(
+    (candidate) =>
+      candidate.effectId === acknowledgement.effectId &&
+      candidate.kind === "verify" &&
+      (candidate.status === "intended" || candidate.status === "ambiguous"),
+  );
+  const effect = entry === undefined ? undefined : rehydrateEffect(run, entry);
+  if (
+    effect === undefined ||
+    effect.kind !== "verify" ||
+    effect.unitId === null ||
+    acknowledgement.baseOid !== effect.params.candidate.baseOid ||
+    acknowledgement.headOid !== effect.params.candidate.headOid ||
+    acknowledgement.treeOid !== effect.params.candidate.treeOid ||
+    acknowledgement.worktreePath !==
+      canonicalAbsolutePath(run.units[effect.unitId]?.worktreePath) ||
+    acknowledgement.commands.length !== effect.params.commands.length ||
+    acknowledgement.commands.some(
+      (command, index) => command !== effect.params.commands[index],
+    )
+  )
+    return { status: "ambiguous" };
+  return parsedEvent({
+    baseOid: effect.params.candidate.baseOid,
+    effectId: effect.effectId,
+    effectKind: effect.kind,
+    eventId: `harness-${effect.effectId}`,
+    expectedRevision: run.revision,
+    headOid: effect.params.candidate.headOid,
+    observationHash: sha256(
+      canonicalJson({
+        domain: "sce.harness.verify-evidence/v1",
+        effectId: effect.effectId,
+        evidenceDigest: acknowledgement.evidenceDigest,
+        paramsHash: effect.paramsHash,
+      }),
+    ),
+    treeOid: effect.params.candidate.treeOid,
+    type: "verification_observed",
+    unitId: effect.unitId,
+  });
+}
 
 /** The only host boundary. It receives persisted effects, never invented work. */
 export interface HarnessPort {
@@ -686,6 +839,7 @@ function acknowledgeHarnessTool(
         )
       : { status: "ambiguous" };
   }
+  if (acknowledgement.kind === "verified") return { status: "ambiguous" };
   const session = sessionForEffect(effect, run, support);
   if (!session.ok || acknowledgement.sessionId !== session.value.sessionId)
     return { status: "ambiguous" };

@@ -34,6 +34,7 @@ export type GitResult = Readonly<{
   exitCode: number | null;
   signal: string | null;
   stdout: string;
+  invalidUtf8?: boolean;
   timedOut?: boolean;
   unavailable?: boolean;
 }>;
@@ -57,6 +58,8 @@ export type GitRepository = Readonly<{
 export type GitSnapshot = Readonly<{
   changedPaths: readonly string[];
   clean: boolean;
+  /** Exact bounded UTF-8 bytes supplied to the reviewer packet builder. */
+  diff: string;
   head: string;
   tree: string;
 }>;
@@ -192,13 +195,22 @@ function allowedGitArgv(argv: readonly string[]): boolean {
     );
   if (command === "diff")
     return (
-      args.length === 4 &&
-      args[0] === "--name-only" &&
-      args[1] === "-z" &&
-      args[2] === "--no-renames" &&
-      /^(?:[0-9a-f]{40}|[0-9a-f]{64})\.\.(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(
-        args[3] ?? "",
-      )
+      (args.length === 4 &&
+        args[0] === "--name-only" &&
+        args[1] === "-z" &&
+        args[2] === "--no-renames" &&
+        /^(?:[0-9a-f]{40}|[0-9a-f]{64})\.\.(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(
+          args[3] ?? "",
+        )) ||
+      (args.length === 6 &&
+        args[0] === "--no-ext-diff" &&
+        args[1] === "--no-textconv" &&
+        args[2] === "--no-renames" &&
+        args[3] === "--no-color" &&
+        args[4] === "--binary" &&
+        /^(?:[0-9a-f]{40}|[0-9a-f]{64})\.\.(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(
+          args[5] ?? "",
+        ))
     );
   if (command === "symbolic-ref")
     return args.length === 2 && args[0] === "-q" && args[1] === "HEAD";
@@ -283,6 +295,7 @@ function commandOk(result: GitResult): boolean {
     result.signal === null &&
     result.timedOut !== true &&
     result.unavailable !== true &&
+    result.invalidUtf8 !== true &&
     Buffer.byteLength(result.stdout, "utf8") <= MAX_OUTPUT
   );
 }
@@ -291,6 +304,8 @@ function terminalFailure(result: GitResult): GitEffect | undefined {
   if (result.timedOut === true || result.signal !== null)
     return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
   if (result.unavailable === true)
+    return effect("refused", "GIT_COMMAND_FAILED");
+  if (result.invalidUtf8 === true)
     return effect("refused", "GIT_COMMAND_FAILED");
   if (Buffer.byteLength(result.stdout, "utf8") > MAX_OUTPUT)
     return effect("refused", "GIT_COMMAND_FAILED");
@@ -673,14 +688,14 @@ export async function observeCandidate(
   input: Readonly<{
     allowedPaths: readonly string[];
     base: string;
-    expectedHead: string;
-    expectedTree: string;
+    branch: string;
+    worktreePath: string;
   }>,
 ): Promise<CandidateObservation> {
   if (
     !exactOid(repository.objectFormat, input.base) ||
-    !exactOid(repository.objectFormat, input.expectedHead) ||
-    !exactOid(repository.objectFormat, input.expectedTree) ||
+    !safeRef(input.branch) ||
+    !safeAbsolutePath(input.worktreePath) ||
     input.allowedPaths.length === 0 ||
     input.allowedPaths.some((path) => !validScope(path)) ||
     !disjointScopes(input.allowedPaths)
@@ -688,32 +703,38 @@ export async function observeCandidate(
     return effect("refused", "GIT_BAD_INPUT");
   const verified = await verifyRepository(runner, repository);
   if (verified.state !== "observed") return verified;
-  const [headResult, treeResult, statusResult, ancestorResult, diffResult] =
+  const wantedPath = canonicalWorktreePath(input.worktreePath);
+  if (wantedPath === undefined) return effect("refused", "GIT_BAD_INPUT");
+  const listed = await run(runner, repository, [
+    "worktree",
+    "list",
+    "--porcelain",
+  ]);
+  if (!commandOk(listed)) return effect("refused", "GIT_REFUSED");
+  const worktree = parseWorktreeList(
+    listed.stdout,
+    repository.objectFormat,
+  )?.find((record) => record.path === wantedPath);
+  if (
+    worktree === undefined ||
+    worktree.branch !== `refs/heads/${input.branch}` ||
+    worktree.head === undefined
+  )
+    return effect("refused", "GIT_FOREIGN_WORKTREE");
+  const ownership = await verifyWorktreeOwnership(
+    runner,
+    repository,
+    wantedPath,
+  );
+  if (ownership.state !== "observed") return ownership;
+  const [headResult, treeResult, statusResult, headRefResult] =
     await Promise.all([
-      run(runner, repository, ["rev-parse", "--verify", "HEAD^{commit}"]),
-      run(runner, repository, ["rev-parse", "--verify", "HEAD^{tree}"]),
-      run(runner, repository, ["status", "--porcelain=v1", "-z"]),
-      run(runner, repository, [
-        "merge-base",
-        "--is-ancestor",
-        input.base,
-        input.expectedHead,
-      ]),
-      run(runner, repository, [
-        "diff",
-        "--name-only",
-        "-z",
-        "--no-renames",
-        `${input.base}..${input.expectedHead}`,
-      ]),
+      runAt(runner, wantedPath, ["rev-parse", "--verify", "HEAD^{commit}"]),
+      runAt(runner, wantedPath, ["rev-parse", "--verify", "HEAD^{tree}"]),
+      runAt(runner, wantedPath, ["status", "--porcelain=v1", "-z"]),
+      runAt(runner, wantedPath, ["symbolic-ref", "-q", "HEAD"]),
     ]);
-  for (const result of [
-    headResult,
-    treeResult,
-    statusResult,
-    ancestorResult,
-    diffResult,
-  ]) {
+  for (const result of [headResult, treeResult, statusResult, headRefResult]) {
     const failure = terminalFailure(result);
     if (failure !== undefined) return failure;
   }
@@ -721,25 +742,76 @@ export async function observeCandidate(
     !commandOk(headResult) ||
     !commandOk(treeResult) ||
     !commandOk(statusResult) ||
-    !commandOk(ancestorResult) ||
-    !commandOk(diffResult)
+    !commandOk(headRefResult)
   )
     return effect("refused", "GIT_REFUSED");
   const head = oneLine(headResult.stdout);
   const tree = oneLine(treeResult.stdout);
-  const changedPaths = nulPaths(diffResult.stdout);
   if (
     head === undefined ||
     tree === undefined ||
-    changedPaths === undefined ||
     !exactOid(repository.objectFormat, head) ||
     !exactOid(repository.objectFormat, tree) ||
-    head !== input.expectedHead ||
-    tree !== input.expectedTree
+    head !== worktree.head ||
+    oneLine(headRefResult.stdout) !== `refs/heads/${input.branch}`
   )
     return effect("refused", "GIT_REFUSED");
   const clean = statusResult.stdout.length === 0;
   if (!clean) return effect("refused", "GIT_DIRTY");
+  const [ancestorResult, pathsResult, diffResult] = await Promise.all([
+    runAt(runner, wantedPath, [
+      "merge-base",
+      "--is-ancestor",
+      input.base,
+      head,
+    ]),
+    runAt(runner, wantedPath, [
+      "diff",
+      "--name-only",
+      "-z",
+      "--no-renames",
+      `${input.base}..${head}`,
+    ]),
+    runAt(runner, wantedPath, [
+      "diff",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--no-renames",
+      "--no-color",
+      "--binary",
+      `${input.base}..${head}`,
+    ]),
+  ]);
+  if (
+    !commandOk(ancestorResult) ||
+    !commandOk(pathsResult) ||
+    !commandOk(diffResult) ||
+    Buffer.byteLength(diffResult.stdout, "utf8") > MAX_OUTPUT
+  )
+    return effect("refused", "GIT_REFUSED");
+  const changedPaths = nulPaths(pathsResult.stdout);
+  if (changedPaths === undefined || diffResult.stdout.includes("\u0000"))
+    return effect("refused", "GIT_REFUSED");
+  // The diff must describe the same clean branch/object pair committed below.
+  // A worker may otherwise race these read-only calls without any Git mutation
+  // by the recovery coordinator itself.
+  const [finalHead, finalTree, finalStatus, finalRef] = await Promise.all([
+    runAt(runner, wantedPath, ["rev-parse", "--verify", "HEAD^{commit}"]),
+    runAt(runner, wantedPath, ["rev-parse", "--verify", "HEAD^{tree}"]),
+    runAt(runner, wantedPath, ["status", "--porcelain=v1", "-z"]),
+    runAt(runner, wantedPath, ["symbolic-ref", "-q", "HEAD"]),
+  ]);
+  if (
+    !commandOk(finalHead) ||
+    !commandOk(finalTree) ||
+    !commandOk(finalStatus) ||
+    !commandOk(finalRef) ||
+    oneLine(finalHead.stdout) !== head ||
+    oneLine(finalTree.stdout) !== tree ||
+    finalStatus.stdout.length !== 0 ||
+    oneLine(finalRef.stdout) !== `refs/heads/${input.branch}`
+  )
+    return effect("refused", "GIT_REFUSED");
   const canonicalChangedPaths = [...new Set(changedPaths)].sort();
   if (
     canonicalChangedPaths.some(
@@ -749,7 +821,13 @@ export async function observeCandidate(
     return effect("refused", "GIT_REFUSED");
   return {
     code: "GIT_OK",
-    snapshot: { changedPaths: canonicalChangedPaths, clean, head, tree },
+    snapshot: {
+      changedPaths: canonicalChangedPaths,
+      clean,
+      diff: diffResult.stdout,
+      head,
+      tree,
+    },
     state: "observed",
   };
 }
@@ -1200,13 +1278,22 @@ export const nodeGitRunner: GitRunner = async ({ argv, cwd }) => {
   if (!safeAbsolutePath(cwd) || !allowedGitArgv(argv))
     return { exitCode: null, signal: null, stdout: "", unavailable: true };
   return new Promise((done) => {
-    let stdout = "";
+    const stdoutChunks: Buffer[] = [];
     let outputBytes = 0;
     let timedOut = false;
     let unavailable = false;
     const child = spawn("/usr/bin/git", argv, {
       cwd,
-      env: { LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin", TZ: "UTC" },
+      env: {
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_NOSYSTEM: "1",
+        HOME: "/nonexistent",
+        LANG: "C",
+        LC_ALL: "C",
+        PATH: "/usr/bin:/bin",
+        TZ: "UTC",
+        XDG_CONFIG_HOME: "/nonexistent",
+      },
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
@@ -1214,7 +1301,7 @@ export const nodeGitRunner: GitRunner = async ({ argv, cwd }) => {
     const consume = (isStdout: boolean, chunk: Buffer): void => {
       outputBytes += chunk.byteLength;
       if (outputBytes > MAX_OUTPUT) child.kill("SIGKILL");
-      else if (isStdout) stdout += chunk.toString("utf8");
+      else if (isStdout) stdoutChunks.push(chunk);
     };
     child.stdout.on("data", (chunk: Buffer) => consume(true, chunk));
     child.stderr.on("data", (chunk: Buffer) => consume(false, chunk));
@@ -1227,7 +1314,16 @@ export const nodeGitRunner: GitRunner = async ({ argv, cwd }) => {
     });
     child.once("close", (exitCode, signal) => {
       clearTimeout(timer);
-      done({ exitCode, signal, stdout, timedOut, unavailable });
+      let stdout = "";
+      let invalidUtf8 = false;
+      try {
+        stdout = new TextDecoder("utf-8", { fatal: true }).decode(
+          Buffer.concat(stdoutChunks),
+        );
+      } catch {
+        invalidUtf8 = true;
+      }
+      done({ exitCode, invalidUtf8, signal, stdout, timedOut, unavailable });
     });
   });
 };
