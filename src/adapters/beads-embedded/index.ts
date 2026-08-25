@@ -1,6 +1,8 @@
 import { canonicalJson, type JsonValue } from "../../protocol/canonical.js";
 import {
   type FencingScope,
+  type ChildProjection,
+  type RootProjection,
   FencingScopeSchema,
   type MergeSlotObservation,
   type MutationBatch,
@@ -11,13 +13,25 @@ import {
   deriveSlotReadbackHash,
   decideControllerSlot,
   validateMergeSlotObservation,
+  validateChildProjection,
   validateMutationBatch,
+  validateRootProjection,
 } from "../../fencing/index.js";
 import {
   PreflightEnvelopeSchema,
   isSchema,
   type PreflightEnvelope,
 } from "../../preflight/index.js";
+import {
+  InitialControllerAcquireSchema,
+  type AuthoritativeLoadResult,
+  type ControllerTransitionPlanResult,
+  type InitialControllerAcquire,
+} from "../../commands/recovery.js";
+import {
+  validate,
+  type SlotTransitionIntent as ProtocolSlotTransitionIntent,
+} from "../../protocol/schemas.js";
 
 import {
   EMBEDDED_ADAPTER_VERSION,
@@ -71,6 +85,11 @@ export type WorkerTrackerBaseline = Readonly<{
   slot: MergeSlotObservation;
   workingSet: "clean";
 }>;
+
+/** Read-only durable-transition reconciliation for recovery effect adapters. */
+export type EmbeddedTransitionReconcile =
+  | Readonly<{ status: "observed" | "absent" | "blocked" }>
+  | Readonly<{ status: "ambiguous" | "unavailable" }>;
 
 /** Read-only controller authority used while preparing an acquire intent. */
 export type EmbeddedAcquisitionPlanningAuthority = Readonly<{
@@ -456,6 +475,112 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     );
   }
 
+  /** Generic read-only planning port used by production CLI composition. */
+  public async prepareControllerTransition(
+    input: Readonly<{
+      holder: string;
+      kind: "acquire" | "release";
+      scope: FencingScope;
+    }>,
+  ): Promise<ControllerTransitionPlanResult> {
+    if (input.holder !== this.holder || !same(input.scope, this.scope))
+      return { status: "quarantined" };
+    const planned =
+      input.kind === "acquire"
+        ? await this.prepareAcquireTransition()
+        : await this.prepareReleaseTransition();
+    if (!("code" in planned)) return { status: "planned", transition: planned };
+    if (planned.code === "blocked" || planned.code === "holder_mismatch")
+      return { status: "blocked" };
+    if (planned.code === "unavailable") return { status: "unavailable" };
+    return planned.code === "quarantined"
+      ? { status: "quarantined" }
+      : { status: "ambiguous" };
+  }
+
+  /**
+   * Reconciles an already-journalled slot transition without invoking acquire,
+   * release, commit, pull, or push. Positive observation requires both the
+   * exact local transition-history proof and current after-slot readback.
+   */
+  public async reconcileControllerTransition(
+    transition: ProtocolSlotTransitionIntent,
+  ): Promise<EmbeddedTransitionReconcile> {
+    if (
+      !this.usable ||
+      !validateSlotTransitionIntent(
+        transition,
+        this.prefix,
+        this.scope,
+        this.mode,
+        this.holder,
+      )
+    )
+      return { status: "ambiguous" };
+    const state = await this.state();
+    const current = await this.slot("check");
+    if (state === undefined || current === undefined)
+      return { status: "unavailable" };
+    if (
+      !state.reachable ||
+      state.workingSet !== "clean" ||
+      state.head === undefined ||
+      (this.mode === "git-sync" && state.remoteHead === undefined)
+    )
+      return { status: "ambiguous" };
+    if (same(current, transition.after)) {
+      const proof = await this.call({
+        kind: "slot_transition",
+        intent: transition,
+      });
+      if (proof?.kind !== "slot_transition" || proof.value !== "observed")
+        return { status: "ambiguous" };
+      if (this.mode === "git-sync") {
+        const remote = await this.slot("check", "remote");
+        if (remote === undefined || !same(remote, transition.after))
+          return { status: "ambiguous" };
+      }
+      return { status: "observed" };
+    }
+    if (current.status === "acquired" && current.holder !== this.holder)
+      return { status: "blocked" };
+    if (
+      same(current, transition.before.slot) &&
+      state.head === transition.before.head &&
+      (this.mode === "local-only" ||
+        state.remoteHead === transition.before.remoteHead)
+    )
+      return { status: "absent" };
+    return { status: "ambiguous" };
+  }
+
+  /** Execute only a validated transition recovered from the durable journal. */
+  public async executeControllerTransition(
+    transition: ProtocolSlotTransitionIntent,
+  ): Promise<EmbeddedTransitionReconcile> {
+    if (
+      !this.usable ||
+      !validateSlotTransitionIntent(
+        transition,
+        this.prefix,
+        this.scope,
+        this.mode,
+        this.holder,
+      )
+    )
+      return { status: "ambiguous" };
+    const outcome =
+      transition.kind === "acquire"
+        ? await this.acquire({ transition })
+        : await this.release({ transition });
+    if (outcome.code === "applied") return { status: "observed" };
+    if (outcome.code === "blocked" || outcome.code === "holder_mismatch")
+      return { status: "blocked" };
+    return outcome.code === "unavailable"
+      ? { status: "unavailable" }
+      : { status: "ambiguous" };
+  }
+
   /** One validated aggregate/child mutation batch, followed by exact readback. */
   public async compareAndSet(batch: MutationBatch): Promise<RunStoreResult> {
     if (
@@ -609,6 +734,359 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       root: readback.root,
       status: "applied",
     };
+  }
+
+  /**
+   * Authoritative projection load. Only the process's positive `absent` is
+   * passed through; malformed, partial, and transport failures remain tagged
+   * failures and can never drive bootstrap.
+   */
+  public async load(): Promise<AuthoritativeLoadResult> {
+    if (!this.usable) return { status: "quarantined" };
+    const response = await this.call({ kind: "load" });
+    if (response?.kind !== "load") return { status: "unavailable" };
+    if (response.value.status !== "observed") return response.value;
+    const root = validateRootProjection(response.value.value.root);
+    if (!root.ok || !same(root.value.scope, this.scope))
+      return { status: "corrupt" };
+    const expected = root.value.childRows;
+    const children = response.value.value.children;
+    if (children.length !== expected.length) return { status: "corrupt" };
+    const seen = new Set<string>();
+    for (const child of children) {
+      const parsed = validateChildProjection(child);
+      const reference = parsed.ok
+        ? expected.find((row) => row.unitId === parsed.value.unitId)
+        : undefined;
+      if (
+        !parsed.ok ||
+        reference === undefined ||
+        seen.has(parsed.value.unitId) ||
+        parsed.value.revision !== reference.revision ||
+        parsed.value.commitment !== reference.commitment ||
+        !same(parsed.value.scope, root.value.scope) ||
+        parsed.value.holder !== root.value.holder
+      )
+        return { status: "corrupt" };
+      seen.add(parsed.value.unitId);
+    }
+    return seen.size !== expected.length
+      ? { status: "corrupt" }
+      : { status: "observed", value: response.value.value };
+  }
+
+  /**
+   * The sole existing-root write permitted before controller ownership. It is
+   * intentionally narrower than compareAndSet: it writes only a validated
+   * unacquired -> acquire_intent journal transition, never an active run.
+   */
+  public async persistControllerAcquireIntent(
+    batch: MutationBatch,
+  ): Promise<RunStoreResult> {
+    if (!this.validPreOwnershipBatch(batch)) return { status: "quarantined" };
+    const loaded = await this.load();
+    if (loaded.status !== "observed") return this.loadFailure(loaded.status);
+    const current = loaded.value.root;
+    if (this.isExactIntentReadback(loaded.value, batch))
+      return this.durablePreOwnershipIntent(batch);
+    if (
+      current.aggregateRevision !== batch.expectedAggregateRevision ||
+      current.aggregateCommitment !== batch.expectedAggregateCommitment ||
+      current.holder !== batch.expectedHolder ||
+      !this.isPreOwnershipTransition(current, batch.next.root)
+    )
+      return { status: "stale" };
+    const slot = await this.availablePreOwnershipSlot();
+    if (slot === undefined) return { status: "ambiguous" };
+    const state = await this.state();
+    if (
+      state === undefined ||
+      !state.reachable ||
+      state.workingSet !== "clean" ||
+      (this.mode === "git-sync" &&
+        (state.head === undefined || state.remoteHead !== state.head))
+    )
+      return { status: "ambiguous" };
+    const mutation = await this.call({
+      kind: "preownership_mutation",
+      batch,
+      slot,
+    });
+    if (mutation?.kind !== "mutation") return { status: "unavailable" };
+    if (mutation.value === "applied")
+      return this.durablePreOwnershipIntent(batch);
+    if (mutation.value !== "stale") return { status: mutation.value };
+    const after = await this.load();
+    if (after.status !== "observed") return this.loadFailure(after.status);
+    return this.isExactIntentReadback(after.value, batch)
+      ? this.durablePreOwnershipIntent(batch)
+      : { status: "stale" };
+  }
+
+  /** Atomic absent-root bootstrap; active runs and ordinary CAS are refused. */
+  public async createControllerAcquireIntent(
+    request: InitialControllerAcquire,
+  ): Promise<RunStoreResult> {
+    const parsed = validate<InitialControllerAcquire>(
+      InitialControllerAcquireSchema,
+      request,
+    );
+    if (
+      !this.usable ||
+      !parsed.ok ||
+      parsed.value === undefined ||
+      !same(parsed.value.expected.scope, this.scope) ||
+      parsed.value.expected.holder !== this.holder
+    )
+      return { status: "quarantined" };
+    const projection = parsed.value.next;
+    if (!this.validInitialProjection(projection))
+      return { status: "quarantined" };
+    const existing = await this.load();
+    if (existing.status === "observed")
+      return this.isExactInitialReadback(existing.value, projection)
+        ? this.durableInitialIntent(projection)
+        : { status: "stale" };
+    if (existing.status !== "absent") return this.loadFailure(existing.status);
+    const slot = await this.availablePreOwnershipSlot();
+    if (slot === undefined) return { status: "ambiguous" };
+    const state = await this.state();
+    if (
+      state === undefined ||
+      !state.reachable ||
+      state.workingSet !== "clean" ||
+      (this.mode === "git-sync" &&
+        (state.head === undefined || state.remoteHead !== state.head))
+    )
+      return { status: "ambiguous" };
+    const initialized = await this.call({
+      kind: "initialize",
+      input: projection,
+      slot,
+    });
+    if (initialized?.kind !== "mutation") return { status: "unavailable" };
+    if (initialized.value === "applied")
+      return this.durableInitialIntent(projection);
+    if (initialized.value !== "stale") return { status: initialized.value };
+    const after = await this.load();
+    if (after.status !== "observed") return this.loadFailure(after.status);
+    return this.isExactInitialReadback(after.value, projection)
+      ? this.durableInitialIntent(projection)
+      : { status: "stale" };
+  }
+
+  private validInitialProjection(
+    input: InitialControllerAcquire["next"],
+  ): boolean {
+    const root = validateRootProjection(input.root);
+    if (!root.ok || !same(root.value.scope, this.scope)) return false;
+    if (root.value.aggregateRevision !== 1) return false;
+    const values: ChildProjection[] = [];
+    for (const inputChild of input.children) {
+      const child = validateChildProjection(inputChild);
+      if (!child.ok) return false;
+      values.push(child.value);
+    }
+    values.sort((a, b) =>
+      a.unitId < b.unitId ? -1 : a.unitId > b.unitId ? 1 : 0,
+    );
+    if (
+      !same(values, input.children) ||
+      values.length !== root.value.childRows.length ||
+      values.some(
+        (child, index) =>
+          root.value.childRows[index]?.unitId !== child.unitId ||
+          root.value.childRows[index]?.revision !== child.revision ||
+          root.value.childRows[index]?.commitment !== child.commitment,
+      )
+    )
+      return false;
+    return (
+      root.value.run.revision === 1 &&
+      root.value.run.effectJournal.length === 1 &&
+      this.isPreOwnershipTransition(undefined, root.value)
+    );
+  }
+
+  private validPreOwnershipBatch(batch: MutationBatch): boolean {
+    return (
+      this.usable &&
+      validateMutationBatch(batch).ok &&
+      same(batch.scope, this.scope) &&
+      batch.holder === this.holder &&
+      this.isPreOwnershipTransition(undefined, batch.next.root)
+    );
+  }
+
+  private isPreOwnershipTransition(
+    before: RootProjection | undefined,
+    next: RootProjection,
+  ): boolean {
+    const prior = before?.run;
+    const run = next.run;
+    const entry = run.effectJournal.at(-1);
+    return (
+      next.holder === this.holder &&
+      same(next.scope, this.scope) &&
+      run.state === "initializing" &&
+      run.controller.holder === this.holder &&
+      run.controller.state === "acquire_intent" &&
+      run.effectJournal.length === (prior?.effectJournal.length ?? 0) + 1 &&
+      entry?.kind === "controller_acquire" &&
+      entry.status === "intended" &&
+      entry.slotTransition !== undefined &&
+      validateSlotTransitionIntent(
+        entry.slotTransition,
+        this.prefix,
+        this.scope,
+        this.mode,
+        this.holder,
+      ) &&
+      (prior === undefined ||
+        (prior.state === "initializing" &&
+          prior.controller.holder === this.holder &&
+          prior.controller.state === "unacquired" &&
+          prior.effectJournal.length === 0 &&
+          run.effectJournal.length === prior.effectJournal.length + 1))
+    );
+  }
+
+  private isExactIntentReadback(
+    readback: Readonly<{
+      children: readonly ChildProjection[];
+      root: RootProjection;
+    }>,
+    batch: MutationBatch,
+  ): boolean {
+    if (!same(readback.root, batch.next.root)) return false;
+    return batch.next.children.every((expected) =>
+      readback.children.some((actual) => same(actual, expected)),
+    );
+  }
+
+  private isExactInitialReadback(
+    readback: Readonly<{
+      children: readonly ChildProjection[];
+      root: RootProjection;
+    }>,
+    input: InitialControllerAcquire["next"],
+  ): boolean {
+    return (
+      same(readback.root, input.root) && same(readback.children, input.children)
+    );
+  }
+
+  private async availablePreOwnershipSlot(): Promise<
+    MergeSlotObservation | undefined
+  > {
+    const prepared = await this.prepareSharedState();
+    if (prepared.result.code !== "applied") return undefined;
+    const local = await this.slot("check");
+    if (
+      local === undefined ||
+      local.status !== "available" ||
+      local.holder !== undefined
+    )
+      return undefined;
+    if (this.mode === "local-only") return local;
+    const remote = await this.slot("check", "remote");
+    return remote !== undefined && same(remote, local) ? local : undefined;
+  }
+
+  private async durablePreOwnershipIntent(
+    batch: MutationBatch,
+  ): Promise<RunStoreResult> {
+    const durable = await this.durableCheckpoint(batch);
+    if (durable.code !== "applied") return this.storeFailure(durable.code);
+    const readback = await this.readback(batch);
+    return readback === undefined ||
+      !this.isExactIntentReadback(readback, batch)
+      ? { status: "quarantined" }
+      : {
+          affectedRowCount: 1 + batch.changedRows.length,
+          checkpoint: batch.checkpoint,
+          children: [...batch.next.children],
+          root: batch.next.root,
+          status: "applied",
+        };
+  }
+
+  /** Commit/push and exact load after the separate absent-row SQL mutation. */
+  private async durableInitialIntent(
+    input: InitialControllerAcquire["next"],
+  ): Promise<RunStoreResult> {
+    let state = await this.state();
+    if (
+      state === undefined ||
+      !state.reachable ||
+      state.workingSet === "unknown"
+    )
+      return { status: "unavailable" };
+    if (state.workingSet === "pending" || state.workingSet === "clean") {
+      const committed = await this.call({ kind: "initial_commit", input });
+      if (committed?.kind !== "commit" || committed.value !== "applied")
+        return {
+          status:
+            committed?.kind === "commit" && committed.value === "unavailable"
+              ? "unavailable"
+              : "ambiguous",
+        };
+      state = await this.state();
+    }
+    if (
+      state === undefined ||
+      !state.reachable ||
+      state.workingSet !== "clean" ||
+      state.head === undefined
+    )
+      return { status: "ambiguous" };
+    if (this.mode === "git-sync") {
+      if (state.remoteHead === state.head) {
+        // Already pushed by the process that crashed before readback.
+      } else {
+        const pushed = await this.call({ kind: "initial_push", input });
+        if (pushed?.kind !== "push" || pushed.value !== "applied")
+          return {
+            status:
+              pushed?.kind === "push" && pushed.value === "unavailable"
+                ? "unavailable"
+                : "ambiguous",
+          };
+        state = await this.state();
+        if (
+          state === undefined ||
+          !state.reachable ||
+          state.workingSet !== "clean" ||
+          state.head === undefined ||
+          state.remoteHead !== state.head
+        )
+          return { status: "ambiguous" };
+      }
+    }
+    const loaded = await this.load();
+    if (loaded.status !== "observed") return this.loadFailure(loaded.status);
+    return !this.isExactInitialReadback(loaded.value, input)
+      ? { status: "stale" }
+      : {
+          affectedRowCount: 1 + input.children.length,
+          checkpoint: input.root.checkpoint,
+          children: [...input.children],
+          root: input.root,
+          status: "applied",
+        };
+  }
+
+  private loadFailure(
+    status: Exclude<AuthoritativeLoadResult["status"], "observed">,
+  ): RunStoreResult {
+    switch (status) {
+      case "absent":
+        return { status: "stale" };
+      case "corrupt":
+        return { status: "quarantined" };
+      default:
+        return { status };
+    }
   }
 
   /** Records a clean baseline before a cooperative worker/reviewer session. */

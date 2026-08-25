@@ -25,9 +25,11 @@ import {
   deriveScopeCommitment,
   deriveSlotReadbackHash,
   FencingScopeSchema,
+  type ChildProjection,
   type FencingScope,
   type MergeSlotObservation,
   type MutationBatch,
+  type RootProjection,
   type RunStorePort,
   type RunStoreResult,
   RunStoreResultSchema,
@@ -37,6 +39,20 @@ import {
   validateRootProjection,
   validateSlotRelease,
 } from "../../fencing/index.js";
+import type {
+  AuthoritativeLoadResult,
+  AuthoritativeRunStore,
+  ControllerTransitionPlanResult,
+  InitialControllerAcquire,
+  PreOwnershipRunStore,
+} from "../../commands/recovery.js";
+import { InitialControllerAcquireSchema } from "../../commands/recovery.js";
+import {
+  ServerSlotTransitionIntentSchema,
+  validate,
+  type ServerSlotTransitionIntent,
+  type SlotTransitionIntent as ProtocolSlotTransitionIntent,
+} from "../../protocol/schemas.js";
 
 const MAX_ENDPOINT_BYTES = 320;
 const MAX_SCHEMA_BYTES = 160;
@@ -1406,6 +1422,34 @@ export type ServerDiscovery = Readonly<{
   slot: unknown;
 }>;
 
+export type ServerDiscoveryReadback =
+  | ServerDiscovery
+  | Readonly<{
+      status: "absent";
+      slot: unknown;
+    }>;
+
+/**
+ * A deliberately separate write boundary for the one pre-ownership
+ * transition. It is not a normal merge-slot-held mutation: the driver must
+ * prove an exact *available* built-in slot while atomically writing the
+ * acquire intent projections.  The input is fully durable and therefore
+ * recoverable after an interrupted caller.
+ */
+export type ServerPreOwnershipMutation =
+  | Readonly<{ kind: "existing"; batch: MutationBatch }>
+  | Readonly<{ kind: "initial"; initial: InitialControllerAcquire }>;
+
+type ServerPreOwnershipPlan = Readonly<{
+  checkpoint: unknown;
+  expectedRows: number;
+  next: Readonly<{
+    children: readonly ChildProjection[];
+    root: RootProjection;
+  }>;
+  statement: string;
+}>;
+
 /** Immutable initialization-time slot identity; bd 1.1.0 preserves external_ref. */
 export type ServerSlotReadback = Readonly<{
   observation: MergeSlotObservation;
@@ -1414,6 +1458,115 @@ export type ServerSlotReadback = Readonly<{
 
 export function slotScopeReference(scope: FencingScope): string {
   return `sce-scope:v1:${deriveScopeCommitment(scope)}`;
+}
+
+type ServerSlotTransitionWithoutKey = Omit<
+  ServerSlotTransitionIntent,
+  "idempotencyKey"
+>;
+
+function serverSlotTransitionKey(
+  input: ServerSlotTransitionWithoutKey,
+): string {
+  return createHash("sha256")
+    .update(
+      canonicalJson({
+        domain: "sce.beads-server.slot-transition.v1",
+        transition: input as JsonValue,
+      }),
+    )
+    .digest("hex");
+}
+
+/** Construct the sole durable authority accepted by server slot effects. */
+export function makeServerSlotTransitionIntent(
+  input: Readonly<{
+    after: MergeSlotObservation;
+    before: MergeSlotObservation;
+    holder: string;
+    kind: "acquire" | "release";
+    scope: FencingScope;
+  }>,
+): ServerSlotTransitionIntent | undefined {
+  const withoutKey: ServerSlotTransitionWithoutKey = {
+    after: input.after,
+    before: input.before,
+    holder: input.holder,
+    kind: input.kind,
+    precondition: {
+      kind: input.kind === "acquire" ? "available" : "held",
+      observationHash: input.before.readbackHash,
+    },
+    schema: "sce.beads-server.slot-transition",
+    scope: input.scope,
+    topology: "shared-server",
+    version: 1,
+  };
+  const candidate = {
+    ...withoutKey,
+    idempotencyKey: serverSlotTransitionKey(withoutKey),
+  };
+  return validateServerSlotTransitionIntent(
+    candidate,
+    input.after.slotId.slice(0, -"-merge-slot".length),
+    input.scope,
+    input.holder,
+    input.kind,
+  )
+    ? candidate
+    : undefined;
+}
+
+/** Strict schema plus cross-field slot semantics; never declaration-only. */
+export function validateServerSlotTransitionIntent(
+  input: unknown,
+  prefix: string,
+  scope: FencingScope,
+  holder: string,
+  kind: "acquire" | "release",
+): input is ServerSlotTransitionIntent {
+  const parsed = validate<ServerSlotTransitionIntent>(
+    ServerSlotTransitionIntentSchema,
+    input,
+  );
+  if (!parsed.ok || parsed.value === undefined) return false;
+  const transition = parsed.value;
+  const before = validateMergeSlotObservation(transition.before, prefix, scope);
+  const after = validateMergeSlotObservation(transition.after, prefix, scope);
+  if (
+    !before.ok ||
+    !after.ok ||
+    transition.kind !== kind ||
+    transition.holder !== holder ||
+    !exact(transition.scope, scope) ||
+    transition.precondition.observationHash !== before.value.readbackHash ||
+    transition.idempotencyKey !==
+      serverSlotTransitionKey({
+        after: transition.after,
+        before: transition.before,
+        holder: transition.holder,
+        kind: transition.kind,
+        precondition: transition.precondition,
+        schema: transition.schema,
+        scope: transition.scope,
+        topology: transition.topology,
+        version: transition.version,
+      })
+  )
+    return false;
+  return kind === "acquire"
+    ? transition.precondition.kind === "available" &&
+        before.value.status === "available" &&
+        before.value.actor === holder &&
+        after.value.status === "acquired" &&
+        after.value.actor === holder &&
+        after.value.holder === holder
+    : transition.precondition.kind === "held" &&
+        before.value.status === "acquired" &&
+        before.value.actor === holder &&
+        before.value.holder === holder &&
+        after.value.status === "available" &&
+        after.value.actor === holder;
 }
 
 export type ServerDriverFailure = "unavailable" | "ambiguous" | "refused";
@@ -1474,6 +1627,16 @@ export interface BeadsServerDriver {
       identity: ServerIdentity;
     }>,
   ): Promise<ServerMutationDriverResponse>;
+  /**
+   * Atomic available-slot + root/child absence-or-CAS program. Optional for
+   * legacy test drivers only; an adapter refuses to pre-own without it.
+   */
+  preOwnershipMutate?(
+    input: Readonly<{
+      identity: ServerIdentity;
+      mutation: ServerPreOwnershipMutation;
+    }>,
+  ): Promise<ServerMutationDriverResponse>;
   /** Read-only reconciliation after a failed/unknown commit; never retries it. */
   discover(
     input: Readonly<{
@@ -1481,7 +1644,7 @@ export interface BeadsServerDriver {
       prefix: string;
       scope: FencingScope;
     }>,
-  ): Promise<ServerDriverResponse<ServerDiscovery>>;
+  ): Promise<ServerDriverResponse<ServerDiscoveryReadback>>;
 }
 
 /** Managed setup may start/probe an authority-owned server; it never stops it. */
@@ -1774,6 +1937,11 @@ export type ServerSlotResult =
       status: "blocked" | "quarantined" | "unavailable" | "ambiguous";
     }>;
 
+/** Privacy-safe result exposed to the generic crash-recovery coordinator. */
+export type ServerTransitionRecoveryResult = Readonly<{
+  status: "observed" | "absent" | "blocked" | "ambiguous" | "unavailable";
+}>;
+
 function safeText(value: string, max: number): boolean {
   return (
     bytes.encode(value).byteLength > 0 &&
@@ -2063,10 +2231,18 @@ function parseDiscovery(
   input: unknown,
   prefix: string,
   scope: FencingScope,
-): ServerDiscovery | undefined {
+): ServerDiscoveryReadback | undefined {
   if (input === null || typeof input !== "object" || Array.isArray(input))
     return undefined;
   const value = input as Record<string, unknown>;
+  if (Object.keys(value).sort().join(",") === "slot,status") {
+    const slot = validateMergeSlotObservation(value.slot, prefix, scope);
+    return value.status === "absent" &&
+      slot.ok &&
+      slot.value.status === "available"
+      ? { status: "absent", slot: slot.value }
+      : undefined;
+  }
   if (
     Object.keys(value).sort().join(",") !== "checkpoint,children,root,slot" ||
     !Array.isArray(value.children)
@@ -2203,10 +2379,16 @@ export function deriveServerIdentity(
 }
 
 /** Strict server-only RunStorePort with explicit slot and outage reconciliation. */
-export class BeadsServerAdapter implements RunStorePort {
+export class BeadsServerAdapter
+  implements
+    RunStorePort,
+    Partial<AuthoritativeRunStore>,
+    Partial<PreOwnershipRunStore>
+{
   readonly #driver: BeadsServerDriver;
   readonly #identity: ServerIdentity;
   readonly #process: ManagedServerProcess | undefined;
+  readonly #recoveryScope: FencingScope | undefined;
   #ready = false;
   #started = false;
   #lastDiscovery: ServerDiscovery | undefined;
@@ -2216,6 +2398,8 @@ export class BeadsServerAdapter implements RunStorePort {
       driver: BeadsServerDriver;
       identity: ServerIdentity;
       process?: ManagedServerProcess;
+      /** Immutable topology scope required for authoritative recovery load. */
+      recoveryScope?: FencingScope;
     }>,
   ) {
     if (
@@ -2228,6 +2412,71 @@ export class BeadsServerAdapter implements RunStorePort {
     this.#driver = input.driver;
     this.#identity = input.identity;
     this.#process = input.process;
+    this.#recoveryScope = input.recoveryScope;
+  }
+
+  /**
+   * A readback is usable only after the concrete driver has reproved its live
+   * identity and returned every exact root/child projection. Absence is never
+   * inferred from an outage or malformed response.
+   */
+  async load(): Promise<AuthoritativeLoadResult> {
+    if (!this.#ready || this.#recoveryScope === undefined)
+      return { status: "quarantined" };
+    let response: ServerDriverResponse<ServerDiscoveryReadback>;
+    try {
+      response = await this.#driver.discover({
+        identity: this.#identity,
+        prefix: this.#identity.prefix,
+        scope: this.#recoveryScope,
+      });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (response.status !== "ok") {
+      this.#revoke();
+      return response.status === "unavailable"
+        ? { status: "unavailable" }
+        : response.status === "ambiguous"
+          ? { status: "ambiguous" }
+          : { status: "quarantined" };
+    }
+    const parsed = parseDiscovery(
+      response.value,
+      this.#identity.prefix,
+      this.#recoveryScope,
+    );
+    if (parsed === undefined) {
+      this.#revoke();
+      return { status: "corrupt" };
+    }
+    if ("status" in parsed) return { status: "absent" };
+    const root = validateRootProjection(parsed.root);
+    if (!root.ok) {
+      this.#revoke();
+      return { status: "corrupt" };
+    }
+    const children: ChildProjection[] = [];
+    for (const child of parsed.children) {
+      const parsedChild = validateChildProjection(child);
+      if (!parsedChild.ok) {
+        this.#revoke();
+        return { status: "corrupt" };
+      }
+      children.push(parsedChild.value);
+    }
+    if (children.length !== root.value.childRows.length) {
+      this.#revoke();
+      return { status: "corrupt" };
+    }
+    return {
+      status: "observed",
+      value: {
+        children,
+        root: root.value,
+      },
+    };
   }
 
   async preflight(): Promise<ServerPreflight> {
@@ -2447,6 +2696,192 @@ export class BeadsServerAdapter implements RunStorePort {
     return { status: "released", slot: result.value.observation };
   }
 
+  /** Read-only topology planning for a fresh persisted controller intent. */
+  async prepareControllerTransition(
+    input: Readonly<{
+      holder: string;
+      kind: "acquire" | "release";
+      scope: FencingScope;
+    }>,
+  ): Promise<ControllerTransitionPlanResult> {
+    this.#lastDiscovery = undefined;
+    if (
+      !this.#ready ||
+      this.#recoveryScope === undefined ||
+      !exact(input.scope, this.#recoveryScope)
+    )
+      return { status: "quarantined" };
+    let result: ServerDriverResponse<ServerSlotReadback>;
+    try {
+      result = await this.#driver.mergeSlotCheck({
+        actor: input.holder,
+        prefix: this.#identity.prefix,
+        scope: input.scope,
+      });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (result.status !== "ok") {
+      this.#revoke();
+      return {
+        status: result.status === "unavailable" ? "unavailable" : "ambiguous",
+      };
+    }
+    const before = parseSlotReadback(
+      result.value,
+      this.#identity.prefix,
+      input.scope,
+    );
+    if (
+      before === undefined ||
+      (input.kind === "acquire" && before.status !== "available") ||
+      (input.kind === "release" &&
+        (before.status !== "acquired" || before.holder !== input.holder))
+    )
+      return before?.status === "acquired"
+        ? { status: "blocked" }
+        : { status: "ambiguous" };
+    const withoutHash = {
+      ...before,
+      actor: input.holder,
+      ...(input.kind === "acquire" ? { holder: input.holder } : {}),
+      status:
+        input.kind === "acquire"
+          ? ("acquired" as const)
+          : ("available" as const),
+    };
+    if (input.kind === "release")
+      delete (withoutHash as { holder?: string }).holder;
+    const { readbackHash: _ignored, ...hashInput } = withoutHash;
+    const after = {
+      ...hashInput,
+      readbackHash: deriveSlotReadbackHash(hashInput),
+    };
+    const transition = makeServerSlotTransitionIntent({
+      after,
+      before,
+      holder: input.holder,
+      kind: input.kind,
+      scope: input.scope,
+    });
+    return transition === undefined
+      ? { status: "quarantined" }
+      : { status: "planned", transition };
+  }
+
+  /**
+   * Read-only reconciliation of an already-persisted server transition.
+   * Exact `before` is positive retry authority; exact `after` is completion.
+   * No acquire or release command is reachable from this method.
+   */
+  async reconcileControllerTransition(
+    transition: ProtocolSlotTransitionIntent,
+  ): Promise<ServerTransitionRecoveryResult> {
+    this.#lastDiscovery = undefined;
+    if (
+      !this.#ready ||
+      !validateServerSlotTransitionIntent(
+        transition,
+        this.#identity.prefix,
+        transition.scope,
+        transition.holder,
+        transition.kind,
+      )
+    )
+      return { status: "ambiguous" };
+    let result: ServerDriverResponse<ServerSlotReadback>;
+    try {
+      result = await this.#driver.mergeSlotCheck({
+        actor: transition.holder,
+        prefix: this.#identity.prefix,
+        scope: transition.scope,
+      });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (result.status !== "ok") {
+      this.#revoke();
+      return {
+        status: result.status === "unavailable" ? "unavailable" : "ambiguous",
+      };
+    }
+    const current = parseSlotReadback(
+      result.value,
+      this.#identity.prefix,
+      transition.scope,
+    );
+    if (current === undefined) {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (exact(current, transition.after)) return { status: "observed" };
+    if (exact(current, transition.before)) return { status: "absent" };
+    return current.status === "acquired" && current.holder !== transition.holder
+      ? { status: "blocked" }
+      : { status: "ambiguous" };
+  }
+
+  /**
+   * Execute only the exact server transition which survived journal
+   * validation. The coordinator calls this solely after read-only reconcile
+   * proved the exact `before` observation.
+   */
+  async executeControllerTransition(
+    transition: ProtocolSlotTransitionIntent,
+  ): Promise<ServerTransitionRecoveryResult> {
+    this.#lastDiscovery = undefined;
+    if (
+      !this.#ready ||
+      !validateServerSlotTransitionIntent(
+        transition,
+        this.#identity.prefix,
+        transition.scope,
+        transition.holder,
+        transition.kind,
+      )
+    )
+      return { status: "ambiguous" };
+    let result: ServerDriverResponse<ServerSlotReadback>;
+    try {
+      result =
+        transition.kind === "acquire"
+          ? await this.#driver.mergeSlotAcquire({
+              actor: transition.holder,
+              prefix: this.#identity.prefix,
+              scope: transition.scope,
+            })
+          : await this.#driver.mergeSlotRelease({
+              actor: transition.holder,
+              prefix: this.#identity.prefix,
+              scope: transition.scope,
+            });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (result.status !== "ok") {
+      this.#revoke();
+      return {
+        status: result.status === "unavailable" ? "unavailable" : "ambiguous",
+      };
+    }
+    const after = parseSlotReadback(
+      result.value,
+      this.#identity.prefix,
+      transition.scope,
+    );
+    if (after === undefined) {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (exact(after, transition.after)) return { status: "observed" };
+    return after.status === "acquired" && after.holder !== transition.holder
+      ? { status: "blocked" }
+      : { status: "ambiguous" };
+  }
+
   /** Exact server readback used to reconcile, never to blindly retry a commit. */
   async discover(scope: FencingScope): Promise<ServerDiscovery | undefined> {
     // A prior read is never evidence for a new reconciliation attempt. Only
@@ -2471,6 +2906,7 @@ export class BeadsServerAdapter implements RunStorePort {
         this.#revoke();
         return undefined;
       }
+      if ("status" in parsed) return undefined;
       this.#lastDiscovery = parsed;
       return parsed;
     } catch {
@@ -2535,6 +2971,155 @@ export class BeadsServerAdapter implements RunStorePort {
       !exact(result.root, batch.value.next.root) ||
       !exact(result.children, batch.value.next.children) ||
       !exact(result.checkpoint, batch.value.checkpoint)
+    ) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    return result;
+  }
+
+  /**
+   * The sole existing-root pre-ownership write.  It intentionally does not
+   * delegate to compareAndSet: ordinary CAS predicates require the slot to be
+   * acquired, whereas this operation proves it remains exactly available.
+   */
+  async persistControllerAcquireIntent(
+    batchInput: MutationBatch,
+  ): Promise<RunStoreResult> {
+    this.#lastDiscovery = undefined;
+    if (!this.#ready || this.#driver.preOwnershipMutate === undefined)
+      return { status: "quarantined" };
+    const batch = validateMutationBatch(batchInput);
+    if (!batch.ok || !boundedMutationBatch(batch.value)) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    const prior = batch.value.next.root.run;
+    const transition = prior.effectJournal.at(-1)?.slotTransition;
+    // The desired post-projection is the only state this pathway may write.
+    if (
+      prior.state !== "initializing" ||
+      prior.controller.state !== "acquire_intent" ||
+      prior.effectJournal.at(-1)?.kind !== "controller_acquire" ||
+      prior.effectJournal.at(-1)?.status !== "intended" ||
+      !validateServerSlotTransitionIntent(
+        transition,
+        this.#identity.prefix,
+        batch.value.scope,
+        batch.value.expectedHolder,
+        "acquire",
+      )
+    ) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    return this.#preOwnershipResult(
+      { kind: "existing", batch: batch.value },
+      batch.value,
+    );
+  }
+
+  /**
+   * Atomic bootstrap used only when authoritative discovery proved every SCE
+   * projection absent. The concrete driver checks those absences and the
+   * available slot in the same SQL transaction, then readbacks the exact
+   * intended projection before returning applied.
+   */
+  async createControllerAcquireIntent(
+    input: InitialControllerAcquire,
+  ): Promise<RunStoreResult> {
+    this.#lastDiscovery = undefined;
+    if (!this.#ready || this.#driver.preOwnershipMutate === undefined)
+      return { status: "quarantined" };
+    const initial = validate<InitialControllerAcquire>(
+      InitialControllerAcquireSchema,
+      input,
+    );
+    if (!initial.ok || initial.value === undefined) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    const candidate = initial.value;
+    const transition = candidate.next.root.run.effectJournal[0]?.slotTransition;
+    if (
+      !exact(candidate.expected.scope, candidate.next.root.scope) ||
+      candidate.expected.holder !== candidate.next.root.holder ||
+      candidate.next.root.run.state !== "initializing" ||
+      candidate.next.root.run.controller.state !== "acquire_intent" ||
+      candidate.next.root.run.effectJournal.length !== 1 ||
+      candidate.next.root.run.effectJournal[0]?.kind !== "controller_acquire" ||
+      !validateServerSlotTransitionIntent(
+        transition,
+        this.#identity.prefix,
+        candidate.expected.scope,
+        candidate.expected.holder,
+        "acquire",
+      )
+    ) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    const expected = {
+      changedRows: candidate.next.children.map((child) => ({
+        expectedCommitment: child.commitment,
+        expectedRevision: child.revision,
+        nextCommitment: child.commitment,
+        nextRevision: child.revision,
+        unitId: child.unitId,
+      })),
+      checkpoint: candidate.next.root.checkpoint,
+      next: candidate.next,
+    };
+    return this.#preOwnershipResult(
+      { kind: "initial", initial: candidate },
+      expected,
+    );
+  }
+
+  async #preOwnershipResult(
+    mutation: ServerPreOwnershipMutation,
+    expected: Readonly<{
+      changedRows: readonly unknown[];
+      checkpoint: unknown;
+      next: Readonly<{
+        children: readonly ChildProjection[];
+        root: RootProjection;
+      }>;
+    }>,
+  ): Promise<RunStoreResult> {
+    let response: ServerMutationDriverResponse;
+    try {
+      response = await this.#driver.preOwnershipMutate!({
+        identity: this.#identity,
+        mutation,
+      });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (response.status !== "ok") {
+      this.#revoke();
+      return response.phase === "before_transaction" &&
+        response.status === "unavailable"
+        ? { status: "unavailable" }
+        : { status: "ambiguous" };
+    }
+    const commit = parseCommit(response.value.commit);
+    const result = parseResult(response.value.result);
+    if (
+      commit === undefined ||
+      result === undefined ||
+      !this.#durable(commit)
+    ) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    if (result.status !== "applied") return result;
+    if (
+      result.affectedRowCount !== expected.changedRows.length + 1 ||
+      !exact(result.root, expected.next.root) ||
+      !exact(result.children, expected.next.children) ||
+      !exact(result.checkpoint, expected.checkpoint)
     ) {
       this.#revoke();
       return { status: "quarantined" };
@@ -3332,13 +3917,108 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     };
   }
 
+  async preOwnershipMutate(
+    input: Readonly<{
+      identity: ServerIdentity;
+      mutation: ServerPreOwnershipMutation;
+    }>,
+  ): Promise<ServerMutationDriverResponse> {
+    const parsed = this.#preOwnershipInput(input);
+    const plan =
+      parsed === undefined
+        ? undefined
+        : this.#preOwnershipPlan(parsed.mutation);
+    if (parsed === undefined || plan === undefined) {
+      this.disarm();
+      return { phase: "before_transaction", status: "refused" };
+    }
+    if (!this.#isReady(parsed.identity)) {
+      this.disarm();
+      return { phase: "before_transaction", status: "refused" };
+    }
+    if (this.#slotProcess === undefined)
+      return { phase: "before_transaction", status: "refused" };
+    const binding = await this.#slotProcess.matchesIdentity(this.#identity);
+    if (binding.status !== "ok") {
+      this.disarm();
+      return { phase: "before_transaction", status: binding.status };
+    }
+    if (
+      this.#identity.autoCommitPolicy !== "on" ||
+      !this.#autoCommitObserved ||
+      !this.#doltTransactionCommitObserved
+    )
+      return { phase: "before_transaction", status: "refused" };
+
+    const affected = await this.#mutateAffected(
+      plan.statement,
+      plan.expectedRows,
+    );
+    if (affected.status !== "ok") {
+      this.disarm();
+      return { phase: "commit_unknown", status: affected.status };
+    }
+    if (affected.rows === 0) {
+      const afterStale = await this.#doltCommitEvidence();
+      if (afterStale.status !== "ok") {
+        this.disarm();
+        return { phase: "commit_unknown", status: afterStale.status };
+      }
+      return {
+        status: "ok",
+        value: {
+          commit: afterStale.value,
+          result: { status: "stale" },
+        },
+      };
+    }
+    if (
+      affected.rows !== plan.expectedRows ||
+      affected.committedHead === undefined
+    ) {
+      this.disarm();
+      return { phase: "commit_unknown", status: "ambiguous" };
+    }
+    try {
+      await doltBeadsServerDriverPostTransactionTestHook?.({
+        committedHead: affected.committedHead,
+      });
+    } catch {
+      this.disarm();
+      return { phase: "commit_unknown", status: "ambiguous" };
+    }
+    const readback = await this.#readbackNext(plan.next);
+    if (readback.status !== "ok") {
+      this.disarm();
+      return { phase: "commit_unknown", status: readback.status };
+    }
+    return {
+      status: "ok",
+      value: {
+        commit: {
+          autoCommitPolicy: this.#identity.autoCommitPolicy,
+          commit: "auto",
+          head: affected.committedHead,
+          workingSet: "clean",
+        },
+        result: {
+          affectedRowCount: affected.rows,
+          checkpoint: plan.checkpoint,
+          children: plan.next.children,
+          root: plan.next.root,
+          status: "applied",
+        },
+      },
+    };
+  }
+
   async discover(
     input: Readonly<{
       identity: ServerIdentity;
       prefix: string;
       scope: FencingScope;
     }>,
-  ): Promise<ServerDriverResponse<ServerDiscovery>> {
+  ): Promise<ServerDriverResponse<ServerDiscoveryReadback>> {
     const discovery = this.#discoveryInput(input);
     if (
       discovery === undefined ||
@@ -3361,6 +4041,22 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     ]);
     if (metadata.status !== "ok")
       return this.#invalidate({ status: metadata.status });
+    const configuredIds = [
+      this.#rows.rootBeadId,
+      ...Object.values(this.#rows.childBeadIds),
+    ];
+    const presence = configuredIds.map((id) =>
+      Object.prototype.hasOwnProperty.call(metadata.value.get(id) ?? {}, "sce"),
+    );
+    if (presence.every((present) => !present))
+      return slot.value.observation.status === "available"
+        ? {
+            status: "ok",
+            value: { status: "absent", slot: slot.value.observation },
+          }
+        : this.#invalidate({ status: "refused" });
+    if (presence.some((present) => !present))
+      return this.#invalidate({ status: "refused" });
     const root = metadata.value.get(this.#rows.rootBeadId)?.sce;
     const parsedRoot = validateRootProjection(root);
     if (!parsedRoot.ok) return this.#invalidate({ status: "refused" });
@@ -3562,6 +4258,22 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
         : normalizedServerIdentity(value.identity);
     return value !== undefined && identity !== undefined
       ? { batch: value.batch, identity }
+      : undefined;
+  }
+
+  #preOwnershipInput(input: unknown):
+    | Readonly<{
+        identity: ServerIdentity;
+        mutation: unknown;
+      }>
+    | undefined {
+    const value = safeRecord(input, ["identity", "mutation"]);
+    const identity =
+      value === undefined
+        ? undefined
+        : normalizedServerIdentity(value.identity);
+    return value !== undefined && identity !== undefined
+      ? { identity, mutation: value.mutation }
       : undefined;
   }
 
@@ -3786,21 +4498,198 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
   ): Promise<
     Readonly<{ status: "ok" }> | Readonly<{ status: ServerDriverFailure }>
   > {
+    return await this.#readbackNext(batch.next);
+  }
+
+  async #readbackNext(
+    next: Readonly<{
+      children: readonly ChildProjection[];
+      root: RootProjection;
+    }>,
+  ): Promise<
+    Readonly<{ status: "ok" }> | Readonly<{ status: ServerDriverFailure }>
+  > {
     const metadata = await this.#metadata([
       this.#rows.rootBeadId,
-      ...batch.next.children.map(
-        (child) => this.#rows.childBeadIds[child.unitId]!,
-      ),
+      ...next.children.map((child) => this.#rows.childBeadIds[child.unitId]!),
     ]);
     if (metadata.status !== "ok") return { status: metadata.status };
     const root = metadata.value.get(this.#rows.rootBeadId)?.sce;
-    const children = batch.next.children.map(
+    const children = next.children.map(
       (child) =>
         metadata.value.get(this.#rows.childBeadIds[child.unitId]!)?.sce,
     );
-    return exact(root, batch.next.root) && exact(children, batch.next.children)
+    return exact(root, next.root) && exact(children, next.children)
       ? { status: "ok" }
       : { status: "ambiguous" };
+  }
+
+  #preOwnershipPlan(input: unknown): ServerPreOwnershipPlan | undefined {
+    const existing = safeRecord(input, ["batch", "kind"]);
+    if (existing?.kind === "existing") {
+      const batch = normalizedMutationBatch(existing.batch);
+      if (batch === undefined) return undefined;
+      const run = batch.next.root.run;
+      const transition = run.effectJournal.at(-1)?.slotTransition;
+      if (
+        run.state !== "initializing" ||
+        run.controller.state !== "acquire_intent" ||
+        run.controller.holder !== batch.expectedHolder ||
+        batch.holder !== batch.expectedHolder ||
+        !exact(batch.scope, batch.next.root.scope) ||
+        run.effectJournal.at(-1)?.kind !== "controller_acquire" ||
+        run.effectJournal.at(-1)?.status !== "intended" ||
+        !validateServerSlotTransitionIntent(
+          transition,
+          this.#identity.prefix,
+          batch.scope,
+          batch.expectedHolder,
+          "acquire",
+        )
+      )
+        return undefined;
+      const statement = this.#preOwnershipExistingStatement(batch);
+      return statement === undefined
+        ? undefined
+        : {
+            checkpoint: batch.checkpoint,
+            expectedRows: batch.changedRows.length + 1,
+            next: batch.next,
+            statement,
+          };
+    }
+
+    const initialRecord = safeRecord(input, ["initial", "kind"]);
+    if (initialRecord?.kind !== "initial") return undefined;
+    const parsed = validate<InitialControllerAcquire>(
+      InitialControllerAcquireSchema,
+      initialRecord.initial,
+    );
+    if (!parsed.ok || parsed.value === undefined) return undefined;
+    const initial = parsed.value;
+    const root = validateRootProjection(initial.next.root);
+    const configuredUnits = Object.keys(this.#rows.childBeadIds).sort();
+    const childUnits = initial.next.children
+      .map((child) => child.unitId)
+      .sort();
+    const transition = initial.next.root.run.effectJournal[0]?.slotTransition;
+    if (
+      !root.ok ||
+      !exact(configuredUnits, childUnits) ||
+      !exact(
+        configuredUnits,
+        initial.next.root.childRows.map((row) => row.unitId).sort(),
+      ) ||
+      initial.expected.holder !== initial.next.root.holder ||
+      !exact(initial.expected.scope, initial.next.root.scope) ||
+      initial.next.root.run.revision !== 1 ||
+      initial.next.root.run.state !== "initializing" ||
+      initial.next.root.run.controller.state !== "acquire_intent" ||
+      initial.next.root.run.controller.holder !== initial.expected.holder ||
+      initial.next.root.run.effectJournal.length !== 1 ||
+      initial.next.root.run.effectJournal[0]?.kind !== "controller_acquire" ||
+      initial.next.root.run.effectJournal[0]?.status !== "intended" ||
+      !validateServerSlotTransitionIntent(
+        transition,
+        this.#identity.prefix,
+        initial.expected.scope,
+        initial.expected.holder,
+        "acquire",
+      ) ||
+      initial.next.children.some((child) => {
+        const parsedChild = validateChildProjection(child);
+        const reference = initial.next.root.childRows.find(
+          (row) => row.unitId === child.unitId,
+        );
+        return (
+          !parsedChild.ok ||
+          reference?.revision !== child.revision ||
+          reference.commitment !== child.commitment ||
+          child.holder !== initial.expected.holder ||
+          !exact(child.scope, initial.expected.scope)
+        );
+      })
+    )
+      return undefined;
+    const statement = this.#preOwnershipInitialStatement(initial);
+    return statement === undefined
+      ? undefined
+      : {
+          checkpoint: initial.next.root.checkpoint,
+          expectedRows: initial.next.children.length + 1,
+          next: initial.next,
+          statement,
+        };
+  }
+
+  #preOwnershipExistingStatement(batch: MutationBatch): string | undefined {
+    const children = batch.next.children.map((child) => {
+      const expected = batch.expectedChildren.find(
+        (value) => value.unitId === child.unitId,
+      );
+      const id = this.#rows.childBeadIds[child.unitId];
+      return expected === undefined || id === undefined || !validIdentifier(id)
+        ? undefined
+        : { child, expected, id };
+    });
+    if (children.some((child) => child === undefined)) return undefined;
+    const mapped = children as readonly {
+      child: MutationBatch["next"]["children"][number];
+      expected: MutationBatch["expectedChildren"][number];
+      id: string;
+    }[];
+    const ids = [this.#rows.rootBeadId, ...mapped.map((child) => child.id)];
+    if (new Set(ids).size !== ids.length) return undefined;
+    const scope = sqlJson(batch.scope);
+    const eligibility = [
+      `${this.#slotDesign(this.#identity.prefix, batch.scope)} AND status = 'open' AND JSON_LENGTH(metadata) = 0`,
+      `id = ${sqlLiteral(this.#rows.rootBeadId)} AND JSON_EXTRACT(metadata, '$.sce') IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.aggregateRevision')) = ${sqlLiteral(batch.expectedAggregateRevision)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.aggregateCommitment')) = ${sqlLiteral(batch.expectedAggregateCommitment)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.holder')) = ${sqlLiteral(batch.expectedHolder)} AND JSON_EXTRACT(metadata, '$.sce.scope') = ${scope}`,
+      ...mapped.map(
+        ({ expected, id }) =>
+          `id = ${sqlLiteral(id)} AND JSON_EXTRACT(metadata, '$.sce') IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.revision')) = ${sqlLiteral(expected.expectedRevision)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.commitment')) = ${sqlLiteral(expected.expectedCommitment)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.holder')) = ${sqlLiteral(batch.expectedHolder)} AND JSON_EXTRACT(metadata, '$.sce.scope') = ${scope}`,
+      ),
+    ];
+    const cases = [
+      `WHEN ${sqlLiteral(this.#rows.rootBeadId)} THEN JSON_SET(target.metadata, '$.sce', ${sqlJson(batch.next.root)})`,
+      ...mapped.map(
+        ({ child, id }) =>
+          `WHEN ${sqlLiteral(id)} THEN JSON_SET(target.metadata, '$.sce', ${sqlJson(child)})`,
+      ),
+    ];
+    return `UPDATE ${this.#issues()} AS target JOIN (SELECT COUNT(*) AS eligible FROM ${this.#issues()} WHERE ${eligibility.map((item) => `(${item})`).join(" OR ")}) AS gate SET target.metadata = CASE target.id ${cases.join(" ")} ELSE target.metadata END WHERE target.id IN (${ids.map(sqlLiteral).join(",")}) AND gate.eligible = ${ids.length + 1}`;
+  }
+
+  #preOwnershipInitialStatement(
+    initial: InitialControllerAcquire,
+  ): string | undefined {
+    const children = initial.next.children.map((child) => {
+      const id = this.#rows.childBeadIds[child.unitId];
+      return id === undefined || !validIdentifier(id)
+        ? undefined
+        : { child, id };
+    });
+    if (children.some((child) => child === undefined)) return undefined;
+    const mapped = children as readonly {
+      child: ChildProjection;
+      id: string;
+    }[];
+    const ids = [this.#rows.rootBeadId, ...mapped.map((child) => child.id)];
+    if (new Set(ids).size !== ids.length) return undefined;
+    const eligibility = [
+      `${this.#slotDesign(this.#identity.prefix, initial.expected.scope)} AND status = 'open' AND JSON_LENGTH(metadata) = 0`,
+      ...ids.map(
+        (id) =>
+          `id = ${sqlLiteral(id)} AND JSON_EXTRACT(metadata, '$.sce') IS NULL`,
+      ),
+    ];
+    const cases = [
+      `WHEN ${sqlLiteral(this.#rows.rootBeadId)} THEN JSON_SET(target.metadata, '$.sce', ${sqlJson(initial.next.root)})`,
+      ...mapped.map(
+        ({ child, id }) =>
+          `WHEN ${sqlLiteral(id)} THEN JSON_SET(target.metadata, '$.sce', ${sqlJson(child)})`,
+      ),
+    ];
+    return `UPDATE ${this.#issues()} AS target JOIN (SELECT COUNT(*) AS eligible FROM ${this.#issues()} WHERE ${eligibility.map((item) => `(${item})`).join(" OR ")}) AS gate SET target.metadata = CASE target.id ${cases.join(" ")} ELSE target.metadata END WHERE target.id IN (${ids.map(sqlLiteral).join(",")}) AND gate.eligible = ${ids.length + 1}`;
   }
 
   #casStatement(batch: MutationBatch): string | undefined {

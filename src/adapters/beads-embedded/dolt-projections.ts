@@ -5,6 +5,7 @@ import { dirname, isAbsolute } from "node:path";
 
 import {
   type ChildProjection,
+  type MergeSlotObservation,
   type MutationBatch,
   type RootProjection,
   validateChildProjection,
@@ -15,6 +16,8 @@ import { canonicalJson, type JsonValue } from "../../protocol/canonical.js";
 
 import type {
   CrashDiscovery,
+  EmbeddedInitialProjection,
+  EmbeddedLoad,
   EmbeddedReadback,
   EmbeddedRequest,
   EmbeddedResponse,
@@ -182,19 +185,78 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
     return { kind: "mutation", value: "applied" };
   }
 
+  /** Existing-root acquire intent CAS with the available slot in its SQL CAS. */
+  public async mutatePreOwnership(
+    batch: MutationBatch,
+    slot: MergeSlotObservation,
+  ): Promise<EmbeddedResponse> {
+    if (!validateMutationBatch(batch).ok)
+      return { kind: "mutation", value: "quarantined" };
+    const statement = this.writeStatement(batch, slot);
+    if (statement === undefined)
+      return { kind: "mutation", value: "quarantined" };
+    const output = await this.sql(
+      `${statement}; SELECT ROW_COUNT() AS affected`,
+    );
+    const readback =
+      output === undefined ||
+      this.affected(output) !== batch.changedRows.length + 1
+        ? undefined
+        : await this.readback(batch);
+    return readback === undefined
+      ? { kind: "mutation", value: "stale" }
+      : { kind: "mutation", value: "applied" };
+  }
+
   /**
    * Authorized bootstrap only. Normal CAS never calls this and therefore
    * refuses an absent `$.sce` envelope rather than creating it lazily.
    */
   public async initialize(
     authority: ProjectionInitializationAuthority,
-    batch: MutationBatch,
+    input: EmbeddedInitialProjection | MutationBatch,
+    slot?: MergeSlotObservation,
   ): Promise<EmbeddedResponse> {
-    if (
-      authority !== PROJECTION_INITIALIZATION_AUTHORITY ||
-      !validateMutationBatch(batch).ok
-    )
+    if (authority !== PROJECTION_INITIALIZATION_AUTHORITY)
       return { kind: "mutation", value: "quarantined" };
+    const legacy = validateMutationBatch(input);
+    if (legacy.ok) return this.initializeLegacy(legacy.value, slot);
+    if (slot === undefined) return { kind: "mutation", value: "quarantined" };
+    const initial = input as EmbeddedInitialProjection;
+    const rows = this.initialRows(initial);
+    if (rows === undefined) return { kind: "mutation", value: "quarantined" };
+    const ids = rows.map((row) => stringLiteral(row.issueId)).join(",");
+    const absent = rows
+      .map(
+        (row) =>
+          `(id=${stringLiteral(row.issueId)} AND JSON_EXTRACT(metadata,'$.sce') IS NULL)`,
+      )
+      .join(" OR ");
+    const cases = rows
+      .map(
+        (row) =>
+          `WHEN ${stringLiteral(row.issueId)} THEN JSON_SET(metadata,'$.sce',${jsonLiteral(row.next)})`,
+      )
+      .join(" ");
+    const slotPredicate = this.availableSlotPredicate(slot);
+    const source = await this.sql(
+      `UPDATE issues SET metadata=CASE id ${cases} ELSE metadata END WHERE id IN (${ids}) AND (SELECT COUNT(*) FROM issues WHERE ${absent})=${rows.length}${slotPredicate}; SELECT ROW_COUNT() AS affected`,
+    );
+    const readback =
+      source === undefined || this.affected(source) !== rows.length
+        ? undefined
+        : await this.load();
+    return readback?.status === "observed" &&
+      same(readback.value.root, initial.root) &&
+      same(readback.value.children, initial.children)
+      ? { kind: "mutation", value: "applied" }
+      : { kind: "mutation", value: "stale" };
+  }
+
+  private async initializeLegacy(
+    batch: MutationBatch,
+    slot: MergeSlotObservation | undefined,
+  ): Promise<EmbeddedResponse> {
     const rows = this.rows(batch);
     if (rows === undefined) return { kind: "mutation", value: "quarantined" };
     const ids = rows.map((row) => stringLiteral(row.issueId)).join(",");
@@ -211,14 +273,112 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
       )
       .join(" ");
     const source = await this.sql(
-      `UPDATE issues SET metadata=CASE id ${cases} ELSE metadata END WHERE id IN (${ids}) AND (SELECT COUNT(*) FROM issues WHERE ${absent})=${rows.length}; SELECT ROW_COUNT() AS affected`,
+      `UPDATE issues SET metadata=CASE id ${cases} ELSE metadata END WHERE id IN (${ids}) AND (SELECT COUNT(*) FROM issues WHERE ${absent})=${rows.length}${slot === undefined ? "" : this.availableSlotPredicate(slot)}; SELECT ROW_COUNT() AS affected`,
     );
     const readback =
       source === undefined || this.affected(source) !== rows.length
         ? undefined
         : await this.readback(batch);
-    if (readback === undefined) return { kind: "mutation", value: "stale" };
-    return { kind: "mutation", value: "applied" };
+    return readback === undefined
+      ? { kind: "mutation", value: "stale" }
+      : { kind: "mutation", value: "applied" };
+  }
+
+  /**
+   * Load exactly the root and every child that root references. A malformed
+   * root/child, missing child, or duplicate mapping is never absence.
+   */
+  public async load(): Promise<EmbeddedLoad> {
+    const source = await this.sql(this.selectStatement([this.rootIssueId]));
+    const records = source === undefined ? undefined : parseRows(source);
+    if (records === undefined) return { status: "unavailable" };
+    if (records.length !== 1 || records[0]?.id !== this.rootIssueId)
+      return { status: "ambiguous" };
+    const rootValue = records[0]?.sce;
+    if (rootValue === null) return { status: "absent" };
+    const rootEnvelope = object(rootValue);
+    if (
+      rootEnvelope === undefined ||
+      Object.keys(rootEnvelope).length !== 2 ||
+      typeof rootEnvelope.commitment !== "string" ||
+      !Object.prototype.hasOwnProperty.call(rootEnvelope, "projection")
+    )
+      return { status: "ambiguous" };
+    const parsedRoot = validateRootProjection(rootEnvelope.projection);
+    if (
+      !parsedRoot.ok ||
+      parsedRoot.value.aggregateCommitment !== rootEnvelope.commitment
+    )
+      return { status: "ambiguous" };
+    const childIds = parsedRoot.value.childRows.map((child) =>
+      this.childIssueId(child.unitId),
+    );
+    if (
+      childIds.some((id) => id === undefined) ||
+      new Set(childIds).size !== childIds.length
+    )
+      return { status: "ambiguous" };
+    if (childIds.length === 0)
+      return {
+        status: "observed",
+        value: { children: [], root: parsedRoot.value },
+      };
+    const childSource = await this.sql(
+      this.selectStatement(childIds as string[]),
+    );
+    const childrenRows =
+      childSource === undefined ? undefined : parseRows(childSource);
+    if (childrenRows === undefined) return { status: "unavailable" };
+    if (childrenRows.length !== childIds.length) return { status: "ambiguous" };
+    const expected = new Map(
+      parsedRoot.value.childRows.map((child) => [child.unitId, child]),
+    );
+    const seen = new Set<string>();
+    const children: ChildProjection[] = [];
+    for (const record of childrenRows) {
+      if (
+        Object.keys(record).length !== 2 ||
+        typeof record.id !== "string" ||
+        seen.has(record.id) ||
+        !Object.prototype.hasOwnProperty.call(record, "sce")
+      )
+        return { status: "ambiguous" };
+      seen.add(record.id);
+      const envelope = object(record.sce);
+      if (
+        envelope === undefined ||
+        Object.keys(envelope).length !== 2 ||
+        typeof envelope.commitment !== "string" ||
+        !Object.prototype.hasOwnProperty.call(envelope, "projection")
+      )
+        return { status: "ambiguous" };
+      const child = validateChildProjection(envelope.projection);
+      const reference = child.ok ? expected.get(child.value.unitId) : undefined;
+      if (
+        !child.ok ||
+        reference === undefined ||
+        child.value.commitment !== envelope.commitment ||
+        this.childIssueId(child.value.unitId) !== record.id ||
+        child.value.revision !== reference.revision ||
+        child.value.commitment !== reference.commitment ||
+        !same(child.value.scope, parsedRoot.value.scope) ||
+        child.value.holder !== parsedRoot.value.holder ||
+        !same(child.value.unit, parsedRoot.value.run.units[child.value.unitId])
+      )
+        return { status: "ambiguous" };
+      children.push(child.value);
+    }
+    return children.length !== expected.size || seen.size !== childIds.length
+      ? { status: "ambiguous" }
+      : {
+          status: "observed",
+          value: {
+            children: children.sort((a, b) =>
+              compareCodeUnits(a.unitId, b.unitId),
+            ),
+            root: parsedRoot.value,
+          },
+        };
   }
 
   public async readback(
@@ -322,7 +482,81 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
     return seen.size === expected.size;
   }
 
-  private writeStatement(batch: MutationBatch): string | undefined {
+  /** Complete root+initial-child delta proof used before initial commit/push. */
+  public matchesInitialDelta(
+    input: EmbeddedInitialProjection,
+    source: string,
+  ): boolean {
+    const rows = this.initialRows(input);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(source) as unknown;
+    } catch {
+      return false;
+    }
+    const table = object(parsed)?.tables;
+    const change =
+      Array.isArray(table) && table.length === 1
+        ? object(table[0])?.data_diff
+        : undefined;
+    if (
+      rows === undefined ||
+      !Array.isArray(table) ||
+      table.length !== 1 ||
+      object(table[0])?.name !== "issues" ||
+      !Array.isArray(change) ||
+      change.length !== rows.length
+    )
+      return false;
+    const expected = new Map(rows.map((row) => [row.issueId, row.next]));
+    const seen = new Set<string>();
+    for (const value of change) {
+      const diff = object(value);
+      const before = diff === undefined ? undefined : object(diff.from_row);
+      const after = diff === undefined ? undefined : object(diff.to_row);
+      if (
+        diff === undefined ||
+        before === undefined ||
+        after === undefined ||
+        typeof before.id !== "string" ||
+        before.id !== after.id ||
+        seen.has(before.id) ||
+        !isPinnedBdIssueRow(before) ||
+        !isPinnedBdIssueRow(after)
+      )
+        return false;
+      const next = expected.get(before.id);
+      const beforeMetadata = object(before.metadata);
+      const afterMetadata = object(after.metadata);
+      if (
+        next === undefined ||
+        beforeMetadata === undefined ||
+        afterMetadata === undefined ||
+        beforeMetadata.sce !== undefined ||
+        !same(afterMetadata.sce, next)
+      )
+        return false;
+      for (const key of Object.keys(before)) {
+        if (
+          key !== "metadata" &&
+          key !== "updated_at" &&
+          !same(before[key], after[key])
+        )
+          return false;
+      }
+      for (const key of Object.keys(beforeMetadata)) {
+        if (key !== "sce" && !same(beforeMetadata[key], afterMetadata[key]))
+          return false;
+      }
+      seen.add(before.id);
+    }
+    return seen.size === expected.size;
+  }
+
+  private writeStatement(
+    batch: MutationBatch,
+    slot?: MergeSlotObservation,
+  ): string | undefined {
     const rows = this.rows(batch);
     if (rows === undefined) return undefined;
     const expected = rows
@@ -338,7 +572,62 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
       )
       .join(" ");
     const ids = rows.map((row) => stringLiteral(row.issueId)).join(",");
-    return `UPDATE issues SET metadata=CASE id ${cases} ELSE metadata END WHERE id IN (${ids}) AND (SELECT COUNT(*) FROM issues WHERE ${expected})=${rows.length}`;
+    return `UPDATE issues SET metadata=CASE id ${cases} ELSE metadata END WHERE id IN (${ids}) AND (SELECT COUNT(*) FROM issues WHERE ${expected})=${rows.length}${slot === undefined ? "" : this.availableSlotPredicate(slot)}`;
+  }
+
+  private availableSlotPredicate(slot: MergeSlotObservation): string {
+    return ` AND (SELECT COUNT(*) FROM issues WHERE id=${stringLiteral(slot.slotId)} AND title=${stringLiteral(slot.title)} AND status='open' AND external_ref=${stringLiteral(`sce-scope:v1:${slot.scopeCommitment}`)} AND design=${stringLiteral(canonicalJson(slot.scope as JsonValue))} AND JSON_TYPE(metadata)='OBJECT' AND JSON_LENGTH(metadata)=0)=1 AND (SELECT COUNT(*) FROM labels WHERE issue_id=${stringLiteral(slot.slotId)} AND label=${stringLiteral(slot.label)})=1`;
+  }
+
+  private initialRows(
+    input: EmbeddedInitialProjection,
+  ): readonly { issueId: string; next: unknown }[] | undefined {
+    const root = validateRootProjection(input.root);
+    if (!root.ok) return undefined;
+    const values: ChildProjection[] = [];
+    for (const inputChild of input.children) {
+      const child = validateChildProjection(inputChild);
+      if (!child.ok) return undefined;
+      values.push(child.value);
+    }
+    values.sort((left, right) => compareCodeUnits(left.unitId, right.unitId));
+    if (
+      values.length !== root.value.childRows.length ||
+      values.some(
+        (child, index) =>
+          root.value.childRows[index]?.unitId !== child.unitId ||
+          root.value.childRows[index]?.revision !== child.revision ||
+          root.value.childRows[index]?.commitment !== child.commitment ||
+          !same(child.scope, root.value.scope) ||
+          child.holder !== root.value.holder ||
+          !same(child.unit, root.value.run.units[child.unitId]),
+      )
+    )
+      return undefined;
+    const rows = [
+      {
+        issueId: this.rootIssueId,
+        next: {
+          commitment: root.value.aggregateCommitment,
+          projection: root.value,
+        },
+      },
+      ...values.map((child) => {
+        const issueId = this.childIssueId(child.unitId);
+        return issueId === undefined
+          ? undefined
+          : {
+              issueId,
+              next: { commitment: child.commitment, projection: child },
+            };
+      }),
+    ];
+    return rows.some((row) => row === undefined) ||
+      new Set(rows.map((row) => row?.issueId)).size !== rows.length
+      ? undefined
+      : (rows as { issueId: string; next: unknown }[]).sort((left, right) =>
+          compareCodeUnits(left.issueId, right.issueId),
+        );
   }
 
   private readStatement(batch: MutationBatch): string | undefined {

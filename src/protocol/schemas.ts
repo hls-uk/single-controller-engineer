@@ -101,6 +101,78 @@ export const EffectKindSchema = Type.Union([
   Type.Literal("controller_release"),
 ]);
 export type EffectKind = Static<typeof EffectKindSchema>;
+// This is deliberately duplicated here instead of importing fencing schemas:
+// fencing projections already depend on the protocol aggregate.  It is the
+// closed wire shape of the embedded adapter's SlotTransitionIntent, retained
+// with controller intent so a replacement process has the exact authority it
+// needs to reconcile rather than inventing a new slot mutation.
+const SlotScopeSchema = strictObject({
+  beadsStoreIdentity: identifier(),
+  gitRepositoryIdentity: identifier(),
+  integrationBranch: identifier(),
+});
+const SlotObservationSchema = strictObject({
+  actor: controllerHolder(),
+  holder: Type.Optional(controllerHolder()),
+  label: Type.Literal("gt:slot"),
+  readbackHash: hash(),
+  scope: SlotScopeSchema,
+  scopeCommitment: hash(),
+  slotId: identifier(),
+  status: Type.Union([Type.Literal("available"), Type.Literal("acquired")]),
+  title: Type.Literal("Merge Slot"),
+  version: Type.Literal(1),
+});
+export const EmbeddedSlotTransitionIntentSchema = strictObject({
+  after: SlotObservationSchema,
+  before: strictObject({
+    head: Type.String({ minLength: 20, maxLength: 64, pattern: "^[0-9a-z]+$" }),
+    remoteHead: Type.Optional(
+      Type.String({ minLength: 20, maxLength: 64, pattern: "^[0-9a-z]+$" }),
+    ),
+    slot: SlotObservationSchema,
+  }),
+  holder: controllerHolder(),
+  idempotencyKey: hash(),
+  kind: Type.Union([Type.Literal("acquire"), Type.Literal("release")]),
+  schema: Type.Literal("sce.beads-embedded.slot-transition"),
+  scope: SlotScopeSchema,
+  version: Type.Literal(1),
+});
+export type EmbeddedSlotTransitionIntent = Static<
+  typeof EmbeddedSlotTransitionIntentSchema
+>;
+
+/**
+ * Shared-server controller authority. Unlike the embedded record, a server
+ * transition is bound to exact before/after slot readbacks rather than Git
+ * heads. The semantic adapter validation also binds the precondition kind to
+ * acquire/release and recomputes this record's idempotency key.
+ */
+export const ServerSlotTransitionIntentSchema = strictObject({
+  after: SlotObservationSchema,
+  before: SlotObservationSchema,
+  holder: controllerHolder(),
+  idempotencyKey: hash(),
+  kind: Type.Union([Type.Literal("acquire"), Type.Literal("release")]),
+  precondition: strictObject({
+    kind: Type.Union([Type.Literal("available"), Type.Literal("held")]),
+    observationHash: hash(),
+  }),
+  schema: Type.Literal("sce.beads-server.slot-transition"),
+  scope: SlotScopeSchema,
+  topology: Type.Literal("shared-server"),
+  version: Type.Literal(1),
+});
+export type ServerSlotTransitionIntent = Static<
+  typeof ServerSlotTransitionIntentSchema
+>;
+
+export const SlotTransitionIntentSchema = Type.Union([
+  EmbeddedSlotTransitionIntentSchema,
+  ServerSlotTransitionIntentSchema,
+]);
+export type SlotTransitionIntent = Static<typeof SlotTransitionIntentSchema>;
 export const EffectJournalEntrySchema = strictObject({
   effectId: effectIdentifier(),
   unitId: nullableIdentifier(),
@@ -109,6 +181,9 @@ export const EffectJournalEntrySchema = strictObject({
   intentRevision: revision(),
   intentCommitment: hash(),
   paramsHash: hash(),
+  // Present only for controller slot acts.  This binds all before/after slot
+  // facts and heads durably before the adapter is invoked.
+  slotTransition: Type.Optional(SlotTransitionIntentSchema),
   status: EffectStatusSchema,
   observationHash: Type.Optional(hash()),
   schemaVersion: Type.Literal(SCHEMA_VERSION),
@@ -672,6 +747,7 @@ export const ProtocolEventSchema = Type.Union([
     ...controllerEventBase,
     type: Type.Literal("controller_acquire_intent"),
     ...effectIntent,
+    slotTransition: Type.Optional(SlotTransitionIntentSchema),
   }),
   strictObject({
     ...controllerEventBase,
@@ -684,6 +760,7 @@ export const ProtocolEventSchema = Type.Union([
     ...controllerEventBase,
     type: Type.Literal("controller_release_intent"),
     ...effectIntent,
+    slotTransition: Type.Optional(SlotTransitionIntentSchema),
   }),
   strictObject({
     ...controllerEventBase,
@@ -959,6 +1036,7 @@ export const RuntimeEffectSchema = Type.Union([
       requestedModel: text(),
       returnedModel: text(),
       promptHash: hash(),
+      slotTransition: Type.Optional(SlotTransitionIntentSchema),
     }),
   }),
   strictObject({
@@ -1098,6 +1176,7 @@ export const RuntimeEffectSchema = Type.Union([
     params: strictObject({
       holder: controllerHolder(),
       controllerFencingToken: identifier(),
+      slotTransition: Type.Optional(SlotTransitionIntentSchema),
     }),
   }),
 ]);

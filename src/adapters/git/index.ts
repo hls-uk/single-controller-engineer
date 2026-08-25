@@ -67,6 +67,9 @@ export type GitEffect = Readonly<{
     | "GIT_BAD_INPUT"
     | "GIT_COMMAND_FAILED"
     | "GIT_DIRTY"
+    | "GIT_ABSENT"
+    | "GIT_FOREIGN_BRANCH"
+    | "GIT_FOREIGN_PUBLICATION"
     | "GIT_FOREIGN_WORKTREE"
     | "GIT_IDENTITY_MISMATCH"
     | "GIT_MOVED_BASE"
@@ -781,6 +784,29 @@ export async function ensureBranch(
     : effect("refused", "GIT_REFUSED");
 }
 
+/** Read-only branch recovery probe; it never calls `git branch`. */
+export async function discoverBranch(
+  runner: GitRunner,
+  repository: GitRepository,
+  input: Readonly<{ base: string; branch: string }>,
+): Promise<GitEffect> {
+  if (!safeRef(input.branch) || !exactOid(repository.objectFormat, input.base))
+    return effect("refused", "GIT_BAD_INPUT");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
+  const current = await refOid(
+    runner,
+    repository,
+    `refs/heads/${input.branch}`,
+  );
+  if (current.state === "unreadable")
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  if (current.state === "missing") return effect("refused", "GIT_ABSENT");
+  return current.oid === input.base
+    ? effect("observed", "GIT_OK")
+    : effect("refused", "GIT_FOREIGN_BRANCH");
+}
+
 type WorktreeRecord = Readonly<{
   branch?: string;
   head?: string;
@@ -891,6 +917,39 @@ export async function ensureWorktree(
   return verifyCleanWorktree(runner, repository, input.path);
 }
 
+/** Read-only worktree recovery probe; absence is distinguished from foreign. */
+export async function discoverWorktree(
+  runner: GitRunner,
+  repository: GitRepository,
+  input: Readonly<{ branch: string; head: string; path: string }>,
+): Promise<GitEffect> {
+  if (
+    !safeRef(input.branch) ||
+    !exactOid(repository.objectFormat, input.head) ||
+    !safeAbsolutePath(input.path)
+  )
+    return effect("refused", "GIT_BAD_INPUT");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
+  const listed = await run(runner, repository, [
+    "worktree",
+    "list",
+    "--porcelain",
+  ]);
+  const failure = outputResult(listed);
+  if (failure !== undefined) return failure;
+  const records = parseWorktreeList(listed.stdout, repository.objectFormat);
+  const wantedPath = canonicalWorktreePath(input.path);
+  if (records === undefined || wantedPath === undefined)
+    return effect("refused", "GIT_REFUSED");
+  const existing = records.find((record) => record.path === wantedPath);
+  if (existing === undefined) return effect("refused", "GIT_ABSENT");
+  return existing.head === input.head &&
+    existing.branch === `refs/heads/${input.branch}`
+    ? verifyCleanWorktree(runner, repository, input.path)
+    : effect("refused", "GIT_FOREIGN_WORKTREE");
+}
+
 /** Recovery is read-only: it determines whether an intent already took effect. */
 export async function discoverIntegration(
   runner: GitRunner,
@@ -902,6 +961,8 @@ export async function discoverIntegration(
     !exactOid(repository.objectFormat, input.candidate)
   )
     return effect("refused", "GIT_BAD_INPUT");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
   const current = await refOid(runner, repository, input.integrationRef);
   if (current.state === "unreadable")
     return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
@@ -988,6 +1049,40 @@ export async function publishCandidate(
   if (remote.state === "unreadable" || terminalFailure(pushed) !== undefined)
     return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
   return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+}
+
+/** Read-only remote-ref publication recovery probe. */
+export async function discoverPublication(
+  runner: GitRunner,
+  repository: GitRepository,
+  input: Readonly<{ candidate: string; remote: string; remoteBranch: string }>,
+): Promise<GitEffect> {
+  if (
+    !REMOTE.test(input.remote) ||
+    !safeRef(input.remoteBranch) ||
+    !exactOid(repository.objectFormat, input.candidate)
+  )
+    return effect("refused", "GIT_BAD_INPUT");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
+  const remoteVerified = await verifySinglePushRemote(
+    runner,
+    repository,
+    input.remote,
+  );
+  if (remoteVerified.state !== "observed") return remoteVerified;
+  const current = await remoteRefOid(
+    runner,
+    repository,
+    input.remote,
+    `refs/heads/${input.remoteBranch}`,
+  );
+  if (current.state === "unreadable")
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  if (current.state === "missing") return effect("refused", "GIT_ABSENT");
+  return current.oid === input.candidate
+    ? effect("observed", "GIT_OK")
+    : effect("refused", "GIT_FOREIGN_PUBLICATION");
 }
 
 /**

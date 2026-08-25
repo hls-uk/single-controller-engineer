@@ -7,6 +7,7 @@ import test from "node:test";
 
 import {
   commandNames,
+  createRecoveryCommandRunner,
   MAX_CLI_RESPONSE_BYTES,
   validateCommandRequest,
 } from "../../src/commands/index.js";
@@ -111,6 +112,24 @@ test("a runner receives a typed parsed request and can return a successful envel
     result: { legalActions: ["plan-wave"] },
     schema: "sce.cli.response",
     version: 1,
+  });
+});
+
+test("an injected recovery composition replaces the Phase-2 unavailable boundary", async () => {
+  let calls = 0;
+  const state = run();
+  const execution = await runCli(["plan-wave", "--json"], {
+    runner: createRecoveryCommandRunner(async (event) => {
+      calls += 1;
+      assert.equal(event, undefined);
+      return { revision: state.revision, run: state, status: "idle" };
+    }),
+  });
+  assert.equal(calls, 1);
+  assert.equal(execution.exitCode, 0);
+  assert.deepEqual(JSON.parse(execution.stdout).result, {
+    revision: state.revision,
+    status: "idle",
   });
 });
 
@@ -392,11 +411,6 @@ test("conditional command envelopes reject accidental fields and semantic state"
     true,
   );
   for (const request of [
-    {
-      ...header,
-      command: "next",
-      options: { json: false },
-    },
     {
       ...header,
       command: "next",

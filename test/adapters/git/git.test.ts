@@ -167,7 +167,7 @@ test("local fast-forward refuses a moved approved base and discovers crash outco
     ).code,
     "GIT_MOVED_BASE",
   );
-  const landed = scripted(ok(`${candidate}\n`));
+  const landed = scripted(...identityResults(), ok(`${candidate}\n`));
   assert.equal(
     (
       await discoverIntegration(landed, repository(), {
@@ -177,7 +177,7 @@ test("local fast-forward refuses a moved approved base and discovers crash outco
     ).state,
     "observed",
   );
-  const absent = scripted(ok());
+  const absent = scripted(...identityResults(), ok());
   assert.equal(
     (
       await discoverIntegration(absent, repository(), {
@@ -187,7 +187,7 @@ test("local fast-forward refuses a moved approved base and discovers crash outco
     ).code,
     "GIT_NOT_FAST_FORWARD",
   );
-  const unreadable = scripted({
+  const unreadable = scripted(...identityResults(), {
     exitCode: null,
     signal: "SIGKILL",
     stdout: "",
@@ -200,6 +200,22 @@ test("local fast-forward refuses a moved approved base and discovers crash outco
       })
     ).code,
     "GIT_UNRESOLVED_EFFECT",
+  );
+
+  const wrongRepository = scripted(
+    ok("/foreign/.git\n"),
+    ok("sha1\n"),
+    ok("https://example.invalid/repo.git\n"),
+    ok(`${candidate}\n`),
+  );
+  assert.equal(
+    (
+      await discoverIntegration(wrongRepository, repository(), {
+        candidate,
+        integrationRef: "refs/heads/main",
+      })
+    ).code,
+    "GIT_IDENTITY_MISMATCH",
   );
 });
 

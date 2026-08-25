@@ -10,6 +10,7 @@ import {
   deriveSlotReadbackHash,
   type FencingScope,
   type MergeSlotObservation,
+  validateMergeSlotObservation,
   type MutationBatch,
   validateMutationBatch,
 } from "../../fencing/index.js";
@@ -18,6 +19,8 @@ import { isPinnedBdIssueRow, type EmbeddedResult } from "./schemas.js";
 
 import type {
   CrashDiscovery,
+  EmbeddedInitialProjection,
+  EmbeddedLoad,
   EmbeddedProcessPort,
   EmbeddedProcessIdentity,
   EmbeddedReadback,
@@ -37,7 +40,21 @@ const EXECUTABLE_SAMPLE_BYTES = 65_536;
 const MAX_CLONE_LINEAGE_EDGES = 64;
 
 export interface ProjectionPersistencePort {
+  initialize?(
+    authority: "sce.embedded.projection.initialize.v1",
+    input: EmbeddedInitialProjection,
+    slot: MergeSlotObservation,
+  ): Promise<EmbeddedResponse>;
+  load?(): Promise<EmbeddedLoad>;
   mutate(batch: MutationBatch): Promise<EmbeddedResponse>;
+  mutatePreOwnership?(
+    batch: MutationBatch,
+    slot: MergeSlotObservation,
+  ): Promise<EmbeddedResponse>;
+  matchesInitialDelta?(
+    input: EmbeddedInitialProjection,
+    source: string,
+  ): boolean;
   readback(batch: MutationBatch): Promise<EmbeddedReadback | undefined>;
   discover(
     request: Extract<EmbeddedRequest, { readonly kind: "discover" }>,
@@ -935,6 +952,14 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
               },
             };
       }
+      case "load":
+        return {
+          kind: "load",
+          value:
+            this.projections.load === undefined
+              ? { status: "unavailable" }
+              : await this.projections.load(),
+        };
       case "slot": {
         if (request.source === "remote") {
           if (request.action !== "check" || this.remote === undefined)
@@ -999,6 +1024,44 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         if (!validateMutationBatch(request.batch).ok)
           return { kind: "mutation", value: "quarantined" };
         return this.projections.mutate(request.batch);
+      case "initialize":
+        if (
+          !validateMergeSlotObservation(request.slot, this.prefix, this.scope)
+            .ok ||
+          request.slot.status !== "available" ||
+          request.slot.holder !== undefined
+        )
+          return { kind: "mutation", value: "quarantined" };
+        return this.projections.initialize === undefined
+          ? { kind: "mutation", value: "unavailable" }
+          : this.projections.initialize(
+              "sce.embedded.projection.initialize.v1",
+              request.input,
+              request.slot,
+            );
+      case "preownership_mutation":
+        if (!validateMutationBatch(request.batch).ok)
+          return { kind: "mutation", value: "quarantined" };
+        if (
+          !validateMergeSlotObservation(request.slot, this.prefix, this.scope)
+            .ok ||
+          request.slot.status !== "available" ||
+          request.slot.holder !== undefined
+        )
+          return { kind: "mutation", value: "quarantined" };
+        return this.projections.mutatePreOwnership === undefined
+          ? { kind: "mutation", value: "unavailable" }
+          : this.projections.mutatePreOwnership(request.batch, request.slot);
+      case "initial_commit":
+        return {
+          kind: "commit",
+          value: await this.commitInitialProjection(request.input),
+        };
+      case "initial_push":
+        return {
+          kind: "push",
+          value: await this.pushInitialProjection(request.input),
+        };
       case "readback": {
         if (!validateMutationBatch(request.batch).ok)
           throw new Error("invalid readback batch");
@@ -1110,6 +1173,102 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       ...withoutHash,
       readbackHash: deriveSlotReadbackHash(withoutHash),
     };
+  }
+
+  /** Commit only an exact all-row initial projection delta. */
+  private async commitInitialProjection(
+    input: EmbeddedInitialProjection,
+  ): Promise<"applied" | "ambiguous" | "unavailable"> {
+    const head = await this.doltHead(this.databaseDirectory);
+    const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+    if (head === undefined || workingSet === undefined) return "unavailable";
+    if (this.projections.matchesInitialDelta === undefined)
+      return "unavailable";
+    if (workingSet === "pending") {
+      const diff = await this.runDolt(this.databaseDirectory, [
+        "diff",
+        "--data",
+        "-r",
+        "json",
+        head,
+      ]);
+      if (
+        diff === undefined ||
+        diff.code !== 0 ||
+        diff.exceeded ||
+        !this.projections.matchesInitialDelta(input, diff.stdout)
+      )
+        return "ambiguous";
+      const committed = await this.run(["dolt", "commit", "--json"]);
+      return committed === undefined || committed.exceeded
+        ? "unavailable"
+        : committed.code === 0
+          ? "applied"
+          : "ambiguous";
+    }
+    if (workingSet !== "clean") return "ambiguous";
+    const parents = await this.directParents(head);
+    if (
+      parents === undefined ||
+      parents.length !== 1 ||
+      parents[0] === undefined
+    )
+      return "ambiguous";
+    const diff = await this.runDolt(this.databaseDirectory, [
+      "diff",
+      "--data",
+      "-r",
+      "json",
+      parents[0],
+      head,
+    ]);
+    return diff !== undefined &&
+      diff.code === 0 &&
+      !diff.exceeded &&
+      this.projections.matchesInitialDelta(input, diff.stdout)
+      ? "applied"
+      : "ambiguous";
+  }
+
+  /** Push only the exact direct checkpoint whose parent is the remote head. */
+  private async pushInitialProjection(
+    input: EmbeddedInitialProjection,
+  ): Promise<"applied" | "conflict" | "ambiguous" | "unavailable"> {
+    if (
+      this.remote === undefined ||
+      this.projections.matchesInitialDelta === undefined
+    )
+      return "unavailable";
+    const head = await this.doltHead(this.databaseDirectory);
+    const remote = await this.remoteHead(this.databaseDirectory, this.remote);
+    const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+    if (head === undefined || remote === undefined || workingSet === undefined)
+      return "unavailable";
+    if (workingSet !== "clean") return "ambiguous";
+    if (head === remote) return "applied";
+    const parents = await this.directParents(head);
+    if (parents === undefined || parents.length !== 1 || parents[0] !== remote)
+      return "ambiguous";
+    const diff = await this.runDolt(this.databaseDirectory, [
+      "diff",
+      "--data",
+      "-r",
+      "json",
+      remote,
+      head,
+    ]);
+    if (
+      diff === undefined ||
+      diff.code !== 0 ||
+      diff.exceeded ||
+      !this.projections.matchesInitialDelta(input, diff.stdout)
+    )
+      return "ambiguous";
+    const pushed = await this.run(["dolt", "push", "--json"]);
+    if (pushed === undefined || pushed.exceeded) return "unavailable";
+    if (pushed.code !== 0) return "conflict";
+    const after = await this.remoteHead(this.databaseDirectory, this.remote);
+    return after === head ? "applied" : "ambiguous";
   }
 
   /**

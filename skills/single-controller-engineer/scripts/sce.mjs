@@ -33,9 +33,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// node_modules/ajv/dist/compile/codegen/code.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/codegen/code.js
 var require_code = __commonJS({
-  "node_modules/ajv/dist/compile/codegen/code.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/codegen/code.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.regexpCode = exports.getEsmExportName = exports.getProperty = exports.safeStringify = exports.stringify = exports.strConcat = exports.addCodeArg = exports.str = exports._ = exports.nil = exports._Code = exports.Name = exports.IDENTIFIER = exports._CodeOrName = void 0;
@@ -187,9 +187,9 @@ var require_code = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/codegen/scope.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/codegen/scope.js
 var require_scope = __commonJS({
-  "node_modules/ajv/dist/compile/codegen/scope.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/codegen/scope.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ValueScope = exports.ValueScopeName = exports.Scope = exports.varKinds = exports.UsedValueState = void 0;
@@ -332,9 +332,9 @@ var require_scope = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/codegen/index.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/codegen/index.js
 var require_codegen = __commonJS({
-  "node_modules/ajv/dist/compile/codegen/index.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/codegen/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.or = exports.and = exports.not = exports.CodeGen = exports.operators = exports.varKinds = exports.ValueScopeName = exports.ValueScope = exports.Scope = exports.Name = exports.regexpCode = exports.stringify = exports.getProperty = exports.nil = exports.strConcat = exports.str = exports._ = void 0;
@@ -1052,19 +1052,19 @@ var require_codegen = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/util.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/util.js
 var require_util = __commonJS({
-  "node_modules/ajv/dist/compile/util.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/util.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.checkStrictMode = exports.getErrorPath = exports.Type = exports.useFunc = exports.setEvaluated = exports.evaluatedPropsToName = exports.mergeEvaluated = exports.eachItem = exports.unescapeJsonPointer = exports.escapeJsonPointer = exports.escapeFragment = exports.unescapeFragment = exports.schemaRefOrVal = exports.schemaHasRulesButRef = exports.schemaHasRules = exports.checkUnknownRules = exports.alwaysValidSchema = exports.toHash = void 0;
     var codegen_1 = require_codegen();
     var code_1 = require_code();
     function toHash(arr) {
-      const hash2 = {};
+      const hash3 = {};
       for (const item of arr)
-        hash2[item] = true;
-      return hash2;
+        hash3[item] = true;
+      return hash3;
     }
     exports.toHash = toHash;
     function alwaysValidSchema(it, schema) {
@@ -1219,9 +1219,9 @@ var require_util = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/names.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/names.js
 var require_names = __commonJS({
-  "node_modules/ajv/dist/compile/names.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/names.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -1258,9 +1258,9 @@ var require_names = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/errors.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/errors.js
 var require_errors = __commonJS({
-  "node_modules/ajv/dist/compile/errors.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/errors.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extendErrors = exports.resetErrorsCount = exports.reportExtraError = exports.reportError = exports.keyword$DataError = exports.keywordError = void 0;
@@ -1380,9 +1380,9 @@ var require_errors = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/validate/boolSchema.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/validate/boolSchema.js
 var require_boolSchema = __commonJS({
-  "node_modules/ajv/dist/compile/validate/boolSchema.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/validate/boolSchema.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.boolOrEmptySchema = exports.topBoolOrEmptySchema = void 0;
@@ -1431,9 +1431,9 @@ var require_boolSchema = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/rules.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/rules.js
 var require_rules = __commonJS({
-  "node_modules/ajv/dist/compile/rules.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/rules.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.getRules = exports.isJSONType = void 0;
@@ -1462,9 +1462,9 @@ var require_rules = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/validate/applicability.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/validate/applicability.js
 var require_applicability = __commonJS({
-  "node_modules/ajv/dist/compile/validate/applicability.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/validate/applicability.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.shouldUseRule = exports.shouldUseGroup = exports.schemaHasRulesForType = void 0;
@@ -1485,9 +1485,9 @@ var require_applicability = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/validate/dataType.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/validate/dataType.js
 var require_dataType = __commonJS({
-  "node_modules/ajv/dist/compile/validate/dataType.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/validate/dataType.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.reportTypeError = exports.checkDataTypes = exports.checkDataType = exports.coerceAndCheckDataType = exports.getJSONTypes = exports.getSchemaTypes = exports.DataType = void 0;
@@ -1669,9 +1669,9 @@ var require_dataType = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/validate/defaults.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/validate/defaults.js
 var require_defaults = __commonJS({
-  "node_modules/ajv/dist/compile/validate/defaults.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/validate/defaults.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.assignDefaults = void 0;
@@ -1706,9 +1706,9 @@ var require_defaults = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/code.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/code.js
 var require_code2 = __commonJS({
-  "node_modules/ajv/dist/vocabularies/code.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/code.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateUnion = exports.validateArray = exports.usePattern = exports.callValidateCode = exports.schemaProperties = exports.allSchemaProperties = exports.noPropertyInData = exports.propertyInData = exports.isOwnProperty = exports.hasPropFunc = exports.reportMissingProp = exports.checkMissingProp = exports.checkReportMissingProp = void 0;
@@ -1839,9 +1839,9 @@ var require_code2 = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/validate/keyword.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/validate/keyword.js
 var require_keyword = __commonJS({
-  "node_modules/ajv/dist/compile/validate/keyword.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/validate/keyword.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateKeywordUsage = exports.validSchemaType = exports.funcKeywordCode = exports.macroKeywordCode = void 0;
@@ -1957,9 +1957,9 @@ var require_keyword = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/validate/subschema.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/validate/subschema.js
 var require_subschema = __commonJS({
-  "node_modules/ajv/dist/compile/validate/subschema.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/validate/subschema.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.extendSubschemaMode = exports.extendSubschemaData = exports.getSubschema = void 0;
@@ -2040,9 +2040,9 @@ var require_subschema = __commonJS({
   }
 });
 
-// node_modules/fast-deep-equal/index.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/fast-deep-equal/index.js
 var require_fast_deep_equal = __commonJS({
-  "node_modules/fast-deep-equal/index.js"(exports, module) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/fast-deep-equal/index.js"(exports, module) {
     "use strict";
     module.exports = function equal(a, b) {
       if (a === b) return true;
@@ -2075,9 +2075,9 @@ var require_fast_deep_equal = __commonJS({
   }
 });
 
-// node_modules/json-schema-traverse/index.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/json-schema-traverse/index.js
 var require_json_schema_traverse = __commonJS({
-  "node_modules/json-schema-traverse/index.js"(exports, module) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/json-schema-traverse/index.js"(exports, module) {
     "use strict";
     var traverse = module.exports = function(schema, opts, cb) {
       if (typeof opts == "function") {
@@ -2163,9 +2163,9 @@ var require_json_schema_traverse = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/resolve.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/resolve.js
 var require_resolve = __commonJS({
-  "node_modules/ajv/dist/compile/resolve.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/resolve.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.getSchemaRefs = exports.resolveUrl = exports.normalizeId = exports._getFullPath = exports.getFullPath = exports.inlineRef = void 0;
@@ -2319,9 +2319,9 @@ var require_resolve = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/validate/index.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/validate/index.js
 var require_validate = __commonJS({
-  "node_modules/ajv/dist/compile/validate/index.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/validate/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.getData = exports.KeywordCxt = exports.validateFunctionCode = void 0;
@@ -2827,9 +2827,9 @@ var require_validate = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/runtime/validation_error.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/runtime/validation_error.js
 var require_validation_error = __commonJS({
-  "node_modules/ajv/dist/runtime/validation_error.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/runtime/validation_error.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var ValidationError = class extends Error {
@@ -2843,9 +2843,9 @@ var require_validation_error = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/ref_error.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/ref_error.js
 var require_ref_error = __commonJS({
-  "node_modules/ajv/dist/compile/ref_error.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/ref_error.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var resolve_1 = require_resolve();
@@ -2860,9 +2860,9 @@ var require_ref_error = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/compile/index.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/index.js
 var require_compile = __commonJS({
-  "node_modules/ajv/dist/compile/index.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/compile/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.resolveSchema = exports.getCompilingSchema = exports.resolveRef = exports.compileSchema = exports.SchemaEnv = void 0;
@@ -3084,9 +3084,9 @@ var require_compile = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/refs/data.json
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/refs/data.json
 var require_data = __commonJS({
-  "node_modules/ajv/dist/refs/data.json"(exports, module) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/refs/data.json"(exports, module) {
     module.exports = {
       $id: "https://raw.githubusercontent.com/ajv-validator/ajv/master/lib/refs/data.json#",
       description: "Meta-schema for $data reference (JSON AnySchema extension proposal)",
@@ -3103,9 +3103,9 @@ var require_data = __commonJS({
   }
 });
 
-// node_modules/fast-uri/lib/utils.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/fast-uri/lib/utils.js
 var require_utils = __commonJS({
-  "node_modules/fast-uri/lib/utils.js"(exports, module) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/fast-uri/lib/utils.js"(exports, module) {
     "use strict";
     var isUUID = RegExp.prototype.test.bind(/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/iu);
     var isIPv4 = RegExp.prototype.test.bind(/^(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$/u);
@@ -3261,8 +3261,8 @@ var require_utils = __commonJS({
       }
       return ind;
     }
-    function removeDotSegments(path) {
-      let input = path;
+    function removeDotSegments(path2) {
+      let input = path2;
       const output = [];
       let nextSlash = -1;
       let len = 0;
@@ -3600,9 +3600,9 @@ var require_utils = __commonJS({
   }
 });
 
-// node_modules/fast-uri/lib/schemes.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/fast-uri/lib/schemes.js
 var require_schemes = __commonJS({
-  "node_modules/fast-uri/lib/schemes.js"(exports, module) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/fast-uri/lib/schemes.js"(exports, module) {
     "use strict";
     var { isUUID } = require_utils();
     var URN_REG = /^([\da-z][\d\-a-z]{0,31}):((?:[\w!$'()*+,\-./:;=@]|%[\da-f]{2})+)$/iu;
@@ -3667,8 +3667,8 @@ var require_schemes = __commonJS({
       }
       if (wsComponent.resourceName) {
         const queryIndex = wsComponent.resourceName.indexOf("?");
-        const path = queryIndex === -1 ? wsComponent.resourceName : wsComponent.resourceName.slice(0, queryIndex);
-        wsComponent.path = path && path !== "/" ? path : void 0;
+        const path2 = queryIndex === -1 ? wsComponent.resourceName : wsComponent.resourceName.slice(0, queryIndex);
+        wsComponent.path = path2 && path2 !== "/" ? path2 : void 0;
         wsComponent.query = queryIndex === -1 ? void 0 : wsComponent.resourceName.slice(queryIndex + 1);
         wsComponent.resourceName = void 0;
       }
@@ -3811,9 +3811,9 @@ var require_schemes = __commonJS({
   }
 });
 
-// node_modules/fast-uri/index.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/fast-uri/index.js
 var require_fast_uri = __commonJS({
-  "node_modules/fast-uri/index.js"(exports, module) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/fast-uri/index.js"(exports, module) {
     "use strict";
     var { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizePercentEncoding, normalizePathEncoding, serializePathEncoding, normalizeQueryFragmentEncoding, encodeQuery, encodeFragment, reescapeHostDelimiters, isIPv4, nonSimpleDomain } = require_utils();
     var { SCHEMES, getSchemeHandler } = require_schemes();
@@ -4210,9 +4210,9 @@ var require_fast_uri = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/runtime/uri.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/runtime/uri.js
 var require_uri = __commonJS({
-  "node_modules/ajv/dist/runtime/uri.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/runtime/uri.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var uri = require_fast_uri();
@@ -4221,9 +4221,9 @@ var require_uri = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/core.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/core.js
 var require_core = __commonJS({
-  "node_modules/ajv/dist/core.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/core.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.CodeGen = exports.Name = exports.nil = exports.stringify = exports.str = exports._ = exports.KeywordCxt = void 0;
@@ -4329,7 +4329,7 @@ var require_core = __commonJS({
         uriResolver
       };
     }
-    var Ajv3 = class {
+    var Ajv5 = class {
       constructor(opts = {}) {
         this.schemas = {};
         this.refs = {};
@@ -4613,7 +4613,7 @@ var require_core = __commonJS({
       errorsText(errors = this.errors, { separator = ", ", dataVar = "data" } = {}) {
         if (!errors || errors.length === 0)
           return "No errors";
-        return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text2, msg) => text2 + separator + msg);
+        return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text3, msg) => text3 + separator + msg);
       }
       $dataMetaSchema(metaSchema, keywordsJsonPointers) {
         const rules = this.RULES.all;
@@ -4699,9 +4699,9 @@ var require_core = __commonJS({
         }
       }
     };
-    Ajv3.ValidationError = validation_error_1.default;
-    Ajv3.MissingRefError = ref_error_1.default;
-    exports.default = Ajv3;
+    Ajv5.ValidationError = validation_error_1.default;
+    Ajv5.MissingRefError = ref_error_1.default;
+    exports.default = Ajv5;
     function checkOptions(checkOpts, options, msg, log = "error") {
       for (const key in checkOpts) {
         const opt = key;
@@ -4832,9 +4832,9 @@ var require_core = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/core/id.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/core/id.js
 var require_id = __commonJS({
-  "node_modules/ajv/dist/vocabularies/core/id.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/core/id.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var def = {
@@ -4847,9 +4847,9 @@ var require_id = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/core/ref.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/core/ref.js
 var require_ref = __commonJS({
-  "node_modules/ajv/dist/vocabularies/core/ref.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/core/ref.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.callRef = exports.getValidate = void 0;
@@ -4969,9 +4969,9 @@ var require_ref = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/core/index.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/core/index.js
 var require_core2 = __commonJS({
-  "node_modules/ajv/dist/vocabularies/core/index.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/core/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var id_1 = require_id();
@@ -4990,9 +4990,9 @@ var require_core2 = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/limitNumber.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/limitNumber.js
 var require_limitNumber = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/limitNumber.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/limitNumber.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5022,9 +5022,9 @@ var require_limitNumber = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/multipleOf.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/multipleOf.js
 var require_multipleOf = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/multipleOf.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/multipleOf.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5050,9 +5050,9 @@ var require_multipleOf = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/runtime/ucs2length.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/runtime/ucs2length.js
 var require_ucs2length = __commonJS({
-  "node_modules/ajv/dist/runtime/ucs2length.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/runtime/ucs2length.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     function ucs2length(str) {
@@ -5076,9 +5076,9 @@ var require_ucs2length = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/limitLength.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/limitLength.js
 var require_limitLength = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/limitLength.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/limitLength.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5108,9 +5108,9 @@ var require_limitLength = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/pattern.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/pattern.js
 var require_pattern = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/pattern.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/pattern.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -5145,9 +5145,9 @@ var require_pattern = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/limitProperties.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/limitProperties.js
 var require_limitProperties = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/limitProperties.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/limitProperties.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5174,9 +5174,9 @@ var require_limitProperties = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/required.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/required.js
 var require_required = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/required.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/required.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -5256,9 +5256,9 @@ var require_required = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/limitItems.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/limitItems.js
 var require_limitItems = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/limitItems.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/limitItems.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5285,9 +5285,9 @@ var require_limitItems = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/runtime/equal.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/runtime/equal.js
 var require_equal = __commonJS({
-  "node_modules/ajv/dist/runtime/equal.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/runtime/equal.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var equal = require_fast_deep_equal();
@@ -5296,9 +5296,9 @@ var require_equal = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/uniqueItems.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/uniqueItems.js
 var require_uniqueItems = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/uniqueItems.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/uniqueItems.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var dataType_1 = require_dataType();
@@ -5363,9 +5363,9 @@ var require_uniqueItems = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/const.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/const.js
 var require_const = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/const.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/const.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5392,9 +5392,9 @@ var require_const = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/enum.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/enum.js
 var require_enum = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/enum.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/enum.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5441,9 +5441,9 @@ var require_enum = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/validation/index.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/index.js
 var require_validation = __commonJS({
-  "node_modules/ajv/dist/vocabularies/validation/index.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/validation/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var limitNumber_1 = require_limitNumber();
@@ -5479,9 +5479,9 @@ var require_validation = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/additionalItems.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/additionalItems.js
 var require_additionalItems = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/additionalItems.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/additionalItems.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateAdditionalItems = void 0;
@@ -5532,9 +5532,9 @@ var require_additionalItems = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/items.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/items.js
 var require_items = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/items.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/items.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateTuple = void 0;
@@ -5589,9 +5589,9 @@ var require_items = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/prefixItems.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/prefixItems.js
 var require_prefixItems = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/prefixItems.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/prefixItems.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var items_1 = require_items();
@@ -5606,9 +5606,9 @@ var require_prefixItems = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/items2020.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/items2020.js
 var require_items2020 = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/items2020.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/items2020.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5641,9 +5641,9 @@ var require_items2020 = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/contains.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/contains.js
 var require_contains = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/contains.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/contains.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5735,9 +5735,9 @@ var require_contains = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/dependencies.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/dependencies.js
 var require_dependencies = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/dependencies.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/dependencies.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.validateSchemaDeps = exports.validatePropertyDeps = exports.error = void 0;
@@ -5829,9 +5829,9 @@ var require_dependencies = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/propertyNames.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/propertyNames.js
 var require_propertyNames = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/propertyNames.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/propertyNames.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -5872,9 +5872,9 @@ var require_propertyNames = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js
 var require_additionalProperties = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/additionalProperties.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -5978,9 +5978,9 @@ var require_additionalProperties = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/properties.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/properties.js
 var require_properties = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/properties.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/properties.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var validate_1 = require_validate();
@@ -6036,9 +6036,9 @@ var require_properties = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/patternProperties.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/patternProperties.js
 var require_patternProperties = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/patternProperties.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/patternProperties.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -6110,9 +6110,9 @@ var require_patternProperties = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/not.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/not.js
 var require_not = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/not.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/not.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var util_1 = require_util();
@@ -6141,9 +6141,9 @@ var require_not = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/anyOf.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/anyOf.js
 var require_anyOf = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/anyOf.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/anyOf.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var code_1 = require_code2();
@@ -6158,9 +6158,9 @@ var require_anyOf = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/oneOf.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/oneOf.js
 var require_oneOf = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/oneOf.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/oneOf.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -6216,9 +6216,9 @@ var require_oneOf = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/allOf.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/allOf.js
 var require_allOf = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/allOf.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/allOf.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var util_1 = require_util();
@@ -6243,9 +6243,9 @@ var require_allOf = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/if.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/if.js
 var require_if = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/if.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/if.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -6312,9 +6312,9 @@ var require_if = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/thenElse.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/thenElse.js
 var require_thenElse = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/thenElse.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/thenElse.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var util_1 = require_util();
@@ -6330,9 +6330,9 @@ var require_thenElse = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/applicator/index.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/index.js
 var require_applicator = __commonJS({
-  "node_modules/ajv/dist/vocabularies/applicator/index.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/applicator/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var additionalItems_1 = require_additionalItems();
@@ -6378,9 +6378,9 @@ var require_applicator = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/format/format.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/format/format.js
 var require_format = __commonJS({
-  "node_modules/ajv/dist/vocabularies/format/format.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/format/format.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -6468,9 +6468,9 @@ var require_format = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/format/index.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/format/index.js
 var require_format2 = __commonJS({
-  "node_modules/ajv/dist/vocabularies/format/index.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/format/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var format_1 = require_format();
@@ -6479,9 +6479,9 @@ var require_format2 = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/metadata.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/metadata.js
 var require_metadata = __commonJS({
-  "node_modules/ajv/dist/vocabularies/metadata.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/metadata.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.contentVocabulary = exports.metadataVocabulary = void 0;
@@ -6502,9 +6502,9 @@ var require_metadata = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/draft7.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/draft7.js
 var require_draft7 = __commonJS({
-  "node_modules/ajv/dist/vocabularies/draft7.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/draft7.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var core_1 = require_core2();
@@ -6524,9 +6524,9 @@ var require_draft7 = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/discriminator/types.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/discriminator/types.js
 var require_types = __commonJS({
-  "node_modules/ajv/dist/vocabularies/discriminator/types.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/discriminator/types.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.DiscrError = void 0;
@@ -6538,9 +6538,9 @@ var require_types = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/vocabularies/discriminator/index.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/discriminator/index.js
 var require_discriminator = __commonJS({
-  "node_modules/ajv/dist/vocabularies/discriminator/index.js"(exports) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/vocabularies/discriminator/index.js"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var codegen_1 = require_codegen();
@@ -6643,9 +6643,9 @@ var require_discriminator = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/refs/json-schema-draft-07.json
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/refs/json-schema-draft-07.json
 var require_json_schema_draft_07 = __commonJS({
-  "node_modules/ajv/dist/refs/json-schema-draft-07.json"(exports, module) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/refs/json-schema-draft-07.json"(exports, module) {
     module.exports = {
       $schema: "http://json-schema.org/draft-07/schema#",
       $id: "http://json-schema.org/draft-07/schema#",
@@ -6800,9 +6800,9 @@ var require_json_schema_draft_07 = __commonJS({
   }
 });
 
-// node_modules/ajv/dist/ajv.js
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/ajv.js
 var require_ajv = __commonJS({
-  "node_modules/ajv/dist/ajv.js"(exports, module) {
+  "../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/ajv/dist/ajv.js"(exports, module) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.MissingRefError = exports.ValidationError = exports.CodeGen = exports.Name = exports.nil = exports.stringify = exports.str = exports._ = exports.KeywordCxt = exports.Ajv = void 0;
@@ -6812,7 +6812,7 @@ var require_ajv = __commonJS({
     var draft7MetaSchema = require_json_schema_draft_07();
     var META_SUPPORT_DATA = ["/properties"];
     var META_SCHEMA_ID = "http://json-schema.org/draft-07/schema";
-    var Ajv3 = class extends core_1.default {
+    var Ajv5 = class extends core_1.default {
       _addVocabularies() {
         super._addVocabularies();
         draft7_1.default.forEach((v) => this.addVocabulary(v));
@@ -6831,11 +6831,11 @@ var require_ajv = __commonJS({
         return this.opts.defaultMeta = super.defaultMeta() || (this.getSchema(META_SCHEMA_ID) ? META_SCHEMA_ID : void 0);
       }
     };
-    exports.Ajv = Ajv3;
-    module.exports = exports = Ajv3;
-    module.exports.Ajv = Ajv3;
+    exports.Ajv = Ajv5;
+    module.exports = exports = Ajv5;
+    module.exports.Ajv = Ajv5;
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.default = Ajv3;
+    exports.default = Ajv5;
     var validate_1 = require_validate();
     Object.defineProperty(exports, "KeywordCxt", { enumerable: true, get: function() {
       return validate_1.KeywordCxt;
@@ -6874,7 +6874,7 @@ var require_ajv = __commonJS({
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-// node_modules/@sinclair/typebox/build/esm/type/guard/value.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/guard/value.mjs
 var value_exports = {};
 __export(value_exports, {
   HasPropertyKey: () => HasPropertyKey,
@@ -6943,7 +6943,7 @@ function IsUndefined(value) {
   return value === void 0;
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/clone/value.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/clone/value.mjs
 function ArrayType(value) {
   return value.map((value2) => Visit(value2));
 }
@@ -6973,12 +6973,12 @@ function Clone(value) {
   return Visit(value);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/clone/type.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/clone/type.mjs
 function CloneType(schema, options) {
   return options === void 0 ? Clone(schema) : Clone({ ...options, ...schema });
 }
 
-// node_modules/@sinclair/typebox/build/esm/value/guard/guard.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/value/guard/guard.mjs
 function IsObject2(value) {
   return value !== null && typeof value === "object";
 }
@@ -6992,7 +6992,7 @@ function IsNumber2(value) {
   return typeof value === "number";
 }
 
-// node_modules/@sinclair/typebox/build/esm/system/policy.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/system/policy.mjs
 var TypeSystemPolicy;
 (function(TypeSystemPolicy2) {
   TypeSystemPolicy2.InstanceMode = "default";
@@ -7024,7 +7024,7 @@ var TypeSystemPolicy;
   TypeSystemPolicy2.IsVoidLike = IsVoidLike;
 })(TypeSystemPolicy || (TypeSystemPolicy = {}));
 
-// node_modules/@sinclair/typebox/build/esm/type/create/immutable.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/create/immutable.mjs
 function ImmutableArray(value) {
   return globalThis.Object.freeze(value).map((value2) => Immutable(value2));
 }
@@ -7051,7 +7051,7 @@ function Immutable(value) {
   return IsArray(value) ? ImmutableArray(value) : IsDate(value) ? ImmutableDate(value) : IsUint8Array(value) ? ImmutableUint8Array(value) : IsRegExp(value) ? ImmutableRegExp(value) : IsObject(value) ? ImmutableObject(value) : value;
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/create/type.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/create/type.mjs
 function CreateType(schema, options) {
   const result = options !== void 0 ? { ...options, ...schema } : schema;
   switch (TypeSystemPolicy.InstanceMode) {
@@ -7064,21 +7064,21 @@ function CreateType(schema, options) {
   }
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/error/error.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/error/error.mjs
 var TypeBoxError = class extends Error {
   constructor(message) {
     super(message);
   }
 };
 
-// node_modules/@sinclair/typebox/build/esm/type/symbols/symbols.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/symbols/symbols.mjs
 var TransformKind = /* @__PURE__ */ Symbol.for("TypeBox.Transform");
 var ReadonlyKind = /* @__PURE__ */ Symbol.for("TypeBox.Readonly");
 var OptionalKind = /* @__PURE__ */ Symbol.for("TypeBox.Optional");
 var Hint = /* @__PURE__ */ Symbol.for("TypeBox.Hint");
 var Kind = /* @__PURE__ */ Symbol.for("TypeBox.Kind");
 
-// node_modules/@sinclair/typebox/build/esm/type/guard/kind.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/guard/kind.mjs
 function IsReadonly(value) {
   return IsObject(value) && value[ReadonlyKind] === "Readonly";
 }
@@ -7209,7 +7209,7 @@ function IsSchema(value) {
   return IsAny(value) || IsArgument(value) || IsArray3(value) || IsBoolean2(value) || IsBigInt2(value) || IsAsyncIterator2(value) || IsComputed(value) || IsConstructor(value) || IsDate2(value) || IsFunction2(value) || IsInteger(value) || IsIntersect(value) || IsIterator2(value) || IsLiteral(value) || IsMappedKey(value) || IsMappedResult(value) || IsNever(value) || IsNot(value) || IsNull2(value) || IsNumber3(value) || IsObject3(value) || IsPromise(value) || IsRecord(value) || IsRef(value) || IsRegExp2(value) || IsString2(value) || IsSymbol2(value) || IsTemplateLiteral(value) || IsThis(value) || IsTuple(value) || IsUndefined3(value) || IsUnion(value) || IsUint8Array2(value) || IsUnknown(value) || IsUnsafe(value) || IsVoid(value) || IsKind(value);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/guard/type.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/guard/type.mjs
 var type_exports = {};
 __export(type_exports, {
   IsAny: () => IsAny2,
@@ -7501,7 +7501,7 @@ function IsSchema2(value) {
   return IsObject(value) && (IsAny2(value) || IsArgument2(value) || IsArray4(value) || IsBoolean3(value) || IsBigInt3(value) || IsAsyncIterator3(value) || IsComputed2(value) || IsConstructor2(value) || IsDate3(value) || IsFunction3(value) || IsInteger2(value) || IsIntersect2(value) || IsIterator3(value) || IsLiteral2(value) || IsMappedKey2(value) || IsMappedResult2(value) || IsNever2(value) || IsNot2(value) || IsNull3(value) || IsNumber4(value) || IsObject4(value) || IsPromise2(value) || IsRecord2(value) || IsRef2(value) || IsRegExp3(value) || IsString3(value) || IsSymbol3(value) || IsTemplateLiteral2(value) || IsThis2(value) || IsTuple2(value) || IsUndefined4(value) || IsUnion2(value) || IsUint8Array3(value) || IsUnknown2(value) || IsUnsafe2(value) || IsVoid2(value) || IsKind2(value));
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/patterns/patterns.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/patterns/patterns.mjs
 var PatternBoolean = "(true|false)";
 var PatternNumber = "(0|[1-9][0-9]*)";
 var PatternString = "(.*)";
@@ -7511,7 +7511,7 @@ var PatternNumberExact = `^${PatternNumber}$`;
 var PatternStringExact = `^${PatternString}$`;
 var PatternNeverExact = `^${PatternNever}$`;
 
-// node_modules/@sinclair/typebox/build/esm/type/sets/set.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/sets/set.mjs
 function SetIncludes(T, S) {
   return T.includes(S);
 }
@@ -7536,32 +7536,32 @@ function SetUnionMany(T) {
   return Acc;
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/any/any.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/any/any.mjs
 function Any(options) {
   return CreateType({ [Kind]: "Any" }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/array/array.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/array/array.mjs
 function Array2(items, options) {
   return CreateType({ [Kind]: "Array", type: "array", items }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/argument/argument.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/argument/argument.mjs
 function Argument(index) {
   return CreateType({ [Kind]: "Argument", index });
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/async-iterator/async-iterator.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/async-iterator/async-iterator.mjs
 function AsyncIterator(items, options) {
   return CreateType({ [Kind]: "AsyncIterator", type: "AsyncIterator", items }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/computed/computed.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/computed/computed.mjs
 function Computed(target, parameters, options) {
   return CreateType({ [Kind]: "Computed", target, parameters }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/discard/discard.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/discard/discard.mjs
 function DiscardKey(value, key) {
   const { [key]: _, ...rest } = value;
   return rest;
@@ -7570,12 +7570,12 @@ function Discard(value, keys) {
   return keys.reduce((acc, key) => DiscardKey(acc, key), value);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/never/never.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/never/never.mjs
 function Never(options) {
   return CreateType({ [Kind]: "Never", not: {} }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/mapped/mapped-result.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/mapped/mapped-result.mjs
 function MappedResult(properties) {
   return CreateType({
     [Kind]: "MappedResult",
@@ -7583,22 +7583,22 @@ function MappedResult(properties) {
   });
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/constructor/constructor.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/constructor/constructor.mjs
 function Constructor(parameters, returns, options) {
   return CreateType({ [Kind]: "Constructor", type: "Constructor", parameters, returns }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/function/function.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/function/function.mjs
 function Function2(parameters, returns, options) {
   return CreateType({ [Kind]: "Function", type: "Function", parameters, returns }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/union/union-create.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/union/union-create.mjs
 function UnionCreate(T, options) {
   return CreateType({ [Kind]: "Union", anyOf: T }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/union/union-evaluated.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/union/union-evaluated.mjs
 function IsUnionOptional(types) {
   return types.some((type) => IsOptional(type));
 }
@@ -7616,12 +7616,12 @@ function UnionEvaluated(T, options) {
   return T.length === 1 ? CreateType(T[0], options) : T.length === 0 ? Never(options) : ResolveUnion(T, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/union/union.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/union/union.mjs
 function Union(types, options) {
   return types.length === 0 ? Never(options) : types.length === 1 ? CreateType(types[0], options) : UnionCreate(types, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/template-literal/parse.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/template-literal/parse.mjs
 var TemplateLiteralParserError = class extends TypeBoxError {
 };
 function Unescape(pattern) {
@@ -7745,7 +7745,7 @@ function TemplateLiteralParseExact(pattern) {
   return TemplateLiteralParse(pattern.slice(1, pattern.length - 1));
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/template-literal/finite.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/template-literal/finite.mjs
 var TemplateLiteralFiniteError = class extends TypeBoxError {
 };
 function IsNumberExpression(expression) {
@@ -7767,7 +7767,7 @@ function IsTemplateLiteralFinite(schema) {
   return IsTemplateLiteralExpressionFinite(expression);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/template-literal/generate.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/template-literal/generate.mjs
 var TemplateLiteralGenerateError = class extends TypeBoxError {
 };
 function* GenerateReduce(buffer) {
@@ -7799,7 +7799,7 @@ function TemplateLiteralGenerate(schema) {
   return IsTemplateLiteralExpressionFinite(expression) ? [...TemplateLiteralExpressionGenerate(expression)] : [];
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/literal/literal.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/literal/literal.mjs
 function Literal(value, options) {
   return CreateType({
     [Kind]: "Literal",
@@ -7808,27 +7808,27 @@ function Literal(value, options) {
   }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/boolean/boolean.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/boolean/boolean.mjs
 function Boolean(options) {
   return CreateType({ [Kind]: "Boolean", type: "boolean" }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/bigint/bigint.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/bigint/bigint.mjs
 function BigInt(options) {
   return CreateType({ [Kind]: "BigInt", type: "bigint" }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/number/number.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/number/number.mjs
 function Number2(options) {
   return CreateType({ [Kind]: "Number", type: "number" }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/string/string.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/string/string.mjs
 function String2(options) {
   return CreateType({ [Kind]: "String", type: "string" }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/template-literal/syntax.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/template-literal/syntax.mjs
 function* FromUnion(syntax) {
   const trim = syntax.trim().replace(/"|'/g, "");
   return trim === "boolean" ? yield Boolean() : trim === "number" ? yield Number2() : trim === "bigint" ? yield BigInt() : trim === "string" ? yield String2() : yield (() => {
@@ -7865,7 +7865,7 @@ function TemplateLiteralSyntax(syntax) {
   return [...FromSyntax(syntax)];
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/template-literal/pattern.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/template-literal/pattern.mjs
 var TemplateLiteralPatternError = class extends TypeBoxError {
 };
 function Escape(value) {
@@ -7880,20 +7880,20 @@ function TemplateLiteralPattern(kinds) {
   return `^${kinds.map((schema) => Visit2(schema, "")).join("")}$`;
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/template-literal/union.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/template-literal/union.mjs
 function TemplateLiteralToUnion(schema) {
   const R = TemplateLiteralGenerate(schema);
   const L = R.map((S) => Literal(S));
   return UnionEvaluated(L);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/template-literal/template-literal.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/template-literal/template-literal.mjs
 function TemplateLiteral(unresolved, options) {
   const pattern = IsString(unresolved) ? TemplateLiteralPattern(TemplateLiteralSyntax(unresolved)) : TemplateLiteralPattern(unresolved);
   return CreateType({ [Kind]: "TemplateLiteral", type: "string", pattern }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/indexed/indexed-property-keys.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/indexed/indexed-property-keys.mjs
 function FromTemplateLiteral(templateLiteral) {
   const keys = TemplateLiteralGenerate(templateLiteral);
   return keys.map((key) => key.toString());
@@ -7911,7 +7911,7 @@ function IndexPropertyKeys(type) {
   return [...new Set(IsTemplateLiteral(type) ? FromTemplateLiteral(type) : IsUnion(type) ? FromUnion2(type.anyOf) : IsLiteral(type) ? FromLiteral(type.const) : IsNumber3(type) ? ["[number]"] : IsInteger(type) ? ["[number]"] : [])];
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/indexed/indexed-from-mapped-result.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/indexed/indexed-from-mapped-result.mjs
 function FromProperties(type, properties, options) {
   const result = {};
   for (const K2 of Object.getOwnPropertyNames(properties)) {
@@ -7927,7 +7927,7 @@ function IndexFromMappedResult(type, mappedResult, options) {
   return MappedResult(properties);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/indexed/indexed.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/indexed/indexed.mjs
 function FromRest(types, key) {
   return types.map((type) => IndexFromPropertyKey(type, key));
 }
@@ -7975,7 +7975,7 @@ function Index(type, key, options) {
   return CreateType(IsSchema(key) ? FromSchema(type, IndexPropertyKeys(key)) : FromSchema(type, key), options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/indexed/indexed-from-mapped-key.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/indexed/indexed-from-mapped-key.mjs
 function MappedIndexPropertyKey(type, key, options) {
   return { [key]: Index(type, [key], Clone(options)) };
 }
@@ -7992,12 +7992,12 @@ function IndexFromMappedKey(type, mappedKey, options) {
   return MappedResult(properties);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/iterator/iterator.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/iterator/iterator.mjs
 function Iterator(items, options) {
   return CreateType({ [Kind]: "Iterator", type: "Iterator", items }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/object/object.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/object/object.mjs
 function RequiredArray(properties) {
   return globalThis.Object.keys(properties).filter((key) => !IsOptional(properties[key]));
 }
@@ -8008,12 +8008,12 @@ function _Object_(properties, options) {
 }
 var Object2 = _Object_;
 
-// node_modules/@sinclair/typebox/build/esm/type/promise/promise.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/promise/promise.mjs
 function Promise2(item, options) {
   return CreateType({ [Kind]: "Promise", type: "Promise", item }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/readonly/readonly.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/readonly/readonly.mjs
 function RemoveReadonly(schema) {
   return CreateType(Discard(schema, [ReadonlyKind]));
 }
@@ -8028,7 +8028,7 @@ function Readonly(schema, enable) {
   return IsMappedResult(schema) ? ReadonlyFromMappedResult(schema, F) : ReadonlyWithFlag(schema, F);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/readonly/readonly-from-mapped-result.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/readonly/readonly-from-mapped-result.mjs
 function FromProperties2(K, F) {
   const Acc = {};
   for (const K2 of globalThis.Object.getOwnPropertyNames(K))
@@ -8043,12 +8043,12 @@ function ReadonlyFromMappedResult(R, F) {
   return MappedResult(P);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/tuple/tuple.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/tuple/tuple.mjs
 function Tuple(types, options) {
   return CreateType(types.length > 0 ? { [Kind]: "Tuple", type: "array", items: types, additionalItems: false, minItems: types.length, maxItems: types.length } : { [Kind]: "Tuple", type: "array", minItems: types.length, maxItems: types.length }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/mapped/mapped.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/mapped/mapped.mjs
 function FromMappedResult3(K, P) {
   return K in P ? FromSchemaType(K, P[K]) : MappedResult(P);
 }
@@ -8103,7 +8103,7 @@ function Mapped(key, map, options) {
   return Object2(R, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/optional/optional.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/optional/optional.mjs
 function RemoveOptional(schema) {
   return CreateType(Discard(schema, [OptionalKind]));
 }
@@ -8118,7 +8118,7 @@ function Optional(schema, enable) {
   return IsMappedResult(schema) ? OptionalFromMappedResult(schema, F) : OptionalWithFlag(schema, F);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/optional/optional-from-mapped-result.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/optional/optional-from-mapped-result.mjs
 function FromProperties4(P, F) {
   const Acc = {};
   for (const K2 of globalThis.Object.getOwnPropertyNames(P))
@@ -8133,14 +8133,14 @@ function OptionalFromMappedResult(R, F) {
   return MappedResult(P);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/intersect/intersect-create.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/intersect/intersect-create.mjs
 function IntersectCreate(T, options = {}) {
   const allObjects = T.every((schema) => IsObject3(schema));
   const clonedUnevaluatedProperties = IsSchema(options.unevaluatedProperties) ? { unevaluatedProperties: options.unevaluatedProperties } : {};
   return CreateType(options.unevaluatedProperties === false || IsSchema(options.unevaluatedProperties) || allObjects ? { ...clonedUnevaluatedProperties, [Kind]: "Intersect", type: "object", allOf: T } : { ...clonedUnevaluatedProperties, [Kind]: "Intersect", allOf: T }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/intersect/intersect-evaluated.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/intersect/intersect-evaluated.mjs
 function IsIntersectOptional(types) {
   return types.every((left) => IsOptional(left));
 }
@@ -8163,7 +8163,7 @@ function IntersectEvaluated(types, options = {}) {
   return ResolveIntersect(types, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/intersect/intersect.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/intersect/intersect.mjs
 function Intersect(types, options) {
   if (types.length === 1)
     return CreateType(types[0], options);
@@ -8174,7 +8174,7 @@ function Intersect(types, options) {
   return IntersectCreate(types, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/ref/ref.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/ref/ref.mjs
 function Ref(...args) {
   const [$ref, options] = typeof args[0] === "string" ? [args[0], args[1]] : [args[0].$id, args[1]];
   if (typeof $ref !== "string")
@@ -8182,7 +8182,7 @@ function Ref(...args) {
   return CreateType({ [Kind]: "Ref", $ref }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/awaited/awaited.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/awaited/awaited.mjs
 function FromComputed(target, parameters) {
   return Computed("Awaited", [Computed(target, parameters)]);
 }
@@ -8205,7 +8205,7 @@ function Awaited(type, options) {
   return CreateType(IsComputed(type) ? FromComputed(type.target, type.parameters) : IsIntersect(type) ? FromIntersect2(type.allOf) : IsUnion(type) ? FromUnion4(type.anyOf) : IsPromise(type) ? FromPromise(type.item) : IsRef(type) ? FromRef(type.$ref) : type, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/keyof/keyof-property-keys.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/keyof/keyof-property-keys.mjs
 function FromRest4(types) {
   const result = [];
   for (const L of types)
@@ -8244,7 +8244,7 @@ function KeyOfPropertyKeys(type) {
 }
 var includePatternProperties = false;
 
-// node_modules/@sinclair/typebox/build/esm/type/keyof/keyof.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/keyof/keyof.mjs
 function FromComputed2(target, parameters) {
   return Computed("KeyOf", [Computed(target, parameters)]);
 }
@@ -8264,7 +8264,7 @@ function KeyOf(type, options) {
   return IsComputed(type) ? FromComputed2(type.target, type.parameters) : IsRef(type) ? FromRef2(type.$ref) : IsMappedResult(type) ? KeyOfFromMappedResult(type, options) : KeyOfFromType(type, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/keyof/keyof-from-mapped-result.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/keyof/keyof-from-mapped-result.mjs
 function FromProperties6(properties, options) {
   const result = {};
   for (const K2 of globalThis.Object.getOwnPropertyNames(properties))
@@ -8279,7 +8279,7 @@ function KeyOfFromMappedResult(mappedResult, options) {
   return MappedResult(properties);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/composite/composite.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/composite/composite.mjs
 function CompositeKeys(T) {
   const Acc = [];
   for (const L of T)
@@ -8309,37 +8309,37 @@ function Composite(T, options) {
   return R;
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/date/date.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/date/date.mjs
 function Date2(options) {
   return CreateType({ [Kind]: "Date", type: "Date" }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/null/null.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/null/null.mjs
 function Null(options) {
   return CreateType({ [Kind]: "Null", type: "null" }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/symbol/symbol.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/symbol/symbol.mjs
 function Symbol2(options) {
   return CreateType({ [Kind]: "Symbol", type: "symbol" }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/undefined/undefined.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/undefined/undefined.mjs
 function Undefined(options) {
   return CreateType({ [Kind]: "Undefined", type: "undefined" }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/uint8array/uint8array.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/uint8array/uint8array.mjs
 function Uint8Array2(options) {
   return CreateType({ [Kind]: "Uint8Array", type: "Uint8Array" }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/unknown/unknown.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/unknown/unknown.mjs
 function Unknown(options) {
   return CreateType({ [Kind]: "Unknown" }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/const/const.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/const/const.mjs
 function FromArray3(T) {
   return T.map((L) => FromValue(L, false));
 }
@@ -8359,12 +8359,12 @@ function Const(T, options) {
   return CreateType(FromValue(T, true), options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/constructor-parameters/constructor-parameters.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/constructor-parameters/constructor-parameters.mjs
 function ConstructorParameters(schema, options) {
   return IsConstructor(schema) ? Tuple(schema.parameters, options) : Never(options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/enum/enum.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/enum/enum.mjs
 function Enum(item, options) {
   if (IsUndefined(item))
     throw new Error("Enum undefined or empty");
@@ -8374,7 +8374,7 @@ function Enum(item, options) {
   return Union(anyOf, { ...options, [Hint]: "Enum" });
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/extends/extends-check.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/extends/extends-check.mjs
 var ExtendsResolverError = class extends TypeBoxError {
 };
 var ExtendsResult;
@@ -8625,7 +8625,7 @@ function ExtendsCheck(left, right) {
   return Visit3(left, right);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/extends/extends-from-mapped-result.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/extends/extends-from-mapped-result.mjs
 function FromProperties8(P, Right, True, False, options) {
   const Acc = {};
   for (const K2 of globalThis.Object.getOwnPropertyNames(P))
@@ -8640,7 +8640,7 @@ function ExtendsFromMappedResult(Left, Right, True, False, options) {
   return MappedResult(P);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/extends/extends.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/extends/extends.mjs
 function ExtendsResolve(left, right, trueType, falseType) {
   const R = ExtendsCheck(left, right);
   return R === ExtendsResult.Union ? Union([trueType, falseType]) : R === ExtendsResult.True ? trueType : falseType;
@@ -8649,7 +8649,7 @@ function Extends(L, R, T, F, options) {
   return IsMappedResult(L) ? ExtendsFromMappedResult(L, R, T, F, options) : IsMappedKey(L) ? CreateType(ExtendsFromMappedKey(L, R, T, F, options)) : CreateType(ExtendsResolve(L, R, T, F), options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/extends/extends-from-mapped-key.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/extends/extends-from-mapped-key.mjs
 function FromPropertyKey(K, U, L, R, options) {
   return {
     [K]: Extends(Literal(K), U, L, R, Clone(options))
@@ -8668,12 +8668,12 @@ function ExtendsFromMappedKey(T, U, L, R, options) {
   return MappedResult(P);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/exclude/exclude-from-template-literal.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/exclude/exclude-from-template-literal.mjs
 function ExcludeFromTemplateLiteral(L, R) {
   return Exclude(TemplateLiteralToUnion(L), R);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/exclude/exclude.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/exclude/exclude.mjs
 function ExcludeRest(L, R) {
   const excluded = L.filter((inner) => ExtendsCheck(inner, R) === ExtendsResult.False);
   return excluded.length === 1 ? excluded[0] : Union(excluded);
@@ -8686,7 +8686,7 @@ function Exclude(L, R, options = {}) {
   return CreateType(IsUnion(L) ? ExcludeRest(L.anyOf, R) : ExtendsCheck(L, R) !== ExtendsResult.False ? Never() : L, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/exclude/exclude-from-mapped-result.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/exclude/exclude-from-mapped-result.mjs
 function FromProperties9(P, U) {
   const Acc = {};
   for (const K2 of globalThis.Object.getOwnPropertyNames(P))
@@ -8701,12 +8701,12 @@ function ExcludeFromMappedResult(R, T) {
   return MappedResult(P);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/extract/extract-from-template-literal.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/extract/extract-from-template-literal.mjs
 function ExtractFromTemplateLiteral(L, R) {
   return Extract(TemplateLiteralToUnion(L), R);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/extract/extract.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/extract/extract.mjs
 function ExtractRest(L, R) {
   const extracted = L.filter((inner) => ExtendsCheck(inner, R) !== ExtendsResult.False);
   return extracted.length === 1 ? extracted[0] : Union(extracted);
@@ -8719,7 +8719,7 @@ function Extract(L, R, options) {
   return CreateType(IsUnion(L) ? ExtractRest(L.anyOf, R) : ExtendsCheck(L, R) !== ExtendsResult.False ? L : Never(), options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/extract/extract-from-mapped-result.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/extract/extract-from-mapped-result.mjs
 function FromProperties10(P, T) {
   const Acc = {};
   for (const K2 of globalThis.Object.getOwnPropertyNames(P))
@@ -8734,17 +8734,17 @@ function ExtractFromMappedResult(R, T) {
   return MappedResult(P);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/instance-type/instance-type.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/instance-type/instance-type.mjs
 function InstanceType(schema, options) {
   return IsConstructor(schema) ? CreateType(schema.returns, options) : Never(options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/readonly-optional/readonly-optional.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/readonly-optional/readonly-optional.mjs
 function ReadonlyOptional(schema) {
   return Readonly(Optional(schema));
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/record/record.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/record/record.mjs
 function RecordCreateFromPattern(pattern, T, options) {
   return CreateType({ [Kind]: "Record", type: "object", patternProperties: { [pattern]: T } }, options);
 }
@@ -8799,7 +8799,7 @@ function RecordValue2(type) {
   return type.patternProperties[RecordPattern(type)];
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/instantiate/instantiate.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/instantiate/instantiate.mjs
 function FromConstructor2(args, type) {
   type.parameters = FromTypes(args, type.parameters);
   type.returns = FromType(args, type.returns);
@@ -8874,12 +8874,12 @@ function Instantiate(type, args) {
   return FromType(args, CloneType(type));
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/integer/integer.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/integer/integer.mjs
 function Integer(options) {
   return CreateType({ [Kind]: "Integer", type: "integer" }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/intrinsic/intrinsic-from-mapped-key.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/intrinsic/intrinsic-from-mapped-key.mjs
 function MappedIntrinsicPropertyKey(K, M, options) {
   return {
     [K]: Intrinsic(Literal(K), M, Clone(options))
@@ -8899,7 +8899,7 @@ function IntrinsicFromMappedKey(T, M, options) {
   return MappedResult(P);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/intrinsic/intrinsic.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/intrinsic/intrinsic.mjs
 function ApplyUncapitalize(value) {
   const [first, rest] = [value.slice(0, 1), value.slice(1)];
   return [first.toLowerCase(), rest].join("");
@@ -8944,27 +8944,27 @@ function Intrinsic(schema, mode, options = {}) {
   );
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/intrinsic/capitalize.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/intrinsic/capitalize.mjs
 function Capitalize(T, options = {}) {
   return Intrinsic(T, "Capitalize", options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/intrinsic/lowercase.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/intrinsic/lowercase.mjs
 function Lowercase(T, options = {}) {
   return Intrinsic(T, "Lowercase", options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/intrinsic/uncapitalize.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/intrinsic/uncapitalize.mjs
 function Uncapitalize(T, options = {}) {
   return Intrinsic(T, "Uncapitalize", options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/intrinsic/uppercase.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/intrinsic/uppercase.mjs
 function Uppercase(T, options = {}) {
   return Intrinsic(T, "Uppercase", options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/omit/omit-from-mapped-result.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/omit/omit-from-mapped-result.mjs
 function FromProperties12(properties, propertyKeys, options) {
   const result = {};
   for (const K2 of globalThis.Object.getOwnPropertyNames(properties))
@@ -8979,7 +8979,7 @@ function OmitFromMappedResult(mappedResult, propertyKeys, options) {
   return MappedResult(properties);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/omit/omit.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/omit/omit.mjs
 function FromIntersect6(types, propertyKeys) {
   return types.map((type) => OmitResolve(type, propertyKeys));
 }
@@ -9013,7 +9013,7 @@ function Omit(type, key, options) {
   return IsMappedResult(type) ? OmitFromMappedResult(type, propertyKeys, options) : IsMappedKey(key) ? OmitFromMappedKey(type, key, options) : isTypeRef && isKeyRef ? Computed("Omit", [type, typeKey], options) : !isTypeRef && isKeyRef ? Computed("Omit", [type, typeKey], options) : isTypeRef && !isKeyRef ? Computed("Omit", [type, typeKey], options) : CreateType({ ...OmitResolve(type, propertyKeys), ...options });
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/omit/omit-from-mapped-key.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/omit/omit-from-mapped-key.mjs
 function FromPropertyKey2(type, key, options) {
   return { [key]: Omit(type, [key], Clone(options)) };
 }
@@ -9030,7 +9030,7 @@ function OmitFromMappedKey(type, mappedKey, options) {
   return MappedResult(properties);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/pick/pick-from-mapped-result.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/pick/pick-from-mapped-result.mjs
 function FromProperties14(properties, propertyKeys, options) {
   const result = {};
   for (const K2 of globalThis.Object.getOwnPropertyNames(properties))
@@ -9045,7 +9045,7 @@ function PickFromMappedResult(mappedResult, propertyKeys, options) {
   return MappedResult(properties);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/pick/pick.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/pick/pick.mjs
 function FromIntersect7(types, propertyKeys) {
   return types.map((type) => PickResolve(type, propertyKeys));
 }
@@ -9079,7 +9079,7 @@ function Pick(type, key, options) {
   return IsMappedResult(type) ? PickFromMappedResult(type, propertyKeys, options) : IsMappedKey(key) ? PickFromMappedKey(type, key, options) : isTypeRef && isKeyRef ? Computed("Pick", [type, typeKey], options) : !isTypeRef && isKeyRef ? Computed("Pick", [type, typeKey], options) : isTypeRef && !isKeyRef ? Computed("Pick", [type, typeKey], options) : CreateType({ ...PickResolve(type, propertyKeys), ...options });
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/pick/pick-from-mapped-key.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/pick/pick-from-mapped-key.mjs
 function FromPropertyKey3(type, key, options) {
   return {
     [key]: Pick(type, [key], Clone(options))
@@ -9098,7 +9098,7 @@ function PickFromMappedKey(type, mappedKey, options) {
   return MappedResult(properties);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/partial/partial.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/partial/partial.mjs
 function FromComputed3(target, parameters) {
   return Computed("Partial", [Computed(target, parameters)]);
 }
@@ -9139,7 +9139,7 @@ function Partial(type, options) {
   }
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/partial/partial-from-mapped-result.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/partial/partial-from-mapped-result.mjs
 function FromProperties17(K, options) {
   const Acc = {};
   for (const K2 of globalThis.Object.getOwnPropertyNames(K))
@@ -9154,7 +9154,7 @@ function PartialFromMappedResult(R, options) {
   return MappedResult(P);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/required/required.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/required/required.mjs
 function FromComputed4(target, parameters) {
   return Computed("Required", [Computed(target, parameters)]);
 }
@@ -9195,7 +9195,7 @@ function Required(type, options) {
   }
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/required/required-from-mapped-result.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/required/required-from-mapped-result.mjs
 function FromProperties19(P, options) {
   const Acc = {};
   for (const K2 of globalThis.Object.getOwnPropertyNames(P))
@@ -9210,7 +9210,7 @@ function RequiredFromMappedResult(R, options) {
   return MappedResult(P);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/module/compute.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/module/compute.mjs
 function DereferenceParameters(moduleProperties, types) {
   return types.map((type) => {
     return IsRef(type) ? Dereference(moduleProperties, type.$ref) : FromType2(moduleProperties, type);
@@ -9306,7 +9306,7 @@ function ComputeModuleProperties(moduleProperties) {
   }, {});
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/module/module.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/module/module.mjs
 var TModule = class {
   constructor($defs) {
     const computed = ComputeModuleProperties($defs);
@@ -9329,17 +9329,17 @@ function Module(properties) {
   return new TModule(properties);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/not/not.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/not/not.mjs
 function Not(type, options) {
   return CreateType({ [Kind]: "Not", not: type }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/parameters/parameters.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/parameters/parameters.mjs
 function Parameters(schema, options) {
   return IsFunction2(schema) ? Tuple(schema.parameters, options) : Never();
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/recursive/recursive.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/recursive/recursive.mjs
 var Ordinal = 0;
 function Recursive(callback, options = {}) {
   if (IsUndefined(options.$id))
@@ -9349,13 +9349,13 @@ function Recursive(callback, options = {}) {
   return CreateType({ [Hint]: "Recursive", ...thisType }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/regexp/regexp.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/regexp/regexp.mjs
 function RegExp2(unresolved, options) {
   const expr = IsString(unresolved) ? new globalThis.RegExp(unresolved) : unresolved;
   return CreateType({ [Kind]: "RegExp", type: "RegExp", source: expr.source, flags: expr.flags }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/rest/rest.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/rest/rest.mjs
 function RestResolve(T) {
   return IsIntersect(T) ? T.allOf : IsUnion(T) ? T.anyOf : IsTuple(T) ? T.items ?? [] : [];
 }
@@ -9363,12 +9363,12 @@ function Rest(T) {
   return RestResolve(T);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/return-type/return-type.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/return-type/return-type.mjs
 function ReturnType(schema, options) {
   return IsFunction2(schema) ? CreateType(schema.returns, options) : Never(options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/transform/transform.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/transform/transform.mjs
 var TransformDecodeBuilder = class {
   constructor(schema) {
     this.schema = schema;
@@ -9400,17 +9400,17 @@ function Transform(schema) {
   return new TransformDecodeBuilder(schema);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/unsafe/unsafe.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/unsafe/unsafe.mjs
 function Unsafe(options = {}) {
   return CreateType({ [Kind]: options[Kind] ?? "Unsafe" }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/void/void.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/void/void.mjs
 function Void(options) {
   return CreateType({ [Kind]: "Void", type: "void" }, options);
 }
 
-// node_modules/@sinclair/typebox/build/esm/type/type/type.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/type/type.mjs
 var type_exports2 = {};
 __export(type_exports2, {
   Any: () => Any,
@@ -9477,11 +9477,11 @@ __export(type_exports2, {
   Void: () => Void
 });
 
-// node_modules/@sinclair/typebox/build/esm/type/type/index.mjs
+// ../../../../Users/adam/dev/hls-uk/single-controller-engineer/node_modules/@sinclair/typebox/build/esm/type/type/index.mjs
 var Type = type_exports2;
 
 // src/commands/index.ts
-var import_ajv2 = __toESM(require_ajv(), 1);
+var import_ajv4 = __toESM(require_ajv(), 1);
 
 // src/protocol/schemas.ts
 var import_ajv = __toESM(require_ajv(), 1);
@@ -9565,6 +9565,58 @@ var EffectKindSchema = Type.Union([
   Type.Literal("cancel"),
   Type.Literal("controller_release")
 ]);
+var SlotScopeSchema = strictObject({
+  beadsStoreIdentity: identifier(),
+  gitRepositoryIdentity: identifier(),
+  integrationBranch: identifier()
+});
+var SlotObservationSchema = strictObject({
+  actor: controllerHolder(),
+  holder: Type.Optional(controllerHolder()),
+  label: Type.Literal("gt:slot"),
+  readbackHash: hash(),
+  scope: SlotScopeSchema,
+  scopeCommitment: hash(),
+  slotId: identifier(),
+  status: Type.Union([Type.Literal("available"), Type.Literal("acquired")]),
+  title: Type.Literal("Merge Slot"),
+  version: Type.Literal(1)
+});
+var EmbeddedSlotTransitionIntentSchema = strictObject({
+  after: SlotObservationSchema,
+  before: strictObject({
+    head: Type.String({ minLength: 20, maxLength: 64, pattern: "^[0-9a-z]+$" }),
+    remoteHead: Type.Optional(
+      Type.String({ minLength: 20, maxLength: 64, pattern: "^[0-9a-z]+$" })
+    ),
+    slot: SlotObservationSchema
+  }),
+  holder: controllerHolder(),
+  idempotencyKey: hash(),
+  kind: Type.Union([Type.Literal("acquire"), Type.Literal("release")]),
+  schema: Type.Literal("sce.beads-embedded.slot-transition"),
+  scope: SlotScopeSchema,
+  version: Type.Literal(1)
+});
+var ServerSlotTransitionIntentSchema = strictObject({
+  after: SlotObservationSchema,
+  before: SlotObservationSchema,
+  holder: controllerHolder(),
+  idempotencyKey: hash(),
+  kind: Type.Union([Type.Literal("acquire"), Type.Literal("release")]),
+  precondition: strictObject({
+    kind: Type.Union([Type.Literal("available"), Type.Literal("held")]),
+    observationHash: hash()
+  }),
+  schema: Type.Literal("sce.beads-server.slot-transition"),
+  scope: SlotScopeSchema,
+  topology: Type.Literal("shared-server"),
+  version: Type.Literal(1)
+});
+var SlotTransitionIntentSchema = Type.Union([
+  EmbeddedSlotTransitionIntentSchema,
+  ServerSlotTransitionIntentSchema
+]);
 var EffectJournalEntrySchema = strictObject({
   effectId: effectIdentifier(),
   unitId: nullableIdentifier(),
@@ -9573,6 +9625,9 @@ var EffectJournalEntrySchema = strictObject({
   intentRevision: revision(),
   intentCommitment: hash(),
   paramsHash: hash(),
+  // Present only for controller slot acts.  This binds all before/after slot
+  // facts and heads durably before the adapter is invoked.
+  slotTransition: Type.Optional(SlotTransitionIntentSchema),
   status: EffectStatusSchema,
   observationHash: Type.Optional(hash()),
   schemaVersion: Type.Literal(SCHEMA_VERSION)
@@ -10102,7 +10157,8 @@ var ProtocolEventSchema = Type.Union([
   strictObject({
     ...controllerEventBase,
     type: Type.Literal("controller_acquire_intent"),
-    ...effectIntent
+    ...effectIntent,
+    slotTransition: Type.Optional(SlotTransitionIntentSchema)
   }),
   strictObject({
     ...controllerEventBase,
@@ -10114,7 +10170,8 @@ var ProtocolEventSchema = Type.Union([
   strictObject({
     ...controllerEventBase,
     type: Type.Literal("controller_release_intent"),
-    ...effectIntent
+    ...effectIntent,
+    slotTransition: Type.Optional(SlotTransitionIntentSchema)
   }),
   strictObject({
     ...controllerEventBase,
@@ -10381,7 +10438,8 @@ var RuntimeEffectSchema = Type.Union([
       controllerFencingToken: identifier(),
       requestedModel: text(),
       returnedModel: text(),
-      promptHash: hash()
+      promptHash: hash(),
+      slotTransition: Type.Optional(SlotTransitionIntentSchema)
     })
   }),
   strictObject({
@@ -10520,7 +10578,8 @@ var RuntimeEffectSchema = Type.Union([
     unitId: Type.Null(),
     params: strictObject({
       holder: controllerHolder(),
-      controllerFencingToken: identifier()
+      controllerFencingToken: identifier(),
+      slotTransition: Type.Optional(SlotTransitionIntentSchema)
     })
   })
 ]);
@@ -10570,7 +10629,7 @@ var preserveStrings = () => "exact";
 function canonicalJson(value, stringPolicy = preserveStrings) {
   return canonical(value, stringPolicy, []);
 }
-function canonical(value, stringPolicy, path) {
+function canonical(value, stringPolicy, path2) {
   if (value === null || typeof value === "boolean")
     return JSON.stringify(value);
   if (typeof value === "number") {
@@ -10579,20 +10638,20 @@ function canonical(value, stringPolicy, path) {
     return JSON.stringify(value);
   }
   if (typeof value === "string")
-    return JSON.stringify(normalizeString(value, stringPolicy(path, "value")));
+    return JSON.stringify(normalizeString(value, stringPolicy(path2, "value")));
   if (Array.isArray(value)) {
     for (let index = 0; index < value.length; index += 1) {
       if (!Object.hasOwn(value, index))
         throw new TypeError("canonical JSON rejects sparse arrays");
     }
-    return `[${value.map((item, index) => canonical(item, stringPolicy, [...path, index])).join(",")}]`;
+    return `[${value.map((item, index) => canonical(item, stringPolicy, [...path2, index])).join(",")}]`;
   }
   if (typeof value !== "object")
     throw new TypeError("canonical JSON only permits JSON values");
   const object = value;
   const entries = Object.keys(object).map((key) => ({
     key,
-    normalizedKey: normalizeString(key, stringPolicy([...path, key], "key"))
+    normalizedKey: normalizeString(key, stringPolicy([...path2, key], "key"))
   }));
   entries.sort(
     (left, right) => left.normalizedKey < right.normalizedKey ? -1 : left.normalizedKey > right.normalizedKey ? 1 : 0
@@ -10607,7 +10666,7 @@ function canonical(value, stringPolicy, path) {
     ({ key, normalizedKey }) => `${JSON.stringify(normalizedKey)}:${canonical(
       object[key],
       stringPolicy,
-      [...path, key]
+      [...path2, key]
     )}`
   ).join(",")}}`;
 }
@@ -10684,6 +10743,7 @@ function deriveIntentCommitment(entry) {
       kind: entry.kind,
       intentRevision: entry.intentRevision,
       paramsHash: entry.paramsHash,
+      ...entry.slotTransition === void 0 ? {} : { slotTransition: entry.slotTransition },
       schemaVersion: entry.schemaVersion
     })
   );
@@ -10829,19 +10889,21 @@ function intentStateForEffect(kind) {
   };
   return states[kind];
 }
-function runtimeEffectParams(state, unitId, kind) {
+function runtimeEffectParams(state, unitId, kind, slotTransition) {
   if (kind === "controller_acquire")
     return {
       holder: state.controller.holder,
       controllerFencingToken: state.controllerFencingToken,
       requestedModel: state.controller.requestedModel,
       returnedModel: state.controller.returnedModel,
-      promptHash: state.controller.promptHash
+      promptHash: state.controller.promptHash,
+      ...slotTransition === void 0 ? {} : { slotTransition }
     };
   if (kind === "controller_release")
     return {
       holder: state.controller.holder,
-      controllerFencingToken: state.controllerFencingToken
+      controllerFencingToken: state.controllerFencingToken,
+      ...slotTransition === void 0 ? {} : { slotTransition }
     };
   if (unitId === null) throw new Error(`${kind} requires a unit`);
   const unit = state.units[unitId];
@@ -11002,10 +11064,10 @@ function denseJournalEntry(value) {
     intentCommitment,
     paramsHash,
     status,
-    observationHash,
+    observationHash2,
     schemaVersion
   ] = values;
-  if (observationHash !== null && typeof observationHash !== "string")
+  if (observationHash2 !== null && typeof observationHash2 !== "string")
     return void 0;
   return {
     effectId,
@@ -11016,7 +11078,7 @@ function denseJournalEntry(value) {
     intentCommitment,
     paramsHash,
     status,
-    ...observationHash === null ? {} : { observationHash },
+    ...observationHash2 === null ? {} : { observationHash: observationHash2 },
     schemaVersion
   };
 }
@@ -11223,15 +11285,15 @@ function decodeClosedUnitEvidenceDetails(encoded) {
     return void 0;
   }
   if (decoded.length > LIMITS.envelopeBytes) return void 0;
-  const text2 = decoded.toString("utf8");
-  if (!Buffer.from(text2, "utf8").equals(decoded)) return void 0;
+  const text3 = decoded.toString("utf8");
+  if (!Buffer.from(text3, "utf8").equals(decoded)) return void 0;
   let parsed;
   try {
-    parsed = JSON.parse(text2);
+    parsed = JSON.parse(text3);
   } catch {
     return void 0;
   }
-  if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object" || canonicalJson(parsed) !== text2)
+  if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object" || canonicalJson(parsed) !== text3)
     return void 0;
   const parsedDense = parsed;
   if (Object.keys(parsedDense).length !== 2 || parsedDense.v !== 1 || parsedDense.u === null || Array.isArray(parsedDense.u) || typeof parsedDense.u !== "object")
@@ -11494,7 +11556,8 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
         const expectedParams = runtimeEffectParams(
           state,
           effect.unitId,
-          effect.kind
+          effect.kind,
+          effect.slotTransition
         );
         if (effect.paramsHash !== deriveParamsHash(effect.kind, expectedParams))
           errors.push(`effect ${effect.effectId} has an invalid params hash`);
@@ -12070,6 +12133,618 @@ function sortActions(actions) {
   });
 }
 
+// src/preflight/schemas.ts
+var import_ajv2 = __toESM(require_ajv(), 1);
+var PREFLIGHT_SCHEMA = "sce.preflight";
+var PREFLIGHT_VERSION = 1;
+var BD_VERSION = "1.1.0";
+var BD_CONTEXT_SCHEMA_VERSION = 1;
+var MAX_PATH_BYTES = 4096;
+var MAX_TEXT_BYTES = 8192;
+var utf83 = new TextEncoder();
+function strictObject2(properties) {
+  return Type.Object(properties, { additionalProperties: false });
+}
+var text2 = (maxLength = MAX_TEXT_BYTES) => Type.String({ minLength: 1, maxLength, maxUtf8Bytes: maxLength });
+var optionalText = (maxLength = MAX_TEXT_BYTES) => Type.Optional(text2(maxLength));
+var absolutePath = () => Type.String({
+  minLength: 1,
+  maxLength: MAX_PATH_BYTES,
+  maxUtf8Bytes: MAX_PATH_BYTES
+});
+var identifier2 = () => Type.String({
+  minLength: 1,
+  maxLength: 160,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+});
+var ajv2 = new import_ajv2.Ajv({
+  allErrors: true,
+  coerceTypes: false,
+  removeAdditional: false,
+  useDefaults: false,
+  strict: true
+});
+ajv2.addKeyword({
+  keyword: "maxUtf8Bytes",
+  type: "string",
+  schemaType: "number",
+  validate: (limit, value) => utf83.encode(value).byteLength <= limit,
+  errors: false
+});
+var InspectionCommandSchema = Type.Union([
+  strictObject2({
+    executable: Type.Literal("bd"),
+    argv: Type.Tuple([Type.Literal("--version")])
+  }),
+  strictObject2({
+    executable: Type.Literal("bd"),
+    argv: Type.Tuple([
+      Type.Literal("config"),
+      Type.Literal("get"),
+      Type.Literal("sync.remote"),
+      Type.Literal("--json")
+    ])
+  }),
+  strictObject2({
+    executable: Type.Literal("bd"),
+    argv: Type.Tuple([
+      Type.Literal("config"),
+      Type.Literal("get"),
+      Type.Literal("issue_prefix"),
+      Type.Literal("--json")
+    ])
+  }),
+  strictObject2({
+    executable: Type.Literal("bd"),
+    argv: Type.Tuple([Type.Literal("context"), Type.Literal("--json")])
+  }),
+  strictObject2({
+    executable: Type.Literal("bd"),
+    argv: Type.Tuple([
+      Type.Literal("dolt"),
+      Type.Literal("show"),
+      Type.Literal("--json")
+    ])
+  }),
+  strictObject2({
+    executable: Type.Literal("bd"),
+    argv: Type.Tuple([
+      Type.Literal("bootstrap"),
+      Type.Literal("--dry-run"),
+      Type.Literal("--json")
+    ])
+  }),
+  strictObject2({
+    executable: Type.Literal("git"),
+    argv: Type.Tuple([
+      Type.Literal("rev-parse"),
+      Type.Literal("--show-toplevel")
+    ])
+  }),
+  strictObject2({
+    executable: Type.Literal("git"),
+    argv: Type.Tuple([
+      Type.Literal("rev-parse"),
+      Type.Literal("--git-common-dir")
+    ])
+  }),
+  strictObject2({
+    executable: Type.Literal("git"),
+    argv: Type.Tuple([
+      Type.Literal("rev-parse"),
+      Type.Literal("--show-object-format")
+    ])
+  }),
+  strictObject2({
+    executable: Type.Literal("git"),
+    argv: Type.Tuple([
+      Type.Literal("config"),
+      Type.Literal("--null"),
+      Type.Literal("--get-regexp"),
+      Type.Literal("^remote\\..*\\.url$")
+    ])
+  })
+]);
+var SanitizedSubprocessRequestSchema = strictObject2({
+  command: InspectionCommandSchema,
+  cwd: absolutePath(),
+  maxOutputBytes: Type.Integer({ minimum: 1, maximum: 65536 }),
+  timeoutMs: Type.Integer({ minimum: 1, maximum: 15e3 })
+});
+var SanitizedSubprocessObservationSchema = strictObject2({
+  command: Type.String({ minLength: 1, maxLength: 80 }),
+  outcome: Type.Union([
+    Type.Literal("ok"),
+    Type.Literal("exit"),
+    Type.Literal("signal"),
+    Type.Literal("timeout"),
+    Type.Literal("output_limit"),
+    Type.Literal("unavailable")
+  ]),
+  exitCode: Type.Optional(Type.Integer({ minimum: 0, maximum: 255 })),
+  signal: Type.Optional(
+    Type.Union([
+      Type.Literal("SIGINT"),
+      Type.Literal("SIGTERM"),
+      Type.Literal("SIGKILL"),
+      Type.Literal("other")
+    ])
+  )
+});
+var BdContextObservationSchema = strictObject2({
+  backend: Type.Union([
+    Type.Literal("dolt"),
+    Type.Literal("none"),
+    Type.Literal("uninitialized")
+  ]),
+  bd_version: text2(32),
+  beads_dir: Type.Optional(absolutePath()),
+  cwd_repo_root: absolutePath(),
+  database: Type.Optional(identifier2()),
+  dolt_mode: Type.Optional(
+    Type.Union([
+      Type.Literal("embedded"),
+      Type.Literal("shared-server"),
+      Type.Literal("external"),
+      Type.Literal("server"),
+      Type.Literal("uninitialized"),
+      Type.Literal("global"),
+      Type.Literal("proxy")
+    ])
+  ),
+  is_redirected: Type.Optional(Type.Boolean()),
+  is_worktree: Type.Optional(Type.Boolean()),
+  project_id: Type.Optional(identifier2()),
+  repo_root: Type.Optional(absolutePath()),
+  role: optionalText(80),
+  schema_version: Type.Integer({
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER
+  }),
+  server: optionalText(320),
+  server_source: Type.Optional(
+    Type.Union([
+      Type.Literal("shared-server"),
+      Type.Literal("server"),
+      Type.Literal("external"),
+      Type.Literal("global"),
+      Type.Literal("proxy")
+    ])
+  ),
+  prefix: Type.Optional(identifier2()),
+  rig: Type.Optional(identifier2()),
+  sync_ref: Type.Optional(identifier2()),
+  sync_remote: optionalText(1024),
+  global: Type.Optional(Type.Boolean()),
+  proxied: Type.Optional(Type.Boolean())
+});
+var BdDoltShowObservationSchema = strictObject2({
+  backend: Type.Literal("dolt"),
+  data_dir: absolutePath(),
+  database: identifier2(),
+  embedded: Type.Boolean(),
+  schema_version: Type.Integer({
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER
+  })
+});
+var BdConfigKeySchema = Type.Union([
+  Type.Literal("sync.remote"),
+  Type.Literal("issue_prefix")
+]);
+var BdConfigLocationSchema = Type.Union([
+  Type.Literal("config.yaml"),
+  Type.Literal("database")
+]);
+var BdConfigValueObservationSchema = strictObject2({
+  key: BdConfigKeySchema,
+  location: Type.Optional(BdConfigLocationSchema),
+  schema_version: Type.Integer({
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER
+  }),
+  value: Type.String({
+    minLength: 0,
+    maxLength: 1024,
+    maxUtf8Bytes: 1024
+  })
+});
+var BootstrapActionSchema = Type.Union([
+  Type.Literal("sync"),
+  Type.Literal("create"),
+  Type.Literal("clone"),
+  Type.Literal("restore"),
+  Type.Literal("import"),
+  Type.Literal("validate")
+]);
+var BdBootstrapRawSchema = strictObject2({
+  action: BootstrapActionSchema,
+  beads_dir: Type.Optional(absolutePath()),
+  database: Type.Optional(identifier2()),
+  has_existing: Type.Boolean(),
+  reason: text2(1024),
+  schema_version: Type.Integer({
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER
+  }),
+  sync_remote: optionalText(1024)
+});
+var BootstrapPlanSchema = strictObject2({
+  action: BootstrapActionSchema,
+  beadsDir: Type.Optional(absolutePath()),
+  database: Type.Optional(identifier2())
+});
+var DoltObservationSchema = strictObject2({
+  autoCommit: Type.Union([
+    Type.Literal("off"),
+    Type.Literal("on"),
+    Type.Literal("batch")
+  ]),
+  database: identifier2(),
+  head: Type.Optional(
+    Type.String({
+      minLength: 40,
+      maxLength: 64,
+      pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    })
+  ),
+  reachable: Type.Boolean(),
+  workingSet: Type.Union([
+    Type.Literal("clean"),
+    Type.Literal("pending"),
+    Type.Literal("unknown")
+  ])
+});
+var GitInspectionSchema = strictObject2({
+  commonDir: absolutePath(),
+  objectFormat: Type.Union([Type.Literal("sha1"), Type.Literal("sha256")]),
+  providerId: Type.Optional(identifier2()),
+  remoteUrls: Type.Array(text2(1024), { minItems: 0, maxItems: 16 }),
+  topLevel: absolutePath()
+});
+var BeadsIdentitySchema = strictObject2({
+  beadsDir: Type.Optional(absolutePath()),
+  contextSchemaVersion: Type.Literal(BD_CONTEXT_SCHEMA_VERSION),
+  database: Type.Optional(identifier2()),
+  mode: Type.Union([
+    Type.Literal("embedded"),
+    Type.Literal("managed_local_shared_server"),
+    Type.Literal("external_server")
+  ]),
+  prefix: Type.Optional(identifier2()),
+  projectId: Type.Optional(identifier2()),
+  provenance: Type.Union([
+    Type.Literal("embedded_config"),
+    Type.Literal("shared_server_flag"),
+    Type.Literal("external_server_flag")
+  ]),
+  rig: Type.Optional(identifier2()),
+  server: Type.Optional(text2(320)),
+  storePath: Type.Optional(absolutePath()),
+  syncRef: Type.Optional(identifier2()),
+  syncRemote: optionalText(1024),
+  toolVersion: Type.Literal(BD_VERSION)
+});
+var GitIdentitySchema = strictObject2({
+  commonDir: absolutePath(),
+  identity: text2(1024),
+  objectFormat: Type.Union([Type.Literal("sha1"), Type.Literal("sha256")]),
+  topLevel: absolutePath()
+});
+var RefusalCodeSchema = Type.Union([
+  Type.Literal("PF_BD_UNAVAILABLE"),
+  Type.Literal("PF_BD_VERSION_UNSUPPORTED"),
+  Type.Literal("PF_BD_CONTEXT_SCHEMA_UNSUPPORTED"),
+  Type.Literal("PF_BD_CONTEXT_INVALID"),
+  Type.Literal("PF_BD_CONFIG_INVALID"),
+  Type.Literal("PF_TOPOLOGY_CONTRADICTORY"),
+  Type.Literal("PF_TOPOLOGY_REFUSED"),
+  Type.Literal("PF_BOOTSTRAP_PLAN_INVALID"),
+  Type.Literal("PF_GIT_INSPECTION_INVALID"),
+  Type.Literal("PF_GIT_IDENTITY_AMBIGUOUS"),
+  Type.Literal("PF_SUBPROCESS_UNAVAILABLE"),
+  Type.Literal("PF_SUBPROCESS_EXIT"),
+  Type.Literal("PF_SUBPROCESS_SIGNAL"),
+  Type.Literal("PF_SUBPROCESS_TIMEOUT"),
+  Type.Literal("PF_SUBPROCESS_OUTPUT_LIMIT")
+]);
+var ReadyPreflightSchema = strictObject2({
+  beads: BeadsIdentitySchema,
+  git: GitIdentitySchema,
+  status: Type.Literal("ready")
+});
+var UninitializedPreflightSchema = strictObject2({
+  bootstrap: BootstrapPlanSchema,
+  status: Type.Literal("uninitialized")
+});
+var RefusedPreflightSchema = strictObject2({
+  code: RefusalCodeSchema,
+  status: Type.Literal("refused")
+});
+var PreflightEnvelopeSchema = strictObject2({
+  payload: Type.Union([
+    ReadyPreflightSchema,
+    UninitializedPreflightSchema,
+    RefusedPreflightSchema
+  ]),
+  schema: Type.Literal(PREFLIGHT_SCHEMA),
+  version: Type.Literal(PREFLIGHT_VERSION)
+});
+
+// src/adapters/git/schemas.ts
+var import_ajv3 = __toESM(require_ajv(), 1);
+var utf84 = new TextEncoder();
+var ajv3 = new import_ajv3.Ajv({
+  allErrors: true,
+  coerceTypes: false,
+  removeAdditional: false,
+  strict: true,
+  useDefaults: false
+});
+ajv3.addKeyword({
+  keyword: "maxUtf8Bytes",
+  type: "string",
+  schemaType: "number",
+  validate: (limit, value) => utf84.encode(value).byteLength <= limit,
+  errors: false
+});
+function strictObject3(properties) {
+  return Type.Object(properties, { additionalProperties: false });
+}
+var oid2 = () => Type.String({
+  minLength: 40,
+  maxLength: 64,
+  pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+});
+var path = () => Type.String({ minLength: 1, maxLength: 4096, maxUtf8Bytes: 4096 });
+var GitObjectFormatSchema2 = Type.Union([
+  Type.Literal("sha1"),
+  Type.Literal("sha256")
+]);
+var ProcessSignalSchema = Type.Union([
+  Type.String({ minLength: 4, maxLength: 19, pattern: "^SIG[A-Z0-9]{1,16}$" }),
+  Type.Null()
+]);
+var GitResultSchema = strictObject3({
+  exitCode: Type.Union([
+    Type.Integer({ minimum: 0, maximum: 255 }),
+    Type.Null()
+  ]),
+  signal: ProcessSignalSchema,
+  stdout: Type.String({ minLength: 0, maxLength: 65536, maxUtf8Bytes: 65536 }),
+  timedOut: Type.Optional(Type.Boolean()),
+  unavailable: Type.Optional(Type.Boolean())
+});
+var GitRepositorySchema = strictObject3({
+  commonDir: path(),
+  cwd: path(),
+  identity: Type.String({ minLength: 1, maxLength: 1024, maxUtf8Bytes: 1024 }),
+  objectFormat: GitObjectFormatSchema2,
+  remoteUrls: Type.Array(
+    Type.String({ minLength: 1, maxLength: 1024, maxUtf8Bytes: 1024 }),
+    { maxItems: 16 }
+  )
+});
+var GitSnapshotSchema = strictObject3({
+  changedPaths: Type.Array(path(), { maxItems: 4096 }),
+  clean: Type.Boolean(),
+  head: oid2(),
+  tree: oid2()
+});
+var GitEffectSchema = strictObject3({
+  code: Type.Union([
+    Type.Literal("GIT_OK"),
+    Type.Literal("GIT_BAD_INPUT"),
+    Type.Literal("GIT_COMMAND_FAILED"),
+    Type.Literal("GIT_DIRTY"),
+    Type.Literal("GIT_ABSENT"),
+    Type.Literal("GIT_FOREIGN_BRANCH"),
+    Type.Literal("GIT_FOREIGN_PUBLICATION"),
+    Type.Literal("GIT_FOREIGN_WORKTREE"),
+    Type.Literal("GIT_IDENTITY_MISMATCH"),
+    Type.Literal("GIT_MOVED_BASE"),
+    Type.Literal("GIT_NOT_FAST_FORWARD"),
+    Type.Literal("GIT_REFUSED"),
+    Type.Literal("GIT_REMOTE_AMBIGUOUS"),
+    Type.Literal("GIT_REMOTE_MISSING"),
+    Type.Literal("GIT_UNSUPPORTED_OBJECT_FORMAT"),
+    Type.Literal("GIT_UNRESOLVED_EFFECT")
+  ]),
+  state: Type.Union([
+    Type.Literal("observed"),
+    Type.Literal("refused"),
+    Type.Literal("ambiguous")
+  ])
+});
+
+// src/fencing/schemas.ts
+var FENCING_SCHEMA_VERSION = 1;
+var MERGE_SLOT_LABEL = "gt:slot";
+var MERGE_SLOT_TITLE = "Merge Slot";
+var FENCING_LIMITS = {
+  batchBytes: 262144,
+  childProjectionBytes: 65536,
+  changedRows: 64,
+  projectionBytes: 196608
+};
+var identifier3 = () => Type.String({
+  minLength: 1,
+  maxLength: 160,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+});
+var holder = () => Type.String({
+  minLength: 3,
+  maxLength: 321,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+});
+var hash2 = () => Type.String({ minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" });
+var revision2 = () => Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
+var FencingScopeSchema = strictObject({
+  beadsStoreIdentity: identifier3(),
+  gitRepositoryIdentity: identifier3(),
+  integrationBranch: identifier3()
+});
+var ChildRowReferenceSchema = strictObject({
+  commitment: hash2(),
+  revision: revision2(),
+  unitId: identifier3()
+});
+var CheckpointObservationSchema = strictObject({
+  aggregateRevision: revision2(),
+  changedRowsCommitment: hash2(),
+  rootCommitment: hash2()
+});
+var RootProjectionSchema = strictObject({
+  aggregateCommitment: hash2(),
+  aggregateRevision: revision2(),
+  checkpoint: CheckpointObservationSchema,
+  childRows: Type.Array(ChildRowReferenceSchema, {
+    maxItems: FENCING_LIMITS.changedRows
+  }),
+  holder: holder(),
+  run: RepositoryRunSchema,
+  schema: Type.Literal("sce.fencing.root"),
+  scope: FencingScopeSchema,
+  version: Type.Literal(FENCING_SCHEMA_VERSION)
+});
+var ChildProjectionSchema = strictObject({
+  commitment: hash2(),
+  holder: holder(),
+  revision: revision2(),
+  schema: Type.Literal("sce.fencing.child"),
+  scope: FencingScopeSchema,
+  unit: UnitSchema,
+  unitId: identifier3(),
+  version: Type.Literal(FENCING_SCHEMA_VERSION)
+});
+var ExpectedChildRowSchema = strictObject({
+  expectedCommitment: hash2(),
+  expectedRevision: revision2(),
+  unitId: identifier3()
+});
+var ChangedRowSchema = strictObject({
+  expectedCommitment: hash2(),
+  expectedRevision: revision2(),
+  nextCommitment: hash2(),
+  nextRevision: revision2(),
+  unitId: identifier3()
+});
+var ContinuationEvidenceSchema = strictObject({
+  nextHolder: holder(),
+  observationHash: hash2(),
+  previousHolder: holder(),
+  scopeCommitment: hash2()
+});
+var ReleaseEvidenceSchema = strictObject({
+  available: Type.Literal(true),
+  holder: holder(),
+  observationHash: hash2(),
+  scopeCommitment: hash2()
+});
+var MergeSlotObservationSchema = strictObject({
+  actor: holder(),
+  holder: Type.Optional(holder()),
+  label: Type.Literal(MERGE_SLOT_LABEL),
+  readbackHash: hash2(),
+  scope: FencingScopeSchema,
+  scopeCommitment: hash2(),
+  slotId: identifier3(),
+  status: Type.Union([Type.Literal("available"), Type.Literal("acquired")]),
+  title: Type.Literal(MERGE_SLOT_TITLE),
+  version: Type.Literal(FENCING_SCHEMA_VERSION)
+});
+var SlotContinuationEvidenceSchema = strictObject({
+  after: MergeSlotObservationSchema,
+  before: MergeSlotObservationSchema,
+  nextHolder: holder(),
+  previousHolder: holder()
+});
+var SlotReleaseEvidenceSchema = strictObject({
+  holder: holder(),
+  readback: MergeSlotObservationSchema
+});
+var MutationBatchSchema = strictObject({
+  changedRows: Type.Array(ChangedRowSchema, {
+    maxItems: FENCING_LIMITS.changedRows
+  }),
+  checkpoint: CheckpointObservationSchema,
+  continuation: Type.Optional(ContinuationEvidenceSchema),
+  expectedAggregateCommitment: hash2(),
+  expectedAggregateRevision: revision2(),
+  /** Exact holder predicate checked inside the topology transaction. */
+  expectedHolder: holder(),
+  expectedChildren: Type.Array(ExpectedChildRowSchema, {
+    maxItems: FENCING_LIMITS.changedRows
+  }),
+  holder: holder(),
+  next: strictObject({
+    children: Type.Array(ChildProjectionSchema, {
+      maxItems: FENCING_LIMITS.changedRows
+    }),
+    root: RootProjectionSchema
+  }),
+  release: Type.Optional(ReleaseEvidenceSchema),
+  schema: Type.Literal("sce.fencing.batch"),
+  scope: FencingScopeSchema,
+  version: Type.Literal(FENCING_SCHEMA_VERSION)
+});
+var RunStoreNonAppliedResultSchema = Type.Union([
+  strictObject({ status: Type.Literal("stale") }),
+  strictObject({ status: Type.Literal("holder_mismatch") }),
+  strictObject({ status: Type.Literal("ambiguous") }),
+  strictObject({ status: Type.Literal("unavailable") }),
+  strictObject({ status: Type.Literal("quarantined") })
+]);
+var RunStoreAppliedResultSchema = strictObject({
+  /** Root is always an affected row, followed by every affected child. */
+  affectedRowCount: Type.Integer({
+    minimum: 1,
+    maximum: FENCING_LIMITS.changedRows + 1
+  }),
+  checkpoint: CheckpointObservationSchema,
+  children: Type.Array(ChildProjectionSchema, {
+    maxItems: FENCING_LIMITS.changedRows
+  }),
+  root: RootProjectionSchema,
+  status: Type.Literal("applied")
+});
+var RunStoreResultSchema = Type.Union([
+  RunStoreAppliedResultSchema,
+  RunStoreNonAppliedResultSchema
+]);
+var OperationLockStateSchema = strictObject({
+  holder: holder(),
+  nonce: identifier3(),
+  scopeCommitment: hash2(),
+  version: Type.Literal(FENCING_SCHEMA_VERSION)
+});
+
+// src/fencing/projections.ts
+var utf85 = new TextEncoder();
+
+// src/fencing/operation-lock.ts
+var utf86 = new TextEncoder();
+
+// src/commands/recovery.ts
+var InitialControllerAcquireSchema = strictObject({
+  expected: strictObject({
+    children: Type.Literal("absent"),
+    holder: Type.String({
+      minLength: 3,
+      maxLength: 321,
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+    }),
+    root: Type.Literal("absent"),
+    scope: FencingScopeSchema
+  }),
+  next: strictObject({
+    children: Type.Array(ChildProjectionSchema, { maxItems: 64 }),
+    root: RootProjectionSchema
+  }),
+  schema: Type.Literal("sce.recovery.initial-controller-acquire"),
+  version: Type.Literal(1)
+});
+
 // src/commands/index.ts
 var commandNames = [
   "inspect",
@@ -12101,7 +12776,7 @@ var MAX_CLI_REQUEST_BYTES = 128 * 1024;
 var MAX_CLI_RESPONSE_BYTES = 128 * 1024;
 var MAX_JSON_ITEMS = 256;
 var MAX_TEXT = 8192;
-function strictObject2(properties) {
+function strictObject4(properties) {
   return Type.Object(properties, { additionalProperties: false });
 }
 var JsonValueSchema = Type.Recursive(
@@ -12140,30 +12815,37 @@ var RequestMetadataSchema = {
   ),
   json: Type.Boolean()
 };
-var StateRequestSchema = strictObject2({ run: RepositoryRunSchema });
-var StateOptionsSchema = strictObject2({
+var StateRequestSchema = strictObject4({ run: RepositoryRunSchema });
+var StateOptionsSchema = strictObject4({
   ...RequestMetadataSchema,
   request: StateRequestSchema
 });
-var NoPayloadOptionsSchema = strictObject2(RequestMetadataSchema);
-var StateCommandSchema = strictObject2({
+var NoPayloadOptionsSchema = strictObject4(RequestMetadataSchema);
+var RecoveryPayloadSchema = strictObject4({
+  event: Type.Optional(ProtocolEventSchema)
+});
+var RecoveryOptionsSchema = strictObject4({
+  ...RequestMetadataSchema,
+  request: Type.Optional(RecoveryPayloadSchema)
+});
+var StateCommandSchema = strictObject4({
   command: Type.Union([
     Type.Literal("inspect"),
     Type.Literal("next"),
     Type.Literal("status")
   ]),
-  options: StateOptionsSchema,
+  options: Type.Union([StateOptionsSchema, NoPayloadOptionsSchema]),
   schema: Type.Literal("sce.command.request"),
   version: Type.Literal(1)
 });
-var FeedbackCommandSchema = strictObject2({
+var FeedbackCommandSchema = strictObject4({
   command: Type.Literal("feedback"),
   feedbackAction: FeedbackActionSchema,
   options: NoPayloadOptionsSchema,
   schema: Type.Literal("sce.command.request"),
   version: Type.Literal(1)
 });
-var UnavailableCommandSchema = strictObject2({
+var UnavailableCommandSchema = strictObject4({
   command: Type.Union([
     Type.Literal("acquire-controller"),
     Type.Literal("plan-wave"),
@@ -12180,7 +12862,7 @@ var UnavailableCommandSchema = strictObject2({
     Type.Literal("resume"),
     Type.Literal("release-controller")
   ]),
-  options: NoPayloadOptionsSchema,
+  options: RecoveryOptionsSchema,
   schema: Type.Literal("sce.command.request"),
   version: Type.Literal(1)
 });
@@ -12190,43 +12872,49 @@ var CommandRequestSchema = Type.Union([
   UnavailableCommandSchema
 ]);
 var CommandRunnerResultSchema = Type.Union([
-  strictObject2({
+  strictObject4({
     result: JsonObjectSchema,
     schema: Type.Literal("sce.command.result"),
     status: Type.Literal("ok"),
     version: Type.Literal(1)
   }),
-  strictObject2({
+  strictObject4({
     code: Type.Literal("SCE_INVALID_STATE_REQUEST"),
     status: Type.Literal("invalid"),
     schema: Type.Literal("sce.command.result"),
     version: Type.Literal(1)
   }),
-  strictObject2({
+  strictObject4({
     schema: Type.Literal("sce.command.result"),
     status: Type.Literal("unavailable"),
     version: Type.Literal(1)
+  }),
+  strictObject4({
+    code: Type.Literal("SCE_RECOVERY_BLOCKED"),
+    schema: Type.Literal("sce.command.result"),
+    status: Type.Literal("blocked"),
+    version: Type.Literal(1)
   })
 ]);
-var ajv2 = new import_ajv2.Ajv({
+var ajv4 = new import_ajv4.Ajv({
   allErrors: true,
   coerceTypes: false,
   removeAdditional: false,
   useDefaults: false,
   strict: true
 });
-var utf83 = new TextEncoder();
-ajv2.addKeyword({
+var utf87 = new TextEncoder();
+ajv4.addKeyword({
   keyword: "maxUtf8Bytes",
   type: "string",
   schemaType: "number",
-  validate: (limit, value) => utf83.encode(value).byteLength <= limit,
+  validate: (limit, value) => utf87.encode(value).byteLength <= limit,
   errors: false
 });
-var requestValidator = ajv2.compile(
+var requestValidator = ajv4.compile(
   CommandRequestSchema
 );
-var runnerResultValidator = ajv2.compile(
+var runnerResultValidator = ajv4.compile(
   CommandRunnerResultSchema
 );
 function validateCommandRequest(input) {
@@ -12236,11 +12924,12 @@ function validateCommandRunnerResult(input) {
   return runnerResultValidator(input);
 }
 function validateCommandPayload(input) {
-  return isJsonObject(input) && ajv2.validate(JsonObjectSchema, input);
+  return isJsonObject(input) && ajv4.validate(JsonObjectSchema, input);
 }
 var stateOnlyCommandRunner = (request) => {
   if (!validateCommandRequest(request)) return invalidStateRequest();
   if (!isStateCommandRequest(request)) return unavailable();
+  if (!("request" in request.options)) return invalidStateRequest();
   const parsedRun = validate(
     RepositoryRunSchema,
     request.options.request.run
@@ -12508,14 +13197,14 @@ function parseExpectedRevision(value) {
       "--expected-revision must be a non-negative integer."
     );
   }
-  const revision2 = Number(value);
-  if (!Number.isSafeInteger(revision2)) {
+  const revision3 = Number(value);
+  if (!Number.isSafeInteger(revision3)) {
     throw new CliError(
       "SCE_INVALID_OPTION_VALUE",
       "--expected-revision must be a safe integer."
     );
   }
-  return revision2;
+  return revision3;
 }
 function parseNonEmpty(value, option) {
   if (value.length === 0) {
@@ -12589,6 +13278,14 @@ async function runCli(argv, dependencies = {}) {
         outcome.code,
         "The request does not contain a valid repository run.",
         EXIT_USAGE,
+        invocation.request.command
+      );
+    }
+    if (outcome.status === "blocked") {
+      return failure(
+        outcome.code,
+        `The ${invocation.request.command} command is blocked pending authoritative recovery.`,
+        EXIT_UNAVAILABLE,
         invocation.request.command
       );
     }

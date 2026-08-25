@@ -941,6 +941,45 @@ export function deriveParamsHash(
   );
 }
 
+/**
+ * Reconstruct the exact executable request from an authoritative intended
+ * journal entry and its same-revision aggregate.  This is used only during
+ * recovery; the derived params hash must equal the durable journal binding.
+ * It is deliberately not an adapter-facing escape hatch.
+ */
+export function rehydrateEffect(
+  state: RepositoryRun,
+  entry: EffectJournalEntry,
+): ProtocolEffect | undefined {
+  try {
+    if (entry.intentCommitment !== deriveIntentCommitment(entry))
+      return undefined;
+    const params = runtimeEffectParams(
+      state,
+      entry.unitId,
+      entry.kind,
+      entry.slotTransition,
+    ) as RuntimeEffect["params"];
+    if (deriveParamsHash(entry.kind, params) !== entry.paramsHash)
+      return undefined;
+    const effect: ProtocolEffect = {
+      effectId: entry.effectId,
+      idempotencyKey: entry.idempotencyKey,
+      kind: entry.kind,
+      params,
+      paramsHash: entry.paramsHash,
+      schemaVersion: SCHEMA_VERSION,
+      unitId: entry.unitId,
+    } as ProtocolEffect;
+    const checked = validate<RuntimeEffect>(RuntimeEffectSchema, effect);
+    return checked.ok && checked.value !== undefined
+      ? checked.value
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function deriveIntentCommitment(
   entry: Pick<
     EffectJournalEntry,
@@ -950,6 +989,7 @@ export function deriveIntentCommitment(
     | "kind"
     | "intentRevision"
     | "paramsHash"
+    | "slotTransition"
     | "schemaVersion"
   >,
 ): string {
@@ -962,6 +1002,9 @@ export function deriveIntentCommitment(
       kind: entry.kind,
       intentRevision: entry.intentRevision,
       paramsHash: entry.paramsHash,
+      ...(entry.slotTransition === undefined
+        ? {}
+        : { slotTransition: entry.slotTransition }),
       schemaVersion: entry.schemaVersion,
     }),
   );
@@ -1682,6 +1725,7 @@ function controllerIntent(
     null,
     event,
     kind,
+    "slotTransition" in event ? event.slotTransition : undefined,
   );
 }
 function modifyingIntent(
@@ -1748,6 +1792,7 @@ function appendIntent(
   unitId: string | null,
   event: IntentEvent,
   kind: EffectKind,
+  slotTransition?: import("./schemas.js").SlotTransitionIntent,
 ): Step {
   const compacted = compactJournal(state);
   const effectId = `${event.eventId}:${kind}`;
@@ -1755,6 +1800,7 @@ function appendIntent(
     compacted,
     unitId,
     kind,
+    slotTransition,
   ) as RuntimeEffect["params"];
   const paramsHash = deriveParamsHash(kind, params);
   const effect: ProtocolEffect = {
@@ -1775,6 +1821,7 @@ function appendIntent(
     intentCommitment: "0".repeat(64),
     paramsHash,
     status: "intended",
+    ...(slotTransition === undefined ? {} : { slotTransition }),
     schemaVersion: SCHEMA_VERSION,
   };
   entry.intentCommitment = deriveIntentCommitment(entry);
@@ -1792,6 +1839,7 @@ function runtimeEffectParams(
   state: RepositoryRun,
   unitId: string | null,
   kind: EffectKind,
+  slotTransition?: import("./schemas.js").SlotTransitionIntent,
 ): unknown {
   if (kind === "controller_acquire")
     return {
@@ -1800,11 +1848,13 @@ function runtimeEffectParams(
       requestedModel: state.controller.requestedModel,
       returnedModel: state.controller.returnedModel,
       promptHash: state.controller.promptHash,
+      ...(slotTransition === undefined ? {} : { slotTransition }),
     };
   if (kind === "controller_release")
     return {
       holder: state.controller.holder,
       controllerFencingToken: state.controllerFencingToken,
+      ...(slotTransition === undefined ? {} : { slotTransition }),
     };
   if (unitId === null) throw new Error(`${kind} requires a unit`);
   const unit = state.units[unitId];
@@ -3580,6 +3630,7 @@ function runInvariantErrorsWithClosedEvidence(
           state,
           effect.unitId,
           effect.kind,
+          effect.slotTransition,
         ) as RuntimeEffect["params"];
         if (effect.paramsHash !== deriveParamsHash(effect.kind, expectedParams))
           errors.push(`effect ${effect.effectId} has an invalid params hash`);

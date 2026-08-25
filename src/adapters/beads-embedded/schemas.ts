@@ -210,6 +210,7 @@ export type CrashPoint =
 
 export type EmbeddedRequest =
   | Readonly<{ kind: "state" }>
+  | Readonly<{ kind: "load" }>
   | Readonly<{
       kind: "slot";
       action: "acquire" | "check" | "release";
@@ -236,6 +237,20 @@ export type EmbeddedRequest =
       kind: "remote_slot_transition";
     }>
   | Readonly<{ kind: "mutation"; batch: MutationBatch }>
+  | Readonly<{
+      input: EmbeddedInitialProjection;
+      /** Exact available built-in slot proved again inside the SQL predicate. */
+      slot: MergeSlotObservation;
+      kind: "initialize";
+    }>
+  | Readonly<{
+      batch: MutationBatch;
+      /** Exact available built-in slot rechecked in the mutation predicate. */
+      slot: MergeSlotObservation;
+      kind: "preownership_mutation";
+    }>
+  | Readonly<{ input: EmbeddedInitialProjection; kind: "initial_commit" }>
+  | Readonly<{ input: EmbeddedInitialProjection; kind: "initial_push" }>
   | Readonly<{ kind: "commit" }>
   | Readonly<{ kind: "pull" }>
   | Readonly<{ kind: "push" }>
@@ -264,6 +279,17 @@ export type EmbeddedReadback = Readonly<{
   children: readonly ChildProjection[];
   root: RootProjection;
 }>;
+
+export type EmbeddedInitialProjection = Readonly<{
+  children: readonly ChildProjection[];
+  root: RootProjection;
+}>;
+
+/** Only a positive `absent` result may authorize bootstrap. */
+export type EmbeddedLoad =
+  | Readonly<{ status: "absent" }>
+  | Readonly<{ status: "observed"; value: EmbeddedReadback }>
+  | Readonly<{ status: "ambiguous" | "unavailable" }>;
 
 /**
  * Immutable, non-secret composition identity. This is supplied once by the
@@ -296,6 +322,7 @@ export type CrashDiscovery = Readonly<{
 
 export type EmbeddedResponse =
   | Readonly<{ kind: "state"; value: EmbeddedState }>
+  | Readonly<{ kind: "load"; value: EmbeddedLoad }>
   | Readonly<{ kind: "slot"; value: MergeSlotObservation }>
   | Readonly<{
       kind: "slot_transition";

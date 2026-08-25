@@ -4,10 +4,19 @@ import { Ajv, type ValidateFunction } from "ajv";
 import {
   RepositoryRunSchema,
   validate,
+  ProtocolEventSchema,
+  type ProtocolEvent,
   type RepositoryRun,
 } from "../protocol/schemas.js";
 import { ambiguityRecoveryActions, legalActions } from "../protocol/actions.js";
 import { runInvariantErrors } from "../protocol/reducer.js";
+import {
+  createProductionRecoveryRunner,
+  type ProductionRecoveryRunnerOptions,
+} from "./production-recovery.js";
+
+export * from "./recovery.js";
+export * from "./production-recovery.js";
 
 export const commandNames = [
   "inspect",
@@ -110,6 +119,13 @@ const StateOptionsSchema = strictObject({
   request: StateRequestSchema,
 });
 const NoPayloadOptionsSchema = strictObject(RequestMetadataSchema);
+const RecoveryPayloadSchema = strictObject({
+  event: Type.Optional(ProtocolEventSchema),
+});
+const RecoveryOptionsSchema = strictObject({
+  ...RequestMetadataSchema,
+  request: Type.Optional(RecoveryPayloadSchema),
+});
 
 const StateCommandSchema = strictObject({
   command: Type.Union([
@@ -117,7 +133,7 @@ const StateCommandSchema = strictObject({
     Type.Literal("next"),
     Type.Literal("status"),
   ]),
-  options: StateOptionsSchema,
+  options: Type.Union([StateOptionsSchema, NoPayloadOptionsSchema]),
   schema: Type.Literal("sce.command.request"),
   version: Type.Literal(1),
 });
@@ -145,7 +161,7 @@ const UnavailableCommandSchema = strictObject({
     Type.Literal("resume"),
     Type.Literal("release-controller"),
   ]),
-  options: NoPayloadOptionsSchema,
+  options: RecoveryOptionsSchema,
   schema: Type.Literal("sce.command.request"),
   version: Type.Literal(1),
 });
@@ -175,6 +191,12 @@ export const CommandRunnerResultSchema = Type.Union([
     status: Type.Literal("unavailable"),
     version: Type.Literal(1),
   }),
+  strictObject({
+    code: Type.Literal("SCE_RECOVERY_BLOCKED"),
+    schema: Type.Literal("sce.command.result"),
+    status: Type.Literal("blocked"),
+    version: Type.Literal(1),
+  }),
 ]);
 export type CommandRunnerResult =
   | {
@@ -192,6 +214,12 @@ export type CommandRunnerResult =
   | {
       readonly schema: "sce.command.result";
       readonly status: "unavailable";
+      readonly version: 1;
+    }
+  | {
+      readonly code: "SCE_RECOVERY_BLOCKED";
+      readonly schema: "sce.command.result";
+      readonly status: "blocked";
       readonly version: 1;
     };
 
@@ -246,6 +274,7 @@ export function validateCommandPayload(input: unknown): input is JsonObject {
 export const stateOnlyCommandRunner: CommandRunner = (request) => {
   if (!validateCommandRequest(request)) return invalidStateRequest();
   if (!isStateCommandRequest(request)) return unavailable();
+  if (!("request" in request.options)) return invalidStateRequest();
   const parsedRun = validate<RepositoryRun>(
     RepositoryRunSchema,
     request.options.request.run,
@@ -307,6 +336,113 @@ export const stateOnlyCommandRunner: CommandRunner = (request) => {
     },
   };
 };
+
+const commandEvent: Readonly<
+  Partial<Record<CommandName, readonly ProtocolEvent["type"][]>>
+> = {
+  "acquire-controller": ["controller_acquire_intent"],
+  "prepare-wave": ["reservation_intent", "branch_intent", "worktree_intent"],
+  "dispatch-request": ["dispatch_intent"],
+  "record-dispatch": ["dispatch_observed"],
+  "collect-candidate": ["candidate_intent"],
+  qualify: ["verification_intent"],
+  "review-prepare": ["reviewer_dispatch_intent"],
+  "review-record": ["review_collected"],
+  publish: ["publish_intent"],
+  integrate: ["integrate_intent"],
+  "release-controller": ["controller_release_intent"],
+};
+
+/**
+ * Binds the CLI's formerly-unavailable Phase-2 command surface to an injected
+ * authoritative recovery runner. The executable's default remains fail
+ * closed until a topology composition root supplies that runner.
+ */
+export function createRecoveryCommandRunner(
+  runner: (event?: ProtocolEvent) => Promise<
+    | { readonly status: string }
+    | {
+        readonly status: string;
+        readonly revision: number;
+        readonly run: RepositoryRun;
+      }
+  >,
+): CommandRunner {
+  return async (request) => {
+    if (!validateCommandRequest(request)) return invalidStateRequest();
+    if (isStateCommandRequest(request)) {
+      const outcome = await runner();
+      if (!("run" in outcome))
+        return outcome.status === "unavailable"
+          ? unavailable()
+          : recoveryBlocked();
+      return await stateResult(request.command, outcome.run);
+    }
+    if (request.command === "feedback") return unavailable();
+    const payload = request.options.request;
+    const event = payload?.event;
+    const expected = commandEvent[request.command];
+    if (
+      expected !== undefined &&
+      (event === undefined || !expected.includes(event.type))
+    )
+      return invalidStateRequest();
+    if (expected === undefined && event !== undefined)
+      return invalidStateRequest();
+    if (
+      event !== undefined &&
+      ((request.options.expectedRevision !== undefined &&
+        request.options.expectedRevision !== event.expectedRevision) ||
+        (request.options.idempotencyKey !== undefined &&
+          (!("idempotencyKey" in event) ||
+            request.options.idempotencyKey !== event.idempotencyKey)))
+    )
+      return invalidStateRequest();
+    const outcome = await runner(event);
+    if (!("revision" in outcome) || outcome.revision < 0)
+      return outcome.status === "unavailable"
+        ? unavailable()
+        : recoveryBlocked();
+    return {
+      result: {
+        revision: outcome.revision,
+        status: outcome.status,
+      },
+      schema: "sce.command.result",
+      status: "ok",
+      version: 1,
+    };
+  };
+}
+
+/** Exact production composition used by hosts after their topology preflight. */
+export function createProductionRecoveryCommandRunner(
+  options: ProductionRecoveryRunnerOptions,
+): CommandRunner {
+  return createRecoveryCommandRunner(createProductionRecoveryRunner(options));
+}
+
+function recoveryBlocked(): CommandRunnerResult {
+  return {
+    code: "SCE_RECOVERY_BLOCKED",
+    schema: "sce.command.result",
+    status: "blocked",
+    version: 1,
+  };
+}
+
+async function stateResult(
+  command: "inspect" | "next" | "status",
+  run: RepositoryRun,
+): Promise<CommandRunnerResult> {
+  const request = {
+    command,
+    options: { json: true, request: { run } },
+    schema: "sce.command.request" as const,
+    version: 1 as const,
+  };
+  return await stateOnlyCommandRunner(request as CommandRequest);
+}
 
 function isStateCommandRequest(
   request: CommandRequest,

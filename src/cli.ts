@@ -373,6 +373,14 @@ export async function runCli(
         invocation.request.command,
       );
     }
+    if (outcome.status === "blocked") {
+      return failure(
+        outcome.code,
+        `The ${invocation.request.command} command is blocked pending authoritative recovery.`,
+        EXIT_UNAVAILABLE,
+        invocation.request.command,
+      );
+    }
     return success(outcome.result, invocation.request.command);
   } catch (error) {
     if (error instanceof CliError) {

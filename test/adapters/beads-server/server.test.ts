@@ -26,6 +26,7 @@ import {
   DoltBeadsServerDriver,
   executeServerSqlProgram,
   deriveServerIdentity,
+  makeServerSlotTransitionIntent,
   parseServerCasReadback,
   PinnedBdManagedServerProcess,
   PinnedBdServerProcess,
@@ -37,6 +38,7 @@ import {
   type ServerIdentity,
   type DoltSqlTransactionTestPhase,
 } from "../../../src/adapters/beads-server/index.js";
+import type { InitialControllerAcquire } from "../../../src/commands/recovery.js";
 import {
   deriveChangedRowsCommitment,
   deriveScopeCommitment,
@@ -199,6 +201,49 @@ function batchForRun(source = run()): MutationBatch {
 
 function batch(): MutationBatch {
   return batchForRun();
+}
+
+function initialServerAcquire(): InitialControllerAcquire {
+  const base = run();
+  const initial = {
+    ...base,
+    controller: { ...base.controller, state: "unacquired" as const },
+    state: "initializing" as const,
+  };
+  const before = slot("available", undefined, holder);
+  const after = slot("acquired", holder, holder);
+  const slotTransition = makeServerSlotTransitionIntent({
+    after,
+    before,
+    holder,
+    kind: "acquire",
+    scope,
+  });
+  assert.ok(slotTransition);
+  const reduced = reduce(initial, {
+    eventId: "server-acquire-intent",
+    expectedRevision: initial.revision,
+    idempotencyKey: deriveIdempotencyKey(
+      initial,
+      initial.revision,
+      null,
+      "controller_acquire",
+    ),
+    slotTransition,
+    type: "controller_acquire_intent",
+  });
+  assert.equal(reduced.ok, true);
+  if (!reduced.ok) throw new Error("initial server reduction failed");
+  const root = makeRootProjection(reduced.nextState);
+  return {
+    expected: { children: "absent", holder, root: "absent", scope },
+    next: {
+      children: [makeChildProjection(root, "unit-1")!],
+      root,
+    },
+    schema: "sce.recovery.initial-controller-acquire",
+    version: 1,
+  };
 }
 
 /** Exact bounded protocol session-lineage maximum for the real SQL fixture. */
@@ -4238,6 +4283,111 @@ test("SQL executor rolls back immediately when a root or child CAS affects the w
   assert.equal(executed.includes("COMMIT"), false);
 });
 
+test("real shared server atomically bootstraps an absent recovery intent before slot acquisition", async () => {
+  const fixture = await startBdDoltServer();
+  const serverIdentity = externalIdentity("on", fixture.endpoint);
+  const rootId = "sce-recovery-root";
+  const childId = "sce-recovery-child";
+  try {
+    for (const [id, title] of [
+      [rootId, "Recovery root"],
+      [childId, "Recovery child"],
+    ] as const)
+      await runBd(
+        [
+          "-C",
+          fixture.workspace,
+          "--actor",
+          "fixture",
+          "--dolt-auto-commit",
+          "on",
+          "create",
+          title,
+          "--id",
+          id,
+          "--metadata",
+          "{}",
+          "--json",
+        ],
+        {
+          cwd: fixture.workspace,
+          executable: fixture.bdExecutable,
+          password: fixture.writerPassword,
+        },
+      );
+    const adapter = new BeadsServerAdapter({
+      driver: new DoltBeadsServerDriver({
+        identity: serverIdentity,
+        rows: { childBeadIds: { "unit-1": childId }, rootBeadId: rootId },
+        slotProcess: new PinnedBdServerProcess({
+          credentialEnvironment: () => ({
+            BEADS_DOLT_PASSWORD: fixture.writerPassword,
+          }),
+          executable: fixture.bdExecutable,
+          identity: serverIdentity,
+          workspace: fixture.workspace,
+        }),
+        worker: fixture.worker,
+        writer: fixture.writer,
+      }),
+      identity: serverIdentity,
+      recoveryScope: scope,
+    });
+    assert.equal((await adapter.preflight()).status, "ready");
+    assert.deepEqual(await adapter.load(), { status: "absent" });
+    const planned = await adapter.prepareControllerTransition({
+      holder,
+      kind: "acquire",
+      scope,
+    });
+    assert.equal(planned.status, "planned");
+    if (planned.status !== "planned") throw new Error("planning failed");
+    const input = initialServerAcquire();
+    assert.deepEqual(
+      input.next.root.run.effectJournal[0]?.slotTransition,
+      planned.transition,
+    );
+    const created = await adapter.createControllerAcquireIntent(input);
+    assert.equal(created.status, "applied");
+    assert.equal(created.status === "applied" && created.affectedRowCount, 2);
+    const loaded = await adapter.load();
+    assert.equal(loaded.status, "observed");
+    assert.deepEqual(
+      await adapter.reconcileControllerTransition(planned.transition),
+      { status: "absent" },
+    );
+    assert.deepEqual(
+      await adapter.executeControllerTransition(planned.transition),
+      { status: "observed" },
+    );
+    assert.deepEqual(
+      await adapter.reconcileControllerTransition(planned.transition),
+      { status: "observed" },
+    );
+    const rows = await fixture.readWriter(
+      `SELECT id, status, metadata FROM sce.issues WHERE id IN (${sqlLiteral(rootId)}, ${sqlLiteral(childId)}, 'sce-merge-slot') ORDER BY id`,
+    );
+    assert.equal(rows.status, "ok");
+    if (rows.status !== "ok") throw new Error("readback failed");
+    assert.equal(rows.rows.length, 3);
+    assert.equal(
+      rows.rows.find((row) => row.id === "sce-merge-slot")?.status,
+      "in_progress",
+    );
+    for (const id of [rootId, childId])
+      assert.equal(
+        Object.hasOwn(
+          jsonObject(rows.rows.find((row) => row.id === id)?.metadata),
+          "sce",
+        ),
+        true,
+      );
+  } finally {
+    await fixture.stop();
+    await removeFixtureDirectory(fixture.directory);
+  }
+});
+
 test("real bd external-server workspace drives the concrete driver, adapter, and built-in slot", async () => {
   const fixture = await startBdDoltServer();
   const serverIdentity = externalIdentity("on", fixture.endpoint);
@@ -4836,6 +4986,8 @@ test("real transaction keeps its same-session head when an unrelated writer adva
     assert.equal(discovery.status, "ok");
     if (discovery.status !== "ok")
       throw new Error("same-session discovery failed");
+    if ("status" in discovery.value)
+      throw new Error("same-session discovery was unexpectedly absent");
     assert.deepEqual(discovery.value.root, value.next.root);
     assert.deepEqual(discovery.value.children, value.next.children);
     assert.deepEqual(await fixture.readWriter("SELECT * FROM dolt_status"), {
