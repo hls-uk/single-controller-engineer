@@ -14877,14 +14877,17 @@ async function discoverWorktree(runner, repository, input) {
   return existing.head === input.head && existing.branch === `refs/heads/${input.branch}` ? verifyCleanWorktree(runner, repository, input.path) : effect("refused", "GIT_FOREIGN_WORKTREE");
 }
 async function discoverIntegration(runner, repository, input) {
-  if (!safeRef(input.integrationRef) || !exactOid(repository.objectFormat, input.candidate))
+  if (!safeRef(input.integrationRef) || !exactOid(repository.objectFormat, input.base) || !exactOid(repository.objectFormat, input.candidate) || input.base === input.candidate)
     return effect("refused", "GIT_BAD_INPUT");
   const verified = await verifyRepository(runner, repository);
   if (verified.state !== "observed") return verified;
   const current = await refOid(runner, repository, input.integrationRef);
   if (current.state === "unreadable")
     return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
-  return current.state === "found" && current.oid === input.candidate ? effect("observed", "GIT_OK") : effect("refused", "GIT_NOT_FAST_FORWARD");
+  if (current.state !== "found")
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  if (current.oid === input.candidate) return effect("observed", "GIT_OK");
+  return current.oid === input.base ? effect("refused", "GIT_ABSENT") : effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
 }
 async function integrateLocalFastForward(runner, repository, input) {
   if (!safeRef(input.integrationRef) || !exactOid(repository.objectFormat, input.base) || !exactOid(repository.objectFormat, input.candidate))
@@ -16436,6 +16439,7 @@ function createProductionRecoveryEffectAdapter(options) {
             return discovered(
               done,
               await discoverIntegration(git.runner, git.repository, {
+                base: effect2.params.candidate.baseOid,
                 candidate: effect2.params.candidate.headOid,
                 integrationRef: localIntegrationRef(
                   effect2.params.integrationBranch

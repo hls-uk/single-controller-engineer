@@ -335,6 +335,7 @@ export function createProductionRecoveryEffectAdapter(
             return discovered(
               done,
               await discoverIntegration(git.runner, git.repository, {
+                base: effect.params.candidate.baseOid,
                 candidate: effect.params.candidate.headOid,
                 integrationRef: localIntegrationRef(
                   effect.params.integrationBranch,

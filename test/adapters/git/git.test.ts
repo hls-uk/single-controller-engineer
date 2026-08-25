@@ -171,21 +171,47 @@ test("local fast-forward refuses a moved approved base and discovers crash outco
   assert.equal(
     (
       await discoverIntegration(landed, repository(), {
+        base,
         candidate,
         integrationRef: "refs/heads/main",
       })
     ).state,
     "observed",
   );
-  const absent = scripted(...identityResults(), ok());
+  const preAct = scripted(...identityResults(), ok(`${base}\n`));
   assert.equal(
     (
-      await discoverIntegration(absent, repository(), {
+      await discoverIntegration(preAct, repository(), {
+        base,
         candidate,
         integrationRef: "refs/heads/main",
       })
     ).code,
-    "GIT_NOT_FAST_FORWARD",
+    "GIT_ABSENT",
+  );
+  assert.equal(
+    (
+      await discoverIntegration(
+        scripted(...identityResults(), ok(`${sha1("3")}\n`)),
+        repository(),
+        { base, candidate, integrationRef: "refs/heads/main" },
+      )
+    ).state,
+    "ambiguous",
+  );
+  assert.equal(
+    (
+      await discoverIntegration(
+        scripted(...identityResults(), ok()),
+        repository(),
+        {
+          base,
+          candidate,
+          integrationRef: "refs/heads/main",
+        },
+      )
+    ).state,
+    "ambiguous",
   );
   const unreadable = scripted(...identityResults(), {
     exitCode: null,
@@ -195,6 +221,7 @@ test("local fast-forward refuses a moved approved base and discovers crash outco
   assert.equal(
     (
       await discoverIntegration(unreadable, repository(), {
+        base,
         candidate,
         integrationRef: "refs/heads/main",
       })
@@ -211,6 +238,7 @@ test("local fast-forward refuses a moved approved base and discovers crash outco
   assert.equal(
     (
       await discoverIntegration(wrongRepository, repository(), {
+        base,
         candidate,
         integrationRef: "refs/heads/main",
       })
@@ -481,7 +509,27 @@ test("real no-remote repository supports the local-only fast-forward profile", a
   const candidate = (await git(worktree, "rev-parse", "HEAD")).trim();
   assert.equal(
     (
+      await discoverIntegration(nodeGitRunner, repo, {
+        base,
+        candidate,
+        integrationRef: "refs/heads/main",
+      })
+    ).code,
+    "GIT_ABSENT",
+  );
+  assert.equal(
+    (
       await integrateLocalFastForward(nodeGitRunner, repo, {
+        base,
+        candidate,
+        integrationRef: "refs/heads/main",
+      })
+    ).state,
+    "observed",
+  );
+  assert.equal(
+    (
+      await discoverIntegration(nodeGitRunner, repo, {
         base,
         candidate,
         integrationRef: "refs/heads/main",

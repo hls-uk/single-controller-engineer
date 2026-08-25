@@ -13,7 +13,11 @@ import {
   makeRootProjection,
   type MutationBatch,
 } from "../../src/fencing/index.js";
-import { reduce, type ProtocolEffect } from "../../src/protocol/reducer.js";
+import {
+  reduce,
+  runInvariantErrors,
+  type ProtocolEffect,
+} from "../../src/protocol/reducer.js";
 import type { RepositoryRun } from "../../src/protocol/schemas.js";
 import { runCli } from "../../src/cli.js";
 import {
@@ -65,6 +69,103 @@ function localIntegrationEffect(): ProtocolEffect {
     schemaVersion: 1,
     unitId: "unit-1",
   } as ProtocolEffect;
+}
+
+function localIntegrationIntentRun(): RepositoryRun {
+  let state: RepositoryRun = {
+    ...localRun(),
+    completionBoundary: "local-integration",
+    integrationProfile: "local-ff",
+  };
+  const observe = (
+    type: Parameters<typeof event>[1],
+    kind: string,
+    fields: Record<string, unknown> = {},
+  ) => {
+    state = transition(
+      state,
+      event(state, type, {
+        effectId: state.effectJournal.at(-1)!.effectId,
+        effectKind: kind,
+        observationHash: HASH,
+        ...fields,
+      }),
+      reduce,
+    );
+  };
+  state = transition(
+    state,
+    event(state, "reservation_intent", {
+      reservations: [{ id: "res-1", namespace: "path", resource: "src" }],
+    }),
+    reduce,
+  );
+  observe("reservation_observed", "reservation_acquire");
+  state = transition(
+    state,
+    event(state, "branch_intent", { branchRef: "sce/unit-1" }),
+    reduce,
+  );
+  observe("branch_observed", "branch_create", { branchRef: "sce/unit-1" });
+  state = transition(
+    state,
+    event(state, "worktree_intent", { worktreePath: "/tmp/unit-1" }),
+    reduce,
+  );
+  observe("worktree_observed", "worktree_create", {
+    worktreePath: "/tmp/unit-1",
+  });
+  state = transition(state, event(state, "dispatch_intent"), reduce);
+  observe("dispatch_observed", "dispatch", {
+    promptHash: HASH,
+    requestedModel: "workhorse",
+    returnedModel: "workhorse-1",
+    sessionId: "worker-1",
+  });
+  state = transition(state, event(state, "collect_intent"), reduce);
+  observe("worker_collected", "worker_collect", {
+    workerResult: { residualRisks: [], status: "completed", summary: "done" },
+  });
+  state = transition(state, event(state, "candidate_intent"), reduce);
+  observe("candidate_observed", "candidate_collect", {
+    headOid: OID_B,
+    treeOid: OID_A,
+  });
+  state = transition(state, event(state, "verification_intent"), reduce);
+  observe("verification_observed", "verify", {
+    baseOid: OID_A,
+    headOid: OID_B,
+    treeOid: OID_A,
+  });
+  state = transition(state, event(state, "reviewer_dispatch_intent"), reduce);
+  observe("reviewer_observed", "review_dispatch", {
+    promptHash: HASH,
+    requestedModel: "frontier",
+    returnedModel: "frontier-1",
+    sessionId: "reviewer-1",
+  });
+  state = transition(state, event(state, "review_collect_intent"), reduce);
+  observe("review_collected", "review_collect", {
+    judgment: {
+      aggregateRevision: state.revision,
+      baseOid: OID_A,
+      decision: "approve",
+      findings: [],
+      headOid: OID_B,
+      kind: "review_verdict",
+      promptHash: HASH,
+      rationale: "approved exact pair",
+      responseHash: HASH,
+      returnedModel: "frontier-1",
+      role: "reviewer",
+      schemaVersion: 1,
+      sessionId: "reviewer-1",
+      treeOid: OID_A,
+      unitId: "unit-1",
+      requestedModel: "frontier",
+    },
+  });
+  return transition(state, event(state, "integrate_intent"), reduce);
 }
 
 function runner(
@@ -277,6 +378,149 @@ test("local integration recovery verifies repository identity and uses the canon
     }).reconcile(localIntegrationEffect(), localRun()),
     { status: "ambiguous" },
   );
+});
+
+test("local integration treats only the durable base as positive pre-act absence", async () => {
+  let head = OID_A;
+  const calls: string[] = [];
+  const adapter = createProductionRecoveryEffectAdapter({
+    git: {
+      repository,
+      runner: async ({ argv }) => {
+        const call = argv.join(" ");
+        calls.push(call);
+        if (call === "rev-parse --git-common-dir")
+          return { exitCode: 0, signal: null, stdout: ".git\n" };
+        if (call === "rev-parse --show-object-format")
+          return { exitCode: 0, signal: null, stdout: "sha1\n" };
+        if (argv[0] === "config")
+          return { exitCode: 1, signal: null, stdout: "" };
+        if (argv[0] === "for-each-ref")
+          return { exitCode: 0, signal: null, stdout: `${head}\n` };
+        if (argv[0] === "symbolic-ref")
+          return { exitCode: 0, signal: null, stdout: "refs/heads/main\n" };
+        if (argv[0] === "status")
+          return { exitCode: 0, signal: null, stdout: "" };
+        if (argv[0] === "merge") {
+          head = OID_B;
+          return { exitCode: 0, signal: null, stdout: "" };
+        }
+        return { exitCode: 1, signal: null, stdout: "" };
+      },
+    },
+  });
+  assert.deepEqual(
+    await adapter.reconcile(localIntegrationEffect(), localRun()),
+    {
+      status: "absent",
+    },
+  );
+  assert.equal(
+    (await adapter.execute(localIntegrationEffect(), localRun())).status,
+    "observed",
+  );
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith("merge ")),
+    [`merge --ff-only ${OID_B}`],
+  );
+
+  assert.equal(
+    (await adapter.reconcile(localIntegrationEffect(), localRun())).status,
+    "observed",
+  );
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith("merge ")),
+    [`merge --ff-only ${OID_B}`],
+  );
+
+  for (const invalid of [OID_A.replace(/^a/u, "c"), ""] as const) {
+    head = invalid;
+    assert.equal(
+      (await adapter.reconcile(localIntegrationEffect(), localRun())).status,
+      "ambiguous",
+    );
+  }
+  assert.deepEqual(
+    calls.filter((call) => call.startsWith("merge ")),
+    [`merge --ff-only ${OID_B}`],
+  );
+});
+
+test("production recovery resumes a persisted local integration intent once after pre-act crash", async () => {
+  let state = localIntegrationIntentRun();
+  assert.deepEqual(runInvariantErrors(state), []);
+  let root = makeRootProjection(state);
+  let children = [makeChildProjection(root, "unit-1")!];
+  let head = OID_A;
+  let merges = 0;
+  const store = {
+    async compareAndSet(batch: MutationBatch) {
+      root = batch.next.root;
+      children = [...batch.next.children];
+      return {
+        affectedRowCount: batch.changedRows.length + 1,
+        checkpoint: batch.checkpoint,
+        children,
+        root,
+        status: "applied" as const,
+      };
+    },
+    async load() {
+      return { status: "observed" as const, value: { children, root } };
+    },
+    async persistControllerAcquireIntent(batch: MutationBatch) {
+      return this.compareAndSet(batch);
+    },
+  };
+  const gitRunner: GitRunner = async ({ argv }) => {
+    const call = argv.join(" ");
+    if (call === "rev-parse --git-common-dir")
+      return { exitCode: 0, signal: null, stdout: ".git\n" };
+    if (call === "rev-parse --show-object-format")
+      return { exitCode: 0, signal: null, stdout: "sha1\n" };
+    if (argv[0] === "config") return { exitCode: 1, signal: null, stdout: "" };
+    if (argv[0] === "for-each-ref")
+      return { exitCode: 0, signal: null, stdout: `${head}\n` };
+    if (argv[0] === "symbolic-ref")
+      return { exitCode: 0, signal: null, stdout: "refs/heads/main\n" };
+    if (argv[0] === "status") return { exitCode: 0, signal: null, stdout: "" };
+    if (argv[0] === "merge") {
+      merges += 1;
+      head = OID_B;
+      return { exitCode: 0, signal: null, stdout: "" };
+    }
+    return { exitCode: 1, signal: null, stdout: "" };
+  };
+  const options = {
+    acquireOperationLock: async () => ({
+      status: "acquired" as const,
+      lock: {
+        async release() {
+          return { status: "released" as const };
+        },
+      },
+    }),
+    git: { repository, runner: gitRunner },
+    nonce: "nonce-integrate-crash",
+    preOwnership: store,
+    proveTopology: async () => ({
+      commonDir: repository.commonDir,
+      holder: state.controller.holder,
+      scope: {
+        beadsStoreIdentity: state.storeIdentity,
+        gitRepositoryIdentity: repository.identity,
+        integrationBranch: state.integrationBranch,
+      },
+    }),
+    store,
+  };
+  // `root` is the durable integrate intent left by a process that died after
+  // persistence and before it could invoke Git. The replacement controller
+  // must use the exact base as its sole retry authority.
+  const resumed = createProductionRecoveryRunner(options);
+  assert.equal((await resumed()).status, "idle");
+  assert.equal(merges, 1);
+  assert.equal(root.run.effectJournal.at(-1)?.status, "observed");
 });
 
 test("composition rejects an exact common-dir/scope/run mismatch before lock or store access", async () => {

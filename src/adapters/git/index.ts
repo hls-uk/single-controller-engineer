@@ -954,11 +954,13 @@ export async function discoverWorktree(
 export async function discoverIntegration(
   runner: GitRunner,
   repository: GitRepository,
-  input: Readonly<{ candidate: string; integrationRef: string }>,
+  input: Readonly<{ base: string; candidate: string; integrationRef: string }>,
 ): Promise<GitEffect> {
   if (
     !safeRef(input.integrationRef) ||
-    !exactOid(repository.objectFormat, input.candidate)
+    !exactOid(repository.objectFormat, input.base) ||
+    !exactOid(repository.objectFormat, input.candidate) ||
+    input.base === input.candidate
   )
     return effect("refused", "GIT_BAD_INPUT");
   const verified = await verifyRepository(runner, repository);
@@ -966,9 +968,15 @@ export async function discoverIntegration(
   const current = await refOid(runner, repository, input.integrationRef);
   if (current.state === "unreadable")
     return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
-  return current.state === "found" && current.oid === input.candidate
-    ? effect("observed", "GIT_OK")
-    : effect("refused", "GIT_NOT_FAST_FORWARD");
+  if (current.state !== "found")
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  if (current.oid === input.candidate) return effect("observed", "GIT_OK");
+  // Only an exact durable base can authorize the coordinator's one local
+  // fast-forward attempt. Missing, foreign, and unreadable refs are never
+  // positive absence because they cannot prove the persisted precondition.
+  return current.oid === input.base
+    ? effect("refused", "GIT_ABSENT")
+    : effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
 }
 
 /** local-ff checks the approved base immediately before merge and reads its result back. */
