@@ -11,7 +11,7 @@ import { Type } from "@sinclair/typebox";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { open, realpath, stat } from "node:fs/promises";
-import { dirname, isAbsolute } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 import {
   containsSecretShape,
@@ -72,6 +72,7 @@ const DOLT_SQL_TIMEOUT_MS = 15_000;
 const DOLT_SQL_MAX_STATEMENT_BYTES = 1_048_576;
 const DOLT_SQL_MAX_OUTPUT_BYTES = 1_048_576;
 const DOLT_SQL_MAX_ERROR_BYTES = 4_096;
+const MUTATION_BATCH_MAX_BYTES = 256 * 1024;
 const BD_PROCESS_TIMEOUT_MS = 15_000;
 const BD_PROCESS_MAX_OUTPUT_BYTES = 16_384;
 const PROCESS_TERM_GRACE_MS = 250;
@@ -97,9 +98,19 @@ export type DoltSqlProcess = (
 type DoltSqlExecution =
   | Readonly<{ status: "ok"; output: string }>
   | Readonly<{ status: "unavailable" | "refused" }>;
-type DoltSqlTransactionExecution =
-  | Readonly<{ status: "ok"; rows: number }>
+type DoltSqlReadExecution =
+  | Readonly<{ status: "ok"; rows: readonly Record<string, unknown>[] }>
   | Readonly<{ status: "unavailable" | "refused" }>;
+type DoltSqlTransactionExecution =
+  | Readonly<{ status: "ok"; rows: number; committedHead?: string }>
+  | Readonly<{ status: "unavailable" | "refused" }>;
+type DoltSqlTransportRole = "worker" | "writer";
+type DoltSqlTransportBinding = Readonly<{
+  credentialReference: string;
+  identity: ServerIdentity;
+  role: DoltSqlTransportRole;
+  user: string;
+}>;
 
 /**
  * The exported transport must expose no mutation-capable property, including
@@ -109,6 +120,8 @@ type DoltSqlTransactionExecution =
  * obtain an invocation handle.
  */
 type DoltSqlTransportOperations = Readonly<{
+  binding: () => DoltSqlTransportBinding;
+  executeRead: (query: string) => Promise<DoltSqlReadExecution>;
   executeProgram: (query: string) => Promise<
     | Readonly<{
         status: "ok";
@@ -129,6 +142,22 @@ const doltSqlTransportOperations = new WeakMap<
   DoltSqlTransport,
   DoltSqlTransportOperations
 >();
+
+function executeDoltSqlRead(
+  transport: DoltSqlTransport,
+  query: string,
+): Promise<DoltSqlReadExecution> {
+  return (
+    doltSqlTransportOperations.get(transport)?.executeRead(query) ??
+    Promise.resolve({ status: "refused" } as const)
+  );
+}
+
+function doltSqlTransportBinding(
+  transport: DoltSqlTransport,
+): DoltSqlTransportBinding | undefined {
+  return doltSqlTransportOperations.get(transport)?.binding();
+}
 
 function executeDoltSqlProgram(
   transport: DoltSqlTransport,
@@ -251,6 +280,32 @@ export function __setDoltSqlTransactionTestHookForTests(
   };
 }
 
+/**
+ * Test-only post-commit boundary. It observes the already-verified
+ * same-session head but cannot supply SQL, alter the transaction program, or
+ * affect production unless a test explicitly installs it.
+ */
+type DoltBeadsServerDriverPostTransactionTestHook = (
+  input: Readonly<{
+    committedHead: string;
+  }>,
+) => void | Promise<void>;
+
+let doltBeadsServerDriverPostTransactionTestHook:
+  DoltBeadsServerDriverPostTransactionTestHook | undefined;
+
+/** @internal Installs the narrow post-transaction test boundary. */
+export function __setDoltBeadsServerDriverPostTransactionTestHookForTests(
+  hook: DoltBeadsServerDriverPostTransactionTestHook | undefined,
+): () => void {
+  const previous = doltBeadsServerDriverPostTransactionTestHook;
+  doltBeadsServerDriverPostTransactionTestHook = hook;
+  return () => {
+    if (doltBeadsServerDriverPostTransactionTestHook === hook)
+      doltBeadsServerDriverPostTransactionTestHook = previous;
+  };
+}
+
 function parseDoltRows(
   output: string,
 ): readonly Record<string, unknown>[] | undefined {
@@ -281,10 +336,13 @@ function parseDoltRows(
   return parsed as readonly Record<string, unknown>[];
 }
 
-function readOnlySql(query: string): boolean {
+function closedReadSql(query: string): boolean {
   return (
     /^\s*(?:SELECT|SHOW|DESCRIBE|EXPLAIN)\b/iu.test(query) &&
-    !query.includes(";")
+    !query.includes(";") &&
+    !/\b(?:INTO\s+(?:OUTFILE|DUMPFILE)|LOAD_FILE|GET_LOCK|RELEASE_LOCK|SLEEP)\b/iu.test(
+      query,
+    )
   );
 }
 
@@ -304,6 +362,8 @@ export class DoltSqlTransport {
   readonly #executable: string | undefined;
   readonly #password: string | undefined;
   readonly #process: DoltSqlProcess;
+  readonly #role: DoltSqlTransportRole;
+  readonly #credentialReference: string;
   readonly #user: string;
   #executablePoisoned = false;
   #executableSnapshot: ExecutableSnapshot | undefined;
@@ -311,10 +371,12 @@ export class DoltSqlTransport {
 
   constructor(
     input: Readonly<{
+      credentialReference?: string;
       identity: ServerIdentity;
       executable?: string;
       password?: string;
       process?: DoltSqlProcess;
+      role?: DoltSqlTransportRole;
       user: string;
     }>,
   ) {
@@ -332,14 +394,34 @@ export class DoltSqlTransport {
           containsSecretShape(input.password)))
     )
       throw new Error("invalid Dolt SQL transport configuration");
+    const role = input.role ?? (input.user === "worker" ? "worker" : "writer");
+    const credentialReference =
+      input.credentialReference ??
+      (role === "worker"
+        ? input.identity.workerCredentialReference
+        : input.identity.credentialReference);
+    if (
+      (role !== "writer" && role !== "worker") ||
+      !validIdentifier(credentialReference, MAX_FINGERPRINT_BYTES)
+    )
+      throw new Error("invalid Dolt SQL transport binding");
     this.#identity = input.identity;
     this.#executable = input.executable;
     this.#password = input.password;
     this.#process = input.process ?? runDoltSql;
+    this.#role = role;
+    this.#credentialReference = credentialReference;
     this.#user = input.user;
     doltSqlTransportOperations.set(
       this,
       Object.freeze({
+        binding: () => ({
+          credentialReference: this.#credentialReference,
+          identity: this.#identity,
+          role: this.#role,
+          user: this.#user,
+        }),
+        executeRead: (query) => this.#executeRead(query),
         executeProgram: (query) => this.#executeProgram(query),
         executeTransaction: (statement, expectedRows) =>
           this.#executeTransaction(statement, expectedRows),
@@ -348,17 +430,12 @@ export class DoltSqlTransport {
     );
   }
 
-  /** Read-only diagnostics and readbacks; server mutations use a private seam. */
-  async query(
-    query: string,
-  ): Promise<
-    | Readonly<{ status: "ok"; rows: readonly Record<string, unknown>[] }>
-    | Readonly<{ status: "unavailable" | "refused" }>
-  > {
+  /** Closed internal reads only; callers cannot supply SQL through this class. */
+  async #executeRead(query: string): Promise<DoltSqlReadExecution> {
     if (
       !safeText(query, DOLT_SQL_MAX_STATEMENT_BYTES) ||
       containsSecretShape(query) ||
-      !readOnlySql(query)
+      !closedReadSql(query)
     )
       return { status: "refused" };
     const result = await this.#execute(query);
@@ -722,6 +799,8 @@ async function runDoltSqlTransaction(
     let postCommitHead: string | undefined;
     let rowCountPhaseObserved = false;
     let closing = false;
+    let stdinClosed = false;
+    let outputBytes = 0;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     const finishAfterClose = (value: DoltSqlTransactionExecution): void => {
       if (result !== undefined) return;
@@ -754,24 +833,56 @@ async function runDoltSqlTransaction(
     const timer = setTimeout(() => {
       terminate({ status: "unavailable" });
     }, DOLT_SQL_TIMEOUT_MS);
+    // Attach before the first write: an early child close/EPIPE is an
+    // unavailable transaction outcome, never an unhandled stream error or a
+    // later write after the parent already reconciled it.
+    child.stdin.once("error", () => terminate({ status: "unavailable" }));
+    const writeStdin = (value: string): boolean => {
+      if (closing || stdinClosed) return false;
+      try {
+        // `false` is merely backpressure: the Writable accepted and ordered
+        // this write. The callback/error listener, not that return value,
+        // distinguishes an asynchronous EPIPE from a queued write.
+        child.stdin.write(value, (error) => {
+          if (error !== undefined && error !== null)
+            terminate({ status: "unavailable" });
+        });
+        return true;
+      } catch {
+        terminate({ status: "unavailable" });
+        return false;
+      }
+    };
+    const closeStdin = (): void => {
+      if (stdinClosed) return;
+      stdinClosed = true;
+      try {
+        child.stdin.end(() => undefined);
+      } catch {
+        terminate({ status: "unavailable" });
+      }
+    };
     const sendFinal = (commit: boolean): void => {
       if (finalSent || closing) return;
       finalSent = true;
       if (!commit) {
-        child.stdin.write("ROLLBACK;\n");
-        child.stdin.end();
+        writeStdin("ROLLBACK;\n");
+        closeStdin();
         return;
       }
       // Keep the commit and both evidence reads on this one process/session.
       // A fresh connection can later reconcile an interrupted response, but it
       // cannot turn an unknown child outcome into an applied result here.
-      child.stdin.write("COMMIT;\n");
+      if (!writeStdin("COMMIT;\n")) return;
       observeTestPhase("after_commit_before_outcome");
       if (closing) return;
-      child.stdin.write(
-        "SELECT DOLT_HASHOF('HEAD') AS committed_head; SELECT COUNT(*) AS working_set_rows FROM dolt_status;\n",
-      );
-      child.stdin.end();
+      if (
+        !writeStdin(
+          "SELECT DOLT_HASHOF('HEAD') AS committed_head; SELECT COUNT(*) AS working_set_rows FROM dolt_status;\n",
+        )
+      )
+        return;
+      closeStdin();
     };
     const inspectLine = (line: string): void => {
       if (line.trim().length === 0 || result !== undefined) return;
@@ -835,11 +946,12 @@ async function runDoltSqlTransaction(
     };
     child.stdout.on("data", (chunk: Buffer) => {
       if (result !== undefined) return;
-      output += chunk.toString("utf8");
-      if (Buffer.byteLength(output, "utf8") > DOLT_SQL_MAX_OUTPUT_BYTES) {
+      outputBytes += Buffer.byteLength(chunk, "utf8");
+      if (outputBytes > DOLT_SQL_MAX_OUTPUT_BYTES) {
         terminate({ status: "unavailable" });
         return;
       }
+      output += chunk.toString("utf8");
       const lines = output.split("\n");
       output = lines.pop() ?? "";
       for (const line of lines) inspectLine(line);
@@ -852,17 +964,17 @@ async function runDoltSqlTransaction(
       // A successful exit proves the exact decision was sent through the same
       // connection. Applied writes additionally need a same-session Dolt head
       // and clean working-set marker; no decision is never an apply result.
-      resolve(
-        code === 0 &&
-          finalSent &&
-          rowCount !== undefined &&
-          (rowCount !== input.expectedRows ||
-            (postCommitClean && postCommitHead !== undefined))
-          ? { status: "ok", rows: rowCount }
+      if (code !== 0 || !finalSent || rowCount === undefined)
+        return resolve({ status: "unavailable" });
+      if (rowCount !== input.expectedRows)
+        return resolve({ status: "ok", rows: rowCount });
+      return resolve(
+        postCommitClean && postCommitHead !== undefined
+          ? { status: "ok", rows: rowCount, committedHead: postCommitHead }
           : { status: "unavailable" },
       );
     });
-    child.stdin.write(
+    writeStdin(
       `SET @@SESSION.dolt_transaction_commit = 1; START TRANSACTION; ${input.statement}; SET @sce_affected_rows := ROW_COUNT(); SELECT @sce_affected_rows AS affected_rows;\n`,
     );
   });
@@ -899,6 +1011,8 @@ export type PinnedBdServerProcessInput = Readonly<{
     BEADS_DOLT_PASSWORD?: string | undefined;
   }>;
   executable: string;
+  /** Declared controller identity which the observed bd context must match. */
+  identity?: ServerIdentity;
   /** Test seam; production uses the canonical executable process. */
   process?: PinnedBdProcess;
   /** Optional isolated child HOME/config used by managed bd server mode. */
@@ -911,6 +1025,7 @@ export class PinnedBdServerProcess {
   readonly #credentialEnvironment:
     (() => Readonly<{ BEADS_DOLT_PASSWORD?: string | undefined }>) | undefined;
   readonly #executable: string;
+  readonly #identity: ServerIdentity | undefined;
   readonly #process: PinnedBdProcess;
   readonly #runtimeEnvironment: (() => PinnedBdRuntimeEnvironment) | undefined;
   readonly #workspace: string;
@@ -923,6 +1038,7 @@ export class PinnedBdServerProcess {
       throw new Error("invalid pinned bd process configuration");
     this.#credentialEnvironment = input.credentialEnvironment;
     this.#executable = input.executable;
+    this.#identity = input.identity;
     this.#process = input.process ?? runPinnedBd;
     this.#runtimeEnvironment = input.runtimeEnvironment;
     this.#workspace = input.workspace;
@@ -940,11 +1056,70 @@ export class PinnedBdServerProcess {
     return this.#run("release", actor);
   }
 
+  /** Closed domain check used by the driver before every slot mutation. */
+  async matchesIdentity(
+    identity: ServerIdentity,
+  ): Promise<
+    Readonly<{ status: "ok" }> | Readonly<{ status: "unavailable" | "refused" }>
+  > {
+    if (this.#identity === undefined || !exact(this.#identity, identity))
+      return { status: "refused" };
+    const verification = await this.#verify();
+    if (verification.status !== "ok") return verification;
+    const workspace = await this.#canonicalWorkspace();
+    if (workspace === undefined) return { status: "refused" };
+    if ((await this.#canonicalExecutable()) !== verification.executable)
+      return { status: "refused" };
+    const context = await this.#exec(verification.executable, [
+      "-C",
+      workspace,
+      "context",
+      "--json",
+    ]);
+    if (
+      context.timedOut ||
+      context.exitCode !== 0 ||
+      Buffer.byteLength(context.output, "utf8") > BD_PROCESS_MAX_OUTPUT_BYTES
+    )
+      return { status: "unavailable" };
+    if ((await this.#canonicalExecutable()) !== verification.executable)
+      return { status: "refused" };
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(context.output) as unknown;
+    } catch {
+      return { status: "refused" };
+    }
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      !this.#matchesContext(
+        parsed as Record<string, unknown>,
+        identity,
+        workspace,
+      )
+    )
+      return { status: "refused" };
+    const prefix = await this.#workspacePrefixMatches(
+      verification.executable,
+      workspace,
+      identity.prefix,
+    );
+    if (prefix === "unavailable") return { status: "unavailable" };
+    if (!prefix) return { status: "refused" };
+    return { status: "ok" };
+  }
+
   async #run(
     command: "acquire" | "check" | "release",
     actor: string,
   ): Promise<PinnedBdSlotCommandResult> {
     if (!validIdentifier(actor)) return { status: "refused" };
+    if (this.#identity !== undefined) {
+      const binding = await this.matchesIdentity(this.#identity);
+      if (binding.status !== "ok") return binding;
+    }
     const verification = await this.#verify();
     if (verification.status !== "ok") return verification;
     const workspace = await this.#canonicalWorkspace();
@@ -1035,6 +1210,78 @@ export class PinnedBdServerProcess {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * `bd context --json` v1 has no prefix field. Bind the remaining immutable
+   * project identity with a fixed, read-only lookup of its built-in slot.
+   * The command accepts only the validated declared prefix and does not alter
+   * the server, so a mismatched workspace fails before slot mutation/CAS.
+   */
+  async #workspacePrefixMatches(
+    executable: string,
+    workspace: string,
+    prefix: string,
+  ): Promise<boolean | "unavailable"> {
+    if (this.#process !== runPinnedBd) return true;
+    try {
+      const result = await this.#exec(executable, [
+        "-C",
+        workspace,
+        "show",
+        `${prefix}-merge-slot`,
+        "--json",
+      ]);
+      if (
+        result.timedOut ||
+        result.exitCode === undefined ||
+        Buffer.byteLength(result.output, "utf8") > BD_PROCESS_MAX_OUTPUT_BYTES
+      )
+        return "unavailable";
+      // A healthy missing/wrong built-in slot and a stopped external Dolt
+      // server both make bd 1.1.0's read-only `show` exit nonzero without a
+      // structured status. Treat that opaque command failure as unavailable;
+      // it still fails closed before any mutation and never becomes identity
+      // evidence. Successful output below is the only prefix acceptance.
+      if (result.exitCode !== 0) return "unavailable";
+      const parsed = JSON.parse(result.output) as unknown;
+      const issue = Array.isArray(parsed) ? parsed[0] : parsed;
+      return (
+        issue !== null &&
+        typeof issue === "object" &&
+        !Array.isArray(issue) &&
+        (issue as Record<string, unknown>).id === `${prefix}-merge-slot`
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  #matchesContext(
+    context: Record<string, unknown>,
+    identity: ServerIdentity,
+    workspace: string,
+  ): boolean {
+    const endpoint = `${String(context.server_host ?? "")}:${String(context.server_port ?? "")}`;
+    if (
+      context.backend !== "dolt" ||
+      context.database !== identity.database ||
+      context.dolt_mode !== "server" ||
+      endpoint !== identity.endpoint ||
+      typeof context.beads_dir !== "string" ||
+      !isAbsolute(context.beads_dir)
+    )
+      return false;
+    if (
+      (identity.topology === "managed_local_shared_server" &&
+        this.#runtimeEnvironment === undefined) ||
+      (identity.topology === "external_server" &&
+        this.#credentialEnvironment === undefined)
+    )
+      return false;
+    // bd context is the authority for workspace provenance. It must point
+    // inside this exact canonical workspace, never a parent-discovered repo.
+    return context.beads_dir === join(workspace, ".beads");
   }
 
   async #exec(
@@ -1672,6 +1919,10 @@ function parseDiscovery(
     value.children.length !== root.value.childRows.length
   )
     return undefined;
+  const expectedUnitIds = new Set(
+    root.value.childRows.map((child) => child.unitId),
+  );
+  const observedUnitIds = new Set<string>();
   for (const child of value.children) {
     const parsed = validateChildProjection(child);
     const reference = parsed.ok
@@ -1679,17 +1930,35 @@ function parseDiscovery(
       : undefined;
     if (
       !parsed.ok ||
+      observedUnitIds.has(parsed.value.unitId) ||
       reference?.revision !== parsed.value.revision ||
       reference.commitment !== parsed.value.commitment
     )
       return undefined;
+    observedUnitIds.add(parsed.value.unitId);
   }
+  if (
+    observedUnitIds.size !== expectedUnitIds.size ||
+    [...expectedUnitIds].some((unitId) => !observedUnitIds.has(unitId))
+  )
+    return undefined;
   return {
     checkpoint: value.checkpoint,
     children: value.children,
     root: value.root,
     slot: value.slot,
   };
+}
+
+function boundedMutationBatch(value: unknown): boolean {
+  try {
+    return (
+      Buffer.byteLength(canonicalJson(value as JsonValue), "utf8") <=
+      MUTATION_BATCH_MAX_BYTES
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1754,6 +2023,7 @@ export class BeadsServerAdapter implements RunStorePort {
   readonly #driver: BeadsServerDriver;
   readonly #identity: ServerIdentity;
   readonly #process: ManagedServerProcess | undefined;
+  #ready = false;
   #started = false;
   #lastDiscovery: ServerDiscovery | undefined;
 
@@ -1777,6 +2047,7 @@ export class BeadsServerAdapter implements RunStorePort {
   }
 
   async preflight(): Promise<ServerPreflight> {
+    this.#ready = false;
     if (
       this.#identity.topology === "managed_local_shared_server" &&
       !this.#started
@@ -1805,6 +2076,7 @@ export class BeadsServerAdapter implements RunStorePort {
       return { status: "refused", code: "BS_IDENTITY_MISMATCH" };
     if (!parsed.workerGrant.serverEnforced || !parsed.workerGrant.writeDenied)
       return { status: "refused", code: "BS_READ_ONLY_NOT_ENFORCED" };
+    this.#ready = true;
     return { status: "ready", identity: this.#identity };
   }
 
@@ -1812,6 +2084,7 @@ export class BeadsServerAdapter implements RunStorePort {
     // A managed bd shared server is authority-owned and may be shared across
     // projects. Disposal only forgets this adapter's adoption; it never sends
     // a server-wide stop operation.
+    this.#ready = false;
     this.#started = false;
   }
 
@@ -1824,6 +2097,7 @@ export class BeadsServerAdapter implements RunStorePort {
       scope: FencingScope;
     }>,
   ): Promise<ServerSlotResult> {
+    if (!this.#ready) return { status: "quarantined" };
     let result: ServerDriverResponse<ServerSlotReadback>;
     try {
       result = await this.#driver.mergeSlotAcquire({
@@ -1832,11 +2106,18 @@ export class BeadsServerAdapter implements RunStorePort {
         scope: input.scope,
       });
     } catch {
+      this.#ready = false;
       return { status: "ambiguous" };
     }
-    if (result.status !== "ok") return { status: mapFailure(result.status) };
+    if (result.status !== "ok") {
+      this.#ready = false;
+      return { status: mapFailure(result.status) };
+    }
     const parsed = parseSlotReadback(result.value, input.prefix, input.scope);
-    if (parsed === undefined) return { status: "quarantined" };
+    if (parsed === undefined) {
+      this.#ready = false;
+      return { status: "quarantined" };
+    }
     // `bd merge-slot acquire` returns the post-CAS holder.  There is no
     // pre-acquire available observation to feed the pure decision helper.
     if (
@@ -1876,6 +2157,7 @@ export class BeadsServerAdapter implements RunStorePort {
       scope: FencingScope;
     }>,
   ): Promise<ServerSlotResult> {
+    if (!this.#ready) return { status: "quarantined" };
     let result: ServerDriverResponse<ServerSlotReadback>;
     try {
       result = await this.#driver.mergeSlotCheck({
@@ -1884,11 +2166,18 @@ export class BeadsServerAdapter implements RunStorePort {
         scope: input.scope,
       });
     } catch {
+      this.#ready = false;
       return { status: "ambiguous" };
     }
-    if (result.status !== "ok") return { status: mapFailure(result.status) };
+    if (result.status !== "ok") {
+      this.#ready = false;
+      return { status: mapFailure(result.status) };
+    }
     const parsed = parseSlotReadback(result.value, input.prefix, input.scope);
-    if (parsed === undefined) return { status: "quarantined" };
+    if (parsed === undefined) {
+      this.#ready = false;
+      return { status: "quarantined" };
+    }
     return parsed.status === "acquired" && parsed.holder === input.holder
       ? { status: "resume", slot: parsed }
       : { status: "blocked" };
@@ -1901,6 +2190,7 @@ export class BeadsServerAdapter implements RunStorePort {
       scope: FencingScope;
     }>,
   ): Promise<ServerSlotResult> {
+    if (!this.#ready) return { status: "quarantined" };
     let result: ServerDriverResponse<ServerSlotReadback>;
     try {
       result = await this.#driver.mergeSlotRelease({
@@ -1909,9 +2199,13 @@ export class BeadsServerAdapter implements RunStorePort {
         scope: input.scope,
       });
     } catch {
+      this.#ready = false;
       return { status: "ambiguous" };
     }
-    if (result.status !== "ok") return { status: mapFailure(result.status) };
+    if (result.status !== "ok") {
+      this.#ready = false;
+      return { status: mapFailure(result.status) };
+    }
     const evidence = validateSlotRelease(
       input.prefix,
       input.scope,
@@ -1921,9 +2215,11 @@ export class BeadsServerAdapter implements RunStorePort {
         readback: result.value.observation,
       },
     );
-    return evidence.ok
-      ? { status: "released", slot: result.value.observation }
-      : { status: "quarantined" };
+    if (!evidence.ok) {
+      this.#ready = false;
+      return { status: "quarantined" };
+    }
+    return { status: "released", slot: result.value.observation };
   }
 
   /** Exact server readback used to reconcile, never to blindly retry a commit. */
@@ -1934,16 +2230,23 @@ export class BeadsServerAdapter implements RunStorePort {
         prefix: this.#identity.prefix,
         scope,
       });
-      if (response.status !== "ok") return undefined;
+      if (response.status !== "ok") {
+        this.#ready = false;
+        return undefined;
+      }
       const parsed = parseDiscovery(
         response.value,
         this.#identity.prefix,
         scope,
       );
-      if (parsed === undefined) return undefined;
+      if (parsed === undefined) {
+        this.#ready = false;
+        return undefined;
+      }
       this.#lastDiscovery = parsed;
       return parsed;
     } catch {
+      this.#ready = false;
       return undefined;
     }
   }
@@ -1953,8 +2256,10 @@ export class BeadsServerAdapter implements RunStorePort {
   }
 
   async compareAndSet(batchInput: MutationBatch): Promise<RunStoreResult> {
+    if (!this.#ready) return { status: "quarantined" };
     const batch = validateMutationBatch(batchInput);
-    if (!batch.ok) return { status: "quarantined" };
+    if (!batch.ok || !boundedMutationBatch(batch.value))
+      return { status: "quarantined" };
     let response: ServerMutationDriverResponse;
     try {
       response = await this.#driver.mutate({
@@ -1962,6 +2267,7 @@ export class BeadsServerAdapter implements RunStorePort {
         identity: this.#identity,
       });
     } catch {
+      this.#ready = false;
       await this.discover(batch.value.scope);
       return { status: "ambiguous" };
     }
@@ -1969,6 +2275,7 @@ export class BeadsServerAdapter implements RunStorePort {
       // A network failure after a transaction starts is never reported stale.
       // Discovery is intentionally read-only and its facts stay local to the
       // driver seam; callers receive ambiguous and must reconcile before retry.
+      this.#ready = false;
       await this.discover(batch.value.scope);
       return {
         status:
@@ -1980,16 +2287,24 @@ export class BeadsServerAdapter implements RunStorePort {
     }
     const commit = parseCommit(response.value.commit);
     const result = parseResult(response.value.result);
-    if (commit === undefined || result === undefined || !this.#durable(commit))
+    if (
+      commit === undefined ||
+      result === undefined ||
+      !this.#durable(commit)
+    ) {
+      this.#ready = false;
       return { status: "quarantined" };
+    }
     if (result.status !== "applied") return result;
     if (
       result.affectedRowCount !== batch.value.changedRows.length + 1 ||
       !exact(result.root, batch.value.next.root) ||
       !exact(result.children, batch.value.next.children) ||
       !exact(result.checkpoint, batch.value.checkpoint)
-    )
+    ) {
+      this.#ready = false;
       return { status: "quarantined" };
+    }
     return result;
   }
 
@@ -2313,6 +2628,27 @@ function jsonRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function exactWorkerSelectGrants(
+  rows: readonly Record<string, unknown>[],
+  user: string,
+  database: string,
+): boolean {
+  const key = `Grants for ${user}@%`;
+  const values = rows.map((row) => row[key]);
+  const principal = `\`${user}\`@\`%\``;
+  const expected = new Set([
+    `GRANT USAGE ON *.* TO ${principal}`,
+    `GRANT SELECT ON \`${database}\`.* TO ${principal}`,
+  ]);
+  return (
+    rows.length === expected.size &&
+    values.every(
+      (value) => typeof value === "string" && expected.delete(value),
+    ) &&
+    expected.size === 0
+  );
+}
+
 export type ServerEnvelopeInitializationResult =
   | Readonly<{ status: "initialized" | "already_initialized" }>
   | Readonly<{ status: ServerDriverFailure }>;
@@ -2332,6 +2668,7 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
   readonly #writer: DoltSqlTransport;
   #autoCommitObserved = false;
   #doltTransactionCommitObserved = false;
+  #ready = false;
 
   constructor(
     input: Readonly<{
@@ -2355,8 +2692,19 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
   }
 
   async probe(): Promise<ServerDriverResponse<ServerProbe>> {
-    if (this.#identity.autoCommitPolicy !== "on") return { status: "refused" };
-    const database = await this.#writer.query(
+    this.#ready = false;
+    this.#autoCommitObserved = false;
+    this.#doltTransactionCommitObserved = false;
+    if (
+      this.#identity.autoCommitPolicy !== "on" ||
+      !this.#transportsMatchIdentity()
+    )
+      return { status: "refused" };
+    if (this.#slotProcess === undefined) return { status: "refused" };
+    const slotBinding = await this.#slotProcess.matchesIdentity(this.#identity);
+    if (slotBinding.status !== "ok") return slotBinding;
+    const database = await executeDoltSqlRead(
+      this.#writer,
       "SELECT DATABASE() AS current_database",
     );
     if (database.status !== "ok") return { status: database.status };
@@ -2365,7 +2713,20 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       database.rows[0]?.current_database !== this.#identity.database
     )
       return { status: "refused" };
-    const issuesTable = await this.#writer.query(
+    const serverVersion = await executeDoltSqlRead(
+      this.#writer,
+      "SELECT DOLT_VERSION() AS dolt_version",
+    );
+    if (
+      serverVersion.status !== "ok" ||
+      serverVersion.rows.length !== 1 ||
+      serverVersion.rows[0]?.dolt_version !== "2.2.1"
+    )
+      return serverVersion.status === "ok"
+        ? { status: "refused" }
+        : serverVersion;
+    const issuesTable = await executeDoltSqlRead(
+      this.#writer,
       `SELECT table_name FROM information_schema.tables WHERE table_schema = ${sqlLiteral(this.#identity.database)} AND table_name = 'issues'`,
     );
     if (issuesTable.status !== "ok") return { status: issuesTable.status };
@@ -2375,7 +2736,8 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
         issuesTable.rows[0]?.TABLE_NAME !== "issues")
     )
       return { status: "refused" };
-    const labelsTable = await this.#writer.query(
+    const labelsTable = await executeDoltSqlRead(
+      this.#writer,
       `SELECT table_name FROM information_schema.tables WHERE table_schema = ${sqlLiteral(this.#identity.database)} AND table_name = 'labels'`,
     );
     if (labelsTable.status !== "ok") return { status: labelsTable.status };
@@ -2385,7 +2747,8 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
         labelsTable.rows[0]?.TABLE_NAME !== "labels")
     )
       return { status: "refused" };
-    const columns = await this.#writer.query(
+    const columns = await executeDoltSqlRead(
+      this.#writer,
       `SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = ${sqlLiteral(this.#identity.database)} AND table_name = 'issues'`,
     );
     if (columns.status !== "ok") return { status: columns.status };
@@ -2405,7 +2768,8 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       if (requiredColumns.get(name) === type) requiredColumns.delete(name);
     }
     if (requiredColumns.size !== 0) return { status: "refused" };
-    const labelColumns = await this.#writer.query(
+    const labelColumns = await executeDoltSqlRead(
+      this.#writer,
       `SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = ${sqlLiteral(this.#identity.database)} AND table_name = 'labels'`,
     );
     if (labelColumns.status !== "ok") return { status: labelColumns.status };
@@ -2422,7 +2786,8 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
         requiredLabelColumns.delete(name);
     }
     if (requiredLabelColumns.size !== 0) return { status: "refused" };
-    const autoCommit = await this.#writer.query(
+    const autoCommit = await executeDoltSqlRead(
+      this.#writer,
       "SELECT @@autocommit AS auto_commit",
     );
     if (
@@ -2450,10 +2815,41 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     if (this.#worker === undefined) return { status: "refused" };
     const issues = quotedIdentifier(this.#identity.database);
     if (issues === undefined) return { status: "refused" };
-    const workerRead = await this.#worker.query(
+    const workerRead = await executeDoltSqlRead(
+      this.#worker,
       `SELECT id FROM ${issues}.issues LIMIT 1`,
     );
     if (workerRead.status !== "ok") return { status: workerRead.status };
+    const workerBinding = doltSqlTransportBinding(this.#worker);
+    if (workerBinding === undefined) return { status: "refused" };
+    const currentWorker = await executeDoltSqlRead(
+      this.#worker,
+      "SELECT CURRENT_USER() AS current_principal",
+    );
+    if (
+      currentWorker.status !== "ok" ||
+      currentWorker.rows.length !== 1 ||
+      currentWorker.rows[0]?.current_principal !== `${workerBinding.user}@%`
+    )
+      return currentWorker.status === "ok"
+        ? { status: "refused" }
+        : currentWorker;
+    // Dolt 2.2.1 does not permit a SELECT-only principal to inspect mysql's
+    // grant metadata. The bound writer therefore performs the authoritative
+    // fixed read, while CURRENT_USER() above binds that exact worker session.
+    const grants = await executeDoltSqlRead(
+      this.#writer,
+      `SHOW GRANTS FOR '${workerBinding.user}'@'%'`,
+    );
+    if (
+      grants.status !== "ok" ||
+      !exactWorkerSelectGrants(
+        grants.rows,
+        workerBinding.user,
+        this.#identity.database,
+      )
+    )
+      return grants.status === "ok" ? { status: "refused" } : grants;
     const workerProbe = await probeDoltSqlWorkerWrite(this.#worker);
     // A ready server must positively prove its independent worker credential
     // received the exact table-write privilege denial. Timeouts, bad logins,
@@ -2464,7 +2860,7 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       return {
         status: workerProbe === "unavailable" ? "unavailable" : "refused",
       };
-    return {
+    const probe = {
       status: "ok",
       value: {
         autoCommitPolicy: this.#identity.autoCommitPolicy,
@@ -2478,38 +2874,71 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
           writeDenied: true,
         },
       },
-    };
+    } as const;
+    this.#ready = true;
+    return probe;
   }
 
   async mergeSlotAcquire(
     input: Readonly<{ actor: string; prefix: string; scope: FencingScope }>,
   ): Promise<ServerDriverResponse<ServerSlotReadback>> {
-    if (this.#slotProcess === undefined) return { status: "refused" };
+    if (!this.#ready || this.#slotProcess === undefined)
+      return { status: "refused" };
+    const binding = await this.#slotProcess.matchesIdentity(this.#identity);
+    if (binding.status !== "ok") {
+      this.#ready = false;
+      return binding;
+    }
     const precheck = await this.#slotReadback(
       input.prefix,
       input.scope,
       input.actor,
     );
-    if (precheck.status !== "ok") return precheck;
+    if (precheck.status !== "ok") {
+      this.#ready = false;
+      return precheck;
+    }
     const attempt = await this.#slotProcess.acquire(input.actor);
-    return this.#slotAfterCommand("acquire", attempt, input);
+    const result = await this.#slotAfterCommand("acquire", attempt, input);
+    if (result.status !== "ok") this.#ready = false;
+    return result;
   }
 
   async mergeSlotCheck(
     input: Readonly<{ actor?: string; prefix: string; scope: FencingScope }>,
   ): Promise<ServerDriverResponse<ServerSlotReadback>> {
-    if (this.#slotProcess === undefined) return { status: "refused" };
+    if (!this.#ready || this.#slotProcess === undefined)
+      return { status: "refused" };
+    const binding = await this.#slotProcess.matchesIdentity(this.#identity);
+    if (binding.status !== "ok") {
+      this.#ready = false;
+      return binding;
+    }
     const actor = input.actor ?? "slot-observer";
     const precheck = await this.#slotReadback(input.prefix, input.scope, actor);
-    if (precheck.status !== "ok") return precheck;
+    if (precheck.status !== "ok") {
+      this.#ready = false;
+      return precheck;
+    }
     const attempt = await this.#slotProcess.check(actor);
-    return this.#slotAfterCommand("check", attempt, { ...input, actor });
+    const result = await this.#slotAfterCommand("check", attempt, {
+      ...input,
+      actor,
+    });
+    if (result.status !== "ok") this.#ready = false;
+    return result;
   }
 
   async mergeSlotRelease(
     input: Readonly<{ actor: string; prefix: string; scope: FencingScope }>,
   ): Promise<ServerDriverResponse<ServerSlotReadback>> {
-    if (this.#slotProcess === undefined) return { status: "refused" };
+    if (!this.#ready || this.#slotProcess === undefined)
+      return { status: "refused" };
+    const binding = await this.#slotProcess.matchesIdentity(this.#identity);
+    if (binding.status !== "ok") {
+      this.#ready = false;
+      return binding;
+    }
     const precheck = await this.#slotReadback(
       input.prefix,
       input.scope,
@@ -2520,9 +2949,13 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       precheck.value.observation.status !== "acquired" ||
       precheck.value.observation.holder !== input.actor
     )
-      return precheck.status === "ok" ? { status: "refused" } : precheck;
+      return precheck.status === "ok"
+        ? this.#invalidate({ status: "refused" })
+        : this.#invalidate(precheck);
     const attempt = await this.#slotProcess.release(input.actor);
-    return this.#slotAfterCommand("release", attempt, input);
+    const result = await this.#slotAfterCommand("release", attempt, input);
+    if (result.status !== "ok") this.#ready = false;
+    return result;
   }
 
   async initializeEnvelope(
@@ -2533,16 +2966,26 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     }>,
   ): Promise<ServerEnvelopeInitializationResult> {
     if (
+      !this.#ready ||
       input.authority !== "authorized_initialization" ||
       !validIdentifier(input.issueId) ||
       containsSecretShape(input.envelope)
     )
       return { status: "refused" };
+    if (this.#slotProcess === undefined) return { status: "refused" };
+    const binding = await this.#slotProcess.matchesIdentity(this.#identity);
+    if (binding.status !== "ok") {
+      this.#ready = false;
+      return binding;
+    }
     const affected = await this.#mutateAffected(
       `UPDATE ${this.#issues()} SET metadata = JSON_SET(metadata, '$.sce', ${sqlJson(input.envelope)}) WHERE id = ${sqlLiteral(input.issueId)} AND JSON_EXTRACT(metadata, '$.sce') IS NULL`,
       1,
     );
-    if (affected.status !== "ok") return { status: affected.status };
+    if (affected.status !== "ok") {
+      this.#ready = false;
+      return { status: affected.status };
+    }
     if (affected.rows === 0) return { status: "already_initialized" };
     return affected.rows === 1
       ? { status: "initialized" }
@@ -2552,17 +2995,23 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
   async mutate(
     input: Readonly<{ batch: MutationBatch; identity: ServerIdentity }>,
   ): Promise<ServerMutationDriverResponse> {
-    if (!exact(input.identity, this.#identity))
+    if (!this.#ready || !exact(input.identity, this.#identity))
       return { phase: "before_transaction", status: "refused" };
+    if (!boundedMutationBatch(input.batch))
+      return { phase: "before_transaction", status: "refused" };
+    if (this.#slotProcess === undefined)
+      return { phase: "before_transaction", status: "refused" };
+    const binding = await this.#slotProcess.matchesIdentity(this.#identity);
+    if (binding.status !== "ok") {
+      this.#ready = false;
+      return { phase: "before_transaction", status: binding.status };
+    }
     if (
       this.#identity.autoCommitPolicy !== "on" ||
       !this.#autoCommitObserved ||
       !this.#doltTransactionCommitObserved
     )
       return { phase: "before_transaction", status: "refused" };
-    const beforeCommit = await this.#doltCommitEvidence();
-    if (beforeCommit.status !== "ok")
-      return { phase: "before_transaction", status: beforeCommit.status };
     const statement = this.#casStatement(input.batch);
     if (statement === undefined)
       return { phase: "before_transaction", status: "refused" };
@@ -2570,18 +3019,19 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       statement,
       input.batch.changedRows.length + 1,
     );
-    if (affected.status !== "ok")
+    if (affected.status !== "ok") {
+      this.#ready = false;
       return { phase: "commit_unknown", status: affected.status };
+    }
     if (affected.rows === 0) {
       const afterStale = await this.#doltCommitEvidence();
-      if (
-        afterStale.status !== "ok" ||
-        afterStale.value.head !== beforeCommit.value.head
-      )
+      if (afterStale.status !== "ok") {
+        this.#ready = false;
         return {
           phase: "commit_unknown",
-          status: afterStale.status === "ok" ? "ambiguous" : afterStale.status,
+          status: afterStale.status,
         };
+      }
       return {
         status: "ok",
         value: {
@@ -2590,24 +3040,40 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
         },
       };
     }
-    if (affected.rows !== input.batch.changedRows.length + 1)
+    if (affected.rows !== input.batch.changedRows.length + 1) {
+      this.#ready = false;
       return { phase: "commit_unknown", status: "ambiguous" };
+    }
+    if (affected.committedHead === undefined) {
+      this.#ready = false;
+      return { phase: "commit_unknown", status: "ambiguous" };
+    }
+    try {
+      await doltBeadsServerDriverPostTransactionTestHook?.({
+        committedHead: affected.committedHead,
+      });
+    } catch {
+      this.#ready = false;
+      return { phase: "commit_unknown", status: "ambiguous" };
+    }
     const readback = await this.#readback(input.batch);
-    if (readback.status !== "ok")
+    if (readback.status !== "ok") {
+      this.#ready = false;
       return { phase: "commit_unknown", status: readback.status };
-    const afterCommit = await this.#doltCommitEvidence();
-    if (
-      afterCommit.status !== "ok" ||
-      afterCommit.value.head === beforeCommit.value.head
-    )
-      return {
-        phase: "commit_unknown",
-        status: afterCommit.status === "ok" ? "ambiguous" : afterCommit.status,
-      };
+    }
     return {
       status: "ok",
       value: {
-        commit: afterCommit.value,
+        // The transaction child observed this head and clean working set in
+        // the very session that sent COMMIT. A later shared-server head may
+        // legitimately advance because of unrelated writers, so it is not a
+        // substitute for this commit witness.
+        commit: {
+          autoCommitPolicy: this.#identity.autoCommitPolicy,
+          commit: "auto",
+          head: affected.committedHead,
+          workingSet: "clean",
+        },
         result: {
           affectedRowCount: affected.rows,
           checkpoint: input.batch.checkpoint,
@@ -2660,10 +3126,16 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     | Readonly<{ status: "ok"; value: ServerCommitReadback }>
     | Readonly<{ status: ServerDriverFailure }>
   > {
-    const status = await this.#writer.query("SELECT * FROM dolt_status");
+    const status = await executeDoltSqlRead(
+      this.#writer,
+      "SELECT * FROM dolt_status",
+    );
     if (status.status !== "ok") return status;
     if (status.rows.length !== 0) return { status: "refused" };
-    const head = await this.#writer.query("SELECT DOLT_HASHOF('HEAD') AS head");
+    const head = await executeDoltSqlRead(
+      this.#writer,
+      "SELECT DOLT_HASHOF('HEAD') AS head",
+    );
     const value = head.status === "ok" ? head.rows[0]?.head : undefined;
     if (
       head.status !== "ok" ||
@@ -2681,6 +3153,31 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
         workingSet: "clean",
       },
     };
+  }
+
+  #transportsMatchIdentity(): boolean {
+    const writer = doltSqlTransportBinding(this.#writer);
+    const worker =
+      this.#worker === undefined
+        ? undefined
+        : doltSqlTransportBinding(this.#worker);
+    return (
+      writer !== undefined &&
+      worker !== undefined &&
+      exact(writer.identity, this.#identity) &&
+      exact(worker.identity, this.#identity) &&
+      writer.role === "writer" &&
+      worker.role === "worker" &&
+      writer.credentialReference === this.#identity.credentialReference &&
+      worker.credentialReference === this.#identity.workerCredentialReference
+    );
+  }
+
+  #invalidate<T extends Readonly<{ status: ServerDriverFailure }>>(
+    value: T,
+  ): T {
+    this.#ready = false;
+    return value;
   }
 
   #issues(): string {
@@ -2764,7 +3261,8 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     scope: FencingScope,
     actor = "slot-observer",
   ): Promise<ServerDriverResponse<ServerSlotReadback>> {
-    const result = await this.#writer.query(
+    const result = await executeDoltSqlRead(
+      this.#writer,
       `SELECT status, metadata, external_ref, title, design FROM ${this.#issues()} WHERE id = ${sqlLiteral(`${prefix}-merge-slot`)}`,
     );
     if (result.status !== "ok") return { status: result.status };
@@ -2775,7 +3273,8 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       result.rows[0]?.design !== canonicalJson(scope as JsonValue)
     )
       return { status: "refused" };
-    const labels = await this.#writer.query(
+    const labels = await executeDoltSqlRead(
+      this.#writer,
       `SELECT label FROM ${this.#labels()} WHERE issue_id = ${sqlLiteral(`${prefix}-merge-slot`)}`,
     );
     if (labels.status !== "ok") return { status: labels.status };
@@ -2816,7 +3315,7 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     statement: string,
     expectedRows: number,
   ): Promise<
-    | Readonly<{ status: "ok"; rows: number }>
+    | Readonly<{ status: "ok"; rows: number; committedHead?: string }>
     | Readonly<{ status: ServerDriverFailure }>
   > {
     const response = await executeDoltSqlTransaction(
@@ -2825,7 +3324,13 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       expectedRows,
     );
     if (response.status !== "ok") return response;
-    return { status: "ok", rows: response.rows };
+    return {
+      status: "ok",
+      rows: response.rows,
+      ...(response.committedHead === undefined
+        ? {}
+        : { committedHead: response.committedHead }),
+    };
   }
 
   async #metadata(ids: readonly string[]): Promise<
@@ -2837,7 +3342,8 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
   > {
     if (ids.length === 0 || ids.some((id) => !validIdentifier(id)))
       return { status: "refused" };
-    const result = await this.#writer.query(
+    const result = await executeDoltSqlRead(
+      this.#writer,
       `SELECT id, JSON_UNQUOTE(JSON_EXTRACT(metadata, '$')) AS metadata FROM ${this.#issues()} WHERE id IN (${ids.map(sqlLiteral).join(",")}) ORDER BY id`,
     );
     if (result.status !== "ok") return { status: result.status };
