@@ -18,6 +18,7 @@ await build({
   logLevel: "silent",
   outfile: output,
   platform: "node",
+  preserveSymlinks: true,
   sourcemap: false,
   target: "node22",
 });

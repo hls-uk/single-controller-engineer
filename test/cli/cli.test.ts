@@ -558,6 +558,8 @@ test("vendored CLI bundle is reproducible and executable", async () => {
   );
   assert.equal(build().status, 0);
   const first = await readFile(output);
+  assert.equal(first.includes(Buffer.from(root)), false);
+  assert.doesNotMatch(first.toString("utf8"), /^\/\/ (?:\.\.[/\\])+/mu);
   assert.equal(build().status, 0);
   assert.deepEqual(await readFile(output), first);
   const execution = spawnSync(process.execPath, [output, "--version"], {
