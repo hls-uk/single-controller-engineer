@@ -1,6 +1,10 @@
 import type { FeedbackAuthority } from "./authority.js";
 import { authorizes } from "./authority.js";
-import { FIXED_TARGET_REPOSITORY_ID, type FeedbackPacket } from "./packet.js";
+import {
+  FIXED_TARGET_REPOSITORY_ID,
+  type FeedbackPacket,
+  validateFeedbackPacket,
+} from "./packet.js";
 import {
   GitHubDiscoverySchema,
   GitHubCreateRequestSchema,
@@ -58,12 +62,15 @@ function canonicalIssueUrl(number: number): string {
 function validIssue(
   packet: FeedbackPacket,
   value: unknown,
+  exactBody: boolean,
 ): value is GitHubIssue {
   return (
     isFeedbackSchema<GitHubIssue>(GitHubIssueSchema, value) &&
     value.repositoryId === packet.target.repositoryId &&
     value.url === canonicalIssueUrl(value.number) &&
-    value.body.includes(packet.marker)
+    (exactBody
+      ? value.body === packet.body
+      : value.body.includes(packet.marker))
   );
 }
 
@@ -72,38 +79,43 @@ function exactMatches(
   issues: readonly GitHubIssue[],
 ): GitHubIssue[] {
   return issues
-    .filter((issue) => issue.open && validIssue(packet, issue))
+    .filter((issue) => issue.open && validIssue(packet, issue, false))
     .sort((left, right) => left.number - right.number);
 }
 
 /** Requires provider proof that every page was inspected before an absence acts. */
 export async function discoverExisting(
-  packet: FeedbackPacket,
+  packet: unknown,
   transport: FeedbackGitHubTransport,
 ): Promise<DiscoveryResult> {
+  const valid = validateFeedbackPacket(packet);
+  if (valid === undefined) return { status: "invalid" };
   let raw: unknown;
   try {
-    raw = await transport.discoverExactMarker(packet.target, packet.marker);
+    raw = await transport.discoverExactMarker(valid.target, valid.marker);
   } catch {
     return { status: "unavailable" };
   }
   if (!isFeedbackSchema<GitHubDiscovery>(GitHubDiscoverySchema, raw))
     return { status: "invalid" };
-  if (raw.repositoryId !== packet.target.repositoryId)
+  if (raw.repositoryId !== valid.target.repositoryId)
     return { status: "invalid" };
-  const matches = exactMatches(packet, raw.issues);
+  const matches = exactMatches(valid, raw.issues);
   return matches[0] === undefined
     ? { status: "absent" }
     : { status: "existing", issue: matches[0] };
 }
 
 export async function submitFeedback(
-  packet: FeedbackPacket,
-  authority: FeedbackAuthority | undefined,
+  packet: unknown,
+  authority: unknown,
   transport: FeedbackGitHubTransport,
 ): Promise<SubmitResult> {
-  if (!authorizes(packet, authority)) return { status: "unauthorized" };
-  const discovery = await discoverExisting(packet, transport);
+  const valid = validateFeedbackPacket(packet);
+  if (valid === undefined)
+    return { status: "ambiguous", code: "GITHUB_REJECTED" };
+  if (!authorizes(valid, authority)) return { status: "unauthorized" };
+  const discovery = await discoverExisting(valid, transport);
   if (discovery.status === "existing")
     return { status: "existing", issue: discovery.issue };
   if (discovery.status === "invalid")
@@ -112,9 +124,9 @@ export async function submitFeedback(
     return { status: "ambiguous", code: "GITHUB_UNAVAILABLE" };
   try {
     const request = {
-      target: packet.target,
-      title: packet.title,
-      body: packet.body,
+      target: valid.target,
+      title: valid.title,
+      body: valid.body,
     };
     if (
       !isFeedbackSchema<{
@@ -125,7 +137,7 @@ export async function submitFeedback(
     )
       return { status: "ambiguous", code: "GITHUB_REJECTED" };
     const issue = await transport.createIssue(request);
-    return validIssue(packet, issue)
+    return validIssue(valid, issue, true)
       ? { status: "submitted", issue }
       : { status: "ambiguous", code: "GITHUB_REJECTED" };
   } catch (error) {
@@ -143,7 +155,7 @@ export interface DuplicateReconciliation {
   readonly canonical: GitHubIssue;
   readonly duplicates: readonly Readonly<{
     number: number;
-    label: "duplicate-feedback";
+    label: "duplicate";
     comment: string;
   }>[];
 }
@@ -160,7 +172,7 @@ export function reconcileExactDuplicates(
     canonical,
     duplicates: matches.slice(1).map((issue) => ({
       number: issue.number,
-      label: "duplicate-feedback" as const,
+      label: "duplicate" as const,
       comment: `Duplicate feedback report; canonical issue: ${canonical.url}`,
     })),
   };

@@ -1,3 +1,5 @@
+import { containsSecretShape } from "../preflight/schemas.js";
+
 const utf8 = new TextEncoder();
 
 export const MAX_NARRATIVE_BYTES = 4 * 1024;
@@ -28,6 +30,26 @@ export function normalizedSingleLine(
   return normalized === undefined || normalized.includes("\n")
     ? undefined
     : normalized;
+}
+
+/** Safe telemetry is unattended, so credential-shaped text is refused outright. */
+export function safeTelemetryText(
+  value: string,
+  maxBytes: number,
+): string | undefined {
+  const normalized = normalizedSingleLine(value, maxBytes);
+  return normalized === undefined || credentialShaped(normalized)
+    ? undefined
+    : normalized;
+}
+
+function credentialShaped(value: string): boolean {
+  return (
+    containsSecretShape(value) ||
+    /\b(?:gh[pousr]_|github_pat_|glpat-|xox[baprs]-|sk-[A-Za-z0-9]|rk_live_|pk_live_|AKIA|ASIA|AIza|ya29\.|eyJ[A-Za-z0-9_-]{6,})[A-Za-z0-9._-]{8,}/u.test(
+      value,
+    )
+  );
 }
 
 export type NarrativeFinding =

@@ -1,6 +1,6 @@
 import { canonicalJson } from "../protocol/canonical.js";
 import { sha256 } from "../protocol/evidence.js";
-import type { FeedbackPacket } from "./packet.js";
+import { type FeedbackPacket, validateFeedbackPacket } from "./packet.js";
 import { FeedbackAuthoritySchema, isFeedbackSchema } from "./schemas.js";
 
 export const FEEDBACK_AUTHORITY_VERSION = 1 as const;
@@ -19,7 +19,7 @@ export interface FeedbackAuthority {
   readonly operationNonce: string;
 }
 
-export function packetPreviewHash(packet: FeedbackPacket): string {
+function packetPreviewHashUnchecked(packet: FeedbackPacket): string {
   return sha256(
     canonicalJson({
       body: packet.body,
@@ -29,28 +29,37 @@ export function packetPreviewHash(packet: FeedbackPacket): string {
   );
 }
 
+export function packetPreviewHash(packet: unknown): string | undefined {
+  const valid = validateFeedbackPacket(packet);
+  return valid === undefined ? undefined : packetPreviewHashUnchecked(valid);
+}
+
 export function authorityFor(
-  packet: FeedbackPacket,
+  packet: unknown,
   source: AuthoritySource,
   operationNonce: string,
-): FeedbackAuthority {
-  return {
+): FeedbackAuthority | undefined {
+  const valid = validateFeedbackPacket(packet);
+  if (valid === undefined) return undefined;
+  const authority: FeedbackAuthority = {
     schemaVersion: FEEDBACK_AUTHORITY_VERSION,
     operation: "create_issue",
     source,
-    targetRepositoryId: packet.target.repositoryId,
-    fingerprint: packet.telemetry.fingerprint,
-    previewHash: packetPreviewHash(packet),
+    targetRepositoryId: valid.target.repositoryId,
+    fingerprint: valid.telemetry.fingerprint,
+    previewHash: packetPreviewHashUnchecked(valid),
     operationNonce,
   };
+  return isFeedbackSchema<FeedbackAuthority>(FeedbackAuthoritySchema, authority)
+    ? authority
+    : undefined;
 }
 
 /** Policy authority can never authorize a reviewed narrative or warning. */
-export function authorizes(
-  packet: FeedbackPacket,
-  authority: FeedbackAuthority | undefined,
-): boolean {
+export function authorizes(packet: unknown, authority: unknown): boolean {
+  const valid = validateFeedbackPacket(packet);
   if (
+    valid === undefined ||
     authority === undefined ||
     !isFeedbackSchema<FeedbackAuthority>(FeedbackAuthoritySchema, authority)
   )
@@ -58,15 +67,15 @@ export function authorizes(
   if (
     authority.schemaVersion !== FEEDBACK_AUTHORITY_VERSION ||
     authority.operation !== "create_issue" ||
-    authority.targetRepositoryId !== packet.target.repositoryId ||
-    authority.fingerprint !== packet.telemetry.fingerprint ||
-    authority.previewHash !== packetPreviewHash(packet)
+    authority.targetRepositoryId !== valid.target.repositoryId ||
+    authority.fingerprint !== valid.telemetry.fingerprint ||
+    authority.previewHash !== packetPreviewHashUnchecked(valid)
   )
     return false;
   return (
     authority.source === "current_user" ||
     (authority.source === "policy_safe_telemetry" &&
-      packet.narrative === undefined &&
-      packet.narrativeFindings.length === 0)
+      valid.narrative === undefined &&
+      valid.narrativeFindings.length === 0)
   );
 }

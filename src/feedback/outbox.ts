@@ -20,9 +20,8 @@ import type { FeedbackAuthority } from "./authority.js";
 import { authorizes } from "./authority.js";
 import type { FeedbackPacket } from "./packet.js";
 import {
-  FEEDBACK_SCHEMA_VERSION,
   FIXED_TARGET_REPOSITORY_ID,
-  prepareFeedback,
+  validateFeedbackPacket,
 } from "./packet.js";
 import { GitHubIssueSchema, isFeedbackSchema } from "./schemas.js";
 import {
@@ -99,21 +98,22 @@ export class FeedbackOutbox {
       : { status: "ok", value: new FeedbackOutbox(directory, hooks) };
   }
 
-  enqueue(packet: FeedbackPacket): OutboxResult {
+  enqueue(packet: unknown): OutboxResult {
     return this.withLock(() => {
-      if (!validPacket(packet)) return { status: "invalid" };
-      const path = this.packetPath(packet.telemetry.fingerprint);
+      const valid = validateFeedbackPacket(packet);
+      if (valid === undefined) return { status: "invalid" };
+      const path = this.packetPath(valid.telemetry.fingerprint);
       const existing = safeFile(path);
       if (existing !== undefined) {
         const envelope = parseEnvelope(existing);
-        return envelope !== undefined && samePacket(envelope.packet, packet)
+        return envelope !== undefined && samePacket(envelope.packet, valid)
           ? { status: "ok", value: undefined }
           : { status: "invalid" };
       }
       const source = sourceFor({
         schemaVersion: OUTBOX_SCHEMA_VERSION,
         status: "pending",
-        packet,
+        packet: valid,
       });
       const quota = this.hasCapacity(
         new TextEncoder().encode(source).byteLength,
@@ -122,7 +122,7 @@ export class FeedbackOutbox {
       return this.write(path, {
         schemaVersion: OUTBOX_SCHEMA_VERSION,
         status: "pending",
-        packet,
+        packet: valid,
       });
     });
   }
@@ -132,7 +132,8 @@ export class FeedbackOutbox {
     const source = safeFile(this.packetPath(fingerprint));
     if (source === undefined) return { status: "not_found" };
     const envelope = parseEnvelope(source);
-    return envelope === undefined
+    return envelope === undefined ||
+      envelope.packet.telemetry.fingerprint !== fingerprint
       ? { status: "invalid" }
       : { status: "ok", value: envelope };
   }
@@ -146,7 +147,11 @@ export class FeedbackOutbox {
     )) {
       const source = safeFile(join(this.directory, name));
       const envelope = source === undefined ? undefined : parseEnvelope(source);
-      if (envelope === undefined) return { status: "invalid" };
+      if (
+        envelope === undefined ||
+        envelope.packet.telemetry.fingerprint !== name.slice(0, -5)
+      )
+        return { status: "invalid" };
       envelopes.push(envelope);
     }
     return {
@@ -194,7 +199,7 @@ export class FeedbackOutbox {
       issue.repositoryId !== FIXED_TARGET_REPOSITORY_ID ||
       issue.url !==
         `https://github.com/hls-uk/single-controller-engineer/issues/${issue.number}` ||
-      !issue.body.includes(current.value.packet.marker)
+      issue.body !== current.value.packet.body
     )
       return { status: "invalid" };
     return this.transition(
@@ -636,40 +641,6 @@ function fsyncDirectory(directory: string): void {
   }
 }
 
-function safeUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return (
-      url.protocol === "https:" &&
-      url.hostname === "github.com" &&
-      value.length <= 1024
-    );
-  } catch {
-    return false;
-  }
-}
-
-function validPacket(packet: FeedbackPacket): boolean {
-  const rebuilt = prepareFeedback(
-    {
-      kind: packet.telemetry.kind,
-      component: packet.telemetry.component,
-      toolVersion: packet.telemetry.toolVersion,
-      toolchain: packet.telemetry.toolchain,
-      requestedModelTier: packet.telemetry.requestedModelTier,
-      protocolState: packet.telemetry.protocolState,
-      stableErrorCode: packet.telemetry.stableErrorCode,
-      capabilityId: packet.telemetry.capabilityId,
-    },
-    packet.narrative,
-  );
-  return (
-    rebuilt !== undefined &&
-    JSON.stringify(rebuilt) === JSON.stringify(packet) &&
-    packet.schemaVersion === FEEDBACK_SCHEMA_VERSION
-  );
-}
-
 function samePacket(left: FeedbackPacket, right: FeedbackPacket): boolean {
   return JSON.stringify(left) === JSON.stringify(right);
 }
@@ -701,7 +672,8 @@ function parseEnvelope(value: string): OutboxEnvelope | undefined {
     )
       return undefined;
     const packet = parsed.packet as unknown as FeedbackPacket;
-    if (!validPacket(packet)) return undefined;
+    const valid = validateFeedbackPacket(packet);
+    if (valid === undefined) return undefined;
     const stableErrorCode = parsed.stableErrorCode;
     const issue = parsed.issue;
     const operationNonce = parsed.operationNonce;
@@ -726,7 +698,7 @@ function parseEnvelope(value: string): OutboxEnvelope | undefined {
     return {
       schemaVersion: OUTBOX_SCHEMA_VERSION,
       status,
-      packet,
+      packet: valid,
       ...(stableErrorCode === undefined ? {} : { stableErrorCode }),
       ...(issue === undefined
         ? {}
@@ -758,7 +730,8 @@ function validIssue(
     Number.isSafeInteger(value.number) &&
     value.number >= 1 &&
     typeof value.url === "string" &&
-    safeUrl(value.url) &&
+    value.url ===
+      `https://github.com/hls-uk/single-controller-engineer/issues/${value.number}` &&
     Object.keys(value).every((key) => key === "number" || key === "url")
   );
 }
