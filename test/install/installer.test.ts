@@ -153,6 +153,43 @@ test("upgrade recovers a process loss after partial backup and preserves the exa
   });
 });
 
+test("upgrade retry restores an intact backup after the first new skill rename", async () => {
+  await inTemporaryDirectory(async (root) => {
+    const original = join(root, "original");
+    const replacement = join(root, "replacement");
+    const destination = join(root, "host");
+    await fixture(original, "0.1.0");
+    await fixture(replacement, "0.2.0");
+    await installSkills({ destination, source: original });
+    let newMoves = 0;
+    await assert.rejects(
+      installSkills({
+        destination,
+        fault: (phase) => {
+          if (phase === "after-new" && ++newMoves === 1)
+            throw new SimulatedProcessLoss();
+        },
+        source: replacement,
+      }),
+      SimulatedProcessLoss,
+    );
+    assert.ok((await readdir(destination)).includes(INSTALL_JOURNAL));
+    const result = await installSkills({ destination, source: replacement });
+    assert.equal(result.status, "installed");
+    for (const name of [
+      "single-controller-engineer",
+      "single-controller-feedback",
+    ])
+      assert.match(
+        await readFile(join(destination, name, "SKILL.md"), "utf8"),
+        /0\.2\.0/u,
+      );
+    await assert.rejects(readFile(join(destination, INSTALL_JOURNAL)), {
+      code: "ENOENT",
+    });
+  });
+});
+
 test("refuses active lock, malformed manifests, symlinked parents, and unowned extra bytes", async () => {
   await inTemporaryDirectory(async (root) => {
     const source = join(root, "source");

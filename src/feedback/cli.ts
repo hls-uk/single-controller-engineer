@@ -1,6 +1,6 @@
 import { authorizes, type FeedbackAuthority } from "./authority.js";
 import { GhFeedbackTransport } from "./github.js";
-import { FeedbackOutbox } from "./outbox.js";
+import { FeedbackOutbox, recoverKilledProcessLock } from "./outbox.js";
 import {
   prepareFeedback,
   previewFeedback,
@@ -207,7 +207,9 @@ async function openOutbox(
       ))
   )().catch(() => undefined);
   if (common === undefined) return undefined;
-  const opened = FeedbackOutbox.open(common);
+  const opened = FeedbackOutbox.open(common, {
+    recoverKilledLock: recoverKilledProcessLock,
+  });
   return opened.status === "ok" ? opened.value : undefined;
 }
 

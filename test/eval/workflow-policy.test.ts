@@ -95,7 +95,7 @@ test("publish workflow separates build authority from an explicitly disabled OID
   );
   assert.match(
     source,
-    /npm publish "release-artifact\/hls-uk-single-controller-engineer-\$\{GITHUB_REF_NAME#v\}\.tgz" --access public --ignore-scripts --provenance/u,
+    /npm publish "release-artifact\/hls-uk-single-controller-engineer-\$\{GITHUB_REF_NAME#v\}\.tgz" --access public --ignore-scripts --provenance --registry=https:\/\/registry\.npmjs\.org --userconfig=\/dev\/null/u,
   );
   assert.match(source, /--registry=https:\/\/registry\.npmjs\.org/u);
   assert.match(source, /--userconfig=\/dev\/null/u);
@@ -142,18 +142,26 @@ test("feedback workflow is disabled, pinned, serialized, and acts only on a reva
   const checkout = source.slice(0, source.indexOf("actions/github-script"));
   assert.doesNotMatch(checkout, /\btoken:/u);
   assert.match(source, /contents: read\n      issues: write/u);
-  assert.match(
-    source,
-    /await github\.paginate\(github\.rest\.issues\.listForRepo/u,
-  );
   assert.match(source, /state: "open"/u);
   assert.match(source, /issue\.pull_request === undefined/u);
   assert.match(source, /await github\.rest\.issues\.get/u);
   assert.match(source, /current\.data\.state !== "open"/u);
   assert.match(source, /return triagePlan\(/u);
   assert.match(source, /discovery\.issues\[row\] =/u);
-  assert.match(source, /let plan = await currentPlan\(\);/u);
-  assert.match(source, /plan = await currentPlan\(\);/u);
+  assert.match(source, /async function currentPlan\(canonicalOverride\)/u);
+  assert.match(
+    source,
+    /const issueRows = await github\.paginate\(\s*github\.rest\.issues\.listForRepo/u,
+  );
+  assert.match(source, /issue_number: planned\.canonicalIssueNumber/u);
+  assert.match(source, /canonical\.data\.state !== "open"/u);
+  assert.match(source, /currentPlan\(canonical\.data\)/u);
+  assert.match(
+    source,
+    /confirmed\.canonicalIssueNumber === planned\.canonicalIssueNumber/u,
+  );
+  assert.match(source, /let plan = await revalidatedPlan\(\);/u);
+  assert.match(source, /plan = await revalidatedPlan\(\);/u);
   assert.match(source, /labels: \["duplicate"\]/u);
   assert.match(
     triageSource,

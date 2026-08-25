@@ -34,26 +34,24 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const issueNumber = context.payload.issue.number;
-            const issueRows = await github.paginate(github.rest.issues.listForRepo, {
-              owner,
-              repo,
-              state: "open",
-              per_page: 100,
-            });
-            const discovery = {
-              issues: issueRows
-                .filter((issue) => issue.pull_request === undefined)
-                .map((issue) => ({
-                  body: issue.body ?? "",
-                  number: issue.number,
-                  open: issue.state === "open",
-                })),
-              paginationComplete: true,
-              repositoryId: context.payload.repository.node_id,
-              schema: "sce.feedback-discovery",
-              version: 1,
-            };
-            async function currentPlan() {
+            async function currentPlan(canonicalOverride) {
+              const issueRows = await github.paginate(
+                github.rest.issues.listForRepo,
+                { owner, repo, state: "open", per_page: 100 },
+              );
+              const discovery = {
+                issues: issueRows
+                  .filter((issue) => issue.pull_request === undefined)
+                  .map((issue) => ({
+                    body: issue.body ?? "",
+                    number: issue.number,
+                    open: issue.state === "open",
+                  })),
+                paginationComplete: true,
+                repositoryId: context.payload.repository.node_id,
+                schema: "sce.feedback-discovery",
+                version: 1,
+              };
               const current = await github.rest.issues.get({
                 owner,
                 repo,
@@ -72,6 +70,21 @@ jobs:
                 number: current.data.number,
                 open: current.data.state === "open",
               };
+              if (canonicalOverride !== undefined) {
+                if (
+                  canonicalOverride.pull_request !== undefined ||
+                  canonicalOverride.state !== "open"
+                ) return { action: "none" };
+                const canonicalRow = discovery.issues.findIndex(
+                  (issue) => issue.number === canonicalOverride.number,
+                );
+                if (canonicalRow === -1) return { action: "none" };
+                discovery.issues[canonicalRow] = {
+                  body: canonicalOverride.body ?? "",
+                  number: canonicalOverride.number,
+                  open: canonicalOverride.state === "open",
+                };
+              }
               return triagePlan(
                 {
                   issue: {
@@ -84,9 +97,28 @@ jobs:
                 discovery,
               );
             }
-            let plan = await currentPlan();
+            async function revalidatedPlan() {
+              const planned = await currentPlan();
+              if (planned.action !== "apply") return planned;
+              const canonical = await github.rest.issues.get({
+                owner,
+                repo,
+                issue_number: planned.canonicalIssueNumber,
+              });
+              if (
+                canonical.data.pull_request !== undefined ||
+                canonical.data.state !== "open"
+              ) return { action: "none" };
+              const confirmed = await currentPlan(canonical.data);
+              return (
+                confirmed.action === "apply" &&
+                confirmed.canonicalIssueNumber === planned.canonicalIssueNumber &&
+                confirmed.comment === planned.comment
+              ) ? confirmed : { action: "none" };
+            }
+            let plan = await revalidatedPlan();
             if (plan.action !== "apply") return;
-            plan = await currentPlan();
+            plan = await revalidatedPlan();
             if (plan.action !== "apply") return;
             await github.rest.issues.addLabels({
               owner,
@@ -100,6 +132,8 @@ jobs:
               issue_number: plan.issueNumber,
               per_page: 100,
             });
+            plan = await revalidatedPlan();
+            if (plan.action !== "apply") return;
             const alreadyCommented = comments.some(
               (comment) =>
                 comment.user?.login === "github-actions[bot]" &&

@@ -68,6 +68,12 @@ type SubmitIntentRecovery =
     }>
   | Exclude<OutboxResult<OutboxEnvelope>, Readonly<{ status: "ok" }>>;
 
+export type OutboxLockIdentity = Readonly<{
+  dev: number;
+  ino: number;
+  pid?: number;
+}>;
+
 type SubmissionLockAcquire =
   | Readonly<{
       status: "ok";
@@ -81,9 +87,20 @@ export interface OutboxHooks {
   readonly afterTempFsync?: () => void;
   readonly afterRename?: () => void;
   /** Positive external observation of a killed holder; never a TTL/PID guess. */
-  readonly recoverKilledLock?: (
-    identity: Readonly<{ dev: number; ino: number }>,
-  ) => boolean;
+  readonly recoverKilledLock?: (identity: OutboxLockIdentity) => boolean;
+}
+
+/** Production liveness proof: only ESRCH proves the recorded holder is gone. */
+export function recoverKilledProcessLock(
+  identity: OutboxLockIdentity,
+): boolean {
+  if (identity.pid === undefined || identity.pid === process.pid) return false;
+  try {
+    process.kill(identity.pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ESRCH";
+  }
 }
 
 export class FeedbackOutbox {
@@ -376,6 +393,13 @@ export class FeedbackOutbox {
       if (!stat.isFile() || (stat.mode & 0o777) !== 0o600)
         return { status: "unavailable" };
       opened = { dev: stat.dev, ino: stat.ino };
+      writeFileSync(
+        descriptor,
+        `pid=${process.pid}\ntoken=${randomUUID()}\n`,
+        "utf8",
+      );
+      fsyncSync(descriptor);
+      fsyncDirectory(this.directory);
       return operation();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST")
@@ -413,7 +437,19 @@ export class FeedbackOutbox {
       )
         return false;
       const identity = { dev: stat.dev, ino: stat.ino };
-      if (this.hooks.recoverKilledLock?.(identity) !== true) return false;
+      const source = readFileSync(path, "utf8");
+      const pidSource =
+        /^pid=(0|[1-9][0-9]*)\ntoken=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\n$/u.exec(
+          source,
+        )?.[1];
+      const pid = pidSource === undefined ? undefined : Number(pidSource);
+      if (
+        (pid !== undefined && (!Number.isSafeInteger(pid) || pid < 1)) ||
+        this.hooks.recoverKilledLock?.(
+          pid === undefined ? identity : { ...identity, pid },
+        ) !== true
+      )
+        return false;
       const current = lstatSync(path);
       if (
         current.dev !== identity.dev ||
@@ -430,9 +466,11 @@ export class FeedbackOutbox {
 
   private acquireSubmissionLock(fingerprint: string): SubmissionLockAcquire {
     const path = join(this.directory, `.submit-${fingerprint}.lock`);
+    let descriptor: number | undefined;
+    let identity: Readonly<{ dev: number; ino: number }> | undefined;
     try {
       if (constants.O_NOFOLLOW === undefined) return { status: "unavailable" };
-      const descriptor = openSync(
+      descriptor = openSync(
         path,
         constants.O_WRONLY |
           constants.O_CREAT |
@@ -441,17 +479,32 @@ export class FeedbackOutbox {
         0o600,
       );
       const stat = fstatSync(descriptor);
+      identity = { dev: stat.dev, ino: stat.ino };
       if (!stat.isFile() || (stat.mode & 0o777) !== 0o600) {
-        closeSync(descriptor);
+        this.releaseLock(descriptor, identity, path);
+        descriptor = undefined;
         return { status: "unavailable" };
       }
+      writeFileSync(
+        descriptor,
+        `pid=${process.pid}\ntoken=${randomUUID()}\n`,
+        "utf8",
+      );
+      fsyncSync(descriptor);
+      fsyncDirectory(this.directory);
       return {
         status: "ok",
         descriptor,
-        identity: { dev: stat.dev, ino: stat.ino },
+        identity,
         path,
       };
     } catch (error) {
+      if (descriptor !== undefined) {
+        if (identity !== undefined)
+          this.releaseLock(descriptor, identity, path);
+        else closeSync(descriptor);
+        descriptor = undefined;
+      }
       if ((error as NodeJS.ErrnoException).code !== "EEXIST")
         return { status: "unavailable" };
       return this.recoverKilledLock(path)

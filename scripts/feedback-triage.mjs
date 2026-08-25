@@ -231,6 +231,7 @@ export function triagePlan(event, discovery) {
     return none();
   return {
     action: "apply",
+    canonicalIssueNumber: canonical,
     comment: `Duplicate feedback report; canonical issue: https://github.com/${REPOSITORY}/issues/${canonical}`,
     issueNumber: event.issue.number,
     label: "duplicate",

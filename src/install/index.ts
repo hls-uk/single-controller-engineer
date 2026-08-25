@@ -504,32 +504,28 @@ async function restoreBackup(
 ): Promise<void> {
   const backup = localTransactionPath(parent, journal.backup);
   try {
-    // A crash while moving the old pair can leave some old entries in place
-    // and some in backup. Reassemble that exact old pair before quarantining
-    // anything; this avoids treating still-owned bytes as disposable.
+    // Make the backup the sole rollback source before touching it. A crash can
+    // leave an old entry in the destination while later entries are already in
+    // backup, or it can leave a complete backup beside a partial new pair. In
+    // both cases destination entries are moved away from, never over, backup
+    // bytes. A retry can therefore reconstruct and validate the same old pair.
     if (journal.previous !== null) {
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
         const target = join(destination, name);
         const source = join(backup, name);
-        if (
-          !(await lstat(target).catch(() => undefined)) &&
-          (await lstat(source).catch(() => undefined))
-        )
-          await rename(source, target);
+        if (await lstat(source).catch(() => undefined))
+          await preserveForRecovery(parent, target);
+        else if (await lstat(target).catch(() => undefined))
+          await rename(target, source);
+        else fail("recovery-needed: rollback source is incomplete");
       }
-      try {
-        await validatePrior(destination, journal);
-        await writeDurable(join(destination, INSTALL_JOURNAL), {
-          ...journal,
-          phase: "committed",
-        });
-        return;
-      } catch {
-        // The destination now contains a mixed/new tree; preserve it below.
-      }
+      await fsync(backup);
+      await fsync(destination);
+      await validateInstalled(backup, journal.previous);
+    } else {
+      for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
+        await preserveForRecovery(parent, join(destination, name));
     }
-    for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
-      await preserveForRecovery(parent, join(destination, name));
     for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
       const source = join(backup, name);
       if (await lstat(source).catch(() => undefined))

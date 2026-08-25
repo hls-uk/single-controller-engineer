@@ -159,7 +159,7 @@ jobs:
             throw new Error("release artifact version does not match tag");
           EOF
       - name: Publish the verified tarball with OIDC
-        run: npm publish "release-artifact/hls-uk-single-controller-engineer-${GITHUB_REF_NAME#v}.tgz" --access public --ignore-scripts --provenance
+        run: npm publish "release-artifact/hls-uk-single-controller-engineer-${GITHUB_REF_NAME#v}.tgz" --access public --ignore-scripts --provenance --registry=https://registry.npmjs.org --userconfig=/dev/null
       - name: Read back registry version, integrity, access, and provenance
         run: |
           node --input-type=module <<'EOF'

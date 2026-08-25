@@ -69,6 +69,7 @@ test("triage chooses the canonical lowest exact fingerprint and emits only the e
     ),
     {
       action: "apply",
+      canonicalIssueNumber: 10,
       comment:
         "Duplicate feedback report; canonical issue: https://github.com/hls-uk/single-controller-engineer/issues/10",
       issueNumber: 20,
@@ -123,6 +124,7 @@ test("triage accepts bounded safe reviewed narratives but refuses hostile narrat
     ),
     {
       action: "apply",
+      canonicalIssueNumber: 3,
       comment:
         "Duplicate feedback report; canonical issue: https://github.com/hls-uk/single-controller-engineer/issues/3",
       issueNumber: 8,

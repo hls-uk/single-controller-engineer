@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -647,6 +654,85 @@ test("feedback queues before authority and fake authorized submit/flush cannot d
     assert.equal(flushed.exitCode, 0);
     assert.equal(JSON.parse(flushed.stdout).result.status, "existing");
     assert.equal(counter.creates, 1);
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test("public feedback flush recovers a submit intent after a proven killed lock holder", async () => {
+  const fixture = await temporaryFeedbackCommon();
+  try {
+    const packet = prepareFeedback(feedbackTelemetry);
+    assert.ok(packet);
+    if (packet === undefined) return;
+    const outbox = FeedbackOutbox.open(fixture.common);
+    assert.equal(outbox.status, "ok");
+    if (outbox.status !== "ok") return;
+    assert.equal(outbox.value.enqueue(packet).status, "ok");
+    const authority = authorityFor(
+      packet,
+      "current_user",
+      "cli-killed-holder-nonce-0001",
+    );
+    assert.ok(authority);
+    if (authority === undefined) return;
+    assert.equal(
+      outbox.value.markSubmitIntent(
+        packet.telemetry.fingerprint,
+        authority.operationNonce,
+      ).status,
+      "ok",
+    );
+    await writeFile(
+      join(
+        outbox.value.directory,
+        `.submit-${packet.telemetry.fingerprint}.lock`,
+      ),
+      "pid=2147483647\ntoken=00000000-0000-4000-8000-000000000000\n",
+      { mode: 0o600 },
+    );
+    const existing = {
+      body: packet.body,
+      number: 43,
+      open: true,
+      repositoryId: "R_kgDOUCvUmw" as const,
+      url: "https://github.com/hls-uk/single-controller-engineer/issues/43",
+    };
+    let creates = 0;
+    const execution = await runCli(
+      [
+        "feedback",
+        "flush",
+        "--request",
+        JSON.stringify({
+          authority,
+          fingerprint: packet.telemetry.fingerprint,
+        }),
+      ],
+      {
+        feedback: {
+          async resolveCommonDirectory() {
+            return fixture.common;
+          },
+          transport: {
+            async discoverExactMarker() {
+              return {
+                issues: [existing],
+                paginationComplete: true,
+                repositoryId: "R_kgDOUCvUmw",
+              };
+            },
+            async createIssue() {
+              creates += 1;
+              throw new Error("must not create while recovering exact intent");
+            },
+          },
+        },
+      },
+    );
+    assert.equal(execution.exitCode, 0, execution.stdout);
+    assert.equal(JSON.parse(execution.stdout).result.status, "existing");
+    assert.equal(creates, 0);
   } finally {
     await rm(fixture.root, { force: true, recursive: true });
   }

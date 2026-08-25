@@ -25828,6 +25828,15 @@ var OUTBOX_MAX_BYTES = 5 * 1024 * 1024;
 var OUTBOX_SCHEMA_VERSION = 1;
 var FINGERPRINT = /^[0-9a-f]{64}$/u;
 var activeFlushes = /* @__PURE__ */ new Set();
+function recoverKilledProcessLock(identity2) {
+  if (identity2.pid === void 0 || identity2.pid === process.pid) return false;
+  try {
+    process.kill(identity2.pid, 0);
+    return false;
+  } catch (error) {
+    return error.code === "ESRCH";
+  }
+}
 var FeedbackOutbox = class _FeedbackOutbox {
   constructor(directory, hooks) {
     this.hooks = hooks;
@@ -26041,6 +26050,15 @@ var FeedbackOutbox = class _FeedbackOutbox {
       if (!stat2.isFile() || (stat2.mode & 511) !== 384)
         return { status: "unavailable" };
       opened = { dev: stat2.dev, ino: stat2.ino };
+      writeFileSync2(
+        descriptor,
+        `pid=${process.pid}
+token=${randomUUID()}
+`,
+        "utf8"
+      );
+      fsyncSync(descriptor);
+      fsyncDirectory(this.directory);
       return operation();
     } catch (error) {
       if (error.code !== "EEXIST")
@@ -26064,7 +26082,15 @@ var FeedbackOutbox = class _FeedbackOutbox {
       if (!stat2.isFile() || stat2.isSymbolicLink() || (stat2.mode & 511) !== 384)
         return false;
       const identity2 = { dev: stat2.dev, ino: stat2.ino };
-      if (this.hooks.recoverKilledLock?.(identity2) !== true) return false;
+      const source = readFileSync2(path2, "utf8");
+      const pidSource = /^pid=(0|[1-9][0-9]*)\ntoken=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\n$/u.exec(
+        source
+      )?.[1];
+      const pid = pidSource === void 0 ? void 0 : Number(pidSource);
+      if (pid !== void 0 && (!Number.isSafeInteger(pid) || pid < 1) || this.hooks.recoverKilledLock?.(
+        pid === void 0 ? identity2 : { ...identity2, pid }
+      ) !== true)
+        return false;
       const current = lstatSync2(path2);
       if (current.dev !== identity2.dev || current.ino !== identity2.ino || current.isSymbolicLink())
         return false;
@@ -26076,25 +26102,44 @@ var FeedbackOutbox = class _FeedbackOutbox {
   }
   acquireSubmissionLock(fingerprint) {
     const path2 = join5(this.directory, `.submit-${fingerprint}.lock`);
+    let descriptor;
+    let identity2;
     try {
       if (constants2.O_NOFOLLOW === void 0) return { status: "unavailable" };
-      const descriptor = openSync4(
+      descriptor = openSync4(
         path2,
         constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | constants2.O_NOFOLLOW,
         384
       );
       const stat2 = fstatSync2(descriptor);
+      identity2 = { dev: stat2.dev, ino: stat2.ino };
       if (!stat2.isFile() || (stat2.mode & 511) !== 384) {
-        closeSync4(descriptor);
+        this.releaseLock(descriptor, identity2, path2);
+        descriptor = void 0;
         return { status: "unavailable" };
       }
+      writeFileSync2(
+        descriptor,
+        `pid=${process.pid}
+token=${randomUUID()}
+`,
+        "utf8"
+      );
+      fsyncSync(descriptor);
+      fsyncDirectory(this.directory);
       return {
         status: "ok",
         descriptor,
-        identity: { dev: stat2.dev, ino: stat2.ino },
+        identity: identity2,
         path: path2
       };
     } catch (error) {
+      if (descriptor !== void 0) {
+        if (identity2 !== void 0)
+          this.releaseLock(descriptor, identity2, path2);
+        else closeSync4(descriptor);
+        descriptor = void 0;
+      }
       if (error.code !== "EEXIST")
         return { status: "unavailable" };
       return this.recoverKilledLock(path2) ? this.acquireSubmissionLock(fingerprint) : { status: "busy" };
@@ -26541,7 +26586,9 @@ async function openOutbox(dependencies) {
     dependencies.cwd
   )))().catch(() => void 0);
   if (common === void 0) return void 0;
-  const opened = FeedbackOutbox.open(common);
+  const opened = FeedbackOutbox.open(common, {
+    recoverKilledLock: recoverKilledProcessLock
+  });
   return opened.status === "ok" ? opened.value : void 0;
 }
 function parseAuthority(value) {
@@ -26921,21 +26968,19 @@ async function restoreBackup(destination, parent, journal) {
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
         const target = join6(destination, name);
         const source = join6(backup, name);
-        if (!await lstat(target).catch(() => void 0) && await lstat(source).catch(() => void 0))
-          await rename(source, target);
+        if (await lstat(source).catch(() => void 0))
+          await preserveForRecovery(parent, target);
+        else if (await lstat(target).catch(() => void 0))
+          await rename(target, source);
+        else fail2("recovery-needed: rollback source is incomplete");
       }
-      try {
-        await validatePrior(destination, journal);
-        await writeDurable(join6(destination, INSTALL_JOURNAL), {
-          ...journal,
-          phase: "committed"
-        });
-        return;
-      } catch {
-      }
+      await fsync(backup);
+      await fsync(destination);
+      await validateInstalled(backup, journal.previous);
+    } else {
+      for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
+        await preserveForRecovery(parent, join6(destination, name));
     }
-    for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
-      await preserveForRecovery(parent, join6(destination, name));
     for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
       const source = join6(backup, name);
       if (await lstat(source).catch(() => void 0))
