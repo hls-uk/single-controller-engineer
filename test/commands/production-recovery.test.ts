@@ -245,6 +245,7 @@ test("branch reconciliation is read-only and classifies positive absence", async
 
 test("production candidate collection and manual verification bind exact durable facts", async () => {
   let state = localRun();
+  let liveHead = OID_B;
   const observe = (
     type: Parameters<typeof event>[1],
     kind: string,
@@ -306,10 +307,12 @@ test("production candidate collection and manual verification bind exact durable
           return {
             exitCode: 0,
             signal: null,
-            stdout: `worktree /task\nHEAD ${OID_B}\nbranch refs/heads/sce/unit-1\n\n`,
+            stdout: `worktree /task\nHEAD ${liveHead}\nbranch refs/heads/sce/unit-1\n\n`,
           };
         if (argv[0] === "status")
           return { exitCode: 0, signal: null, stdout: "" };
+        if (argv[0] === "ls-files")
+          return { exitCode: 0, signal: null, stdout: "H src/file.ts\u0000" };
         if (argv[0] === "symbolic-ref")
           return {
             exitCode: 0,
@@ -338,7 +341,7 @@ test("production candidate collection and manual verification bind exact durable
                 : argv[1] === "--show-object-format"
                   ? "sha1\n"
                   : argv[2] === "HEAD^{commit}"
-                    ? `${OID_B}\n`
+                    ? `${liveHead}\n`
                     : `${OID_A}\n`,
           };
         return { exitCode: 1, signal: null, stdout: "" };
@@ -398,6 +401,15 @@ test("production candidate collection and manual verification bind exact durable
   assert.deepEqual((requested.toolRequest as { commands: string[] }).commands, [
     "npm test",
   ]);
+  const ambiguousVerify = transition(
+    state,
+    event(state, "effect_ambiguous", {
+      effectId: verify.effectId,
+      effectKind: "verify",
+    }),
+    reduce,
+  );
+  assert.equal(ambiguousVerify.state, "blocked");
   assert.equal(
     (
       await adapter.acknowledge!(
@@ -414,7 +426,7 @@ test("production candidate collection and manual verification bind exact durable
           version: 1,
           worktreePath: "/foreign",
         },
-        state,
+        ambiguousVerify,
       )
     ).status,
     "ambiguous",
@@ -435,7 +447,7 @@ test("production candidate collection and manual verification bind exact durable
           version: 1,
           worktreePath: "/foreign",
         },
-        state,
+        ambiguousVerify,
       )
     ).status,
     "ambiguous",
@@ -454,9 +466,64 @@ test("production candidate collection and manual verification bind exact durable
       version: 1,
       worktreePath: "/task",
     },
-    state,
+    ambiguousVerify,
   );
   assert.equal(acknowledged.status, "observed");
+  if (acknowledged.status === "observed") {
+    const qualified = reduce(ambiguousVerify, acknowledged.observation);
+    assert.equal(qualified.ok, true);
+    if (qualified.ok)
+      assert.equal(qualified.nextState.units["unit-1"]?.state, "qualified");
+  }
+  const failed = await adapter.acknowledge!(
+    {
+      baseOid: OID_A,
+      commands: ["npm test"],
+      effectId: verify.effectId,
+      evidenceDigest: HASH,
+      headOid: OID_B,
+      kind: "verified",
+      passed: false,
+      schema: "sce.harness-tool-acknowledgement",
+      treeOid: OID_A,
+      version: 1,
+      worktreePath: "/task",
+    },
+    ambiguousVerify,
+  );
+  assert.equal(failed.status, "observed");
+  if (failed.status === "observed") {
+    const repaired = reduce(ambiguousVerify, failed.observation);
+    assert.equal(repaired.ok, true);
+    if (repaired.ok)
+      assert.equal(
+        repaired.nextState.units["unit-1"]?.state,
+        "repair_required",
+      );
+  }
+  liveHead = OID_A;
+  assert.equal(
+    (
+      await adapter.acknowledge!(
+        {
+          baseOid: OID_A,
+          commands: ["npm test"],
+          effectId: verify.effectId,
+          evidenceDigest: HASH,
+          headOid: OID_B,
+          kind: "verified",
+          passed: true,
+          schema: "sce.harness-tool-acknowledgement",
+          treeOid: OID_A,
+          version: 1,
+          worktreePath: "/task",
+        },
+        ambiguousVerify,
+      )
+    ).status,
+    "ambiguous",
+  );
+  liveHead = OID_B;
   assert.equal(
     calls.some((call) => call.startsWith("merge ")),
     false,
@@ -501,6 +568,8 @@ test("production candidate collection and manual verification bind exact durable
           };
         if (argv[0] === "status")
           return { exitCode: 0, signal: null, stdout: "" };
+        if (argv[0] === "ls-files")
+          return { exitCode: 0, signal: null, stdout: "H src/file.ts\u0000" };
         if (argv[0] === "symbolic-ref")
           return {
             exitCode: 0,
@@ -536,8 +605,11 @@ test("production candidate collection and manual verification bind exact durable
     }),
     store,
   });
-  assert.equal((await recovery()).status, "tool_request");
-  assert.equal((await recovery()).status, "tool_request");
+  const firstRequest = await recovery();
+  assert.equal(firstRequest.status, "tool_request");
+  assert.equal(root.run.effectJournal.at(-1)?.status, "ambiguous");
+  assert.equal(root.run.units["unit-1"]?.state, "blocked");
+  assert.equal((await recovery()).status, "ambiguous");
   assert.equal(
     (
       await recovery({

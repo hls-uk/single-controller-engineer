@@ -74,6 +74,9 @@ test("candidate observation binds the owned worktree and exact diff bytes", asyn
     ok(`worktree /task\nHEAD ${head}\nbranch refs/heads/sce/task\n\n`),
     ok("/repo/.git\n"),
     failed(),
+    ok(
+      "H src/adapters/git/index.ts\u0000H test/adapters/git/git.test.ts\u0000",
+    ),
     ok(`${head}\n`),
     ok(`${tree}\n`),
     ok(),
@@ -85,6 +88,9 @@ test("candidate observation binds the owned worktree and exact diff bytes", asyn
     ok(`${tree}\n`),
     ok(),
     ok("refs/heads/sce/task\n"),
+    ok(
+      "H src/adapters/git/index.ts\u0000H test/adapters/git/git.test.ts\u0000",
+    ),
   );
   const result = await observeCandidate(runner, repository(), {
     allowedPaths: ["src/adapters/git", "test/adapters/git"],
@@ -107,6 +113,7 @@ test("candidate observation binds the owned worktree and exact diff bytes", asyn
     ok(`worktree /task\nHEAD ${head}\nbranch refs/heads/sce/task\n\n`),
     ok("/repo/.git\n"),
     failed(),
+    ok("H src/adapters/git/index.ts\u0000"),
     ok(`${head}\n`),
     ok(`${tree}\n`),
     ok(" M src/adapters/git/index.ts\u0000"),
@@ -146,6 +153,7 @@ test("candidate observation rejects a head or clean-state race after diff captur
     ok(`worktree /task\nHEAD ${head}\nbranch refs/heads/sce/task\n\n`),
     ok("/repo/.git\n"),
     failed(),
+    ok("H src/file.ts\u0000"),
     ok(`${head}\n`),
     ok(`${tree}\n`),
     ok(),
@@ -694,6 +702,36 @@ test("real worktree candidate observation binds exact committed diff bytes", asy
   );
   assert.equal(externalAttributes.state, "refused");
   await git(worktree, "config", "--unset", "core.attributesFile");
+  for (const [flag, clear] of [
+    ["--assume-unchanged", "--no-assume-unchanged"],
+    ["--skip-worktree", "--no-skip-worktree"],
+  ] as const) {
+    await writeFile(join(worktree, "candidate.txt"), `${flag}\n`, "utf8");
+    await git(worktree, "update-index", flag, "candidate.txt");
+    assert.equal(
+      (
+        await observeCandidate(nodeGitRunner, await actualRepository(cwd), {
+          allowedPaths: ["candidate.txt"],
+          base,
+          branch: "sce/candidate",
+          worktreePath: worktree,
+        })
+      ).state,
+      "refused",
+    );
+    assert.equal(
+      (
+        await verifyCandidateWorktree(
+          nodeGitRunner,
+          await actualRepository(cwd),
+          { branch: "sce/candidate", head, path: worktree, tree },
+        )
+      ).state,
+      "refused",
+    );
+    await git(worktree, "update-index", clear, "candidate.txt");
+    await writeFile(join(worktree, "candidate.txt"), "candidate\n", "utf8");
+  }
   const alias = join(root, "candidate-alias");
   await symlink(worktree, alias, "dir");
   assert.equal(

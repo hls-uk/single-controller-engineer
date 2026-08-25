@@ -199,6 +199,13 @@ function allowedGitArgv(argv: readonly string[]): boolean {
     return (
       args.length === 2 && args[0] === "--porcelain=v1" && args[1] === "-z"
     );
+  if (command === "ls-files")
+    return (
+      args.length === 3 &&
+      args[0] === "--cached" &&
+      args[1] === "-v" &&
+      args[2] === "-z"
+    );
   if (command === "merge-base")
     return (
       args.length === 3 &&
@@ -355,6 +362,23 @@ function nulPaths(value: string): string[] | undefined {
   const paths = value.slice(0, -1).split("\u0000");
   if (paths.some((path) => !safePath(path))) return undefined;
   return paths;
+}
+
+/**
+ * `status` deliberately honors index flags, so it cannot establish that the
+ * worktree bytes match HEAD while either assume-unchanged or skip-worktree is
+ * present. This deliberately accepts only ordinary tracked cache entries.
+ */
+function ordinaryTrackedIndex(value: string): boolean {
+  if (value.length === 0) return true;
+  if (!value.endsWith("\u0000") || value.length > MAX_OUTPUT) return false;
+  return value
+    .slice(0, -1)
+    .split("\u0000")
+    .every(
+      (entry) =>
+        entry.startsWith("H ") && entry.length > 2 && safePath(entry.slice(2)),
+    );
 }
 
 function outputResult(result: GitResult): GitEffect | undefined {
@@ -546,6 +570,26 @@ async function verifyCleanWorktree(
   return status.stdout.length === 0
     ? effect("observed", "GIT_OK")
     : effect("refused", "GIT_DIRTY");
+}
+
+/**
+ * Reject any assume-unchanged or skip-worktree path before trusting status.
+ * The caller repeats this after its status/head readback to close the index
+ * state loophole across the multi-command observation.
+ */
+async function verifyOrdinaryTrackedIndex(
+  runner: GitRunner,
+  path: string,
+): Promise<GitEffect> {
+  const result = await runAt(runner, path, [
+    "ls-files",
+    "--cached",
+    "-v",
+    "-z",
+  ]);
+  return commandOk(result) && ordinaryTrackedIndex(result.stdout)
+    ? effect("observed", "GIT_OK")
+    : effect("refused", "GIT_REFUSED");
 }
 
 /**
@@ -795,6 +839,8 @@ export async function observeCandidate(
     wantedPath,
   );
   if (diffEnvironment.state !== "observed") return diffEnvironment;
+  const index = await verifyOrdinaryTrackedIndex(runner, wantedPath);
+  if (index.state !== "observed") return index;
   const headResult = await runAt(runner, wantedPath, [
     "rev-parse",
     "--verify",
@@ -897,7 +943,7 @@ export async function observeCandidate(
     finalHeadOid !== head
   )
     return effect("refused", "GIT_REFUSED");
-  const [finalTree, finalStatus, finalRef] = await Promise.all([
+  const [finalTree, finalStatus, finalRef, finalIndex] = await Promise.all([
     runAt(runner, wantedPath, [
       "rev-parse",
       "--verify",
@@ -905,11 +951,13 @@ export async function observeCandidate(
     ]),
     runAt(runner, wantedPath, ["status", "--porcelain=v1", "-z"]),
     runAt(runner, wantedPath, ["symbolic-ref", "-q", "HEAD"]),
+    verifyOrdinaryTrackedIndex(runner, wantedPath),
   ]);
   if (
     !commandOk(finalTree) ||
     !commandOk(finalStatus) ||
     !commandOk(finalRef) ||
+    finalIndex.state !== "observed" ||
     oneLine(finalTree.stdout) !== tree ||
     finalStatus.stdout.length !== 0 ||
     oneLine(finalRef.stdout) !== `refs/heads/${input.branch}`
@@ -978,6 +1026,8 @@ export async function verifyCandidateWorktree(
     return effect("refused", "GIT_FOREIGN_WORKTREE");
   const ownership = await verifyWorktreeOwnership(runner, repository, path);
   if (ownership.state !== "observed") return ownership;
+  const index = await verifyOrdinaryTrackedIndex(runner, path);
+  if (index.state !== "observed") return index;
   const head = await runAt(runner, path, [
     "rev-parse",
     "--verify",
@@ -985,14 +1035,16 @@ export async function verifyCandidateWorktree(
   ]);
   if (!commandOk(head) || oneLine(head.stdout) !== input.head)
     return effect("refused", "GIT_REFUSED");
-  const [tree, status, ref] = await Promise.all([
+  const [tree, status, ref, finalIndex] = await Promise.all([
     runAt(runner, path, ["rev-parse", "--verify", `${input.head}^{tree}`]),
     runAt(runner, path, ["status", "--porcelain=v1", "-z"]),
     runAt(runner, path, ["symbolic-ref", "-q", "HEAD"]),
+    verifyOrdinaryTrackedIndex(runner, path),
   ]);
   return commandOk(tree) &&
     commandOk(status) &&
     commandOk(ref) &&
+    finalIndex.state === "observed" &&
     oneLine(tree.stdout) === input.tree &&
     status.stdout.length === 0 &&
     oneLine(ref.stdout) === `refs/heads/${input.branch}`

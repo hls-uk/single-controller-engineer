@@ -337,6 +337,7 @@ test("every normal lifecycle state exposes its reducer-legal progress descriptor
   expectProgress("verification_intent");
   state = step(state, "verification_intent", {});
   expectProgress("verification_observed");
+  expectProgress("verification_failed");
   state = observe(state, "verification_observed", "verify", {
     baseOid: OID_A,
     headOid: OID_B,

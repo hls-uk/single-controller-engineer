@@ -878,6 +878,41 @@ function reduceInternal(
         },
       );
       break;
+    case "verification_failed":
+      if (
+        unit.state !== "verification_intent" ||
+        state.qualificationOwnerUnitId !== unit.id ||
+        unit.baseOid !== event.baseOid ||
+        unit.candidateHead !== event.headOid ||
+        unit.candidateTree !== event.treeOid
+      )
+        return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "verify"))
+        return badObservation();
+      result = observe(
+        state,
+        unit,
+        "repair_required",
+        event,
+        {
+          repairContext: {
+            baseOid: event.baseOid,
+            headOid: event.headOid,
+            treeOid: event.treeOid,
+            responseHash: event.observationHash,
+            rationale: "manual verification failed",
+            findings: [
+              {
+                id: "manual-verification-failed",
+                severity: "blocking",
+                detail: "manual verification failed",
+              },
+            ],
+          },
+        },
+        clearUnitOwners(state, unit.id),
+      );
+      break;
     case "reviewer_observed":
       const reviewerSessionUpdate = freshSessionUpdate(
         state,
@@ -1950,26 +1985,28 @@ function effectMatchesObservation(
   type: ProtocolEvent["type"],
   kind: EffectKind,
 ): boolean {
-  const observations: Partial<Record<EffectKind, ProtocolEvent["type"]>> = {
-    reservation_acquire: "reservation_observed",
-    branch_create: "branch_observed",
-    worktree_create: "worktree_observed",
-    dispatch: "dispatch_observed",
-    worker_collect: "worker_collected",
-    candidate_collect: "candidate_observed",
-    verify: "verification_observed",
-    review_dispatch: "reviewer_observed",
-    review_collect: "review_collected",
-    publish: "publish_observed",
-    integrate: "integrate_observed",
-    reservation_release: "reservation_released",
-    repair: "repair_observed",
-    failure: "failure_observed",
-    timeout: "timeout_observed",
-    park: "park_observed",
-    cancel: "cancel_observed",
+  const observations: Partial<
+    Record<EffectKind, readonly ProtocolEvent["type"][]>
+  > = {
+    reservation_acquire: ["reservation_observed"],
+    branch_create: ["branch_observed"],
+    worktree_create: ["worktree_observed"],
+    dispatch: ["dispatch_observed"],
+    worker_collect: ["worker_collected"],
+    candidate_collect: ["candidate_observed"],
+    verify: ["verification_observed", "verification_failed"],
+    review_dispatch: ["reviewer_observed"],
+    review_collect: ["review_collected"],
+    publish: ["publish_observed"],
+    integrate: ["integrate_observed"],
+    reservation_release: ["reservation_released"],
+    repair: ["repair_observed"],
+    failure: ["failure_observed"],
+    timeout: ["timeout_observed"],
+    park: ["park_observed"],
+    cancel: ["cancel_observed"],
   };
-  return observations[kind] === type;
+  return observations[kind]?.includes(type) ?? false;
 }
 /**
  * An ambiguity blocks *new* effects, not facts already bound to a durable
@@ -4503,6 +4540,14 @@ function runInvariantErrorsWithClosedEvidence(
     "published",
     "integrate_intent",
   ]);
+  const hasBlockedVerification = (unit: Unit | undefined): boolean =>
+    unit?.state === "blocked" &&
+    state.effectJournal.some(
+      (effect) =>
+        effect.unitId === unit.id &&
+        effect.kind === "verify" &&
+        effect.status === "ambiguous",
+    );
   const integrationQueueStates = new Set<UnitState>([
     "approved",
     "publish_intent",
@@ -4513,6 +4558,7 @@ function runInvariantErrorsWithClosedEvidence(
     .filter(
       (unit) =>
         qualificationQueueStates.has(unit.state) ||
+        hasBlockedVerification(unit) ||
         (state.qualificationOwnerUnitId === unit.id &&
           [
             "failure_intent",
@@ -4561,12 +4607,14 @@ function runInvariantErrorsWithClosedEvidence(
     state.qualificationOwnerUnitId !== undefined &&
     !qualificationOwnerAllowedStates.has(
       state.units[state.qualificationOwnerUnitId]?.state ?? "planned",
-    )
+    ) &&
+    !hasBlockedVerification(state.units[state.qualificationOwnerUnitId])
   )
     errors.push("qualification owner is not qualifying");
   for (const unit of Object.values(state.units))
     if (
-      qualificationOwnerStates.has(unit.state) &&
+      (qualificationOwnerStates.has(unit.state) ||
+        hasBlockedVerification(unit)) &&
       state.qualificationOwnerUnitId !== unit.id
     )
       errors.push(`qualifying unit ${unit.id} lacks owner converse`);

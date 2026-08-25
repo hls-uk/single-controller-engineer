@@ -69,26 +69,26 @@ export function legalActions(
   );
 }
 
-const observationForEffect: Readonly<Record<EffectKind, string>> = {
-  controller_acquire: "controller_acquired",
-  reservation_acquire: "reservation_observed",
-  branch_create: "branch_observed",
-  worktree_create: "worktree_observed",
-  dispatch: "dispatch_observed",
-  worker_collect: "worker_collected",
-  candidate_collect: "candidate_observed",
-  verify: "verification_observed",
-  review_dispatch: "reviewer_observed",
-  review_collect: "review_collected",
-  publish: "publish_observed",
-  integrate: "integrate_observed",
-  reservation_release: "reservation_released",
-  repair: "repair_observed",
-  failure: "failure_observed",
-  timeout: "timeout_observed",
-  park: "park_observed",
-  cancel: "cancel_observed",
-  controller_release: "controller_released",
+const observationsForEffect: Readonly<Record<EffectKind, readonly string[]>> = {
+  controller_acquire: ["controller_acquired"],
+  reservation_acquire: ["reservation_observed"],
+  branch_create: ["branch_observed"],
+  worktree_create: ["worktree_observed"],
+  dispatch: ["dispatch_observed"],
+  worker_collect: ["worker_collected"],
+  candidate_collect: ["candidate_observed"],
+  verify: ["verification_observed", "verification_failed"],
+  review_dispatch: ["reviewer_observed"],
+  review_collect: ["review_collected"],
+  publish: ["publish_observed"],
+  integrate: ["integrate_observed"],
+  reservation_release: ["reservation_released"],
+  repair: ["repair_observed"],
+  failure: ["failure_observed"],
+  timeout: ["timeout_observed"],
+  park: ["park_observed"],
+  cancel: ["cancel_observed"],
+  controller_release: ["controller_released"],
 };
 
 export function ambiguityRecoveryActions(
@@ -100,13 +100,15 @@ export function ambiguityRecoveryActions(
         (effect) =>
           effect.status === "intended" || effect.status === "ambiguous",
       )
-      .map((effect) => ({
-        effectId: effect.effectId,
-        effectKind: effect.kind,
-        mode: "record" as const,
-        type: observationForEffect[effect.kind],
-        ...(effect.unitId === null ? {} : { unitId: effect.unitId }),
-      })),
+      .flatMap((effect) =>
+        observationsForEffect[effect.kind].map((type) => ({
+          effectId: effect.effectId,
+          effectKind: effect.kind,
+          mode: "record" as const,
+          type,
+          ...(effect.unitId === null ? {} : { unitId: effect.unitId }),
+        })),
+      ),
   );
 }
 
@@ -228,7 +230,10 @@ function lifecycleActions(
         : [];
     case "verification_intent":
       return state.qualificationOwnerUnitId === unit.id
-        ? [unitAction(unit, "verification_observed", "record", "verify")]
+        ? [
+            unitAction(unit, "verification_observed", "record", "verify"),
+            unitAction(unit, "verification_failed", "record", "verify"),
+          ]
         : [];
     case "qualified":
       return state.qualificationOwnerUnitId === unit.id &&

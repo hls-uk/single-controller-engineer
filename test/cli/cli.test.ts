@@ -309,7 +309,10 @@ test("qualify accepts only a strict verified acknowledgement", async () => {
   let calls = 0;
   const runner = createRecoveryCommandRunner(async (request) => {
     calls += 1;
-    assert.deepEqual(request, { harnessAcknowledgement: verified });
+    assert.deepEqual(request, {
+      harnessAcknowledgement:
+        calls === 1 ? verified : { ...verified, passed: false },
+    });
     return {
       revision: 8,
       run: run(),
@@ -332,6 +335,18 @@ test("qualify accepts only a strict verified acknowledgement", async () => {
   );
   assert.equal(accepted.exitCode, 0);
   assert.equal(JSON.parse(accepted.stdout).result.status, "tool_request");
+  const failed = await runCli(
+    [
+      "qualify",
+      "--json",
+      "--request",
+      JSON.stringify({
+        harnessAcknowledgement: { ...verified, passed: false },
+      }),
+    ],
+    { runner },
+  );
+  assert.equal(failed.exitCode, 0);
   const rejected = await runCli(
     [
       "qualify",
@@ -372,7 +387,7 @@ test("qualify accepts only a strict verified acknowledgement", async () => {
     { runner },
   );
   assert.equal(smuggled.exitCode, 64);
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
 });
 
 test("recovery commands refuse missing mutating payloads before injected runners", async () => {

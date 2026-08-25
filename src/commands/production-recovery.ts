@@ -274,7 +274,11 @@ async function verificationRequest(
   git: ProductionRecoveryEffectAdapterOptions["git"],
 ): Promise<
   | Readonly<{ status: "ambiguous" }>
-  | Readonly<{ status: "tool_request"; toolRequest: unknown }>
+  | Readonly<{
+      status: "tool_request";
+      toolRequest: unknown;
+      delivery: "mark_ambiguous";
+    }>
 > {
   const unit = run.units[effect.unitId];
   if (
@@ -286,6 +290,13 @@ async function verificationRequest(
     unit.baseOid !== effect.params.candidate.baseOid
   )
     return ambiguous();
+  const entry = run.effectJournal.find(
+    (candidate) =>
+      candidate.effectId === effect.effectId &&
+      candidate.unitId === effect.unitId &&
+      candidate.kind === "verify",
+  );
+  if (entry?.status !== "intended") return ambiguous();
   const binding = await verifyCandidateWorktree(git.runner, git.repository, {
     branch: unit.branchRef,
     head: effect.params.candidate.headOid,
@@ -296,7 +307,9 @@ async function verificationRequest(
     binding.state === "observed"
       ? verificationToolRequest(effect, run)
       : ambiguous();
-  return requested.status === "tool_request" ? requested : ambiguous();
+  return requested.status === "tool_request"
+    ? { ...requested, delivery: "mark_ambiguous" }
+    : ambiguous();
 }
 
 function canPublish(

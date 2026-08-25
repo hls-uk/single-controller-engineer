@@ -145,13 +145,23 @@ export const InitialControllerAcquireSchema = strictObject({
 export type ReconcileResult =
   | Readonly<{ status: "absent" }>
   | Readonly<{ status: "ambiguous"; observationHash?: string }>
-  | Readonly<{ status: "tool_request"; toolRequest: unknown }>
+  | Readonly<{
+      status: "tool_request";
+      toolRequest: unknown;
+      /** This request is exposed only after its durable effect is ambiguous. */
+      delivery?: "mark_ambiguous";
+    }>
   | Readonly<{ status: "unavailable" }>
   | Readonly<{ status: "observed"; observation: ProtocolEvent }>;
 
 export type ExecuteResult =
   | Readonly<{ status: "ambiguous"; observationHash?: string }>
-  | Readonly<{ status: "tool_request"; toolRequest: unknown }>
+  | Readonly<{
+      status: "tool_request";
+      toolRequest: unknown;
+      /** This request is exposed only after its durable effect is ambiguous. */
+      delivery?: "mark_ambiguous";
+    }>
   | Readonly<{ status: "unavailable" }>
   | Readonly<{ status: "observed"; observation: ProtocolEvent }>;
 
@@ -615,13 +625,32 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
         return { status: "blocked" };
       const answer = await options.adapter.reconcile(effect, current);
       if (answer.status === "unavailable") return { status: "unavailable" };
-      if (answer.status === "tool_request")
+      if (answer.status === "tool_request") {
+        if (answer.delivery === "mark_ambiguous") {
+          const delivered = await persistEvent(
+            currentRoot,
+            current,
+            ambiguousEvent(current, entry),
+          );
+          if (!isRun(delivered)) return delivered;
+          return {
+            revision: delivered.revision,
+            run: delivered,
+            status: "tool_request",
+            toolRequest: answer.toolRequest,
+          };
+        }
         return {
           revision: current.revision,
           run: current,
           status: "tool_request",
           toolRequest: answer.toolRequest,
         };
+      }
+      // A durable manual delivery is intentionally not reissued on resume.
+      // Only an exact acknowledgement can settle its already-ambiguous entry.
+      if (entry.status === "ambiguous" && answer.status === "ambiguous")
+        return { status: "ambiguous" };
       let settledAnswer:
         | Exclude<
             ExecuteResult,
@@ -932,13 +961,32 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
       );
       if (entry === undefined) return { status: "corrupt" };
       if (acted.status === "unavailable") return { status: "unavailable" };
-      if (acted.status === "tool_request")
+      if (acted.status === "tool_request") {
+        if (acted.delivery === "mark_ambiguous") {
+          const deliveredEvent = ambiguousEvent(intent, entry);
+          fault("before_observation_persist");
+          fault("during_observation_persist");
+          const delivered = await persistEvent(
+            makeRootProjection(intent),
+            intent,
+            deliveredEvent,
+          );
+          fault("after_observation_persist");
+          if (!isRun(delivered)) return delivered;
+          return {
+            revision: delivered.revision,
+            run: delivered,
+            status: "tool_request",
+            toolRequest: acted.toolRequest,
+          };
+        }
         return {
           revision: intent.revision,
           run: intent,
           status: "tool_request",
           toolRequest: acted.toolRequest,
         };
+      }
       const observed =
         acted.status === "observed"
           ? observationFor(intent, entry, acted.observation)

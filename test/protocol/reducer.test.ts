@@ -579,6 +579,42 @@ test("verification observations preserve the original base binding", () => {
   );
 });
 
+test("a failed exact verification retains repair evidence and releases qualification", () => {
+  let state = completeCandidate();
+  state = step(state, "verification_intent", {});
+  const failed = reduce(
+    state,
+    event(state, "verification_failed", {
+      baseOid: OID_A,
+      effectId: effectId(state, "verify"),
+      effectKind: "verify",
+      headOid: OID_B,
+      observationHash: HASH,
+      treeOid: OID_C,
+    }),
+  );
+  assert.equal(failed.ok, true);
+  if (!failed.ok) return;
+  const unit = failed.nextState.units["unit-1"];
+  assert.equal(unit?.state, "repair_required");
+  assert.deepEqual(unit?.repairContext, {
+    baseOid: OID_A,
+    findings: [
+      {
+        detail: "manual verification failed",
+        id: "manual-verification-failed",
+        severity: "blocking",
+      },
+    ],
+    headOid: OID_B,
+    rationale: "manual verification failed",
+    responseHash: HASH,
+    treeOid: OID_C,
+  });
+  assert.equal(failed.nextState.qualificationOwnerUnitId, undefined);
+  assert.deepEqual(failed.nextState.qualificationQueue, []);
+});
+
 test("review approval binds role, session, exact model, revision, prompt, and Git facts", () => {
   let state = completeCandidate();
   state = step(state, "verification_intent", {

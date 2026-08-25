@@ -239,7 +239,7 @@ export const HarnessToolAcknowledgementSchema = Type.Union([
       pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
     }),
     kind: Type.Literal("verified"),
-    passed: Type.Literal(true),
+    passed: Type.Boolean(),
     treeOid: Type.String({
       minLength: 40,
       maxLength: 64,
@@ -351,12 +351,15 @@ export function acknowledgeVerificationTool(
         domain: "sce.harness.verify-evidence/v1",
         effectId: effect.effectId,
         evidenceDigest: acknowledgement.evidenceDigest,
+        passed: acknowledgement.passed,
         paramsHash: effect.paramsHash,
         worktreePath: effect.params.worktreePath,
       }),
     ),
     treeOid: effect.params.candidate.treeOid,
-    type: "verification_observed",
+    type: acknowledgement.passed
+      ? "verification_observed"
+      : "verification_failed",
     unitId: effect.unitId,
   });
 }

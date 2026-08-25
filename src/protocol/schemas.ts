@@ -992,6 +992,14 @@ export const ProtocolEventSchema = Type.Union([
   }),
   strictObject({
     ...eventBase,
+    type: Type.Literal("verification_failed"),
+    ...observedEffect,
+    baseOid: oid(),
+    headOid: oid(),
+    treeOid: oid(),
+  }),
+  strictObject({
+    ...eventBase,
     type: Type.Literal("reviewer_dispatch_intent"),
     ...effectIntent,
     packet: HarnessPacketBindingSchema,
