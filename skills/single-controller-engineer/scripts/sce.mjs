@@ -15770,14 +15770,14 @@ function scopedHookPath(value) {
 }
 function allowedGitArgv(argv) {
   const [command, ...args] = argv;
-  if (command === "-c" && args[0] === "core.quotePath=false" && args[1] === "diff")
-    return allowedGitArgv(["diff", ...args.slice(2)]);
+  if (command === "-c" && args[0] === "core.quotePath=false" && args[1] === "-c" && args[2] === "core.attributesFile=/dev/null" && args[3] === "diff")
+    return allowedGitArgv(["diff", ...args.slice(4)]);
   if (command === "rev-parse")
     return args.length === 1 && ["--git-common-dir", "--show-object-format"].includes(args[0] ?? "") || args.length === 2 && args[0] === "--verify" && (args[1] === "HEAD^{commit}" || args[1] === "HEAD^{tree}" || /^(?:[0-9a-f]{40}|[0-9a-f]{64})\^\{tree\}$/u.test(args[1] ?? ""));
   if (command === "config")
     return args.length === 3 && args[0] === "--null" && args[1] === "--get-regexp" && [
       "^remote\\..*\\.url$",
-      "^(core\\.(attributesFile|quotePath)|diff\\..*)$"
+      "^(core\\.(attributesfile|quotepath)|diff\\..*)$"
     ].includes(args[2] ?? "");
   if (command === "for-each-ref")
     return args.length === 2 && args[0] === "--format=%(objectname)" && args[1]?.startsWith("refs/heads/") === true && safeRef(args[1].slice(11));
@@ -15987,9 +15987,11 @@ async function candidateDiffEnvironment(runner, repository, worktreePath) {
     "config",
     "--null",
     "--get-regexp",
-    "^(core\\.(attributesFile|quotePath)|diff\\..*)$"
+    "^(core\\.(attributesfile|quotepath)|diff\\..*)$"
   ]);
-  if (configured.exitCode === 1 && configured.signal === null)
+  const failure2 = terminalFailure(configured);
+  if (failure2 !== void 0) return failure2;
+  if (configured.exitCode === 1 && configured.signal === null && configured.stdout.length === 0)
     return effect("observed", "GIT_OK");
   return commandOk(configured) && configured.stdout.length === 0 ? effect("observed", "GIT_OK") : effect("refused", "GIT_REFUSED");
 }
@@ -16154,6 +16156,8 @@ async function observeCandidate(runner, repository, input) {
     runAt(runner, wantedPath, [
       "-c",
       "core.quotePath=false",
+      "-c",
+      "core.attributesFile=/dev/null",
       "diff",
       "--name-only",
       "-z",
@@ -16163,6 +16167,8 @@ async function observeCandidate(runner, repository, input) {
     runAt(runner, wantedPath, [
       "-c",
       "core.quotePath=false",
+      "-c",
+      "core.attributesFile=/dev/null",
       "diff",
       "--no-ext-diff",
       "--no-textconv",
@@ -16192,7 +16198,7 @@ async function observeCandidate(runner, repository, input) {
     "HEAD^{commit}"
   ]);
   const finalHeadOid = oneLine(finalHead.stdout);
-  if (finalHeadOid === void 0 || finalHeadOid !== head3)
+  if (!commandOk(finalHead) || finalHeadOid === void 0 || finalHeadOid !== head3)
     return effect("refused", "GIT_REFUSED");
   const [finalTree, finalStatus, finalRef] = await Promise.all([
     runAt(runner, wantedPath, [

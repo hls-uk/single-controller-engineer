@@ -678,6 +678,22 @@ test("real worktree candidate observation binds exact committed diff bytes", asy
     },
   );
   assert.equal(configured.state, "refused");
+  await git(worktree, "config", "--unset", "diff.noprefix");
+  const attributes = join(root, "external-attributes");
+  await writeFile(attributes, "*.txt binary\n", "utf8");
+  await git(worktree, "config", "core.attributesFile", attributes);
+  const externalAttributes = await observeCandidate(
+    nodeGitRunner,
+    await actualRepository(cwd),
+    {
+      allowedPaths: ["candidate.txt"],
+      base,
+      branch: "sce/candidate",
+      worktreePath: worktree,
+    },
+  );
+  assert.equal(externalAttributes.state, "refused");
+  await git(worktree, "config", "--unset", "core.attributesFile");
   const alias = join(root, "candidate-alias");
   await symlink(worktree, alias, "dir");
   assert.equal(

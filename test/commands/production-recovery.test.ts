@@ -318,7 +318,7 @@ test("production candidate collection and manual verification bind exact durable
           };
         if (argv[0] === "merge-base")
           return { exitCode: 0, signal: null, stdout: "" };
-        if (argv[0] === "diff" || (argv[0] === "-c" && argv[2] === "diff"))
+        if (argv[0] === "diff" || (argv[0] === "-c" && argv[4] === "diff"))
           return {
             exitCode: 0,
             signal: null,

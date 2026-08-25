@@ -151,9 +151,11 @@ function allowedGitArgv(argv: readonly string[]): boolean {
   if (
     command === "-c" &&
     args[0] === "core.quotePath=false" &&
-    args[1] === "diff"
+    args[1] === "-c" &&
+    args[2] === "core.attributesFile=/dev/null" &&
+    args[3] === "diff"
   )
-    return allowedGitArgv(["diff", ...args.slice(2)]);
+    return allowedGitArgv(["diff", ...args.slice(4)]);
   if (command === "rev-parse")
     return (
       (args.length === 1 &&
@@ -171,7 +173,7 @@ function allowedGitArgv(argv: readonly string[]): boolean {
       args[1] === "--get-regexp" &&
       [
         "^remote\\..*\\.url$",
-        "^(core\\.(attributesFile|quotePath)|diff\\..*)$",
+        "^(core\\.(attributesfile|quotepath)|diff\\..*)$",
       ].includes(args[2] ?? "")
     );
   if (command === "for-each-ref")
@@ -570,9 +572,15 @@ async function candidateDiffEnvironment(
     "config",
     "--null",
     "--get-regexp",
-    "^(core\\.(attributesFile|quotePath)|diff\\..*)$",
+    "^(core\\.(attributesfile|quotepath)|diff\\..*)$",
   ]);
-  if (configured.exitCode === 1 && configured.signal === null)
+  const failure = terminalFailure(configured);
+  if (failure !== undefined) return failure;
+  if (
+    configured.exitCode === 1 &&
+    configured.signal === null &&
+    configured.stdout.length === 0
+  )
     return effect("observed", "GIT_OK");
   return commandOk(configured) && configured.stdout.length === 0
     ? effect("observed", "GIT_OK")
@@ -833,6 +841,8 @@ export async function observeCandidate(
     runAt(runner, wantedPath, [
       "-c",
       "core.quotePath=false",
+      "-c",
+      "core.attributesFile=/dev/null",
       "diff",
       "--name-only",
       "-z",
@@ -842,6 +852,8 @@ export async function observeCandidate(
     runAt(runner, wantedPath, [
       "-c",
       "core.quotePath=false",
+      "-c",
+      "core.attributesFile=/dev/null",
       "diff",
       "--no-ext-diff",
       "--no-textconv",
@@ -879,7 +891,11 @@ export async function observeCandidate(
     "HEAD^{commit}",
   ]);
   const finalHeadOid = oneLine(finalHead.stdout);
-  if (finalHeadOid === undefined || finalHeadOid !== head)
+  if (
+    !commandOk(finalHead) ||
+    finalHeadOid === undefined ||
+    finalHeadOid !== head
+  )
     return effect("refused", "GIT_REFUSED");
   const [finalTree, finalStatus, finalRef] = await Promise.all([
     runAt(runner, wantedPath, [
