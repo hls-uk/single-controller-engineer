@@ -148,14 +148,14 @@ test("feedback workflow is disabled, pinned, serialized, and acts only on a reva
   assert.match(source, /current\.data\.state !== "open"/u);
   assert.match(source, /return triagePlan\(/u);
   assert.match(source, /discovery\.issues\[row\] =/u);
-  assert.match(source, /async function currentPlan\(canonicalOverride\)/u);
+  assert.match(source, /async function currentPlan\(canonicalIssueNumber\)/u);
   assert.match(
     source,
     /const issueRows = await github\.paginate\(\s*github\.rest\.issues\.listForRepo/u,
   );
-  assert.match(source, /issue_number: planned\.canonicalIssueNumber/u);
+  assert.match(source, /issue_number: canonicalIssueNumber/u);
   assert.match(source, /canonical\.data\.state !== "open"/u);
-  assert.match(source, /currentPlan\(canonical\.data\)/u);
+  assert.match(source, /currentPlan\(planned\.canonicalIssueNumber\)/u);
   assert.match(
     source,
     /confirmed\.canonicalIssueNumber === planned\.canonicalIssueNumber/u,

@@ -34,7 +34,7 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const issueNumber = context.payload.issue.number;
-            async function currentPlan(canonicalOverride) {
+            async function currentPlan(canonicalIssueNumber) {
               const issueRows = await github.paginate(
                 github.rest.issues.listForRepo,
                 { owner, repo, state: "open", per_page: 100 },
@@ -70,19 +70,25 @@ jobs:
                 number: current.data.number,
                 open: current.data.state === "open",
               };
-              if (canonicalOverride !== undefined) {
+              if (canonicalIssueNumber !== undefined) {
+                const canonical = await github.rest.issues.get({
+                  owner,
+                  repo,
+                  issue_number: canonicalIssueNumber,
+                });
                 if (
-                  canonicalOverride.pull_request !== undefined ||
-                  canonicalOverride.state !== "open"
+                  canonical.data.pull_request !== undefined ||
+                  canonical.data.state !== "open" ||
+                  canonical.data.number !== canonicalIssueNumber
                 ) return { action: "none" };
                 const canonicalRow = discovery.issues.findIndex(
-                  (issue) => issue.number === canonicalOverride.number,
+                  (issue) => issue.number === canonical.data.number,
                 );
                 if (canonicalRow === -1) return { action: "none" };
                 discovery.issues[canonicalRow] = {
-                  body: canonicalOverride.body ?? "",
-                  number: canonicalOverride.number,
-                  open: canonicalOverride.state === "open",
+                  body: canonical.data.body ?? "",
+                  number: canonical.data.number,
+                  open: canonical.data.state === "open",
                 };
               }
               return triagePlan(
@@ -100,16 +106,7 @@ jobs:
             async function revalidatedPlan() {
               const planned = await currentPlan();
               if (planned.action !== "apply") return planned;
-              const canonical = await github.rest.issues.get({
-                owner,
-                repo,
-                issue_number: planned.canonicalIssueNumber,
-              });
-              if (
-                canonical.data.pull_request !== undefined ||
-                canonical.data.state !== "open"
-              ) return { action: "none" };
-              const confirmed = await currentPlan(canonical.data);
+              const confirmed = await currentPlan(planned.canonicalIssueNumber);
               return (
                 confirmed.action === "apply" &&
                 confirmed.canonicalIssueNumber === planned.canonicalIssueNumber &&
