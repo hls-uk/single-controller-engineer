@@ -24,6 +24,7 @@ import {
   decideControllerSlot,
   deriveScopeCommitment,
   deriveSlotReadbackHash,
+  FencingScopeSchema,
   type FencingScope,
   type MergeSlotObservation,
   type MutationBatch,
@@ -1439,7 +1440,13 @@ export type ServerMutationDriverResponse =
  * before it can report applied.  There is intentionally no create-slot API.
  */
 export interface BeadsServerDriver {
-  probe(): Promise<ServerDriverResponse<ServerProbe>>;
+  /**
+   * Arms this driver only for this exact adapter-declared identity.  The
+   * expected identity is an authority input, not merely response metadata.
+   */
+  probe(identity: ServerIdentity): Promise<ServerDriverResponse<ServerProbe>>;
+  /** Revokes any preflight arm, including when an adapter rejects a probe. */
+  disarm(): void;
   mergeSlotAcquire(
     input: Readonly<{
       actor: string;
@@ -1962,6 +1969,27 @@ function boundedMutationBatch(value: unknown): boolean {
 }
 
 /**
+ * A direct driver call receives untyped JavaScript at runtime. Reparse the
+ * complete batch through the fencing boundary, then operate on a canonical
+ * clone so later caller mutation cannot alter the guarded SQL request.
+ */
+function normalizedMutationBatch(input: unknown): MutationBatch | undefined {
+  const parsed = validateMutationBatch(input);
+  if (!parsed.ok || !boundedMutationBatch(parsed.value)) return undefined;
+  try {
+    const normalized = JSON.parse(
+      canonicalJson(parsed.value as JsonValue),
+    ) as unknown;
+    const reparsed = validateMutationBatch(normalized);
+    return reparsed.ok && boundedMutationBatch(reparsed.value)
+      ? reparsed.value
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Binds preflight's sanitized topology to a single server configuration.
  * The caller supplies only a credential provenance/reference, never a secret.
  */
@@ -2047,7 +2075,10 @@ export class BeadsServerAdapter implements RunStorePort {
   }
 
   async preflight(): Promise<ServerPreflight> {
-    this.#ready = false;
+    // Driver readiness is only meaningful after this adapter accepts its
+    // identity-bound probe. Revoke a retained driver arm before every new
+    // attempt and on every path below that does not return ready.
+    this.#revoke();
     if (
       this.#identity.topology === "managed_local_shared_server" &&
       !this.#started
@@ -2058,24 +2089,35 @@ export class BeadsServerAdapter implements RunStorePort {
       try {
         started = await this.#process.start();
       } catch {
+        this.#revoke();
         return { status: "unavailable", code: "BS_SERVER_UNAVAILABLE" };
       }
-      if (started.status !== "ok")
+      if (started.status !== "ok") {
+        this.#revoke();
         return this.#preflightFailure(started.status);
+      }
       this.#started = true;
     }
     let probe: ServerDriverResponse<ServerProbe>;
     try {
-      probe = await this.#driver.probe();
+      probe = await this.#driver.probe(this.#identity);
     } catch {
+      this.#revoke();
       return { status: "unavailable", code: "BS_SERVER_UNAVAILABLE" };
     }
-    if (probe.status !== "ok") return this.#preflightFailure(probe.status);
+    if (probe.status !== "ok") {
+      this.#revoke();
+      return this.#preflightFailure(probe.status);
+    }
     const parsed = parseProbe(probe.value);
-    if (parsed === undefined || !sameServerIdentity(this.#identity, parsed))
+    if (parsed === undefined || !sameServerIdentity(this.#identity, parsed)) {
+      this.#revoke();
       return { status: "refused", code: "BS_IDENTITY_MISMATCH" };
-    if (!parsed.workerGrant.serverEnforced || !parsed.workerGrant.writeDenied)
+    }
+    if (!parsed.workerGrant.serverEnforced || !parsed.workerGrant.writeDenied) {
+      this.#revoke();
       return { status: "refused", code: "BS_READ_ONLY_NOT_ENFORCED" };
+    }
     this.#ready = true;
     return { status: "ready", identity: this.#identity };
   }
@@ -2084,7 +2126,7 @@ export class BeadsServerAdapter implements RunStorePort {
     // A managed bd shared server is authority-owned and may be shared across
     // projects. Disposal only forgets this adapter's adoption; it never sends
     // a server-wide stop operation.
-    this.#ready = false;
+    this.#revoke();
     this.#started = false;
   }
 
@@ -2106,16 +2148,16 @@ export class BeadsServerAdapter implements RunStorePort {
         scope: input.scope,
       });
     } catch {
-      this.#ready = false;
+      this.#revoke();
       return { status: "ambiguous" };
     }
     if (result.status !== "ok") {
-      this.#ready = false;
+      this.#revoke();
       return { status: mapFailure(result.status) };
     }
     const parsed = parseSlotReadback(result.value, input.prefix, input.scope);
     if (parsed === undefined) {
-      this.#ready = false;
+      this.#revoke();
       return { status: "quarantined" };
     }
     // `bd merge-slot acquire` returns the post-CAS holder.  There is no
@@ -2141,8 +2183,10 @@ export class BeadsServerAdapter implements RunStorePort {
         parsed.status !== "acquired" ||
         parsed.holder !== input.holder ||
         parsed.actor !== input.holder
-      )
+      ) {
+        this.#revoke();
         return { status: "quarantined" };
+      }
       return { status: "acquired", slot: parsed };
     }
     if (decision.kind === "resume" || decision.kind === "continue")
@@ -2166,16 +2210,16 @@ export class BeadsServerAdapter implements RunStorePort {
         scope: input.scope,
       });
     } catch {
-      this.#ready = false;
+      this.#revoke();
       return { status: "ambiguous" };
     }
     if (result.status !== "ok") {
-      this.#ready = false;
+      this.#revoke();
       return { status: mapFailure(result.status) };
     }
     const parsed = parseSlotReadback(result.value, input.prefix, input.scope);
     if (parsed === undefined) {
-      this.#ready = false;
+      this.#revoke();
       return { status: "quarantined" };
     }
     return parsed.status === "acquired" && parsed.holder === input.holder
@@ -2199,11 +2243,11 @@ export class BeadsServerAdapter implements RunStorePort {
         scope: input.scope,
       });
     } catch {
-      this.#ready = false;
+      this.#revoke();
       return { status: "ambiguous" };
     }
     if (result.status !== "ok") {
-      this.#ready = false;
+      this.#revoke();
       return { status: mapFailure(result.status) };
     }
     const evidence = validateSlotRelease(
@@ -2216,7 +2260,7 @@ export class BeadsServerAdapter implements RunStorePort {
       },
     );
     if (!evidence.ok) {
-      this.#ready = false;
+      this.#revoke();
       return { status: "quarantined" };
     }
     return { status: "released", slot: result.value.observation };
@@ -2231,7 +2275,7 @@ export class BeadsServerAdapter implements RunStorePort {
         scope,
       });
       if (response.status !== "ok") {
-        this.#ready = false;
+        this.#revoke();
         return undefined;
       }
       const parsed = parseDiscovery(
@@ -2240,13 +2284,13 @@ export class BeadsServerAdapter implements RunStorePort {
         scope,
       );
       if (parsed === undefined) {
-        this.#ready = false;
+        this.#revoke();
         return undefined;
       }
       this.#lastDiscovery = parsed;
       return parsed;
     } catch {
-      this.#ready = false;
+      this.#revoke();
       return undefined;
     }
   }
@@ -2258,8 +2302,10 @@ export class BeadsServerAdapter implements RunStorePort {
   async compareAndSet(batchInput: MutationBatch): Promise<RunStoreResult> {
     if (!this.#ready) return { status: "quarantined" };
     const batch = validateMutationBatch(batchInput);
-    if (!batch.ok || !boundedMutationBatch(batch.value))
+    if (!batch.ok || !boundedMutationBatch(batch.value)) {
+      this.#revoke();
       return { status: "quarantined" };
+    }
     let response: ServerMutationDriverResponse;
     try {
       response = await this.#driver.mutate({
@@ -2267,7 +2313,7 @@ export class BeadsServerAdapter implements RunStorePort {
         identity: this.#identity,
       });
     } catch {
-      this.#ready = false;
+      this.#revoke();
       await this.discover(batch.value.scope);
       return { status: "ambiguous" };
     }
@@ -2275,7 +2321,7 @@ export class BeadsServerAdapter implements RunStorePort {
       // A network failure after a transaction starts is never reported stale.
       // Discovery is intentionally read-only and its facts stay local to the
       // driver seam; callers receive ambiguous and must reconcile before retry.
-      this.#ready = false;
+      this.#revoke();
       await this.discover(batch.value.scope);
       return {
         status:
@@ -2292,7 +2338,7 @@ export class BeadsServerAdapter implements RunStorePort {
       result === undefined ||
       !this.#durable(commit)
     ) {
-      this.#ready = false;
+      this.#revoke();
       return { status: "quarantined" };
     }
     if (result.status !== "applied") return result;
@@ -2302,7 +2348,7 @@ export class BeadsServerAdapter implements RunStorePort {
       !exact(result.children, batch.value.next.children) ||
       !exact(result.checkpoint, batch.value.checkpoint)
     ) {
-      this.#ready = false;
+      this.#revoke();
       return { status: "quarantined" };
     }
     return result;
@@ -2325,6 +2371,16 @@ export class BeadsServerAdapter implements RunStorePort {
     if (failure === "ambiguous")
       return { status: "ambiguous", code: "BS_SERVER_AMBIGUOUS" };
     return { status: "refused", code: "BS_SERVER_REFUSED" };
+  }
+
+  #revoke(): void {
+    this.#ready = false;
+    try {
+      this.#driver.disarm();
+    } catch {
+      // An untrusted driver's failed revocation must never leave this adapter
+      // armed. Concrete driver revocation is synchronous and cannot throw.
+    }
   }
 }
 
@@ -2669,6 +2725,7 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
   #autoCommitObserved = false;
   #doltTransactionCommitObserved = false;
   #ready = false;
+  #readyIdentity: ServerIdentity | undefined;
 
   constructor(
     input: Readonly<{
@@ -2691,11 +2748,19 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     this.#writer = input.writer;
   }
 
-  async probe(): Promise<ServerDriverResponse<ServerProbe>> {
+  disarm(): void {
     this.#ready = false;
+    this.#readyIdentity = undefined;
     this.#autoCommitObserved = false;
     this.#doltTransactionCommitObserved = false;
+  }
+
+  async probe(
+    expectedIdentity: ServerIdentity,
+  ): Promise<ServerDriverResponse<ServerProbe>> {
+    this.disarm();
     if (
+      !exact(expectedIdentity, this.#identity) ||
       this.#identity.autoCommitPolicy !== "on" ||
       !this.#transportsMatchIdentity()
     )
@@ -2875,6 +2940,7 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
         },
       },
     } as const;
+    this.#readyIdentity = expectedIdentity;
     this.#ready = true;
     return probe;
   }
@@ -2882,11 +2948,13 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
   async mergeSlotAcquire(
     input: Readonly<{ actor: string; prefix: string; scope: FencingScope }>,
   ): Promise<ServerDriverResponse<ServerSlotReadback>> {
-    if (!this.#ready || this.#slotProcess === undefined)
+    if (!this.#isReady() || this.#slotProcess === undefined)
       return { status: "refused" };
+    if (!this.#validSlotInput(input, false))
+      return this.#invalidate({ status: "refused" });
     const binding = await this.#slotProcess.matchesIdentity(this.#identity);
     if (binding.status !== "ok") {
-      this.#ready = false;
+      this.disarm();
       return binding;
     }
     const precheck = await this.#slotReadback(
@@ -2895,29 +2963,31 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       input.actor,
     );
     if (precheck.status !== "ok") {
-      this.#ready = false;
+      this.disarm();
       return precheck;
     }
     const attempt = await this.#slotProcess.acquire(input.actor);
     const result = await this.#slotAfterCommand("acquire", attempt, input);
-    if (result.status !== "ok") this.#ready = false;
+    if (result.status !== "ok") this.disarm();
     return result;
   }
 
   async mergeSlotCheck(
     input: Readonly<{ actor?: string; prefix: string; scope: FencingScope }>,
   ): Promise<ServerDriverResponse<ServerSlotReadback>> {
-    if (!this.#ready || this.#slotProcess === undefined)
+    if (!this.#isReady() || this.#slotProcess === undefined)
       return { status: "refused" };
+    if (!this.#validSlotInput(input, true))
+      return this.#invalidate({ status: "refused" });
     const binding = await this.#slotProcess.matchesIdentity(this.#identity);
     if (binding.status !== "ok") {
-      this.#ready = false;
+      this.disarm();
       return binding;
     }
     const actor = input.actor ?? "slot-observer";
     const precheck = await this.#slotReadback(input.prefix, input.scope, actor);
     if (precheck.status !== "ok") {
-      this.#ready = false;
+      this.disarm();
       return precheck;
     }
     const attempt = await this.#slotProcess.check(actor);
@@ -2925,18 +2995,20 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       ...input,
       actor,
     });
-    if (result.status !== "ok") this.#ready = false;
+    if (result.status !== "ok") this.disarm();
     return result;
   }
 
   async mergeSlotRelease(
     input: Readonly<{ actor: string; prefix: string; scope: FencingScope }>,
   ): Promise<ServerDriverResponse<ServerSlotReadback>> {
-    if (!this.#ready || this.#slotProcess === undefined)
+    if (!this.#isReady() || this.#slotProcess === undefined)
       return { status: "refused" };
+    if (!this.#validSlotInput(input, false))
+      return this.#invalidate({ status: "refused" });
     const binding = await this.#slotProcess.matchesIdentity(this.#identity);
     if (binding.status !== "ok") {
-      this.#ready = false;
+      this.disarm();
       return binding;
     }
     const precheck = await this.#slotReadback(
@@ -2954,7 +3026,7 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
         : this.#invalidate(precheck);
     const attempt = await this.#slotProcess.release(input.actor);
     const result = await this.#slotAfterCommand("release", attempt, input);
-    if (result.status !== "ok") this.#ready = false;
+    if (result.status !== "ok") this.disarm();
     return result;
   }
 
@@ -2966,7 +3038,7 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     }>,
   ): Promise<ServerEnvelopeInitializationResult> {
     if (
-      !this.#ready ||
+      !this.#isReady() ||
       input.authority !== "authorized_initialization" ||
       !validIdentifier(input.issueId) ||
       containsSecretShape(input.envelope)
@@ -2975,7 +3047,7 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     if (this.#slotProcess === undefined) return { status: "refused" };
     const binding = await this.#slotProcess.matchesIdentity(this.#identity);
     if (binding.status !== "ok") {
-      this.#ready = false;
+      this.disarm();
       return binding;
     }
     const affected = await this.#mutateAffected(
@@ -2983,7 +3055,7 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       1,
     );
     if (affected.status !== "ok") {
-      this.#ready = false;
+      this.disarm();
       return { status: affected.status };
     }
     if (affected.rows === 0) return { status: "already_initialized" };
@@ -2995,15 +3067,18 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
   async mutate(
     input: Readonly<{ batch: MutationBatch; identity: ServerIdentity }>,
   ): Promise<ServerMutationDriverResponse> {
-    if (!this.#ready || !exact(input.identity, this.#identity))
+    const batch = normalizedMutationBatch(input?.batch);
+    if (batch === undefined) {
+      this.disarm();
       return { phase: "before_transaction", status: "refused" };
-    if (!boundedMutationBatch(input.batch))
+    }
+    if (!this.#isReady(input?.identity))
       return { phase: "before_transaction", status: "refused" };
     if (this.#slotProcess === undefined)
       return { phase: "before_transaction", status: "refused" };
     const binding = await this.#slotProcess.matchesIdentity(this.#identity);
     if (binding.status !== "ok") {
-      this.#ready = false;
+      this.disarm();
       return { phase: "before_transaction", status: binding.status };
     }
     if (
@@ -3012,21 +3087,21 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       !this.#doltTransactionCommitObserved
     )
       return { phase: "before_transaction", status: "refused" };
-    const statement = this.#casStatement(input.batch);
+    const statement = this.#casStatement(batch);
     if (statement === undefined)
       return { phase: "before_transaction", status: "refused" };
     const affected = await this.#mutateAffected(
       statement,
-      input.batch.changedRows.length + 1,
+      batch.changedRows.length + 1,
     );
     if (affected.status !== "ok") {
-      this.#ready = false;
+      this.disarm();
       return { phase: "commit_unknown", status: affected.status };
     }
     if (affected.rows === 0) {
       const afterStale = await this.#doltCommitEvidence();
       if (afterStale.status !== "ok") {
-        this.#ready = false;
+        this.disarm();
         return {
           phase: "commit_unknown",
           status: afterStale.status,
@@ -3040,12 +3115,12 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
         },
       };
     }
-    if (affected.rows !== input.batch.changedRows.length + 1) {
-      this.#ready = false;
+    if (affected.rows !== batch.changedRows.length + 1) {
+      this.disarm();
       return { phase: "commit_unknown", status: "ambiguous" };
     }
     if (affected.committedHead === undefined) {
-      this.#ready = false;
+      this.disarm();
       return { phase: "commit_unknown", status: "ambiguous" };
     }
     try {
@@ -3053,12 +3128,12 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
         committedHead: affected.committedHead,
       });
     } catch {
-      this.#ready = false;
+      this.disarm();
       return { phase: "commit_unknown", status: "ambiguous" };
     }
-    const readback = await this.#readback(input.batch);
+    const readback = await this.#readback(batch);
     if (readback.status !== "ok") {
-      this.#ready = false;
+      this.disarm();
       return { phase: "commit_unknown", status: readback.status };
     }
     return {
@@ -3076,9 +3151,9 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
         },
         result: {
           affectedRowCount: affected.rows,
-          checkpoint: input.batch.checkpoint,
-          children: input.batch.next.children,
-          root: input.batch.next.root,
+          checkpoint: batch.checkpoint,
+          children: batch.next.children,
+          root: batch.next.root,
           status: "applied",
         },
       },
@@ -3173,10 +3248,39 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     );
   }
 
+  #isReady(identity: unknown = this.#identity): boolean {
+    if (identity === undefined) return false;
+    try {
+      return (
+        this.#ready &&
+        this.#readyIdentity !== undefined &&
+        exact(identity, this.#identity) &&
+        exact(this.#readyIdentity, this.#identity)
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  #validSlotInput(input: unknown, actorOptional: boolean): boolean {
+    if (input === null || typeof input !== "object" || Array.isArray(input))
+      return false;
+    const value = input as Record<string, unknown>;
+    const actor = value.actor;
+    return (
+      value.prefix === this.#identity.prefix &&
+      isSchema(FencingScopeSchema, value.scope) &&
+      (actorOptional
+        ? actor === undefined ||
+          (typeof actor === "string" && validIdentifier(actor))
+        : typeof actor === "string" && validIdentifier(actor))
+    );
+  }
+
   #invalidate<T extends Readonly<{ status: ServerDriverFailure }>>(
     value: T,
   ): T {
-    this.#ready = false;
+    this.disarm();
     return value;
   }
 
@@ -3261,6 +3365,14 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     scope: FencingScope,
     actor = "slot-observer",
   ): Promise<ServerDriverResponse<ServerSlotReadback>> {
+    // Discovery shares this readback path, so bind its prefix/scope too before
+    // issuing either SQL read. Slot operations never infer a prefix from SQL.
+    if (
+      prefix !== this.#identity.prefix ||
+      !isSchema(FencingScopeSchema, scope) ||
+      !validIdentifier(actor)
+    )
+      return { status: "refused" };
     const result = await executeDoltSqlRead(
       this.#writer,
       `SELECT status, metadata, external_ref, title, design FROM ${this.#issues()} WHERE id = ${sqlLiteral(`${prefix}-merge-slot`)}`,

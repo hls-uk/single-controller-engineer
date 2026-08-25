@@ -1123,6 +1123,7 @@ class FakeServer implements BeadsServerDriver {
   outage: "none" | "before" | "after" = "none";
   commitOverride: "auto" | "explicit" | undefined;
   discoveryCalls = 0;
+  disarmCalls = 0;
   discoveryChildren: readonly unknown[] | undefined;
 
   constructor(
@@ -1134,7 +1135,11 @@ class FakeServer implements BeadsServerDriver {
     this.root = makeRootProjection(run());
   }
 
-  async probe() {
+  disarm(): void {
+    this.disarmCalls += 1;
+  }
+
+  async probe(_expectedIdentity: ServerIdentity) {
     return {
       status: "ok" as const,
       value: {
@@ -1307,6 +1312,508 @@ class FakeServer implements BeadsServerDriver {
     };
   }
 }
+
+type ConcreteProbeFault =
+  | "context"
+  | "error"
+  | "grants"
+  | "identity"
+  | "malformed"
+  | "schema"
+  | "version"
+  | "worker";
+
+/**
+ * A complete in-memory protocol fixture for concrete-driver readiness gates.
+ * It intentionally never supports transaction execution: these tests prove
+ * rejected preflight/invalid input reaches no SQL or bd command at all.
+ */
+function concreteReadinessHarness(fault?: ConcreteProbeFault) {
+  const driverIdentity = identity();
+  const adapterIdentity =
+    fault === "identity" ? identity("on", "127.0.0.1:3307") : driverIdentity;
+  const calls = { bd: 0, worker: 0, writer: 0 };
+  const issueColumns = [
+    ["id", "varchar"],
+    ["status", "varchar"],
+    ["metadata", "json"],
+    ["external_ref", "varchar"],
+    ["title", "varchar"],
+    ["design", "longtext"],
+  ].map(([column_name, data_type]) => ({ column_name, data_type }));
+  const labelColumns = [
+    ["issue_id", "varchar"],
+    ["label", "varchar"],
+  ].map(([column_name, data_type]) => ({ column_name, data_type }));
+  const writer = new DoltSqlTransport({
+    identity: driverIdentity,
+    process: async (request) => {
+      calls.writer += 1;
+      if (request.argv[0] === "version")
+        return {
+          exitCode: 0,
+          output: "dolt version 2.2.1\n",
+          timedOut: false,
+        };
+      const query = request.argv.at(request.argv.indexOf("-q") + 1) ?? "";
+      if (
+        fault === "error" &&
+        query === "SELECT DATABASE() AS current_database"
+      )
+        throw new Error("fixture transport error");
+      if (
+        fault === "malformed" &&
+        query === "SELECT DATABASE() AS current_database"
+      )
+        return { exitCode: 0, output: "{", timedOut: false };
+      if (query === "SELECT DATABASE() AS current_database")
+        return {
+          exitCode: 0,
+          output: '[{"current_database":"sce"}]',
+          timedOut: false,
+        };
+      if (query === "SELECT DOLT_VERSION() AS dolt_version")
+        return {
+          exitCode: 0,
+          output: JSON.stringify([
+            { dolt_version: fault === "version" ? "2.2.2" : "2.2.1" },
+          ]),
+          timedOut: false,
+        };
+      if (query.includes("information_schema.tables"))
+        return {
+          exitCode: 0,
+          output:
+            fault === "schema" && query.includes("table_name = 'labels'")
+              ? "[]"
+              : query.includes("table_name = 'issues'")
+                ? '[{"table_name":"issues"}]'
+                : '[{"table_name":"labels"}]',
+          timedOut: false,
+        };
+      if (query.includes("information_schema.columns"))
+        return {
+          exitCode: 0,
+          output: JSON.stringify(
+            query.includes("table_name = 'issues'")
+              ? issueColumns
+              : labelColumns,
+          ),
+          timedOut: false,
+        };
+      if (query === "SELECT @@autocommit AS auto_commit")
+        return {
+          exitCode: 0,
+          output: '[{"auto_commit":"1"}]',
+          timedOut: false,
+        };
+      if (query.startsWith("SET @@SESSION.dolt_transaction_commit"))
+        return {
+          exitCode: 0,
+          output: '[{"dolt_transaction_commit":"1"}]',
+          timedOut: false,
+        };
+      if (query === "SELECT * FROM dolt_status")
+        return { exitCode: 0, output: "[]", timedOut: false };
+      if (query === "SELECT DOLT_HASHOF('HEAD') AS head")
+        return {
+          exitCode: 0,
+          output: '[{"head":"c96vvi04oug557a1fk7tcjm7ok5sqmiu"}]',
+          timedOut: false,
+        };
+      if (query === "SHOW GRANTS FOR 'worker'@'%'")
+        return {
+          exitCode: 0,
+          output: JSON.stringify(
+            fault === "grants"
+              ? [
+                  {
+                    "Grants for worker@%":
+                      "GRANT UPDATE ON `sce`.* TO `worker`@`%`",
+                  },
+                ]
+              : [
+                  {
+                    "Grants for worker@%": "GRANT USAGE ON *.* TO `worker`@`%`",
+                  },
+                  {
+                    "Grants for worker@%":
+                      "GRANT SELECT ON `sce`.* TO `worker`@`%`",
+                  },
+                ],
+          ),
+          timedOut: false,
+        };
+      throw new Error(`unexpected readiness writer query: ${query}`);
+    },
+    user: "writer",
+  });
+  const worker = new DoltSqlTransport({
+    identity: driverIdentity,
+    process: async (request) => {
+      calls.worker += 1;
+      if (request.argv[0] === "version")
+        return {
+          exitCode: 0,
+          output: "dolt version 2.2.1\n",
+          timedOut: false,
+        };
+      const query = request.argv.at(request.argv.indexOf("-q") + 1) ?? "";
+      if (query.startsWith("SELECT id FROM `sce`.issues"))
+        return fault === "worker"
+          ? { exitCode: 1, output: "worker unavailable", timedOut: false }
+          : { exitCode: 0, output: '[{"id":"sce-root"}]', timedOut: false };
+      if (query === "SELECT CURRENT_USER() AS current_principal")
+        return {
+          exitCode: 0,
+          output: '[{"current_principal":"worker@%"}]',
+          timedOut: false,
+        };
+      const noOp = "UPDATE `sce`.issues SET status = status WHERE 1 = 0";
+      if (query === noOp)
+        return {
+          exitCode: 1,
+          output: `error on line 1 for query ${noOp}: Error 1105 (HY000): command denied to user 'worker'@'%'`,
+          timedOut: false,
+        };
+      throw new Error(`unexpected readiness worker query: ${query}`);
+    },
+    user: "worker",
+  });
+  const slotProcess = new PinnedBdServerProcess({
+    executable: "/fixture/bd",
+    identity: driverIdentity,
+    process: async (request) => {
+      calls.bd += 1;
+      if (request.argv[0] === "version")
+        return { exitCode: 0, output: "bd version 1.1.0\n", timedOut: false };
+      if (request.argv.includes("context"))
+        return {
+          exitCode: 0,
+          output: JSON.stringify({
+            backend: "dolt",
+            beads_dir: "/fixture/workspace/.beads",
+            database: fault === "context" ? "wrong" : "sce",
+            dolt_mode: "server",
+            server_host: "127.0.0.1",
+            server_port: 3306,
+          }),
+          timedOut: false,
+        };
+      throw new Error(
+        `unexpected readiness bd command: ${request.argv.join(" ")}`,
+      );
+    },
+    runtimeEnvironment: () => ({
+      HOME: "/fixture/home",
+      XDG_CONFIG_HOME: "/fixture/config",
+    }),
+    workspace: "/fixture/workspace",
+  });
+  const driver = new DoltBeadsServerDriver({
+    identity: driverIdentity,
+    rows: { childBeadIds: { "unit-1": "sce-child" }, rootBeadId: "sce-root" },
+    slotProcess,
+    worker,
+    writer,
+  });
+  return {
+    adapter: new BeadsServerAdapter({
+      driver,
+      identity: adapterIdentity,
+      process: fakeManagedProcess,
+    }),
+    calls,
+    driver,
+    identity: driverIdentity,
+  };
+}
+
+test("concrete driver stays disarmed after every rejected preflight gate", async () => {
+  for (const fault of [
+    "schema",
+    "identity",
+    "context",
+    "worker",
+    "grants",
+    "version",
+    "malformed",
+    "error",
+  ] as const) {
+    const harness = concreteReadinessHarness(fault);
+    const preflight = await harness.adapter.preflight();
+    assert.notEqual(preflight.status, "ready", fault);
+    const before = { ...harness.calls };
+    assert.deepEqual(
+      await harness.driver.mergeSlotAcquire({
+        actor: holder,
+        prefix: "sce",
+        scope,
+      }),
+      { status: "refused" },
+      `${fault}: acquire`,
+    );
+    assert.deepEqual(
+      await harness.driver.mergeSlotCheck({
+        actor: holder,
+        prefix: "sce",
+        scope,
+      }),
+      { status: "refused" },
+      `${fault}: check`,
+    );
+    assert.deepEqual(
+      await harness.driver.mergeSlotRelease({
+        actor: holder,
+        prefix: "sce",
+        scope,
+      }),
+      { status: "refused" },
+      `${fault}: release`,
+    );
+    assert.deepEqual(
+      await harness.driver.initializeEnvelope({
+        authority: "authorized_initialization",
+        envelope: makeRootProjection(run()),
+        issueId: "sce-root",
+      }),
+      { status: "refused" },
+      `${fault}: initialization`,
+    );
+    assert.deepEqual(
+      await harness.driver.mutate({
+        batch: batch(),
+        identity: harness.identity,
+      }),
+      { phase: "before_transaction", status: "refused" },
+      `${fault}: mutation`,
+    );
+    assert.deepEqual(harness.calls, before, `${fault}: zero retained calls`);
+  }
+});
+
+test("adapter revokes a driver that returns malformed, mismatched, or throws", async () => {
+  for (const mode of ["malformed", "mismatched", "error"] as const) {
+    let armed = false;
+    let mutationCommands = 0;
+    const response = {
+      autoCommitPolicy: "on" as const,
+      credentialReference: "managed-writer-v1",
+      database: "sce",
+      endpoint: mode === "mismatched" ? "127.0.0.1:3307" : "127.0.0.1:3306",
+      schema: "beads",
+      workerGrant: {
+        credentialReference: "managed-worker-ro-v1",
+        serverEnforced: true,
+        writeDenied: true,
+      },
+    };
+    const driver: BeadsServerDriver = {
+      disarm: () => {
+        armed = false;
+      },
+      discover: async () => ({ status: "refused" }),
+      mergeSlotAcquire: async () => {
+        if (armed) mutationCommands += 1;
+        return { status: "refused" };
+      },
+      mergeSlotCheck: async () => {
+        if (armed) mutationCommands += 1;
+        return { status: "refused" };
+      },
+      mergeSlotRelease: async () => {
+        if (armed) mutationCommands += 1;
+        return { status: "refused" };
+      },
+      mutate: async () => {
+        if (armed) mutationCommands += 1;
+        return { phase: "before_transaction", status: "refused" };
+      },
+      probe: async () => {
+        armed = true;
+        if (mode === "error") throw new Error("probe error");
+        return {
+          status: "ok",
+          value: mode === "malformed" ? {} : response,
+        } as ServerDriverResponse<never>;
+      },
+    };
+    const adapter = new BeadsServerAdapter({
+      driver,
+      identity: identity(),
+      process: fakeManagedProcess,
+    });
+    assert.notEqual((await adapter.preflight()).status, "ready", mode);
+    assert.deepEqual(
+      await driver.mergeSlotCheck({ actor: holder, prefix: "sce", scope }),
+      { status: "refused" },
+      mode,
+    );
+    assert.deepEqual(
+      await driver.mutate({ batch: batch(), identity: identity() }),
+      { phase: "before_transaction", status: "refused" },
+      mode,
+    );
+    assert.equal(mutationCommands, 0, mode);
+  }
+
+  let disposedArmed = false;
+  const disposable: BeadsServerDriver = {
+    disarm: () => {
+      disposedArmed = false;
+    },
+    discover: async () => ({ status: "refused" }),
+    mergeSlotAcquire: async () => ({ status: "refused" }),
+    mergeSlotCheck: async () => ({ status: "refused" }),
+    mergeSlotRelease: async () => ({ status: "refused" }),
+    mutate: async () => ({ phase: "before_transaction", status: "refused" }),
+    probe: async () => {
+      disposedArmed = true;
+      return {
+        status: "ok",
+        value: {
+          autoCommitPolicy: "on",
+          credentialReference: "managed-writer-v1",
+          database: "sce",
+          endpoint: "127.0.0.1:3306",
+          schema: "beads",
+          workerGrant: {
+            credentialReference: "managed-worker-ro-v1",
+            serverEnforced: true,
+            writeDenied: true,
+          },
+        },
+      };
+    },
+  };
+  const adapter = new BeadsServerAdapter({
+    driver: disposable,
+    identity: identity(),
+    process: fakeManagedProcess,
+  });
+  assert.equal((await adapter.preflight()).status, "ready");
+  assert.equal(disposedArmed, true);
+  await adapter.dispose();
+  assert.equal(disposedArmed, false);
+});
+
+test("direct concrete mutation normalizes the complete batch before any command", async () => {
+  const malformed = (change: (value: Record<string, unknown>) => void) => {
+    const value = structuredClone(batch()) as unknown as Record<
+      string,
+      unknown
+    >;
+    change(value);
+    return value as MutationBatch;
+  };
+  const invalidBatches: readonly [string, MutationBatch][] = [
+    ["extra field", malformed((value) => (value.extra = true))],
+    ["holder", malformed((value) => (value.holder = "invalid holder"))],
+    [
+      "scope",
+      malformed((value) => {
+        value.scope = { ...scope, unexpected: true };
+      }),
+    ],
+    [
+      "root envelope",
+      malformed((value) => {
+        const next = value.next as Record<string, unknown>;
+        next.root = {
+          ...(next.root as Record<string, unknown>),
+          aggregateRevision: -1,
+        };
+      }),
+    ],
+    [
+      "children",
+      malformed((value) => {
+        (value.next as Record<string, unknown>).children = [];
+      }),
+    ],
+    [
+      "child envelope",
+      malformed((value) => {
+        const next = value.next as Record<string, unknown>;
+        const children = structuredClone(next.children) as Record<
+          string,
+          unknown
+        >[];
+        children[0]!.holder = "invalid holder";
+        next.children = children;
+      }),
+    ],
+  ];
+  for (const [name, invalid] of invalidBatches) {
+    const harness = concreteReadinessHarness();
+    assert.equal(
+      (await harness.driver.probe(harness.identity)).status,
+      "ok",
+      name,
+    );
+    const before = { ...harness.calls };
+    assert.deepEqual(
+      await harness.driver.mutate({
+        batch: invalid,
+        identity: harness.identity,
+      }),
+      { phase: "before_transaction", status: "refused" },
+      name,
+    );
+    // Invalid input disarms rather than leaving the previous successful probe
+    // available for a later caller-supplied payload.
+    assert.deepEqual(
+      await harness.driver.mutate({
+        batch: batch(),
+        identity: harness.identity,
+      }),
+      { phase: "before_transaction", status: "refused" },
+      `${name}: remains disarmed`,
+    );
+    assert.deepEqual(harness.calls, before, `${name}: zero transport/bd calls`);
+  }
+});
+
+test("fresh concrete slot calls reject a wrong prefix before every command", async () => {
+  for (const operation of ["acquire", "check", "release"] as const) {
+    const harness = concreteReadinessHarness();
+    assert.equal(
+      (await harness.driver.probe(harness.identity)).status,
+      "ok",
+      operation,
+    );
+    const before = { ...harness.calls };
+    const result =
+      operation === "acquire"
+        ? await harness.driver.mergeSlotAcquire({
+            actor: holder,
+            prefix: "wrong",
+            scope,
+          })
+        : operation === "check"
+          ? await harness.driver.mergeSlotCheck({
+              actor: holder,
+              prefix: "wrong",
+              scope,
+            })
+          : await harness.driver.mergeSlotRelease({
+              actor: holder,
+              prefix: "wrong",
+              scope,
+            });
+    assert.deepEqual(result, { status: "refused" }, operation);
+    assert.deepEqual(harness.calls, before, `${operation}: zero commands`);
+    assert.deepEqual(
+      await harness.driver.mutate({
+        batch: batch(),
+        identity: harness.identity,
+      }),
+      { phase: "before_transaction", status: "refused" },
+      `${operation}: wrong prefix disarms fresh instance`,
+    );
+    assert.deepEqual(harness.calls, before, `${operation}: zero movement`);
+  }
+});
 
 test("server identity binds only sanitized managed/external configuration provenance", () => {
   assert.equal(identity().endpoint, "127.0.0.1:3306");
@@ -1716,12 +2223,12 @@ test("immutable executable pins poison self-replacing read, slot, and lifecycle 
       worker: queryWorker,
       writer: queryTransport,
     });
-    assert.deepEqual(await queryDriver.probe(), {
+    assert.deepEqual(await queryDriver.probe(identity()), {
       status: "refused",
     });
     assert.deepEqual(queryCalls, [["version"]]);
     await assert.rejects(stat(doltTrap.marker));
-    assert.deepEqual(await queryDriver.probe(), {
+    assert.deepEqual(await queryDriver.probe(identity()), {
       status: "refused",
     });
     assert.deepEqual(queryCalls, [["version"]]);
@@ -2020,7 +2527,9 @@ test("concrete driver rejects missing labels schema and merge-slot label skew", 
     rows: { childBeadIds: { "unit-1": "sce-2" }, rootBeadId: "sce-1" },
     writer: missingLabels,
   });
-  assert.deepEqual(await missingLabelsDriver.probe(), { status: "refused" });
+  assert.deepEqual(await missingLabelsDriver.probe(identity()), {
+    status: "refused",
+  });
 
   const labelSkewWriter = new DoltSqlTransport({
     identity: identity(),
@@ -2089,7 +2598,9 @@ test("concrete driver refuses off and batch policies without same-connection com
       rows: { childBeadIds: { "unit-1": "sce-2" }, rootBeadId: "sce-1" },
       writer: transport,
     });
-    assert.deepEqual(await driver.probe(), { status: "refused" });
+    assert.deepEqual(await driver.probe(identity(policy)), {
+      status: "refused",
+    });
   }
 });
 
@@ -2291,7 +2802,7 @@ test("worker readonly preflight accepts only the exact pinned permission denial"
       worker,
       writer,
     });
-    const result = await driver.probe();
+    const result = await driver.probe(identity());
     if (mode === "denied") {
       assert.equal(result.status, "ok", writerQueries.join("\n"));
       assert.deepEqual(workerWrites, [exactNoop]);
@@ -2467,7 +2978,7 @@ test("real transaction child accepts stdin backpressure and contains an early EP
     await chmod(epipeExecutable, 0o700);
 
     const driver = driverFor(executable);
-    assert.equal((await driver.probe()).status, "ok");
+    assert.equal((await driver.probe(identity())).status, "ok");
     const started = Date.now();
     const completed = await driver.mutate({
       batch: value,
@@ -2478,7 +2989,7 @@ test("real transaction child accepts stdin backpressure and contains an early EP
     await stat(completionMarker);
 
     const epipeDriver = driverFor(epipeExecutable);
-    assert.equal((await epipeDriver.probe()).status, "ok");
+    assert.equal((await epipeDriver.probe(identity())).status, "ok");
     const epipe = await epipeDriver.mutate({
       batch: value,
       identity: identity(),
@@ -3241,7 +3752,9 @@ test("real bd external-server workspace drives the concrete driver, adapter, and
     assert.equal(rawFinal.available, true);
     assert.equal(rawFinal.holder, null);
     await fixture.stop();
-    assert.deepEqual(await driver.probe(), { status: "unavailable" });
+    assert.deepEqual(await driver.probe(serverIdentity), {
+      status: "unavailable",
+    });
   } finally {
     await fixture.stop();
     await removeFixtureDirectory(fixture.directory);
@@ -4111,7 +4624,7 @@ test("default Dolt session leaves direct SQL pending and the driver refuses it",
       worker: fixture.worker,
       writer: fixture.writer,
     });
-    assert.deepEqual(await driver.probe(), { status: "refused" });
+    assert.deepEqual(await driver.probe(serverIdentity), { status: "refused" });
   } finally {
     await fixture.stop();
     await rm(fixture.directory, { force: true, recursive: true });
