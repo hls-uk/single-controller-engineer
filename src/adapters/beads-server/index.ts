@@ -71,15 +71,11 @@ const DOLT_SQL_TIMEOUT_MS = 15_000;
 // for that concrete wire form and for the corresponding JSON readback.
 const DOLT_SQL_MAX_STATEMENT_BYTES = 1_048_576;
 const DOLT_SQL_MAX_OUTPUT_BYTES = 1_048_576;
+const DOLT_SQL_MAX_ERROR_BYTES = 4_096;
 const BD_PROCESS_TIMEOUT_MS = 15_000;
 const BD_PROCESS_MAX_OUTPUT_BYTES = 16_384;
 const PROCESS_TERM_GRACE_MS = 250;
 const EXECUTABLE_SAMPLE_BYTES = 4_096;
-const doltServerExecute = Symbol("doltServerExecute");
-const doltServerTransactionExecute = Symbol("doltServerTransactionExecute");
-/** @internal Test-only access to the otherwise module-private transaction seam. */
-export const __doltSqlTransportTransactionForTests: typeof doltServerTransactionExecute =
-  doltServerTransactionExecute;
 
 export type DoltSqlProcessRequest = Readonly<{
   argv: readonly string[];
@@ -90,6 +86,8 @@ export type DoltSqlProcessRequest = Readonly<{
 export type DoltSqlProcessResult = Readonly<{
   exitCode: number | undefined;
   output: string;
+  /** Internal bounded diagnostic only; never returned to transport callers. */
+  stderr?: string;
   timedOut: boolean;
 }>;
 export type DoltSqlProcess = (
@@ -102,6 +100,67 @@ type DoltSqlExecution =
 type DoltSqlTransactionExecution =
   | Readonly<{ status: "ok"; rows: number }>
   | Readonly<{ status: "unavailable" | "refused" }>;
+
+/**
+ * The exported transport must expose no mutation-capable property, including
+ * a discoverable symbol. These closures are installed per instance in a
+ * module-scoped WeakMap and can only be reached by the closed driver helpers
+ * below; reflection over an exported transport cannot discover the map or
+ * obtain an invocation handle.
+ */
+type DoltSqlTransportOperations = Readonly<{
+  executeProgram: (query: string) => Promise<
+    | Readonly<{
+        status: "ok";
+        results: readonly (readonly Record<string, unknown>[])[];
+      }>
+    | Readonly<{ status: "unavailable" | "refused" }>
+  >;
+  executeTransaction: (
+    statement: string,
+    expectedRows: number,
+  ) => Promise<DoltSqlTransactionExecution>;
+  probeWorkerWrite: () => Promise<
+    "allowed" | "denied" | "refused" | "unavailable"
+  >;
+}>;
+
+const doltSqlTransportOperations = new WeakMap<
+  DoltSqlTransport,
+  DoltSqlTransportOperations
+>();
+
+function executeDoltSqlProgram(
+  transport: DoltSqlTransport,
+  query: string,
+): ReturnType<DoltSqlTransportOperations["executeProgram"]> {
+  return (
+    doltSqlTransportOperations.get(transport)?.executeProgram(query) ??
+    Promise.resolve({ status: "refused" } as const)
+  );
+}
+
+function executeDoltSqlTransaction(
+  transport: DoltSqlTransport,
+  statement: string,
+  expectedRows: number,
+): Promise<DoltSqlTransactionExecution> {
+  return (
+    doltSqlTransportOperations
+      .get(transport)
+      ?.executeTransaction(statement, expectedRows) ??
+    Promise.resolve({ status: "refused" } as const)
+  );
+}
+
+function probeDoltSqlWorkerWrite(
+  transport: DoltSqlTransport,
+): ReturnType<DoltSqlTransportOperations["probeWorkerWrite"]> {
+  return (
+    doltSqlTransportOperations.get(transport)?.probeWorkerWrite() ??
+    Promise.resolve("refused" as const)
+  );
+}
 
 type ExecutableSnapshot = Readonly<{
   canonical: string;
@@ -278,6 +337,15 @@ export class DoltSqlTransport {
     this.#password = input.password;
     this.#process = input.process ?? runDoltSql;
     this.#user = input.user;
+    doltSqlTransportOperations.set(
+      this,
+      Object.freeze({
+        executeProgram: (query) => this.#executeProgram(query),
+        executeTransaction: (statement, expectedRows) =>
+          this.#executeTransaction(statement, expectedRows),
+        probeWorkerWrite: () => this.#probeWorkerWrite(),
+      }),
+    );
   }
 
   /** Read-only diagnostics and readbacks; server mutations use a private seam. */
@@ -305,14 +373,14 @@ export class DoltSqlTransport {
     }
   }
 
-  async [doltServerExecute](query: string): Promise<
+  async #executeProgram(query: string): Promise<
     | Readonly<{
         status: "ok";
         results: readonly (readonly Record<string, unknown>[])[];
       }>
     | Readonly<{ status: "unavailable" | "refused" }>
   > {
-    // This symbol is module-private and receives only SQL assembled from
+    // The module-private WeakMap closure receives only SQL assembled from
     // validated projections. Do not apply heuristic text secret matching to
     // canonical protocol JSON: legitimate field names include `Token`.
     if (!safeText(query, DOLT_SQL_MAX_STATEMENT_BYTES))
@@ -339,7 +407,7 @@ export class DoltSqlTransport {
     }
   }
 
-  async [doltServerTransactionExecute](
+  async #executeTransaction(
     statement: string,
     expectedRows: number,
   ): Promise<DoltSqlTransactionExecution> {
@@ -379,6 +447,86 @@ export class DoltSqlTransport {
       password: this.#password,
       statement,
     });
+  }
+
+  /**
+   * Private, constant no-op capability probe. It never accepts caller SQL and
+   * reports denial only for Dolt's exact pinned table-write permission error.
+   * Every other failure is deliberately non-evidence.
+   */
+  async #probeWorkerWrite(): Promise<
+    "allowed" | "denied" | "refused" | "unavailable"
+  > {
+    const [host, port] = this.#endpointParts();
+    const executable = await this.#verifiedDoltExecutable();
+    const database = quotedIdentifier(this.#identity.database);
+    if (
+      host === undefined ||
+      port === undefined ||
+      executable === undefined ||
+      database === undefined ||
+      (await this.#pinnedDoltExecutable()) !== executable
+    )
+      return "refused";
+    const statement = `UPDATE ${database}.issues SET status = status WHERE 1 = 0`;
+    try {
+      const result = await this.#process({
+        argv: [
+          ...(this.#identity.transportSecurity === "loopback_plaintext"
+            ? ["--no-tls"]
+            : []),
+          "--host",
+          host,
+          "--port",
+          port,
+          "--use-db",
+          this.#identity.database,
+          "--user",
+          this.#user,
+          "sql",
+          "-q",
+          statement,
+          "-r",
+          "json",
+        ],
+        executable,
+        env: {
+          DOLT_CLI_PASSWORD: this.#password ?? "",
+          PATH: `${dirname(executable)}:/usr/bin:/bin`,
+        },
+        timeoutMs: DOLT_SQL_TIMEOUT_MS,
+      });
+      // Dolt CLI writes the pinned MySQL error on stderr in server mode, but
+      // some supported terminal modes route it to stdout. It remains bounded,
+      // private, and is only compared to the exact denial diagnostic below.
+      const diagnostic =
+        (result.stderr ?? "").trim().length > 0
+          ? (result.stderr ?? "")
+          : result.output;
+      if (
+        result.timedOut ||
+        result.exitCode === undefined ||
+        Buffer.byteLength(result.output, "utf8") > DOLT_SQL_MAX_OUTPUT_BYTES ||
+        Buffer.byteLength(diagnostic, "utf8") > DOLT_SQL_MAX_ERROR_BYTES ||
+        containsSecretShape(diagnostic)
+      )
+        return "unavailable";
+      if (result.exitCode === 0) return "allowed";
+      // Pinned Dolt 2.2.1 emits this exact 1105 wrapper and command-denied
+      // diagnostic for the constant issues-table UPDATE. Do not treat login,
+      // network, parser, timeout, or generic nonzero failures as denial.
+      const escapedStatement = statement.replace(
+        /[.*+?^${}()|[\]\\]/gu,
+        "\\$&",
+      );
+      const denied = new RegExp(
+        `^error on line 1 for query ${escapedStatement}: Error 1105 \\(HY000\\): command denied to user '${this.#user}'@'%'$`,
+        "u",
+      );
+      return denied.test(diagnostic.trim()) ? "denied" : "unavailable";
+    } catch {
+      return "unavailable";
+    }
   }
 
   async #execute(query: string): Promise<DoltSqlExecution> {
@@ -492,9 +640,10 @@ async function runDoltSql(
   return new Promise((resolve) => {
     const child = spawn(request.executable, request.argv, {
       env: request.env,
-      stdio: ["ignore", "pipe", "ignore"],
+      stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";
+    let stderr = "";
     let capped = false;
     let failed = false;
     let timedOut = false;
@@ -520,6 +669,14 @@ async function runDoltSql(
         terminate();
       }
     });
+    child.stderr.on("data", (chunk: Buffer) => {
+      if (capped) return;
+      stderr += chunk.toString("utf8");
+      if (Buffer.byteLength(stderr, "utf8") > DOLT_SQL_MAX_ERROR_BYTES) {
+        capped = true;
+        terminate();
+      }
+    });
     child.once("error", () => {
       failed = true;
       terminate();
@@ -533,6 +690,7 @@ async function runDoltSql(
         exitCode:
           capped || timedOut || failed ? undefined : (code ?? undefined),
         output,
+        stderr,
         timedOut: capped || timedOut,
       });
     });
@@ -2273,7 +2431,8 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       String(autoCommit.rows[0]?.auto_commit) !== "1"
     )
       return { status: "refused" };
-    const doltTransactionCommit = await this.#writer[doltServerExecute](
+    const doltTransactionCommit = await executeDoltSqlProgram(
+      this.#writer,
       "SET @@SESSION.dolt_transaction_commit = 1; SELECT @@SESSION.dolt_transaction_commit AS dolt_transaction_commit",
     );
     if (
@@ -2288,18 +2447,23 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     if (initialCommit.status !== "ok") return initialCommit;
     this.#autoCommitObserved = true;
     this.#doltTransactionCommitObserved = true;
-    let writeDenied = false;
-    if (this.#worker !== undefined) {
-      const workerRead = await this.#worker.query(
-        `SELECT id FROM ${quotedIdentifier(this.#identity.database)}.issues LIMIT 1`,
-      );
-      const workerProbe = await this.#worker[doltServerExecute](
-        `UPDATE ${quotedIdentifier(this.#identity.database)}.issues SET status = status WHERE 1 = 0`,
-      );
-      // The writer has just read the same server. A worker mutation failure is
-      // therefore server-enforced denial, while a successful update is unsafe.
-      writeDenied = workerRead.status === "ok" && workerProbe.status !== "ok";
-    }
+    if (this.#worker === undefined) return { status: "refused" };
+    const issues = quotedIdentifier(this.#identity.database);
+    if (issues === undefined) return { status: "refused" };
+    const workerRead = await this.#worker.query(
+      `SELECT id FROM ${issues}.issues LIMIT 1`,
+    );
+    if (workerRead.status !== "ok") return { status: workerRead.status };
+    const workerProbe = await probeDoltSqlWorkerWrite(this.#worker);
+    // A ready server must positively prove its independent worker credential
+    // received the exact table-write privilege denial. Timeouts, bad logins,
+    // malformed output, executable refusal, and arbitrary command failures
+    // are no more evidence of read-only enforcement than an allowed write.
+    if (workerProbe === "allowed") return { status: "refused" };
+    if (workerProbe !== "denied")
+      return {
+        status: workerProbe === "unavailable" ? "unavailable" : "refused",
+      };
     return {
       status: "ok",
       value: {
@@ -2310,8 +2474,8 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
         schema: this.#identity.schema,
         workerGrant: {
           credentialReference: this.#identity.workerCredentialReference,
-          serverEnforced: this.#worker !== undefined && writeDenied,
-          writeDenied,
+          serverEnforced: true,
+          writeDenied: true,
         },
       },
     };
@@ -2321,6 +2485,12 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     input: Readonly<{ actor: string; prefix: string; scope: FencingScope }>,
   ): Promise<ServerDriverResponse<ServerSlotReadback>> {
     if (this.#slotProcess === undefined) return { status: "refused" };
+    const precheck = await this.#slotReadback(
+      input.prefix,
+      input.scope,
+      input.actor,
+    );
+    if (precheck.status !== "ok") return precheck;
     const attempt = await this.#slotProcess.acquire(input.actor);
     return this.#slotAfterCommand("acquire", attempt, input);
   }
@@ -2330,6 +2500,8 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
   ): Promise<ServerDriverResponse<ServerSlotReadback>> {
     if (this.#slotProcess === undefined) return { status: "refused" };
     const actor = input.actor ?? "slot-observer";
+    const precheck = await this.#slotReadback(input.prefix, input.scope, actor);
+    if (precheck.status !== "ok") return precheck;
     const attempt = await this.#slotProcess.check(actor);
     return this.#slotAfterCommand("check", attempt, { ...input, actor });
   }
@@ -2338,6 +2510,17 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     input: Readonly<{ actor: string; prefix: string; scope: FencingScope }>,
   ): Promise<ServerDriverResponse<ServerSlotReadback>> {
     if (this.#slotProcess === undefined) return { status: "refused" };
+    const precheck = await this.#slotReadback(
+      input.prefix,
+      input.scope,
+      input.actor,
+    );
+    if (
+      precheck.status !== "ok" ||
+      precheck.value.observation.status !== "acquired" ||
+      precheck.value.observation.holder !== input.actor
+    )
+      return precheck.status === "ok" ? { status: "refused" } : precheck;
     const attempt = await this.#slotProcess.release(input.actor);
     return this.#slotAfterCommand("release", attempt, input);
   }
@@ -2636,7 +2819,8 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     | Readonly<{ status: "ok"; rows: number }>
     | Readonly<{ status: ServerDriverFailure }>
   > {
-    const response = await this.#writer[doltServerTransactionExecute](
+    const response = await executeDoltSqlTransaction(
+      this.#writer,
       statement,
       expectedRows,
     );
