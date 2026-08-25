@@ -1784,7 +1784,85 @@ function safeText(value: string, max: number): boolean {
 }
 
 function exact(left: unknown, right: unknown): boolean {
-  return canonicalJson(left as JsonValue) === canonicalJson(right as JsonValue);
+  try {
+    return (
+      canonicalJson(left as JsonValue) === canonicalJson(right as JsonValue)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read an untyped public-method input without executing its accessors. The
+ * resulting shallow data record has only own data properties and exact keys;
+ * nested values are still validated by the existing strict schemas below.
+ */
+function safeRecord(
+  input: unknown,
+  keys: readonly string[],
+): Record<string, unknown> | undefined {
+  try {
+    if (input === null || typeof input !== "object" || Array.isArray(input))
+      return undefined;
+    const prototype = Object.getPrototypeOf(input);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const descriptors = Object.getOwnPropertyDescriptors(input);
+    const ownKeys = Reflect.ownKeys(descriptors);
+    if (ownKeys.some((key) => typeof key !== "string")) return undefined;
+    const actual = ownKeys as string[];
+    actual.sort();
+    const expected = [...keys].sort();
+    if (
+      actual.length !== expected.length ||
+      actual.some((key, index) => key !== expected[index])
+    )
+      return undefined;
+    const record: Record<string, unknown> = {};
+    for (const key of keys) {
+      const descriptor = descriptors[key];
+      if (descriptor === undefined || !("value" in descriptor))
+        return undefined;
+      record[key] = descriptor.value;
+    }
+    return record;
+  } catch {
+    return undefined;
+  }
+}
+
+function safeOptionalRecord(
+  input: unknown,
+  required: readonly string[],
+  optional: readonly string[],
+): Record<string, unknown> | undefined {
+  try {
+    if (input === null || typeof input !== "object" || Array.isArray(input))
+      return undefined;
+    const prototype = Object.getPrototypeOf(input);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const descriptors = Object.getOwnPropertyDescriptors(input);
+    const ownKeys = Reflect.ownKeys(descriptors);
+    if (ownKeys.some((key) => typeof key !== "string")) return undefined;
+    const actual = ownKeys as string[];
+    actual.sort();
+    const allowed = new Set([...required, ...optional]);
+    if (
+      actual.some((key) => !allowed.has(key)) ||
+      required.some((key) => !actual.includes(key))
+    )
+      return undefined;
+    const record: Record<string, unknown> = {};
+    for (const key of actual) {
+      const descriptor = descriptors[key];
+      if (descriptor === undefined || !("value" in descriptor))
+        return undefined;
+      record[key] = descriptor.value;
+    }
+    return record;
+  } catch {
+    return undefined;
+  }
 }
 
 function validEndpoint(value: string): boolean {
@@ -1845,6 +1923,37 @@ const ServerProbeSchema = strictObject({
     writeDenied: Type.Boolean(),
   }),
 });
+const ServerIdentitySchema = strictObject({
+  autoCommitPolicy: Type.Union([
+    Type.Literal("on"),
+    Type.Literal("off"),
+    Type.Literal("batch"),
+  ]),
+  credentialProvenance: Type.Union([
+    Type.Literal("environment"),
+    Type.Literal("managed_local_runtime"),
+  ]),
+  credentialReference: Type.String({
+    minLength: 1,
+    maxLength: MAX_FINGERPRINT_BYTES,
+  }),
+  database: Type.String({ minLength: 1, maxLength: MAX_SCHEMA_BYTES }),
+  endpoint: Type.String({ minLength: 1, maxLength: MAX_ENDPOINT_BYTES }),
+  prefix: Type.String({ minLength: 1, maxLength: MAX_SCHEMA_BYTES }),
+  schema: Type.String({ minLength: 1, maxLength: MAX_SCHEMA_BYTES }),
+  topology: Type.Union([
+    Type.Literal("managed_local_shared_server"),
+    Type.Literal("external_server"),
+  ]),
+  transportSecurity: Type.Union([
+    Type.Literal("tls"),
+    Type.Literal("loopback_plaintext"),
+  ]),
+  workerCredentialReference: Type.String({
+    minLength: 1,
+    maxLength: MAX_FINGERPRINT_BYTES,
+  }),
+});
 const ServerCommitReadbackSchema = strictObject({
   autoCommitPolicy: Type.Union([
     Type.Literal("on"),
@@ -1870,6 +1979,53 @@ function parseCommit(input: unknown): ServerCommitReadback | undefined {
   return isSchema<ServerCommitReadback>(ServerCommitReadbackSchema, input)
     ? input
     : undefined;
+}
+
+function normalizedServerIdentity(input: unknown): ServerIdentity | undefined {
+  const record = safeRecord(input, [
+    "autoCommitPolicy",
+    "credentialProvenance",
+    "credentialReference",
+    "database",
+    "endpoint",
+    "prefix",
+    "schema",
+    "topology",
+    "transportSecurity",
+    "workerCredentialReference",
+  ]);
+  try {
+    return record !== undefined &&
+      isSchema<ServerIdentity>(ServerIdentitySchema, record)
+      ? (record as ServerIdentity)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizedScope(input: unknown): FencingScope | undefined {
+  const record = safeRecord(input, [
+    "beadsStoreIdentity",
+    "gitRepositoryIdentity",
+    "integrationBranch",
+  ]);
+  try {
+    return record !== undefined &&
+      isSchema<FencingScope>(FencingScopeSchema, record)
+      ? (record as FencingScope)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizedJsonValue(input: unknown): JsonValue | undefined {
+  try {
+    return JSON.parse(canonicalJson(input as JsonValue)) as JsonValue;
+  } catch {
+    return undefined;
+  }
 }
 
 function parseResult(input: unknown): RunStoreResult | undefined {
@@ -1974,9 +2130,9 @@ function boundedMutationBatch(value: unknown): boolean {
  * clone so later caller mutation cannot alter the guarded SQL request.
  */
 function normalizedMutationBatch(input: unknown): MutationBatch | undefined {
-  const parsed = validateMutationBatch(input);
-  if (!parsed.ok || !boundedMutationBatch(parsed.value)) return undefined;
   try {
+    const parsed = validateMutationBatch(input);
+    if (!parsed.ok || !boundedMutationBatch(parsed.value)) return undefined;
     const normalized = JSON.parse(
       canonicalJson(parsed.value as JsonValue),
     ) as unknown;
@@ -2759,8 +2915,10 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     expectedIdentity: ServerIdentity,
   ): Promise<ServerDriverResponse<ServerProbe>> {
     this.disarm();
+    const expected = normalizedServerIdentity(expectedIdentity);
     if (
-      !exact(expectedIdentity, this.#identity) ||
+      expected === undefined ||
+      !exact(expected, this.#identity) ||
       this.#identity.autoCommitPolicy !== "on" ||
       !this.#transportsMatchIdentity()
     )
@@ -2940,7 +3098,7 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
         },
       },
     } as const;
-    this.#readyIdentity = expectedIdentity;
+    this.#readyIdentity = expected;
     this.#ready = true;
     return probe;
   }
@@ -2948,26 +3106,26 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
   async mergeSlotAcquire(
     input: Readonly<{ actor: string; prefix: string; scope: FencingScope }>,
   ): Promise<ServerDriverResponse<ServerSlotReadback>> {
+    const slotInput = this.#slotInput(input, false);
+    if (slotInput === undefined) return this.#invalidate({ status: "refused" });
     if (!this.#isReady() || this.#slotProcess === undefined)
       return { status: "refused" };
-    if (!this.#validSlotInput(input, false))
-      return this.#invalidate({ status: "refused" });
     const binding = await this.#slotProcess.matchesIdentity(this.#identity);
     if (binding.status !== "ok") {
       this.disarm();
       return binding;
     }
     const precheck = await this.#slotReadback(
-      input.prefix,
-      input.scope,
-      input.actor,
+      slotInput.prefix,
+      slotInput.scope,
+      slotInput.actor,
     );
     if (precheck.status !== "ok") {
       this.disarm();
       return precheck;
     }
-    const attempt = await this.#slotProcess.acquire(input.actor);
-    const result = await this.#slotAfterCommand("acquire", attempt, input);
+    const attempt = await this.#slotProcess.acquire(slotInput.actor);
+    const result = await this.#slotAfterCommand("acquire", attempt, slotInput);
     if (result.status !== "ok") this.disarm();
     return result;
   }
@@ -2975,26 +3133,26 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
   async mergeSlotCheck(
     input: Readonly<{ actor?: string; prefix: string; scope: FencingScope }>,
   ): Promise<ServerDriverResponse<ServerSlotReadback>> {
+    const slotInput = this.#slotInput(input, true);
+    if (slotInput === undefined) return this.#invalidate({ status: "refused" });
     if (!this.#isReady() || this.#slotProcess === undefined)
       return { status: "refused" };
-    if (!this.#validSlotInput(input, true))
-      return this.#invalidate({ status: "refused" });
     const binding = await this.#slotProcess.matchesIdentity(this.#identity);
     if (binding.status !== "ok") {
       this.disarm();
       return binding;
     }
-    const actor = input.actor ?? "slot-observer";
-    const precheck = await this.#slotReadback(input.prefix, input.scope, actor);
+    const precheck = await this.#slotReadback(
+      slotInput.prefix,
+      slotInput.scope,
+      slotInput.actor,
+    );
     if (precheck.status !== "ok") {
       this.disarm();
       return precheck;
     }
-    const attempt = await this.#slotProcess.check(actor);
-    const result = await this.#slotAfterCommand("check", attempt, {
-      ...input,
-      actor,
-    });
+    const attempt = await this.#slotProcess.check(slotInput.actor);
+    const result = await this.#slotAfterCommand("check", attempt, slotInput);
     if (result.status !== "ok") this.disarm();
     return result;
   }
@@ -3002,30 +3160,30 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
   async mergeSlotRelease(
     input: Readonly<{ actor: string; prefix: string; scope: FencingScope }>,
   ): Promise<ServerDriverResponse<ServerSlotReadback>> {
+    const slotInput = this.#slotInput(input, false);
+    if (slotInput === undefined) return this.#invalidate({ status: "refused" });
     if (!this.#isReady() || this.#slotProcess === undefined)
       return { status: "refused" };
-    if (!this.#validSlotInput(input, false))
-      return this.#invalidate({ status: "refused" });
     const binding = await this.#slotProcess.matchesIdentity(this.#identity);
     if (binding.status !== "ok") {
       this.disarm();
       return binding;
     }
     const precheck = await this.#slotReadback(
-      input.prefix,
-      input.scope,
-      input.actor,
+      slotInput.prefix,
+      slotInput.scope,
+      slotInput.actor,
     );
     if (
       precheck.status !== "ok" ||
       precheck.value.observation.status !== "acquired" ||
-      precheck.value.observation.holder !== input.actor
+      precheck.value.observation.holder !== slotInput.actor
     )
       return precheck.status === "ok"
         ? this.#invalidate({ status: "refused" })
         : this.#invalidate(precheck);
-    const attempt = await this.#slotProcess.release(input.actor);
-    const result = await this.#slotAfterCommand("release", attempt, input);
+    const attempt = await this.#slotProcess.release(slotInput.actor);
+    const result = await this.#slotAfterCommand("release", attempt, slotInput);
     if (result.status !== "ok") this.disarm();
     return result;
   }
@@ -3037,11 +3195,14 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       issueId: string;
     }>,
   ): Promise<ServerEnvelopeInitializationResult> {
+    const initialization = this.#initializationInput(input);
+    if (initialization === undefined) {
+      this.disarm();
+      return { status: "refused" };
+    }
     if (
       !this.#isReady() ||
-      input.authority !== "authorized_initialization" ||
-      !validIdentifier(input.issueId) ||
-      containsSecretShape(input.envelope)
+      initialization.authority !== "authorized_initialization"
     )
       return { status: "refused" };
     if (this.#slotProcess === undefined) return { status: "refused" };
@@ -3051,7 +3212,7 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       return binding;
     }
     const affected = await this.#mutateAffected(
-      `UPDATE ${this.#issues()} SET metadata = JSON_SET(metadata, '$.sce', ${sqlJson(input.envelope)}) WHERE id = ${sqlLiteral(input.issueId)} AND JSON_EXTRACT(metadata, '$.sce') IS NULL`,
+      `UPDATE ${this.#issues()} SET metadata = JSON_SET(metadata, '$.sce', ${sqlJson(initialization.envelope)}) WHERE id = ${sqlLiteral(initialization.issueId)} AND JSON_EXTRACT(metadata, '$.sce') IS NULL`,
       1,
     );
     if (affected.status !== "ok") {
@@ -3067,13 +3228,19 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
   async mutate(
     input: Readonly<{ batch: MutationBatch; identity: ServerIdentity }>,
   ): Promise<ServerMutationDriverResponse> {
-    const batch = normalizedMutationBatch(input?.batch);
-    if (batch === undefined) {
+    const mutation = this.#mutationInput(input);
+    const batch =
+      mutation === undefined
+        ? undefined
+        : normalizedMutationBatch(mutation.batch);
+    if (mutation === undefined || batch === undefined) {
       this.disarm();
       return { phase: "before_transaction", status: "refused" };
     }
-    if (!this.#isReady(input?.identity))
+    if (!this.#isReady(mutation.identity)) {
+      this.disarm();
       return { phase: "before_transaction", status: "refused" };
+    }
     if (this.#slotProcess === undefined)
       return { phase: "before_transaction", status: "refused" };
     const binding = await this.#slotProcess.matchesIdentity(this.#identity);
@@ -3167,8 +3334,10 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       scope: FencingScope;
     }>,
   ): Promise<ServerDriverResponse<ServerDiscovery>> {
-    if (!exact(input.identity, this.#identity)) return { status: "refused" };
-    const slot = await this.#slotReadback(input.prefix, input.scope);
+    const discovery = this.#discoveryInput(input);
+    if (discovery === undefined || !exact(discovery.identity, this.#identity))
+      return this.#invalidate({ status: "refused" });
+    const slot = await this.#slotReadback(discovery.prefix, discovery.scope);
     if (slot.status !== "ok") return slot;
     const metadata = await this.#metadata([
       this.#rows.rootBeadId,
@@ -3262,19 +3431,87 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     }
   }
 
-  #validSlotInput(input: unknown, actorOptional: boolean): boolean {
-    if (input === null || typeof input !== "object" || Array.isArray(input))
-      return false;
-    const value = input as Record<string, unknown>;
-    const actor = value.actor;
-    return (
-      value.prefix === this.#identity.prefix &&
-      isSchema(FencingScopeSchema, value.scope) &&
-      (actorOptional
-        ? actor === undefined ||
-          (typeof actor === "string" && validIdentifier(actor))
-        : typeof actor === "string" && validIdentifier(actor))
-    );
+  #slotInput(
+    input: unknown,
+    actorOptional: boolean,
+  ):
+    | Readonly<{ actor: string; prefix: string; scope: FencingScope }>
+    | undefined {
+    const value = actorOptional
+      ? safeOptionalRecord(input, ["prefix", "scope"], ["actor"])
+      : safeRecord(input, ["actor", "prefix", "scope"]);
+    if (value === undefined || typeof value.prefix !== "string")
+      return undefined;
+    const actor = value.actor ?? (actorOptional ? "slot-observer" : undefined);
+    const scope = normalizedScope(value.scope);
+    return value.prefix === this.#identity.prefix &&
+      typeof actor === "string" &&
+      validIdentifier(actor) &&
+      scope !== undefined
+      ? { actor, prefix: value.prefix, scope }
+      : undefined;
+  }
+
+  #initializationInput(input: unknown):
+    | Readonly<{
+        authority: "authorized_initialization";
+        envelope: JsonValue;
+        issueId: string;
+      }>
+    | undefined {
+    const value = safeRecord(input, ["authority", "envelope", "issueId"]);
+    const envelope =
+      value === undefined ? undefined : normalizedJsonValue(value.envelope);
+    try {
+      return value?.authority === "authorized_initialization" &&
+        typeof value.issueId === "string" &&
+        validIdentifier(value.issueId) &&
+        envelope !== undefined &&
+        !containsSecretShape(envelope)
+        ? {
+            authority: value.authority,
+            envelope,
+            issueId: value.issueId,
+          }
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  #mutationInput(
+    input: unknown,
+  ): Readonly<{ batch: unknown; identity: ServerIdentity }> | undefined {
+    const value = safeRecord(input, ["batch", "identity"]);
+    const identity =
+      value === undefined
+        ? undefined
+        : normalizedServerIdentity(value.identity);
+    return value !== undefined && identity !== undefined
+      ? { batch: value.batch, identity }
+      : undefined;
+  }
+
+  #discoveryInput(input: unknown):
+    | Readonly<{
+        identity: ServerIdentity;
+        prefix: string;
+        scope: FencingScope;
+      }>
+    | undefined {
+    const value = safeRecord(input, ["identity", "prefix", "scope"]);
+    const identity =
+      value === undefined
+        ? undefined
+        : normalizedServerIdentity(value.identity);
+    const scope =
+      value === undefined ? undefined : normalizedScope(value.scope);
+    return value !== undefined &&
+      identity !== undefined &&
+      typeof value.prefix === "string" &&
+      scope !== undefined
+      ? { identity, prefix: value.prefix, scope }
+      : undefined;
   }
 
   #invalidate<T extends Readonly<{ status: ServerDriverFailure }>>(

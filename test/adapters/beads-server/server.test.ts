@@ -1815,6 +1815,318 @@ test("fresh concrete slot calls reject a wrong prefix before every command", asy
   }
 });
 
+test("concrete public driver boundaries are total over malformed runtime inputs", async () => {
+  const cyclic = () => {
+    const value: Record<string, unknown> = {};
+    value.self = value;
+    return value;
+  };
+  const accessor = () => {
+    const value: Record<string, unknown> = {};
+    Object.defineProperty(value, "identity", {
+      enumerable: true,
+      get: () => {
+        throw new Error("accessor must not run");
+      },
+    });
+    return value;
+  };
+  const proxy = () =>
+    new Proxy(
+      {},
+      {
+        ownKeys: () => {
+          throw new Error("proxy trap must not escape");
+        },
+      },
+    );
+  const slot = { actor: holder, prefix: "sce", scope };
+  const initialization = {
+    authority: "authorized_initialization" as const,
+    envelope: makeRootProjection(run()),
+    issueId: "sce-root",
+  };
+  const mutation = (serverIdentity: ServerIdentity) => ({
+    batch: batch(),
+    identity: serverIdentity,
+  });
+  const refused = { status: "refused" };
+  const mutationRefused = { phase: "before_transaction", status: "refused" };
+
+  // Unready instances reject malformed values without trying to normalize
+  // them through a server operation.
+  const unready = concreteReadinessHarness();
+  const unreadyBefore = { ...unready.calls };
+  let unreadyResult: unknown;
+  await assert.doesNotReject(async () => {
+    unreadyResult = await unready.driver.probe(cyclic() as ServerIdentity);
+  });
+  assert.deepEqual(unreadyResult, refused);
+  await assert.doesNotReject(async () => {
+    unreadyResult = await unready.driver.discover(cyclic() as never);
+  });
+  assert.deepEqual(unreadyResult, refused);
+  await assert.doesNotReject(async () => {
+    unreadyResult = await unready.driver.mergeSlotAcquire(cyclic() as never);
+  });
+  assert.deepEqual(unreadyResult, refused);
+  await assert.doesNotReject(async () => {
+    unreadyResult = await unready.driver.initializeEnvelope(cyclic() as never);
+  });
+  assert.deepEqual(unreadyResult, refused);
+  await assert.doesNotReject(async () => {
+    unreadyResult = await unready.driver.mutate(cyclic() as never);
+  });
+  assert.deepEqual(unreadyResult, mutationRefused);
+  assert.deepEqual(unready.calls, unreadyBefore);
+
+  const cases: readonly {
+    expected: unknown;
+    invoke: (
+      driver: DoltBeadsServerDriver,
+      serverIdentity: ServerIdentity,
+    ) => Promise<unknown>;
+    name: string;
+  }[] = [
+    {
+      expected: refused,
+      invoke: (driver) => driver.probe(cyclic() as ServerIdentity),
+      name: "probe cyclic identity",
+    },
+    {
+      expected: refused,
+      invoke: (driver) => driver.probe(1n as unknown as ServerIdentity),
+      name: "probe bigint identity",
+    },
+    {
+      expected: refused,
+      invoke: (driver) => driver.probe(accessor() as ServerIdentity),
+      name: "probe accessor identity",
+    },
+    {
+      expected: refused,
+      invoke: (driver) => driver.probe(proxy() as ServerIdentity),
+      name: "probe proxy identity",
+    },
+    {
+      expected: refused,
+      invoke: (driver, serverIdentity) =>
+        driver.probe({ ...serverIdentity, unexpected: true } as ServerIdentity),
+      name: "probe extra identity field",
+    },
+    {
+      expected: refused,
+      invoke: (driver) => driver.probe({} as ServerIdentity),
+      name: "probe missing identity fields",
+    },
+    {
+      expected: refused,
+      invoke: (driver, serverIdentity) =>
+        driver.discover({
+          identity: cyclic() as ServerIdentity,
+          prefix: "sce",
+          scope,
+        }),
+      name: "discover cyclic identity",
+    },
+    {
+      expected: refused,
+      invoke: (driver, serverIdentity) =>
+        driver.discover({
+          identity: serverIdentity,
+          prefix: 1n as unknown as string,
+          scope,
+        }),
+      name: "discover bigint prefix",
+    },
+    {
+      expected: refused,
+      invoke: (driver, serverIdentity) =>
+        driver.discover({
+          identity: serverIdentity,
+          prefix: "sce",
+          scope: proxy() as FencingScope,
+        }),
+      name: "discover proxy scope",
+    },
+    {
+      expected: refused,
+      invoke: (driver) => driver.discover(accessor() as never),
+      name: "discover accessor input",
+    },
+    {
+      expected: refused,
+      invoke: (driver) =>
+        driver.discover({ identity: identity(), prefix: "sce" } as never),
+      name: "discover missing scope",
+    },
+    {
+      expected: refused,
+      invoke: (driver, serverIdentity) =>
+        driver.discover({
+          identity: serverIdentity,
+          prefix: "sce",
+          scope,
+          unexpected: true,
+        } as never),
+      name: "discover extra field",
+    },
+    {
+      expected: refused,
+      invoke: (driver, serverIdentity) =>
+        driver.mergeSlotAcquire({ ...slot, scope: cyclic() as FencingScope }),
+      name: "slot acquire cyclic scope",
+    },
+    {
+      expected: refused,
+      invoke: (driver) => driver.mergeSlotCheck(proxy() as never),
+      name: "slot check proxy input",
+    },
+    {
+      expected: refused,
+      invoke: (driver) =>
+        driver.mergeSlotRelease({ ...slot, actor: 1n as unknown as string }),
+      name: "slot release bigint actor",
+    },
+    {
+      expected: refused,
+      invoke: (driver) =>
+        driver.mergeSlotAcquire({ ...slot, unexpected: true } as never),
+      name: "slot extra field",
+    },
+    {
+      expected: refused,
+      invoke: (driver) =>
+        driver.mergeSlotAcquire({ prefix: "sce", scope } as never),
+      name: "slot missing actor",
+    },
+    {
+      expected: refused,
+      invoke: (driver) => driver.initializeEnvelope(accessor() as never),
+      name: "initialization accessor input",
+    },
+    {
+      expected: refused,
+      invoke: (driver) =>
+        driver.initializeEnvelope({ ...initialization, envelope: cyclic() }),
+      name: "initialization cyclic envelope",
+    },
+    {
+      expected: refused,
+      invoke: (driver) =>
+        driver.initializeEnvelope({ ...initialization, envelope: 1n }),
+      name: "initialization bigint envelope",
+    },
+    {
+      expected: refused,
+      invoke: (driver) =>
+        driver.initializeEnvelope({ ...initialization, envelope: proxy() }),
+      name: "initialization proxy envelope",
+    },
+    {
+      expected: refused,
+      invoke: (driver) =>
+        driver.initializeEnvelope({
+          ...initialization,
+          unexpected: true,
+        } as never),
+      name: "initialization extra field",
+    },
+    {
+      expected: refused,
+      invoke: (driver) =>
+        driver.initializeEnvelope({
+          authority: "authorized_initialization",
+          issueId: "sce-root",
+        } as never),
+      name: "initialization missing envelope",
+    },
+    {
+      expected: mutationRefused,
+      invoke: (driver) => driver.mutate(accessor() as never),
+      name: "mutation accessor input",
+    },
+    {
+      expected: mutationRefused,
+      invoke: (driver) =>
+        driver.mutate({
+          batch: cyclic() as MutationBatch,
+          identity: identity(),
+        }),
+      name: "mutation cyclic batch",
+    },
+    {
+      expected: mutationRefused,
+      invoke: (driver) =>
+        driver.mutate({
+          batch: 1n as unknown as MutationBatch,
+          identity: identity(),
+        }),
+      name: "mutation bigint batch",
+    },
+    {
+      expected: mutationRefused,
+      invoke: (driver) =>
+        driver.mutate({
+          batch: proxy() as MutationBatch,
+          identity: identity(),
+        }),
+      name: "mutation proxy batch",
+    },
+    {
+      expected: mutationRefused,
+      invoke: (driver, serverIdentity) =>
+        driver.mutate({ batch: batch(), identity: cyclic() as ServerIdentity }),
+      name: "mutation cyclic identity",
+    },
+    {
+      expected: mutationRefused,
+      invoke: (driver, serverIdentity) =>
+        driver.mutate({
+          batch: batch(),
+          identity: 1n as unknown as ServerIdentity,
+        }),
+      name: "mutation bigint identity",
+    },
+    {
+      expected: mutationRefused,
+      invoke: (driver, serverIdentity) =>
+        driver.mutate({
+          ...mutation(serverIdentity),
+          unexpected: true,
+        } as never),
+      name: "mutation extra field",
+    },
+    {
+      expected: mutationRefused,
+      invoke: (driver) => driver.mutate({ identity: identity() } as never),
+      name: "mutation missing batch",
+    },
+  ];
+
+  for (const testCase of cases) {
+    const harness = concreteReadinessHarness();
+    assert.equal(
+      (await harness.driver.probe(harness.identity)).status,
+      "ok",
+      testCase.name,
+    );
+    const before = { ...harness.calls };
+    let result: unknown;
+    await assert.doesNotReject(async () => {
+      result = await testCase.invoke(harness.driver, harness.identity);
+    }, testCase.name);
+    assert.deepEqual(result, testCase.expected, testCase.name);
+    assert.deepEqual(harness.calls, before, `${testCase.name}: zero commands`);
+    assert.deepEqual(
+      await harness.driver.mergeSlotCheck(slot),
+      refused,
+      `${testCase.name}: malformed call disarms`,
+    );
+    assert.deepEqual(harness.calls, before, `${testCase.name}: remains zero`);
+  }
+});
+
 test("server identity binds only sanitized managed/external configuration provenance", () => {
   assert.equal(identity().endpoint, "127.0.0.1:3306");
   const external: BeadsIdentity = {
