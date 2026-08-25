@@ -340,6 +340,7 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
   const remote = join(root, "remote.git");
   const first = join(root, "first");
   const second = join(root, "second");
+  const third = join(root, "third");
   try {
     await run(root, "git", ["init", "-q", "--bare", remote]);
     await run(root, "git", ["clone", "-q", remote, first]);
@@ -441,6 +442,19 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
     ]);
     await run(second, "bd", ["dolt", "pull", "--json"]);
     const secondDatabase = join(second, ".beads", "embeddeddolt", "sce");
+    await run(root, "git", ["clone", "-q", remote, third]);
+    await run(third, "bd", [
+      "init",
+      "--non-interactive",
+      "--skip-agents",
+      "--skip-hooks",
+      "-p",
+      "sce",
+      "--remote",
+      `file://${remote}`,
+    ]);
+    await run(third, "bd", ["dolt", "pull", "--json"]);
+    const thirdDatabase = join(third, ".beads", "embeddeddolt", "sce");
     assert.equal(acquired.effects.length, 1);
     const settled = reduce(acquired.nextState, {
       eventId: "controller-acquired",
@@ -693,6 +707,72 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
     });
     assert.deepEqual(afterCrossAcquireState, beforeCrossAcquireState);
     assert.deepEqual(afterCrossAcquireRemote, beforeCrossAcquireRemote);
+    // A third independently initialized clone has a distinct metadata-merge
+    // parent too. It must replay A's persisted acquire from remote authority
+    // only, without reissuing a slot command, commit, or push.
+    const thirdAcquireBase = processFor(
+      third,
+      thirdDatabase,
+      new DoltProjectionPersistence({
+        childIssueId: () => undefined,
+        databaseDirectory: thirdDatabase,
+        doltExecutable: "/opt/homebrew/bin/dolt",
+        rootIssueId: "sce-root",
+      }),
+    );
+    assert.equal(
+      (await thirdAcquireBase.execute({ kind: "pull" })).value,
+      "applied",
+    );
+    const beforeThirdAcquireState = await thirdAcquireBase.execute({
+      kind: "state",
+    });
+    const beforeThirdAcquireRemote = await thirdAcquireBase.execute({
+      actor: initial.controller.holder,
+      kind: "slot",
+      action: "check",
+      source: "remote",
+    });
+    assert.equal(beforeThirdAcquireState.kind, "state");
+    assert.equal(beforeThirdAcquireRemote.kind, "slot");
+    const thirdAcquirePort = new RecordingProcess(thirdAcquireBase);
+    const thirdAcquire = new EmbeddedBeadsAdapter({
+      holder: initial.controller.holder,
+      mode: "git-sync",
+      prefix: "sce",
+      preflight: preflight(third),
+      process: thirdAcquirePort,
+      scope,
+    });
+    assert.equal(
+      (
+        await thirdAcquire.acquire({
+          knownHolder: initial.controller.holder,
+          transition: firstAcquireIntent,
+        })
+      ).code,
+      "applied",
+    );
+    assert.equal(
+      thirdAcquirePort.requests.some(
+        (request) =>
+          request.kind === "commit" ||
+          request.kind === "push" ||
+          (request.kind === "slot" && request.action !== "check"),
+      ),
+      false,
+    );
+    const afterThirdAcquireState = await thirdAcquireBase.execute({
+      kind: "state",
+    });
+    const afterThirdAcquireRemote = await thirdAcquireBase.execute({
+      actor: initial.controller.holder,
+      kind: "slot",
+      action: "check",
+      source: "remote",
+    });
+    assert.deepEqual(afterThirdAcquireState, beforeThirdAcquireState);
+    assert.deepEqual(afterThirdAcquireRemote, beforeThirdAcquireRemote);
     // Crash boundary: the exact batch is written and committed, but the
     // controller process dies before push. A fresh process may only use the
     // journal batch plus local/remote projection discovery to complete it.
@@ -861,6 +941,13 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
     await run(first, "bd", ["config", "set", "dolt.auto-commit", "off"]);
     await run(first, "bd", ["dolt", "commit", "--json"]);
     await run(first, "bd", ["dolt", "push", "--json"]);
+    // Bring clone C to the exact release intent's remote before-head. Its
+    // subsequent pull of the release effect then has the required ancestry
+    // relation, rather than an older cross-clone merge parent.
+    assert.equal(
+      (await thirdAcquireBase.execute({ kind: "pull" })).value,
+      "applied",
+    );
     const restartReleaseIntent =
       await restartAdapter.prepareReleaseTransition();
     assert.ok("idempotencyKey" in restartReleaseIntent);
@@ -1033,6 +1120,56 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
     });
     assert.deepEqual(afterCrossReleaseState, beforeCrossReleaseState);
     assert.deepEqual(afterCrossReleaseRemote, beforeCrossReleaseRemote);
+    assert.equal(
+      (await thirdAcquireBase.execute({ kind: "pull" })).value,
+      "applied",
+    );
+    // The same independent third clone also proves A's later release from
+    // the exact remote effect and its own metadata-only merge relation.
+    const beforeThirdReleaseState = await thirdAcquireBase.execute({
+      kind: "state",
+    });
+    const beforeThirdReleaseRemote = await thirdAcquireBase.execute({
+      actor: initial.controller.holder,
+      kind: "slot",
+      action: "check",
+      source: "remote",
+    });
+    assert.equal(beforeThirdReleaseState.kind, "state");
+    assert.equal(beforeThirdReleaseRemote.kind, "slot");
+    const thirdReleasePort = new RecordingProcess(thirdAcquireBase);
+    const thirdRelease = new EmbeddedBeadsAdapter({
+      holder: initial.controller.holder,
+      mode: "git-sync",
+      prefix: "sce",
+      preflight: preflight(third),
+      process: thirdReleasePort,
+      scope,
+    });
+    assert.equal(
+      (await thirdRelease.release({ transition: restartReleaseIntent })).code,
+      "applied",
+    );
+    assert.equal(
+      thirdReleasePort.requests.some(
+        (request) =>
+          request.kind === "commit" ||
+          request.kind === "push" ||
+          (request.kind === "slot" && request.action !== "check"),
+      ),
+      false,
+    );
+    const afterThirdReleaseState = await thirdAcquireBase.execute({
+      kind: "state",
+    });
+    const afterThirdReleaseRemote = await thirdAcquireBase.execute({
+      actor: initial.controller.holder,
+      kind: "slot",
+      action: "check",
+      source: "remote",
+    });
+    assert.deepEqual(afterThirdReleaseState, beforeThirdReleaseState);
+    assert.deepEqual(afterThirdReleaseRemote, beforeThirdReleaseRemote);
     const availableSlot = await secondProcess.execute({
       actor: initial.controller.holder,
       kind: "slot",
@@ -1047,6 +1184,99 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
       (await restartAdapter.acquire({ transition: restartAcquireIntent })).code,
       "applied",
     );
+    // Build a real forged merge in clone C. Its local merge result is
+    // deliberately reduced back to only the two allowed clone metadata rows,
+    // while C's non-remote parent still contains an unrelated issue commit.
+    // The lineage proof must inspect that parent relation and refuse replay.
+    await json(third, [
+      "create",
+      "--id",
+      "sce-forged-parent",
+      "forged parent mutation",
+      "--json",
+    ]);
+    await run(thirdDatabase, "/opt/homebrew/bin/dolt", ["fetch", "origin"]);
+    await run(thirdDatabase, "/opt/homebrew/bin/dolt", [
+      "merge",
+      "--no-commit",
+      "origin/main",
+    ]);
+    await run(thirdDatabase, "/opt/homebrew/bin/dolt", [
+      "sql",
+      "-q",
+      "DELETE FROM issues WHERE id = 'sce-forged-parent'",
+    ]);
+    await run(thirdDatabase, "/opt/homebrew/bin/dolt", [
+      "sql",
+      "-q",
+      "UPDATE metadata SET value = '1111111111111111' WHERE `key` = 'clone_id'",
+    ]);
+    await run(thirdDatabase, "/opt/homebrew/bin/dolt", [
+      "sql",
+      "-q",
+      "UPDATE metadata SET value = '2026-08-25T12:00:00Z' WHERE `key` = 'last_import_time'",
+    ]);
+    await run(thirdDatabase, "/opt/homebrew/bin/dolt", ["add", "."]);
+    await run(thirdDatabase, "/opt/homebrew/bin/dolt", [
+      "commit",
+      "-m",
+      "forged-parent-merge",
+    ]);
+    const forgedBase = processFor(
+      third,
+      thirdDatabase,
+      new DoltProjectionPersistence({
+        childIssueId: () => undefined,
+        databaseDirectory: thirdDatabase,
+        doltExecutable: "/opt/homebrew/bin/dolt",
+        rootIssueId: "sce-root",
+      }),
+    );
+    const beforeForgedReplayState = await forgedBase.execute({ kind: "state" });
+    const beforeForgedReplayRemote = await forgedBase.execute({
+      actor: initial.controller.holder,
+      kind: "slot",
+      action: "check",
+      source: "remote",
+    });
+    assert.equal(beforeForgedReplayState.kind, "state");
+    assert.equal(beforeForgedReplayRemote.kind, "slot");
+    const forgedPort = new RecordingProcess(forgedBase);
+    const forgedReplay = new EmbeddedBeadsAdapter({
+      holder: initial.controller.holder,
+      mode: "git-sync",
+      prefix: "sce",
+      preflight: preflight(third),
+      process: forgedPort,
+      scope,
+    });
+    assert.equal(
+      (
+        await forgedReplay.acquire({
+          knownHolder: initial.controller.holder,
+          transition: restartAcquireIntent,
+        })
+      ).code,
+      "ambiguous",
+    );
+    assert.equal(
+      forgedPort.requests.some(
+        (request) =>
+          request.kind === "commit" ||
+          request.kind === "push" ||
+          (request.kind === "slot" && request.action !== "check"),
+      ),
+      false,
+    );
+    const afterForgedReplayState = await forgedBase.execute({ kind: "state" });
+    const afterForgedReplayRemote = await forgedBase.execute({
+      actor: initial.controller.holder,
+      kind: "slot",
+      action: "check",
+      source: "remote",
+    });
+    assert.deepEqual(afterForgedReplayState, beforeForgedReplayState);
+    assert.deepEqual(afterForgedReplayRemote, beforeForgedReplayRemote);
     const remoteWorkerBaseline = await restartAdapter.workerBaseline();
     assert.ok(remoteWorkerBaseline);
     assert.ok(remoteWorkerBaseline.remoteHead);

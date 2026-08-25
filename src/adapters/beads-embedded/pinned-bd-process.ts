@@ -313,6 +313,372 @@ export function isPinnedCloneMergeDelta(source: string): boolean {
   );
 }
 
+const SLOT_ISSUE_BASE_KEYS = [
+  "acceptance_criteria",
+  "actor",
+  "agent_state",
+  "await_id",
+  "await_type",
+  "close_reason",
+  "closed_by_session",
+  "compaction_level",
+  "content_hash",
+  "created_at",
+  "created_by",
+  "description",
+  "design",
+  "ephemeral",
+  "event_kind",
+  "external_ref",
+  "hook_bead",
+  "id",
+  "is_blocked",
+  "is_template",
+  "issue_type",
+  "metadata",
+  "mol_type",
+  "no_history",
+  "notes",
+  "owner",
+  "payload",
+  "pinned",
+  "priority",
+  "rig",
+  "role_bead",
+  "role_type",
+  "sender",
+  "source_repo",
+  "source_system",
+  "spec_id",
+  "status",
+  "target",
+  "timeout_ns",
+  "title",
+  "updated_at",
+  "waiters",
+  "wisp_type",
+  "work_type",
+] as const;
+const SLOT_ISSUE_NUMERIC_KEYS = [
+  "compaction_level",
+  "ephemeral",
+  "is_blocked",
+  "is_template",
+  "no_history",
+  "pinned",
+  "priority",
+  "timeout_ns",
+] as const;
+const SLOT_ISSUE_STRING_KEYS = [
+  "acceptance_criteria",
+  "actor",
+  "agent_state",
+  "await_id",
+  "await_type",
+  "close_reason",
+  "closed_by_session",
+  "content_hash",
+  "created_by",
+  "description",
+  "design",
+  "event_kind",
+  "external_ref",
+  "hook_bead",
+  "mol_type",
+  "notes",
+  "owner",
+  "payload",
+  "rig",
+  "role_bead",
+  "role_type",
+  "sender",
+  "source_repo",
+  "source_system",
+  "spec_id",
+  "target",
+  "waiters",
+  "wisp_type",
+  "work_type",
+] as const;
+const EVENT_ROW_KEYS = [
+  "actor",
+  "created_at",
+  "event_type",
+  "id",
+  "issue_id",
+  "new_value",
+  "old_value",
+] as const;
+const EVENT_OLD_BASE_KEYS = [
+  "created_at",
+  "description",
+  "design",
+  "external_ref",
+  "id",
+  "issue_type",
+  "labels",
+  "priority",
+  "status",
+  "title",
+  "updated_at",
+] as const;
+
+function hasExactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+): boolean {
+  const actual = Object.keys(value);
+  return (
+    actual.length === expected.length &&
+    expected.every((key) => Object.prototype.hasOwnProperty.call(value, key))
+  );
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  try {
+    return (
+      canonicalJson(left as JsonValue) === canonicalJson(right as JsonValue)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function sqlTimestamp(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u.test(value)
+  );
+}
+
+function eventTimestamp(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/u.test(value)
+  );
+}
+
+function eventId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(
+      value,
+    )
+  );
+}
+
+function jsonObjectString(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    return object(JSON.parse(value) as unknown);
+  } catch {
+    return undefined;
+  }
+}
+
+function exactSlotMetadata(
+  value: unknown,
+  holder: string | undefined,
+): boolean {
+  const metadata = object(value);
+  return (
+    metadata !== undefined &&
+    hasExactKeys(metadata, holder === undefined ? [] : ["holder"]) &&
+    (holder === undefined || metadata.holder === holder)
+  );
+}
+
+function exactSlotIssueRow(
+  row: Record<string, unknown>,
+  expectedId: string,
+  status: "open" | "in_progress",
+  holder: string | undefined,
+  hasStartedAt: boolean,
+): boolean {
+  const expectedKeys = hasStartedAt
+    ? [...SLOT_ISSUE_BASE_KEYS, "started_at"]
+    : SLOT_ISSUE_BASE_KEYS;
+  return (
+    hasExactKeys(row, expectedKeys) &&
+    row.id === expectedId &&
+    row.issue_type === "task" &&
+    row.status === status &&
+    row.title === MERGE_SLOT_TITLE &&
+    exactSlotMetadata(row.metadata, holder) &&
+    SLOT_ISSUE_STRING_KEYS.every((key) => typeof row[key] === "string") &&
+    SLOT_ISSUE_NUMERIC_KEYS.every(
+      (key) => typeof row[key] === "number" && Number.isSafeInteger(row[key]),
+    ) &&
+    sqlTimestamp(row.created_at) &&
+    sqlTimestamp(row.updated_at) &&
+    (!hasStartedAt || sqlTimestamp(row.started_at))
+  );
+}
+
+function exactPriorEventValue(
+  value: Record<string, unknown>,
+  issue: Record<string, unknown>,
+  beforeHolder: string | undefined,
+  hasStartedAt: boolean,
+): boolean {
+  const expectedKeys = [
+    ...EVENT_OLD_BASE_KEYS,
+    ...(beforeHolder === undefined ? [] : ["metadata"]),
+    ...(hasStartedAt ? ["started_at"] : []),
+  ];
+  return (
+    hasExactKeys(value, expectedKeys) &&
+    value.id === issue.id &&
+    value.title === issue.title &&
+    value.description === issue.description &&
+    value.design === issue.design &&
+    value.status === issue.status &&
+    value.priority === issue.priority &&
+    value.issue_type === issue.issue_type &&
+    value.external_ref === issue.external_ref &&
+    eventTimestamp(value.created_at) &&
+    eventTimestamp(value.updated_at) &&
+    (!hasStartedAt || eventTimestamp(value.started_at)) &&
+    Array.isArray(value.labels) &&
+    value.labels.length === 1 &&
+    value.labels[0] === MERGE_SLOT_LABEL &&
+    (beforeHolder === undefined ||
+      exactSlotMetadata(value.metadata, beforeHolder))
+  );
+}
+
+function exactNextEventValue(
+  value: Record<string, unknown>,
+  issue: Record<string, unknown>,
+  afterHolder: string | undefined,
+): boolean {
+  return (
+    hasExactKeys(value, ["metadata", "status"]) &&
+    value.status === issue.status &&
+    typeof value.metadata === "string" &&
+    exactSlotMetadata(jsonObjectString(value.metadata), afterHolder)
+  );
+}
+
+/**
+ * Strictly proves the complete, pinned bd 1.1.0 effect of one merge-slot
+ * transition. This accepts parsed values only: every JSON envelope, table,
+ * data-diff, and row has an exact known shape before semantic comparison.
+ */
+export function isPinnedSlotTransitionDelta(
+  source: string,
+  prefix: string,
+  intent: SlotTransitionIntent,
+): boolean {
+  const raw = json(source);
+  if (raw === undefined || !hasExactKeys(raw, ["tables"])) return false;
+  const tables = raw.tables;
+  if (!Array.isArray(tables) || tables.length !== 2) return false;
+  const byName = new Map<string, Record<string, unknown>>();
+  for (const table of tables) {
+    const value = object(table);
+    const name = value === undefined ? undefined : value.name;
+    if (
+      value === undefined ||
+      !hasExactKeys(value, ["name", "data_diff"]) ||
+      (name !== "issues" && name !== "events") ||
+      byName.has(name)
+    )
+      return false;
+    byName.set(name, value);
+  }
+  const issues = byName.get("issues");
+  const events = byName.get("events");
+  if (issues === undefined || events === undefined) return false;
+  const issueDiffs = issues.data_diff;
+  const eventDiffs = events.data_diff;
+  if (
+    !Array.isArray(issueDiffs) ||
+    issueDiffs.length !== 1 ||
+    !Array.isArray(eventDiffs) ||
+    eventDiffs.length !== 1
+  )
+    return false;
+  const issue = object(issueDiffs[0]);
+  const event = object(eventDiffs[0]);
+  if (
+    issue === undefined ||
+    event === undefined ||
+    !hasExactKeys(issue, ["from_row", "to_row"]) ||
+    !hasExactKeys(event, ["from_row", "to_row"])
+  )
+    return false;
+  const from = object(issue.from_row);
+  const to = object(issue.to_row);
+  const eventFrom = object(event.from_row);
+  const eventTo = object(event.to_row);
+  if (
+    from === undefined ||
+    to === undefined ||
+    eventFrom === undefined ||
+    !hasExactKeys(eventFrom, []) ||
+    eventTo === undefined ||
+    !hasExactKeys(eventTo, EVENT_ROW_KEYS) ||
+    sameJson(from, to)
+  )
+    return false;
+  const expectedId = `${prefix}-merge-slot`;
+  const before = intent.before.slot;
+  const after = intent.after;
+  const fromStatus = before.status === "available" ? "open" : "in_progress";
+  const toStatus = after.status === "available" ? "open" : "in_progress";
+  // A released bd 1.1.0 slot preserves its historical started_at. A pristine
+  // available slot has none; these are the only two pinned shapes.
+  const fromHasStartedAt = Object.prototype.hasOwnProperty.call(
+    from,
+    "started_at",
+  );
+  const exactFrom = exactSlotIssueRow(
+    from,
+    expectedId,
+    fromStatus,
+    before.holder,
+    fromHasStartedAt,
+  );
+  const exactTo = exactSlotIssueRow(
+    to,
+    expectedId,
+    toStatus,
+    after.holder,
+    true,
+  );
+  if (
+    !exactFrom ||
+    !exactTo ||
+    (before.status === "acquired" && !fromHasStartedAt)
+  )
+    return false;
+  // bd 1.1.0 changes only status/holder metadata and generated timestamps on
+  // the built-in issue. All other concrete fields are frozen byte-for-byte.
+  const mutable = new Set(["metadata", "started_at", "status", "updated_at"]);
+  for (const key of new Set([...Object.keys(from), ...Object.keys(to)])) {
+    if (!mutable.has(key) && !sameJson(from[key], to[key])) return false;
+  }
+  const previousValue = jsonObjectString(eventTo.old_value);
+  const nextValue = jsonObjectString(eventTo.new_value);
+  return (
+    eventId(eventTo.id) &&
+    eventTo.issue_id === expectedId &&
+    eventTo.actor === intent.holder &&
+    eventTo.event_type === "status_changed" &&
+    sqlTimestamp(eventTo.created_at) &&
+    previousValue !== undefined &&
+    exactPriorEventValue(
+      previousValue,
+      from,
+      before.holder,
+      fromHasStartedAt,
+    ) &&
+    nextValue !== undefined &&
+    exactNextEventValue(nextValue, to, after.holder)
+  );
+}
+
 type SlotDocument = Readonly<{
   holder?: string;
   scope: FencingScope;
@@ -733,150 +1099,7 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
     source: string,
     intent: SlotTransitionIntent,
   ): boolean {
-    const raw = json(source);
-    const tables = raw?.tables;
-    if (!Array.isArray(tables) || tables.length !== 2) return false;
-    const byName = new Map<string, Record<string, unknown>>();
-    for (const table of tables) {
-      const value = object(table);
-      const name = safeString(value?.name);
-      if (value === undefined || name === undefined || byName.has(name))
-        return false;
-      byName.set(name, value);
-    }
-    const issues = byName.get("issues");
-    const events = byName.get("events");
-    if (issues === undefined || events === undefined) return false;
-    const issueDiffs = issues.data_diff;
-    const eventDiffs = events.data_diff;
-    if (
-      !Array.isArray(issueDiffs) ||
-      issueDiffs.length !== 1 ||
-      !Array.isArray(eventDiffs) ||
-      eventDiffs.length !== 1
-    )
-      return false;
-    const issue = object(issueDiffs[0]);
-    const event = object(eventDiffs[0]);
-    const from = object(issue?.from_row);
-    const to = object(issue?.to_row);
-    const eventFrom = object(event?.from_row);
-    const eventTo = object(event?.to_row);
-    if (
-      from === undefined ||
-      to === undefined ||
-      eventFrom === undefined ||
-      Object.keys(eventFrom).length !== 0 ||
-      eventTo === undefined
-    )
-      return false;
-    const expectedId = `${this.prefix}-merge-slot`;
-    if (from.id !== expectedId || to.id !== expectedId) return false;
-    const before = intent.before.slot;
-    const after = intent.after;
-    const fromMetadata = from.metadata;
-    const toMetadata = to.metadata;
-    if (
-      from.status !==
-        (before.status === "available" ? "open" : "in_progress") ||
-      to.status !== (after.status === "available" ? "open" : "in_progress") ||
-      canonicalJson(fromMetadata as JsonValue) !==
-        canonicalJson(
-          before.holder === undefined ? {} : { holder: before.holder },
-        ) ||
-      canonicalJson(toMetadata as JsonValue) !==
-        canonicalJson(
-          after.holder === undefined ? {} : { holder: after.holder },
-        )
-    )
-      return false;
-    // Fields permitted to change in the actual slot issue are generated
-    // timestamps/commit metadata plus status and holder metadata. In
-    // particular labels, design, external_ref and every other issue field are
-    // frozen by this proof.
-    const mutable = new Set([
-      "commit",
-      "commit_date",
-      "metadata",
-      "started_at",
-      "status",
-      "updated_at",
-    ]);
-    const keys = new Set([...Object.keys(from), ...Object.keys(to)]);
-    for (const key of keys) {
-      if (mutable.has(key)) continue;
-      if (
-        canonicalJson(from[key] as JsonValue) !==
-        canonicalJson(to[key] as JsonValue)
-      )
-        return false;
-    }
-    const nextValue = object(
-      typeof eventTo.new_value === "string"
-        ? (() => {
-            try {
-              return JSON.parse(eventTo.new_value) as unknown;
-            } catch {
-              return undefined;
-            }
-          })()
-        : undefined,
-    );
-    const previousValue = object(
-      typeof eventTo.old_value === "string"
-        ? (() => {
-            try {
-              return JSON.parse(eventTo.old_value) as unknown;
-            } catch {
-              return undefined;
-            }
-          })()
-        : undefined,
-    );
-    // bd 1.1.0 elides `metadata` from an inserted event's old_value when the
-    // prior issue metadata is the empty object, and serializes a non-empty
-    // old_value metadata as an object (new_value is the string encoding). The
-    // omission is safe only for that exact canonical empty value; any present
-    // prior value must bind exactly to the issue diff.
-    const expectedPreviousMetadata = canonicalJson(fromMetadata as JsonValue);
-    const parsedPreviousMetadata =
-      typeof previousValue?.metadata === "string"
-        ? (() => {
-            try {
-              return JSON.parse(previousValue.metadata) as unknown;
-            } catch {
-              return undefined;
-            }
-          })()
-        : object(previousValue?.metadata);
-    const previousMetadataMatches =
-      previousValue?.metadata === undefined
-        ? expectedPreviousMetadata === canonicalJson({})
-        : parsedPreviousMetadata !== undefined &&
-          canonicalJson(parsedPreviousMetadata as JsonValue) ===
-            expectedPreviousMetadata;
-    return (
-      safeString(eventTo.id) !== undefined &&
-      eventTo.issue_id === expectedId &&
-      eventTo.actor === intent.holder &&
-      eventTo.event_type === "status_changed" &&
-      previousValue !== undefined &&
-      previousValue.id === expectedId &&
-      previousValue.status === from.status &&
-      previousMetadataMatches &&
-      nextValue !== undefined &&
-      nextValue.status === to.status &&
-      typeof nextValue.metadata === "string" &&
-      canonicalJson(
-        (() => {
-          try {
-            return JSON.parse(nextValue.metadata) as unknown;
-          } catch {
-            return undefined;
-          }
-        })() as JsonValue,
-      ) === canonicalJson(toMetadata as JsonValue)
-    );
+    return isPinnedSlotTransitionDelta(source, this.prefix, intent);
   }
 
   private async proveSlotTransition(
@@ -1012,6 +1235,38 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       : (values as readonly string[]);
   }
 
+  /**
+   * Pinned, bounded ancestry predicate. The CTE returns one exact count row,
+   * so no caller can infer reachability from a partial ancestor listing.
+   */
+  private async isAncestor(
+    ancestor: string,
+    descendant: string,
+  ): Promise<boolean> {
+    if (safeHead(ancestor) === undefined || safeHead(descendant) === undefined)
+      return false;
+    const capture = await this.runDolt(this.databaseDirectory, [
+      "sql",
+      "-r",
+      "json",
+      "-q",
+      `WITH RECURSIVE ancestry(parent_hash) AS (SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash = '${descendant}' UNION SELECT edge.parent_hash FROM dolt_commit_ancestors AS edge JOIN ancestry ON edge.commit_hash = ancestry.parent_hash) SELECT COUNT(*) AS matches FROM ancestry WHERE parent_hash = '${ancestor}'`,
+    ]);
+    if (capture === undefined || capture.code !== 0 || capture.exceeded)
+      return false;
+    const raw = json(capture.stdout);
+    const rows = raw?.rows;
+    const row =
+      Array.isArray(rows) && rows.length === 1 ? object(rows[0]) : undefined;
+    return (
+      raw !== undefined &&
+      hasExactKeys(raw, ["rows"]) &&
+      row !== undefined &&
+      hasExactKeys(row, ["matches"]) &&
+      row.matches === 1
+    );
+  }
+
   private remoteProof(
     status: "absent" | "ambiguous",
   ): RemoteSlotTransitionProof {
@@ -1099,6 +1354,27 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         localDiff.code !== 0 ||
         localDiff.exceeded ||
         !isPinnedCloneMergeDelta(localDiff.stdout)
+      )
+        return this.remoteProof("ambiguous");
+      const otherParent = localParents.find((parent) => parent !== remoteHead);
+      if (
+        otherParent === undefined ||
+        !(await this.isAncestor(intent.before.remoteHead, otherParent))
+      )
+        return this.remoteProof("ambiguous");
+      const otherParentDiff = await this.runDolt(this.databaseDirectory, [
+        "diff",
+        "--data",
+        "-r",
+        "json",
+        intent.before.remoteHead,
+        otherParent,
+      ]);
+      if (
+        otherParentDiff === undefined ||
+        otherParentDiff.code !== 0 ||
+        otherParentDiff.exceeded ||
+        !isPinnedCloneMergeDelta(otherParentDiff.stdout)
       )
         return this.remoteProof("ambiguous");
     }
