@@ -20,6 +20,10 @@ import {
   type GitRepository,
   type GitRunner,
 } from "../adapters/git/index.js";
+import {
+  createHarnessRecoveryEffectAdapter,
+  type HarnessPort,
+} from "../harness/index.js";
 import type { ProtocolEffect } from "../protocol/reducer.js";
 import type { FencingScope } from "../fencing/index.js";
 import type {
@@ -72,6 +76,8 @@ export interface ProductionRecoveryEffectAdapterOptions {
   }>;
   /** Required for controller acquire/release recovery; never inferred. */
   readonly topology?: ControllerTransitionRecoveryPort;
+  /** Explicit versioned harness support; absent harness effects fail closed. */
+  readonly harness?: Readonly<{ port?: HarnessPort; support: unknown }>;
 }
 
 /** Exact composition input; callers must supply topology proof and stores. */
@@ -268,11 +274,20 @@ export function createProductionRecoveryEffectAdapter(
   options: ProductionRecoveryEffectAdapterOptions,
 ): RecoveryEffectAdapter {
   const git = options.git;
+  const harness =
+    options.harness === undefined
+      ? undefined
+      : createHarnessRecoveryEffectAdapter(
+          options.harness.support,
+          options.harness.port,
+        );
 
   async function discover(
     effect: ProtocolEffect,
     run: RepositoryRun,
   ): Promise<ReconcileResult> {
+    if (harness?.canReconcile?.(effect))
+      return await harness.reconcile(effect, run);
     const done = observed(effect, run);
     if (done === undefined) return ambiguous();
     if (
@@ -374,6 +389,8 @@ export function createProductionRecoveryEffectAdapter(
     effect: ProtocolEffect,
     run: RepositoryRun,
   ): Promise<ExecuteResult> {
+    if (harness?.canExecute?.(effect))
+      return await harness.execute(effect, run);
     const done = observed(effect, run);
     if (done === undefined) return ambiguous();
     if (
@@ -470,7 +487,16 @@ export function createProductionRecoveryEffectAdapter(
     }
   }
 
-  return { execute, reconcile: discover };
+  return {
+    canExecute: (effect) => harness?.canExecute?.(effect) ?? false,
+    canReconcile: (effect) => harness?.canReconcile?.(effect) ?? false,
+    acknowledge: async (acknowledgement, run) =>
+      harness?.acknowledge === undefined
+        ? ambiguous()
+        : await harness.acknowledge(acknowledgement, run),
+    execute,
+    reconcile: discover,
+  };
 }
 
 /**
@@ -481,11 +507,12 @@ export function createProductionRecoveryEffectAdapter(
 export function createProductionRecoveryRunner(
   options: ProductionRecoveryRunnerOptions,
 ) {
-  const { git, topology, ...recovery } = options;
+  const { git, topology, harness, ...recovery } = options;
   return createRecoveryRunner({
     ...recovery,
     adapter: createProductionRecoveryEffectAdapter({
       git,
+      ...(harness === undefined ? {} : { harness }),
       ...(topology === undefined ? {} : { topology }),
     }),
     ...(topology?.prepareControllerTransition === undefined

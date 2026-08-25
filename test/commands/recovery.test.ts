@@ -350,6 +350,12 @@ test("a harness effect is refused before intent persistence", async () => {
         "unit-1",
         "dispatch",
       ),
+      packet: (
+        event(state, "dispatch_intent") as Extract<
+          import("../../src/protocol/schemas.js").ProtocolEvent,
+          { type: "dispatch_intent" }
+        >
+      ).packet,
       promptHash: HASH,
       requestedModel: "workhorse",
       type: "dispatch_intent",

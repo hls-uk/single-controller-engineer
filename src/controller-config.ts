@@ -37,6 +37,11 @@ import {
   createProductionRecoveryCommandRunner,
   type CommandRunner,
 } from "./commands/index.js";
+import {
+  harnessSupportCommitment,
+  parseHarnessSupport,
+  type HarnessSupport,
+} from "./harness/index.js";
 import { FencingScopeSchema, type FencingScope } from "./fencing/index.js";
 import {
   containsSecretShape,
@@ -92,6 +97,8 @@ export type EmbeddedConfig = Readonly<{
 
 export type ControllerConfig = Readonly<{
   git: Readonly<{ remote?: string; repository: GitRepository }>;
+  /** Optional only for an old run that has no harness configuration. */
+  harnessSupport?: HarnessSupport;
   initialRun: RepositoryRun;
   nonce: string;
   scope: FencingScope;
@@ -429,7 +436,7 @@ function parseServerIdentity(value: unknown): ServerIdentity | undefined {
 
 function parseControllerConfig(input: unknown): ControllerConfig | undefined {
   if (containsSecretShape(input)) return undefined;
-  const value = record(input, [
+  const keys = [
     "git",
     "initialRun",
     "nonce",
@@ -437,7 +444,9 @@ function parseControllerConfig(input: unknown): ControllerConfig | undefined {
     "scope",
     "topology",
     "version",
-  ]);
+  ] as const;
+  const value =
+    record(input, keys) ?? record(input, [...keys, "harnessSupport"]);
   if (
     value === undefined ||
     value.schema !== "sce.controller-config" ||
@@ -456,12 +465,33 @@ function parseControllerConfig(input: unknown): ControllerConfig | undefined {
   const topology =
     embeddedTopology(value.topology) ?? sharedServerTopology(value.topology);
   const run = value.initialRun as RepositoryRun;
+  const parsedHarness =
+    value.harnessSupport === undefined
+      ? undefined
+      : parseHarnessSupport(value.harnessSupport);
+  const commitment =
+    value.harnessSupport === undefined
+      ? undefined
+      : harnessSupportCommitment(value.harnessSupport);
   const scope = value.scope as FencingScope;
   const repository = git.repository as GitRepository;
   if (
     nonce === undefined ||
     (git.remote !== undefined && remote === undefined) ||
     topology === undefined ||
+    (parsedHarness !== undefined && !parsedHarness.ok) ||
+    (commitment !== undefined && !commitment.ok) ||
+    (run.harness !== undefined && parsedHarness === undefined) ||
+    (parsedHarness !== undefined &&
+      (run.harness === undefined ||
+        commitment === undefined ||
+        !commitment.ok ||
+        run.harness.family !== parsedHarness.value.capabilities.family ||
+        run.harness.adapterVersion !==
+          parsedHarness.value.capabilities.adapterVersion ||
+        run.harness.harnessVersion !==
+          parsedHarness.value.capabilities.harnessVersion ||
+        run.harness.supportCommitment !== commitment.value)) ||
     canonicalGitCommonDir(repository.commonDir) !== repository.commonDir ||
     absolutePath(repository.cwd) !== repository.cwd ||
     run.controller.holder.length === 0 ||
@@ -481,6 +511,9 @@ function parseControllerConfig(input: unknown): ControllerConfig | undefined {
     return undefined;
   return {
     git: { repository, ...(remote === undefined ? {} : { remote }) },
+    ...(parsedHarness === undefined
+      ? {}
+      : { harnessSupport: parsedHarness.value }),
     initialRun: run,
     nonce,
     scope,
@@ -567,6 +600,9 @@ function embeddedRunner(
   });
   return createProductionRecoveryCommandRunner({
     git: { ...config.git, runner: nodeGitRunner },
+    ...(config.harnessSupport === undefined
+      ? {}
+      : { harness: { support: config.harnessSupport } }),
     initialRun: config.initialRun,
     nonce: config.nonce,
     preOwnership: adapter,
@@ -638,6 +674,9 @@ async function sharedServerRunner(
     if ((await adapter.preflight()).status !== "ready") return undefined;
     return createProductionRecoveryCommandRunner({
       git: { ...config.git, runner: nodeGitRunner },
+      ...(config.harnessSupport === undefined
+        ? {}
+        : { harness: { support: config.harnessSupport } }),
       initialRun: config.initialRun,
       nonce: config.nonce,
       preOwnership: adapter,

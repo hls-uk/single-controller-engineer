@@ -14,6 +14,11 @@ import {
   type Unit,
   UnitSchema,
   type UnitState,
+  type HarnessConfiguration,
+  type HarnessPacket,
+  HarnessPacketSchema,
+  type HarnessPacketBinding,
+  type WaveTaskMetadata,
   validate,
 } from "./schemas.js";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
@@ -51,6 +56,347 @@ export function reduce(
   eventInput: ProtocolEvent,
 ): Reduction {
   return reduceInternal(stateInput, eventInput);
+}
+
+/** Pins one tested harness family/mapping before any session effect is durable. */
+function reduceHarnessConfiguration(
+  state: RepositoryRun,
+  event: Extract<ProtocolEvent, { type: "harness_configured" }>,
+): Reduction {
+  if (state.state !== "active" || state.controller.state !== "acquired")
+    return reject(
+      "illegal_transition",
+      "controller ownership has not been acquired",
+    );
+  if (
+    state.harness !== undefined ||
+    state.activeModifyingUnitIds.length !== 0 ||
+    state.currentReviewerUnitId !== undefined ||
+    state.effectJournal.some(
+      (entry) =>
+        entry.status !== "observed" &&
+        ["dispatch", "repair", "review_dispatch"].includes(entry.kind),
+    )
+  )
+    return reject(
+      "illegal_transition",
+      "harness configuration is immutable once session work begins",
+    );
+  return commit({ ...state, harness: event.configuration }, event, []);
+}
+function hasHarnessConfiguration(
+  state: RepositoryRun,
+): state is RepositoryRun & { readonly harness: HarnessConfiguration } {
+  return state.harness !== undefined;
+}
+
+/**
+ * Commits the exact UTF-8 diff bytes observed for a candidate. This is
+ * deliberately distinct from packet and observation hashes: a reviewer must
+ * see precisely the candidate diff that the controller collected.
+ */
+export function deriveCandidateDiffHash(diff: string): string {
+  return sha256(`sce.protocol.candidate-diff/v1\n${diff}`);
+}
+
+function committedTaskMetadataError(unit: Unit): string | undefined {
+  if (unit.taskMetadata === undefined)
+    return "lacks committed wave task metadata";
+  if (unit.taskMetadata.unitId !== unit.id)
+    return "has committed wave task metadata for a different unit";
+  return undefined;
+}
+
+function committedVerificationError(unit: Unit): string | undefined {
+  const metadataError = committedTaskMetadataError(unit);
+  if (metadataError !== undefined) return metadataError;
+  if (
+    unit.verificationCommands === undefined ||
+    unit.verificationCommands.length === 0
+  )
+    return "lacks committed mandatory verification commands";
+  if (
+    !sameStringArray(
+      unit.verificationCommands,
+      unit.taskMetadata!.mandatoryVerification,
+    )
+  )
+    return "verification commands do not match committed wave task metadata";
+  return undefined;
+}
+
+/** Packet bytes are a launch input, not controller-authored narrative. */
+function launchPacketError(
+  packet: HarnessPacketBinding,
+  unit: Unit,
+  role: "reviewer" | "worker",
+): string | undefined {
+  try {
+    const decoded = JSON.parse(packet.payload) as unknown;
+    const parsed = validate<HarnessPacket>(HarnessPacketSchema, decoded);
+    if (!parsed.ok || parsed.value === undefined)
+      return "launch packet has invalid schema";
+    if (
+      canonicalJson(parsed.value as JsonValue) !== packet.payload ||
+      sha256(`sce.harness-packet/v1\n${packet.payload}`) !== packet.hash
+    )
+      return "launch packet payload/hash mismatch";
+    const value = parsed.value;
+    if (
+      value.role !== role ||
+      value.unitId !== unit.id ||
+      value.baseOid !== unit.baseOid
+    )
+      return "launch packet is not bound to the exact unit/base/role";
+    const metadataError = committedTaskMetadataError(unit);
+    if (metadataError !== undefined) return `launch packet ${metadataError}`;
+    const taskMetadata = unit.taskMetadata;
+    if (taskMetadata === undefined)
+      return "launch packet lacks committed wave task metadata";
+    if (
+      taskMetadata.unitId !== unit.id ||
+      !sameStringArray(value.acceptance, taskMetadata.acceptanceIds) ||
+      !sameStringArray(value.ownedPaths, taskMetadata.ownedPaths) ||
+      !sameStringArray(
+        value.mandatoryVerification,
+        taskMetadata.mandatoryVerification,
+      )
+    )
+      return "launch packet does not bind committed wave task metadata";
+    if (role === "reviewer") {
+      if (
+        value.role !== "reviewer" ||
+        value.headOid !== unit.candidateHead ||
+        unit.candidateHead === undefined ||
+        unit.candidateTree === undefined ||
+        unit.candidateDiffHash === undefined ||
+        deriveCandidateDiffHash(value.diff) !== unit.candidateDiffHash
+      )
+        return "review packet is not bound to the exact candidate diff";
+    }
+    return undefined;
+  } catch {
+    return "launch packet cannot be parsed";
+  }
+}
+
+/**
+ * Wave membership is durable aggregate state, while task metadata is an
+ * exact controller input from Beads. The planner is conservative by design:
+ * any unclear independence produces the first deterministic singleton.
+ */
+function reduceWavePlan(
+  state: RepositoryRun,
+  event: Extract<ProtocolEvent, { type: "wave_planned" }>,
+): Reduction {
+  if (state.state !== "active" || state.controller.state !== "acquired")
+    return reject(
+      "illegal_transition",
+      "controller ownership has not been acquired",
+    );
+  if (
+    state.wave.unitIds.length !== 0 ||
+    state.activeModifyingUnitIds.length !== 0 ||
+    state.qualificationOwnerUnitId !== undefined ||
+    state.integrationOwnerUnitId !== undefined ||
+    state.currentReviewerUnitId !== undefined ||
+    state.qualificationQueue.length !== 0 ||
+    state.integrationQueue.length !== 0 ||
+    state.effectJournal.some(
+      (entry) => entry.status === "intended" || entry.status === "ambiguous",
+    )
+  )
+    return reject("illegal_transition", "prior wave has not drained");
+  if (Object.values(state.units).some((unit) => unit.state !== "planned"))
+    return reject(
+      "illegal_transition",
+      "only planned units may form a new wave",
+    );
+  const selected = selectWaveUnits(state, event.tasks);
+  if (!selected.ok) return reject("invalid_event", selected.reason);
+  const metadata = event.tasks.map(canonicalTaskMetadata);
+  if (!metadataFitsEnvelope(metadata))
+    return reject(
+      "invalid_event",
+      "wave task metadata exceeds durable envelope",
+    );
+  const byUnitId = new Map(metadata.map((task) => [task.unitId, task]));
+  return commit(
+    {
+      ...state,
+      units: Object.fromEntries(
+        Object.entries(state.units).map(([unitId, unit]) => [
+          unitId,
+          { ...unit, taskMetadata: byUnitId.get(unitId)! },
+        ]),
+      ),
+      wave: { id: event.waveId, unitIds: [...selected.value] },
+    },
+    event,
+    [],
+  );
+}
+
+function canonicalTaskMetadata(task: WaveTaskMetadata): WaveTaskMetadata {
+  return {
+    ...task,
+    acceptanceIds: sortedStrings(task.acceptanceIds),
+    conflictDomains: sortedStrings(task.conflictDomains),
+    dependencies: sortedStrings(task.dependencies),
+    mandatoryVerification: sortedStrings(task.mandatoryVerification),
+    ownedPaths: sortedStrings(task.ownedPaths),
+    reservations: sortedStrings(task.reservations),
+  };
+}
+
+function metadataFitsEnvelope(metadata: readonly WaveTaskMetadata[]): boolean {
+  try {
+    // Leave half of the aggregate envelope for durable lifecycle evidence,
+    // journal records, and future task waves; the full aggregate invariant
+    // remains the final guard.
+    return (
+      utf8.encode(canonicalJson(metadata as unknown as JsonValue)).byteLength <=
+      LIMITS.envelopeBytes / 2
+    );
+  } catch {
+    return false;
+  }
+}
+
+function sameStringArray(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
+function sortedStrings(values: readonly string[]): string[] {
+  return [...values].sort((left, right) => left.localeCompare(right));
+}
+
+function selectWaveUnits(
+  state: RepositoryRun,
+  metadata: readonly WaveTaskMetadata[],
+):
+  | { readonly ok: true; readonly value: readonly string[] }
+  | { readonly ok: false; readonly reason: string } {
+  if (
+    metadata.length !== Object.keys(state.units).length ||
+    new Set(metadata.map((task) => task.unitId)).size !== metadata.length ||
+    metadata.some((task) => state.units[task.unitId] === undefined)
+  )
+    return {
+      ok: false,
+      reason: "wave metadata must cover every remaining unit exactly once",
+    };
+  const byId = new Map(metadata.map((task) => [task.unitId, task]));
+  if (
+    metadata.some(
+      (task) =>
+        task.dependencies.some(
+          (dependency) => byId.get(dependency) === undefined,
+        ) ||
+        task.dependencies.includes(task.unitId) ||
+        task.ownedPaths.some((path) => !validOwnedPath(path)),
+    )
+  )
+    return {
+      ok: false,
+      reason: "wave metadata has unknown dependency or invalid owned path",
+    };
+  const depth = new Map<string, number>();
+  const visiting = new Set<string>();
+  const visit = (id: string): number | undefined => {
+    const known = depth.get(id);
+    if (known !== undefined) return known;
+    if (visiting.has(id)) return undefined;
+    visiting.add(id);
+    const task = byId.get(id)!;
+    let current = 0;
+    for (const dependency of task.dependencies) {
+      const found = visit(dependency);
+      if (found === undefined) {
+        visiting.delete(id);
+        return undefined;
+      }
+      current = Math.max(current, found + 1);
+    }
+    visiting.delete(id);
+    depth.set(id, current);
+    return current;
+  };
+  if (metadata.some((task) => visit(task.unitId) === undefined))
+    return { ok: false, reason: "wave dependency graph contains a cycle" };
+  const ordered = metadata
+    .filter((task) => task.dependencies.length === 0)
+    .sort(
+      (left, right) =>
+        depth.get(left.unitId)! - depth.get(right.unitId)! ||
+        riskOrder(left.risk) - riskOrder(right.risk) ||
+        left.priority - right.priority ||
+        left.unitId.localeCompare(right.unitId),
+    );
+  const first = ordered[0];
+  if (first === undefined)
+    return { ok: false, reason: "wave has no dependency-ready unit" };
+  // Unknown independence is not silently skipped in favour of a larger
+  // fanout. The next deterministic wave is a singleton until its metadata
+  // can be made explicit.
+  if (ordered.some((task) => task.independence !== "proven"))
+    return { ok: true, value: [first.unitId] };
+  const selected = [first];
+  for (const candidate of ordered.slice(1)) {
+    if (
+      candidate.independence !== "proven" ||
+      selected.some((other) => taskConflict(other, candidate))
+    )
+      continue;
+    selected.push(candidate);
+    if (selected.length === 3) break;
+  }
+  return { ok: true, value: selected.map((task) => task.unitId) };
+}
+function validOwnedPath(path: string): boolean {
+  return (
+    path.length > 0 &&
+    path !== "." &&
+    !path.startsWith("/") &&
+    !path.endsWith("/") &&
+    !path.includes("//") &&
+    !path.includes("\\") &&
+    !/^[A-Za-z]:/u.test(path) &&
+    path.split("/").every((part) => part !== "." && part !== "..")
+  );
+}
+function riskOrder(value: WaveTaskMetadata["risk"]): number {
+  return { critical: 0, high: 1, low: 3, medium: 2 }[value];
+}
+function taskConflict(
+  left: WaveTaskMetadata,
+  right: WaveTaskMetadata,
+): boolean {
+  return (
+    left.acceptanceIds.some((acceptance) =>
+      right.acceptanceIds.includes(acceptance),
+    ) ||
+    left.conflictDomains.some((domain) =>
+      right.conflictDomains.includes(domain),
+    ) ||
+    left.reservations.some((reservation) =>
+      right.reservations.includes(reservation),
+    ) ||
+    left.ownedPaths.some((path) =>
+      right.ownedPaths.some(
+        (other) =>
+          path === other ||
+          path.startsWith(`${other}/`) ||
+          other.startsWith(`${path}/`),
+      ),
+    )
+  );
 }
 
 /**
@@ -108,6 +454,9 @@ function reduceInternal(
       "invalid_event",
       "idempotency key is not deterministic for this run, revision, unit, and effect",
     );
+  if (event.type === "wave_planned") return reduceWavePlan(state, event);
+  if (event.type === "harness_configured")
+    return reduceHarnessConfiguration(state, event);
 
   if (
     event.type === "controller_acquire_intent" ||
@@ -261,6 +610,23 @@ function reduceInternal(
       break;
     case "dispatch_intent":
       if (unit.state !== "worktree_observed") return illegal(unit, event.type);
+      if (!hasHarnessConfiguration(state))
+        return reject(
+          "illegal_transition",
+          "harness must be configured before dispatch",
+        );
+      const dispatchPacketError = launchPacketError(
+        event.packet,
+        unit,
+        "worker",
+      );
+      if (dispatchPacketError !== undefined)
+        return reject("invalid_event", dispatchPacketError);
+      if (event.promptHash !== event.packet.hash)
+        return reject(
+          "invalid_event",
+          "launch prompt hash must equal packet hash",
+        );
       if (state.activeModifyingUnitIds.length >= 3)
         return reject("invariant", "all three modifying slots are occupied");
       result = modifyingIntent(
@@ -272,6 +638,7 @@ function reduceInternal(
         {
           workerRequestedModel: event.requestedModel,
           workerPromptHash: event.promptHash,
+          workerPacket: event.packet,
         },
       );
       break;
@@ -302,10 +669,25 @@ function reduceInternal(
       break;
     case "collect_intent":
       if (unit.state !== "dispatched") return illegal(unit, event.type);
+      if (!hasHarnessConfiguration(state))
+        return reject(
+          "illegal_transition",
+          "harness must be configured before collection",
+        );
       result = intent(state, unit, "collect_intent", event, "worker_collect");
       break;
     case "worker_collected":
       if (unit.state !== "collect_intent") return illegal(unit, event.type);
+      if (
+        event.sessionId !== unit.workerSessionId ||
+        event.requestedModel !== unit.workerRequestedModel ||
+        event.returnedModel !== unit.workerReturnedModel ||
+        event.promptHash !== unit.workerPromptHash
+      )
+        return reject(
+          "illegal_transition",
+          "worker collection is not bound to the dispatched session identity",
+        );
       if (!matchesIntended(state, event, unit.id, "worker_collect"))
         return badObservation();
       result =
@@ -392,6 +774,7 @@ function reduceInternal(
         {
           candidateHead: event.headOid,
           candidateTree: event.treeOid,
+          candidateDiffHash: event.candidateDiffHash,
         },
         { qualificationQueue: insertSorted(state.qualificationQueue, unit.id) },
       );
@@ -399,6 +782,22 @@ function reduceInternal(
     case "verification_intent":
       if (unit.state !== "candidate_committed")
         return illegal(unit, event.type);
+      if (unit.taskMetadata === undefined)
+        return reject(
+          "invalid_event",
+          "verification lacks committed wave task metadata",
+        );
+      if (
+        unit.taskMetadata.unitId !== unit.id ||
+        !sameStringArray(
+          event.commands,
+          unit.taskMetadata.mandatoryVerification,
+        )
+      )
+        return reject(
+          "invalid_event",
+          "verification commands do not bind committed wave task metadata",
+        );
       if (
         state.qualificationOwnerUnitId !== undefined &&
         state.qualificationOwnerUnitId !== unit.id
@@ -445,6 +844,23 @@ function reduceInternal(
         state.currentReviewerUnitId !== undefined
       )
         return illegal(unit, event.type);
+      if (!hasHarnessConfiguration(state))
+        return reject(
+          "illegal_transition",
+          "harness must be configured before review",
+        );
+      const reviewerPacketError = launchPacketError(
+        event.packet,
+        unit,
+        "reviewer",
+      );
+      if (reviewerPacketError !== undefined)
+        return reject("invalid_event", reviewerPacketError);
+      if (event.promptHash !== event.packet.hash)
+        return reject(
+          "invalid_event",
+          "launch prompt hash must equal packet hash",
+        );
       result = intent(
         state,
         unit,
@@ -457,6 +873,7 @@ function reduceInternal(
             ...unit,
             reviewerRequestedModel: event.requestedModel,
             reviewPromptHash: event.promptHash,
+            reviewerPacket: event.packet,
           }),
         },
       );
@@ -493,6 +910,11 @@ function reduceInternal(
         state.currentReviewerUnitId !== unit.id
       )
         return illegal(unit, event.type);
+      if (!hasHarnessConfiguration(state))
+        return reject(
+          "illegal_transition",
+          "harness must be configured before review collection",
+        );
       result = intent(
         state,
         unit,
@@ -734,6 +1156,19 @@ function reduceInternal(
           "illegal_transition",
           "repair judgment is not bound to this unit and revision",
         );
+      if (!hasHarnessConfiguration(state))
+        return reject(
+          "illegal_transition",
+          "harness must be configured before repair",
+        );
+      const repairPacketError = launchPacketError(event.packet, unit, "worker");
+      if (repairPacketError !== undefined)
+        return reject("invalid_event", repairPacketError);
+      if (event.promptHash !== event.packet.hash)
+        return reject(
+          "invalid_event",
+          "launch prompt hash must equal packet hash",
+        );
       if (unit.branchRef === undefined || unit.worktreePath === undefined)
         return reject(
           "illegal_transition",
@@ -744,6 +1179,7 @@ function reduceInternal(
       result = modifyingIntent(state, unit, "repair_intent", event, "repair", {
         workerRequestedModel: event.requestedModel,
         workerPromptHash: event.promptHash,
+        workerPacket: event.packet,
       });
       result = {
         ...result,
@@ -840,6 +1276,15 @@ function reduceInternal(
       break;
     case "cancel_intent":
       if (!canEnterTerminalIntent(unit.state)) return illegal(unit, event.type);
+      if (
+        (state.activeModifyingUnitIds.includes(unit.id) ||
+          state.currentReviewerUnitId === unit.id) &&
+        !hasHarnessConfiguration(state)
+      )
+        return reject(
+          "illegal_transition",
+          "harness must be configured before session cancellation",
+        );
       result = terminalIntent(state, unit, "cancel_intent", event, "cancel");
       break;
     case "cancel_observed":
@@ -848,6 +1293,11 @@ function reduceInternal(
         !matchesIntended(state, event, unit.id, "cancel")
       )
         return illegal(unit, event.type);
+      if (!matchesTerminalSession(state, unit, event))
+        return reject(
+          "illegal_transition",
+          "cancellation is not bound to the active session readback",
+        );
       result = observe(
         state,
         unit,
@@ -1861,6 +2311,7 @@ function runtimeEffectParams(
   if (unit === undefined) throw new Error(`${kind} has an unknown unit`);
   const worker = () => ({
     branchRef: required(unit.branchRef, "branch ref", kind),
+    packet: required(unit.workerPacket, "worker packet", kind),
     worktreePath: required(unit.worktreePath, "worktree path", kind),
     requestedModel: required(unit.workerRequestedModel, "worker model", kind),
     promptHash: required(unit.workerPromptHash, "worker prompt", kind),
@@ -1927,6 +2378,7 @@ function runtimeEffectParams(
     case "review_dispatch":
       return {
         candidate: candidate(),
+        packet: required(unit.reviewerPacket, "reviewer packet", kind),
         requestedModel: required(
           unit.reviewerRequestedModel,
           "reviewer model",
@@ -1995,6 +2447,29 @@ function terminalEffectParams(
       sessionId: required(unit.workerSessionId, "worker session", kind),
     };
   return { role: "none" };
+}
+function matchesTerminalSession(
+  state: RepositoryRun,
+  unit: Unit,
+  event: Extract<ProtocolEvent, { type: "cancel_observed" }>,
+): boolean {
+  if (state.currentReviewerUnitId === unit.id)
+    return (
+      event.role === "reviewer" &&
+      event.sessionId === unit.reviewerSessionId &&
+      event.requestedModel === unit.reviewerRequestedModel &&
+      event.returnedModel === unit.reviewerReturnedModel &&
+      event.promptHash === unit.reviewPromptHash
+    );
+  if (state.activeModifyingUnitIds.includes(unit.id))
+    return (
+      event.role === "worker" &&
+      event.sessionId === unit.workerSessionId &&
+      event.requestedModel === unit.workerRequestedModel &&
+      event.returnedModel === unit.workerReturnedModel &&
+      event.promptHash === unit.workerPromptHash
+    );
+  return event.role === "none";
 }
 function required<T>(value: T | undefined, name: string, kind: EffectKind): T {
   if (value === undefined) throw new Error(`${kind} lacks ${name}`);
@@ -3641,6 +4116,21 @@ function runInvariantErrorsWithClosedEvidence(
       }
     }
   }
+  if (
+    state.harness === undefined &&
+    state.effectJournal.some(
+      (effect) =>
+        (effect.status === "intended" || effect.status === "ambiguous") &&
+        [
+          "dispatch",
+          "worker_collect",
+          "review_dispatch",
+          "review_collect",
+          "repair",
+        ].includes(effect.kind),
+    )
+  )
+    errors.push("unresolved harness effects require harness configuration");
   // The map is filled explicitly because a unit's durable phase determines
   // exactly one unresolved external act; this rejects both orphaned and
   // stacked intents on hydration.
@@ -3752,6 +4242,23 @@ function runInvariantErrorsWithClosedEvidence(
       errors.push(`worktree lifecycle ${id} lacks worktree path`);
     if (
       [
+        "dispatch_intent",
+        "dispatched",
+        "collect_intent",
+        "collected",
+        "candidate_intent",
+        "repair_intent",
+      ].includes(unit.state) &&
+      unit.workerPacket === undefined
+    )
+      errors.push(`worker lifecycle ${id} lacks exact launch packet`);
+    if (unit.workerPacket !== undefined) {
+      const packetError = launchPacketError(unit.workerPacket, unit, "worker");
+      if (packetError !== undefined)
+        errors.push(`worker packet ${id} ${packetError}`);
+    }
+    if (
+      [
         "dispatched",
         "collect_intent",
         "collected",
@@ -3778,7 +4285,9 @@ function runInvariantErrorsWithClosedEvidence(
         "landed",
         "handoff",
       ].includes(unit.state) &&
-      (unit.candidateHead === undefined || unit.candidateTree === undefined)
+      (unit.candidateHead === undefined ||
+        unit.candidateTree === undefined ||
+        unit.candidateDiffHash === undefined)
     )
       errors.push(`candidate lifecycle ${id} lacks exact objects`);
     if (
@@ -3800,12 +4309,48 @@ function runInvariantErrorsWithClosedEvidence(
         unit.verificationEvidenceHash === undefined)
     )
       errors.push(`qualification lifecycle ${id} lacks verification evidence`);
+    if (unit.verificationCommands !== undefined) {
+      const verificationError = committedVerificationError(unit);
+      if (verificationError !== undefined)
+        errors.push(`verification commands ${id} ${verificationError}`);
+    }
     if (
-      unit.state === "verification_intent" &&
-      (unit.verificationCommands === undefined ||
-        unit.verificationCommands.length === 0)
+      [
+        "verification_intent",
+        "qualified",
+        "reviewer_dispatch_intent",
+        "reviewer_dispatched",
+        "review_collect_intent",
+        "approved",
+        "publish_intent",
+        "published",
+        "integrate_intent",
+        "landed",
+        "handoff",
+      ].includes(unit.state)
+    ) {
+      const verificationError = committedVerificationError(unit);
+      if (verificationError !== undefined)
+        errors.push(`qualification ${id} ${verificationError}`);
+    }
+    if (
+      [
+        "reviewer_dispatch_intent",
+        "reviewer_dispatched",
+        "review_collect_intent",
+      ].includes(unit.state) &&
+      unit.reviewerPacket === undefined
     )
-      errors.push(`verification intent ${id} lacks commands`);
+      errors.push(`review lifecycle ${id} lacks exact launch packet`);
+    if (unit.reviewerPacket !== undefined) {
+      const packetError = launchPacketError(
+        unit.reviewerPacket,
+        unit,
+        "reviewer",
+      );
+      if (packetError !== undefined)
+        errors.push(`review packet ${id} ${packetError}`);
+    }
     if (
       ["reviewer_dispatched", "review_collect_intent"].includes(unit.state) &&
       (unit.reviewerSessionId === undefined ||

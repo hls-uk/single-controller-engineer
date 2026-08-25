@@ -136,6 +136,98 @@ function completeCandidate(): RepositoryRun {
   return state;
 }
 
+test("hydration binds persisted packets, verification, and reviewer diff bytes", () => {
+  const legacy = run();
+  const legacyUnit = { ...legacy.units["unit-1"]! };
+  delete legacyUnit.taskMetadata;
+  const legacyPlanned = {
+    ...legacy,
+    units: { ...legacy.units, "unit-1": legacyUnit },
+  };
+  assert.equal(validate(RepositoryRunSchema, legacyPlanned).ok, true);
+  assert.deepEqual(runInvariantErrors(legacyPlanned), []);
+
+  const candidate = completeCandidate();
+  assert.deepEqual(runInvariantErrors(candidate), []);
+  const missingMetadataUnit = { ...candidate.units["unit-1"]! };
+  delete missingMetadataUnit.taskMetadata;
+  const missingMetadata = {
+    ...candidate,
+    units: { ...candidate.units, "unit-1": missingMetadataUnit },
+  };
+  assert.equal(validate(RepositoryRunSchema, missingMetadata).ok, true);
+  assert.ok(
+    runInvariantErrors(missingMetadata).some((error) =>
+      error.includes(
+        "worker packet unit-1 launch packet lacks committed wave task metadata",
+      ),
+    ),
+  );
+  const mismatchedPacketMetadata = {
+    ...candidate,
+    units: {
+      ...candidate.units,
+      "unit-1": {
+        ...candidate.units["unit-1"]!,
+        taskMetadata: {
+          ...candidate.units["unit-1"]!.taskMetadata!,
+          ownedPaths: ["totally-different"],
+        },
+      },
+    },
+  };
+  assert.ok(
+    runInvariantErrors(mismatchedPacketMetadata).some((error) =>
+      error.includes(
+        "worker packet unit-1 launch packet does not bind committed",
+      ),
+    ),
+  );
+
+  const verification = step(candidate, "verification_intent");
+  const mismatchedVerification = {
+    ...verification,
+    units: {
+      ...verification.units,
+      "unit-1": {
+        ...verification.units["unit-1"]!,
+        verificationCommands: ["true"],
+      },
+    },
+  };
+  assert.ok(
+    runInvariantErrors(mismatchedVerification).some((error) =>
+      error.includes(
+        "verification commands unit-1 verification commands do not match",
+      ),
+    ),
+  );
+  const qualified = observe(verification, "verification_observed", "verify", {
+    baseOid: OID_A,
+    headOid: OID_B,
+    treeOid: OID_C,
+  });
+  const reviewIntent = step(qualified, "reviewer_dispatch_intent");
+  assert.deepEqual(runInvariantErrors(reviewIntent), []);
+  const substitutedDiff = {
+    ...reviewIntent,
+    units: {
+      ...reviewIntent.units,
+      "unit-1": {
+        ...reviewIntent.units["unit-1"]!,
+        candidateDiffHash: HASH,
+      },
+    },
+  };
+  assert.ok(
+    runInvariantErrors(substitutedDiff).some((error) =>
+      error.includes(
+        "review packet unit-1 review packet is not bound to the exact candidate diff",
+      ),
+    ),
+  );
+});
+
 function approvedCandidate(
   authorityProfile: RepositoryRun["authorityProfile"] = "integrate",
   integrationProfile: RepositoryRun["integrationProfile"] = "remote-ff",
@@ -1451,7 +1543,7 @@ test("repair disposition binds current context without reusing the initial promp
       ...validEvent,
       promptHash: "c".repeat(64),
     }).ok,
-    true,
+    false,
   );
   for (const field of ["promptHash", "responseHash"] as const)
     assert.equal(
@@ -1655,6 +1747,12 @@ test("an evicted effect key cannot be replayed for another unit at the current r
       // This key was emitted at revision 344, then checkpointed. It cannot
       // be used by any current-revision effect, even on a different unit.
       idempotencyKey: deriveIdempotencyKey(replay, 344, "unit-2", "repair"),
+      packet: (
+        event(replay, "repair_intent") as Extract<
+          ProtocolEvent,
+          { type: "repair_intent" }
+        >
+      ).packet,
       requestedModel: "workhorse",
       promptHash: HASH,
       judgment: {

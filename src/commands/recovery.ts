@@ -145,16 +145,27 @@ export const InitialControllerAcquireSchema = strictObject({
 export type ReconcileResult =
   | Readonly<{ status: "absent" }>
   | Readonly<{ status: "ambiguous"; observationHash?: string }>
+  | Readonly<{ status: "tool_request"; toolRequest: unknown }>
   | Readonly<{ status: "unavailable" }>
   | Readonly<{ status: "observed"; observation: ProtocolEvent }>;
 
 export type ExecuteResult =
   | Readonly<{ status: "ambiguous"; observationHash?: string }>
+  | Readonly<{ status: "tool_request"; toolRequest: unknown }>
   | Readonly<{ status: "unavailable" }>
   | Readonly<{ status: "observed"; observation: ProtocolEvent }>;
 
 /** Each adapter result is converted back through the reducer's strict event schema. */
 export interface RecoveryEffectAdapter {
+  /** Explicitly admits a non-Git effect after its intent is durably persisted. */
+  canExecute?(effect: ProtocolEffect): boolean;
+  /** Explicitly admits reconciliation without granting a blind retry. */
+  canReconcile?(effect: ProtocolEffect): boolean;
+  /** Parses a narrow host acknowledgement and creates its ProtocolEvent. */
+  acknowledge?(
+    acknowledgement: unknown,
+    run: RepositoryRun,
+  ): Promise<ExecuteResult>;
   execute(effect: ProtocolEffect, run: RepositoryRun): Promise<ExecuteResult>;
   reconcile(
     effect: ProtocolEffect,
@@ -233,6 +244,12 @@ export type RecoveryOperationLockAcquire =
 
 export type RecoveryOutcome =
   | Readonly<{
+      status: "tool_request";
+      revision: number;
+      run: RepositoryRun;
+      toolRequest: unknown;
+    }>
+  | Readonly<{
       status: "applied" | "reconciled" | "idle";
       revision: number;
       run: RepositoryRun;
@@ -248,6 +265,10 @@ export type RecoveryOutcome =
         | "unavailable"
         | "quarantined";
     }>;
+
+/** A command may submit either a reducer event or a narrow host acknowledgement. */
+export type RecoveryRequest =
+  ProtocolEvent | Readonly<{ harnessAcknowledgement: unknown }>;
 
 /**
  * Positive absence permits replay only for Phase-2 effects with adapter-level
@@ -587,11 +608,25 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
     )) {
       const effect = effectFor(entry, current);
       if (effect === undefined) return { status: "blocked" };
-      if (!isRecoverableEffect(effect)) return { status: "blocked" };
+      if (
+        !isRecoverableEffect(effect) &&
+        !options.adapter.canReconcile?.(effect)
+      )
+        return { status: "blocked" };
       const answer = await options.adapter.reconcile(effect, current);
       if (answer.status === "unavailable") return { status: "unavailable" };
+      if (answer.status === "tool_request")
+        return {
+          revision: current.revision,
+          run: current,
+          status: "tool_request",
+          toolRequest: answer.toolRequest,
+        };
       let settledAnswer:
-        | Exclude<ExecuteResult, { readonly status: "unavailable" }>
+        | Exclude<
+            ExecuteResult,
+            { readonly status: "unavailable" | "tool_request" }
+          >
         | ReconcileResult = answer;
       // Positive absence is the sole retry authority. The executable request
       // comes from the durable entry via rehydrateEffect, never fresh command
@@ -600,7 +635,9 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
         try {
           fault("before_act");
           fault("during_act");
-          settledAnswer = await options.adapter.execute(effect, current);
+          const acted = await options.adapter.execute(effect, current);
+          settledAnswer =
+            acted.status === "tool_request" ? { status: "ambiguous" } : acted;
           fault("after_act");
         } catch {
           settledAnswer = { status: "ambiguous" };
@@ -629,7 +666,7 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
   }
 
   return async function recoverAndRun(
-    requested?: ProtocolEvent,
+    requested?: RecoveryRequest,
   ): Promise<RecoveryOutcome> {
     const proof = await options.proveTopology();
     if (proof === undefined) return { status: "unavailable" };
@@ -662,6 +699,7 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
         // here because `load` must distinguish it from positive absence.
         if (
           requested === undefined ||
+          isHarnessAcknowledgementRequest(requested) ||
           options.initialRun === undefined ||
           options.preOwnership.createControllerAcquireIntent === undefined
         )
@@ -788,7 +826,13 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
       )
         return { status: "corrupt" };
       const root = loaded!.root;
-      const reconciled = await reconcile(root, run);
+      // A host acknowledgement is already an exact readback for one durable
+      // intent. Reconciliation must not first mark that same intent ambiguous
+      // and thereby discard a valid manual-tool completion.
+      const reconciled =
+        requested !== undefined && isHarnessAcknowledgementRequest(requested)
+          ? run
+          : await reconcile(root, run);
       if (!isRun(reconciled)) return reconciled;
       if (requested === undefined)
         return {
@@ -796,6 +840,51 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
           revision: reconciled.revision,
           run: reconciled,
         };
+      if (isHarnessAcknowledgementRequest(requested)) {
+        if (options.adapter.acknowledge === undefined)
+          return { status: "blocked" };
+        let acknowledged: ExecuteResult;
+        try {
+          acknowledged = await options.adapter.acknowledge(
+            requested.harnessAcknowledgement,
+            reconciled,
+          );
+        } catch {
+          return { status: "ambiguous" };
+        }
+        if (acknowledged.status === "unavailable")
+          return { status: "unavailable" };
+        if (acknowledged.status === "tool_request")
+          return {
+            revision: reconciled.revision,
+            run: reconciled,
+            status: "tool_request",
+            toolRequest: acknowledged.toolRequest,
+          };
+        if (acknowledged.status !== "observed") return { status: "blocked" };
+        const acknowledgementObservation = acknowledged.observation;
+        if (!("effectId" in acknowledgementObservation))
+          return { status: "blocked" };
+        const entry = reconciled.effectJournal.find(
+          (candidate) =>
+            candidate.effectId === acknowledgementObservation.effectId,
+        );
+        if (entry === undefined) return { status: "blocked" };
+        const observed = observationFor(
+          reconciled,
+          entry,
+          acknowledgementObservation,
+        );
+        if (observed === undefined) return { status: "corrupt" };
+        const settled = await persistEvent(
+          makeRootProjection(reconciled),
+          reconciled,
+          observed,
+        );
+        return isRun(settled)
+          ? { status: "applied", revision: settled.revision, run: settled }
+          : settled;
+      }
       const event = validate<ProtocolEvent>(ProtocolEventSchema, requested);
       if (!event.ok || event.value === undefined) return { status: "corrupt" };
       if (event.value.expectedRevision !== reconciled.revision)
@@ -809,10 +898,11 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
       const reduction = reduce(reconciled, prepared.event);
       if (!reduction.ok) return { status: "blocked" };
       const emitted = reduction.effects[0];
-      // Phase 3 harness capabilities are not represented by a durable
-      // "maybe launch" record in Phase 2. Refuse before intent persistence so
-      // a missing harness cannot strand an unreconcilable journal entry.
-      if (emitted !== undefined && !isRecoverableEffect(emitted))
+      if (
+        emitted !== undefined &&
+        !isRecoverableEffect(emitted) &&
+        !options.adapter.canExecute?.(emitted)
+      )
         return { status: "blocked" };
       const preOwnership = isPreOwnershipAcquire(
         reconciled,
@@ -842,6 +932,13 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
       );
       if (entry === undefined) return { status: "corrupt" };
       if (acted.status === "unavailable") return { status: "unavailable" };
+      if (acted.status === "tool_request")
+        return {
+          revision: intent.revision,
+          run: intent,
+          status: "tool_request",
+          toolRequest: acted.toolRequest,
+        };
       const observed =
         acted.status === "observed"
           ? observationFor(intent, entry, acted.observation)
@@ -870,6 +967,17 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
         };
     }
   };
+}
+
+function isHarnessAcknowledgementRequest(
+  value: RecoveryRequest,
+): value is Readonly<{ harnessAcknowledgement: unknown }> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "harnessAcknowledgement" in value &&
+    Object.keys(value).length === 1
+  );
 }
 
 /** Small, privacy-safe state view used by CLI composition. */

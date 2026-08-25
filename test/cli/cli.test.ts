@@ -14,11 +14,12 @@ import {
 import { canonicalJson, parseCliArguments, runCli } from "../../src/cli.js";
 import { legalActions } from "../../src/protocol/actions.js";
 import { reduce } from "../../src/protocol/reducer.js";
+import { createPacket } from "../../src/harness/index.js";
 
 import { HASH, event, run, transition, unit } from "../protocol/fixtures.js";
 test("mutating and external commands report stable unavailability", async () => {
   for (const command of commandNames.filter(
-    (item) => !["inspect", "status", "next"].includes(item),
+    (item) => !["inspect", "status", "next", "harness-packet"].includes(item),
   )) {
     const argv = command === "feedback" ? [command, "prepare"] : [command];
     const execution = await runCli(argv);
@@ -70,9 +71,21 @@ test("command help exposes feedback's explicit subcommand surface", async () => 
 
 test("an explicit controller config replaces the unavailable default without fallback", async () => {
   const state = run();
+  const expected = {
+    configuration: state.harness!,
+    eventId: "configure-harness",
+    expectedRevision: state.revision,
+    type: "harness_configured" as const,
+  };
   let path: string | undefined;
   const configured = await runCli(
-    ["plan-wave", "--controller-config", "/tmp/sce.json"],
+    [
+      "configure-harness",
+      "--controller-config",
+      "/tmp/sce.json",
+      "--request",
+      JSON.stringify({ event: expected }),
+    ],
     {
       async controllerConfigRunner(input) {
         path = input;
@@ -92,7 +105,7 @@ test("an explicit controller config replaces the unavailable default without fal
   });
 
   const rejected = await runCli([
-    "plan-wave",
+    "configure-harness",
     "--controller-config",
     "/tmp/missing.json",
   ]);
@@ -153,19 +166,134 @@ test("a runner receives a typed parsed request and can return a successful envel
 test("an injected recovery composition replaces the Phase-2 unavailable boundary", async () => {
   let calls = 0;
   const state = run();
-  const execution = await runCli(["plan-wave", "--json"], {
-    runner: createRecoveryCommandRunner(async (event) => {
-      calls += 1;
-      assert.equal(event, undefined);
-      return { revision: state.revision, run: state, status: "idle" };
-    }),
-  });
+  const expected = {
+    configuration: state.harness!,
+    eventId: "configure-harness",
+    expectedRevision: state.revision,
+    type: "harness_configured" as const,
+  };
+  const execution = await runCli(
+    [
+      "configure-harness",
+      "--json",
+      "--request",
+      JSON.stringify({ event: expected }),
+    ],
+    {
+      runner: createRecoveryCommandRunner(async (event) => {
+        calls += 1;
+        assert.deepEqual(event, expected);
+        return { revision: state.revision, run: state, status: "idle" };
+      }),
+    },
+  );
   assert.equal(calls, 1);
   assert.equal(execution.exitCode, 0);
   assert.deepEqual(JSON.parse(execution.stdout).result, {
     revision: state.revision,
     status: "idle",
   });
+});
+
+test("public harness-packet emits immutable worker and reviewer prompt bytes", async () => {
+  const worker = {
+    acceptance: ["acceptance-b", "acceptance-a"],
+    baseOid: "a".repeat(40),
+    mandatoryVerification: ["npm test"],
+    ownedPaths: ["src/b", "src/a"],
+    role: "worker" as const,
+    unitId: "unit-1",
+  };
+  const reviewer = {
+    ...worker,
+    diff: "diff --git a/src/a b/src/a",
+    headOid: "b".repeat(40),
+    role: "reviewer" as const,
+  };
+  for (const input of [worker, reviewer]) {
+    const expected = createPacket(input);
+    assert.equal(expected.ok, true);
+    if (!expected.ok) return;
+    const execution = await runCli([
+      "harness-packet",
+      "--json",
+      "--request",
+      JSON.stringify(input),
+    ]);
+    assert.equal(execution.exitCode, 0);
+    assert.deepEqual(JSON.parse(execution.stdout).result, {
+      hash: expected.hash,
+      payload: expected.payload,
+      schema: expected.schema,
+      version: expected.version,
+    });
+  }
+  const invalid = await runCli([
+    "harness-packet",
+    "--json",
+    "--request",
+    JSON.stringify({ ...worker, unexpected: true }),
+  ]);
+  assert.equal(invalid.exitCode, 64);
+});
+
+test("manual harness acknowledgements cross the CLI as narrow host facts", async () => {
+  const acknowledgement = {
+    effectId: "effect-1",
+    kind: "launch",
+    schema: "sce.harness-tool-acknowledgement",
+    session: { sessionId: "worker-1" },
+    version: 1,
+  };
+  const execution = await runCli(
+    [
+      "record-dispatch",
+      "--json",
+      "--request",
+      JSON.stringify({ harnessAcknowledgement: acknowledgement }),
+    ],
+    {
+      runner: createRecoveryCommandRunner(async (request) => {
+        assert.deepEqual(request, { harnessAcknowledgement: acknowledgement });
+        return {
+          revision: 7,
+          run: run(),
+          status: "tool_request",
+          toolRequest: {
+            operation: "launch",
+            schema: "sce.harness-tool-request",
+            version: 1,
+          },
+        };
+      }),
+    },
+  );
+  assert.equal(execution.exitCode, 0);
+  assert.deepEqual(JSON.parse(execution.stdout).result, {
+    revision: 7,
+    status: "tool_request",
+    toolRequest: {
+      operation: "launch",
+      schema: "sce.harness-tool-request",
+      version: 1,
+    },
+  });
+});
+
+test("recovery commands refuse missing mutating payloads before injected runners", async () => {
+  let calls = 0;
+  const execution = await runCli(["dispatch-request", "--json"], {
+    runner: createRecoveryCommandRunner(async () => {
+      calls += 1;
+      return { revision: 0, run: run(), status: "idle" };
+    }),
+  });
+  assert.equal(execution.exitCode, 64);
+  assert.equal(calls, 0);
+  assert.equal(
+    JSON.parse(execution.stdout).error.code,
+    "SCE_INVALID_STATE_REQUEST",
+  );
 });
 
 test("feedback requires and validates its action", () => {
@@ -569,6 +697,44 @@ test("vendored CLI bundle is reproducible and executable", async () => {
   assert.equal(
     execution.stdout,
     '{"ok":true,"result":{"version":"0.1.0"},"schema":"sce.cli.response","version":1}\n',
+  );
+  const packetInput = {
+    acceptance: ["acceptance-1"],
+    baseOid: "a".repeat(40),
+    mandatoryVerification: ["npm test"],
+    ownedPaths: ["src"],
+    role: "worker",
+    unitId: "unit-1",
+  };
+  const packet = createPacket(packetInput);
+  assert.equal(packet.ok, true);
+  if (!packet.ok) return;
+  const packetExecution = spawnSync(
+    process.execPath,
+    [
+      output,
+      "harness-packet",
+      "--json",
+      "--request",
+      JSON.stringify(packetInput),
+    ],
+    { encoding: "utf8" },
+  );
+  assert.equal(packetExecution.status, 0);
+  assert.equal(
+    packetExecution.stdout,
+    `${JSON.stringify({
+      command: "harness-packet",
+      ok: true,
+      result: {
+        hash: packet.hash,
+        payload: packet.payload,
+        schema: packet.schema,
+        version: packet.version,
+      },
+      schema: "sce.cli.response",
+      version: 1,
+    })}\n`,
   );
   assert.ok((await stat(output)).mode & 0o111);
 });

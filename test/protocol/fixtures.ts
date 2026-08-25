@@ -5,16 +5,48 @@ import type {
 } from "../../src/protocol/schemas.js";
 import {
   deriveIdempotencyKey,
+  deriveCandidateDiffHash,
   deriveParamsHash,
   deriveRepairContextHash,
   deriveRepairJudgmentPromptHash,
   deriveRepairJudgmentResponseHash,
 } from "../../src/protocol/reducer.js";
+import { canonicalJson } from "../../src/protocol/canonical.js";
+import { sha256 } from "../../src/protocol/evidence.js";
 
 export const OID_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 export const OID_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 export const OID_C = "cccccccccccccccccccccccccccccccccccccccc";
 export const HASH = "d".repeat(64);
+export const CANDIDATE_DIFF = "diff";
+
+function launchPacket(
+  state: RepositoryRun,
+  unitId: string,
+  role: "reviewer" | "worker",
+) {
+  const current = state.units[unitId];
+  const value = {
+    acceptance: ["acceptance-1"],
+    baseOid: current?.baseOid ?? OID_A,
+    ...(role === "reviewer"
+      ? { diff: CANDIDATE_DIFF, headOid: current?.candidateHead ?? OID_B }
+      : {}),
+    mandatoryVerification: ["npm test"],
+    ownedPaths: ["src"],
+    role,
+    schema: "sce.harness-packet" as const,
+    unitId,
+    version: 1 as const,
+  };
+  const payload = canonicalJson(value);
+  return {
+    hash: sha256(`sce.harness-packet/v1\n${payload}`),
+    payload,
+    schema: "sce.harness-packet" as const,
+    version: 1 as const,
+  };
+}
 
 export function unit(id: string, state: Unit["state"] = "planned"): Unit {
   return {
@@ -23,6 +55,18 @@ export function unit(id: string, state: Unit["state"] = "planned"): Unit {
     revision: 0,
     state,
     baseOid: OID_A,
+    taskMetadata: {
+      acceptanceIds: ["acceptance-1"],
+      conflictDomains: [],
+      dependencies: [],
+      independence: "proven",
+      mandatoryVerification: ["npm test"],
+      ownedPaths: ["src"],
+      priority: 0,
+      reservations: [],
+      risk: "medium",
+      unitId: id,
+    },
     reservationIds: [],
     repairCount: 0,
   };
@@ -47,6 +91,12 @@ export function run(units: readonly Unit[] = [unit("unit-1")]): RepositoryRun {
       returnedModel: "frontier-1",
       promptHash: HASH,
       state: "acquired",
+    },
+    harness: {
+      adapterVersion: 1,
+      family: "codex",
+      harnessVersion: 1,
+      supportCommitment: HASH,
     },
     units: Object.fromEntries(
       units.map((item, ordinal) => [item.id, { ...item, ordinal }]),
@@ -116,6 +166,14 @@ export function event(
     typeof fields.workerResult === "object" &&
     fields.workerResult !== null
       ? {
+          ...(state.units[unitId]?.workerSessionId === undefined
+            ? {}
+            : {
+                promptHash: state.units[unitId]!.workerPromptHash,
+                requestedModel: state.units[unitId]!.workerRequestedModel,
+                returnedModel: state.units[unitId]!.workerReturnedModel,
+                sessionId: state.units[unitId]!.workerSessionId,
+              }),
           ...fields,
           workerResult: {
             ...(fields.workerResult as Record<string, unknown>),
@@ -125,13 +183,76 @@ export function event(
           },
         }
       : fields;
+  const unit = state.units[unitId];
+  const sessionBoundFields =
+    (type === "dispatch_observed" || type === "repair_observed") &&
+    unit?.workerPromptHash !== undefined &&
+    unit.workerRequestedModel !== undefined
+      ? {
+          ...normalizedFields,
+          promptHash: unit.workerPromptHash,
+          requestedModel: unit.workerRequestedModel,
+        }
+      : type === "reviewer_observed" &&
+          unit?.reviewPromptHash !== undefined &&
+          unit.reviewerRequestedModel !== undefined
+        ? {
+            ...normalizedFields,
+            promptHash: unit.reviewPromptHash,
+            requestedModel: unit.reviewerRequestedModel,
+          }
+        : type === "worker_collected" &&
+            unit?.workerPromptHash !== undefined &&
+            unit.workerRequestedModel !== undefined
+          ? {
+              ...normalizedFields,
+              promptHash: unit.workerPromptHash,
+              requestedModel: unit.workerRequestedModel,
+            }
+          : type === "review_collected" &&
+              unit?.reviewPromptHash !== undefined &&
+              typeof normalizedFields.judgment === "object" &&
+              normalizedFields.judgment !== null
+            ? {
+                ...normalizedFields,
+                judgment: {
+                  ...(normalizedFields.judgment as Record<string, unknown>),
+                  promptHash: unit.reviewPromptHash,
+                },
+              }
+            : normalizedFields;
+  const terminalFields =
+    type === "cancel_observed"
+      ? (() => {
+          if (unit === undefined) return sessionBoundFields;
+          if (state.currentReviewerUnitId === unitId)
+            return {
+              role: "reviewer",
+              sessionId: unit.reviewerSessionId,
+              returnedModel: unit.reviewerReturnedModel,
+              ...sessionBoundFields,
+              promptHash: unit.reviewPromptHash,
+              requestedModel: unit.reviewerRequestedModel,
+            };
+          if (state.activeModifyingUnitIds.includes(unitId))
+            return {
+              role: "worker",
+              sessionId: unit.workerSessionId,
+              returnedModel: unit.workerReturnedModel,
+              ...sessionBoundFields,
+              promptHash: unit.workerPromptHash,
+              requestedModel: unit.workerRequestedModel,
+            };
+          return { role: "none", ...sessionBoundFields };
+        })()
+      : sessionBoundFields;
   const repairJudgment =
     type === "repair_intent" &&
-    typeof normalizedFields.judgment === "object" &&
-    normalizedFields.judgment !== null &&
+    typeof terminalFields.judgment === "object" &&
+    terminalFields.judgment !== null &&
     state.units[unitId] !== undefined
       ? (() => {
-          const judgment = normalizedFields.judgment as Extract<
+          const judgment = terminalFields.judgment as Extract<
             ProtocolEvent,
             { type: "repair_intent" }
           >["judgment"];
@@ -142,7 +263,7 @@ export function event(
           );
           const promptBoundJudgment = { ...judgment, promptHash };
           return {
-            ...normalizedFields,
+            ...terminalFields,
             judgment: {
               ...promptBoundJudgment,
               responseHash:
@@ -150,23 +271,39 @@ export function event(
             },
           };
         })()
-      : normalizedFields;
+      : terminalFields;
+  const candidateDiffBoundFields =
+    type === "candidate_observed"
+      ? {
+          candidateDiffHash: deriveCandidateDiffHash(CANDIDATE_DIFF),
+          ...repairJudgment,
+        }
+      : repairJudgment;
+  const packet =
+    type === "dispatch_intent" || type === "repair_intent"
+      ? launchPacket(state, unitId, "worker")
+      : type === "reviewer_dispatch_intent"
+        ? launchPacket(state, unitId, "reviewer")
+        : undefined;
   return {
     eventId: `event-${state.revision + 1}`,
     expectedRevision: state.revision,
     unitId,
     type,
     ...(type === "dispatch_intent"
-      ? { requestedModel: "workhorse", promptHash: HASH }
+      ? { requestedModel: "workhorse", promptHash: packet?.hash ?? HASH }
       : {}),
     ...(type === "verification_intent" ? { commands: ["npm test"] } : {}),
     ...(type === "reviewer_dispatch_intent"
-      ? { requestedModel: "frontier", promptHash: HASH }
+      ? { requestedModel: "frontier", promptHash: packet?.hash ?? HASH }
       : {}),
     ...(type === "repair_intent"
-      ? { requestedModel: "workhorse", promptHash: HASH }
+      ? { requestedModel: "workhorse", promptHash: packet?.hash ?? HASH }
       : {}),
-    ...repairJudgment,
+    ...candidateDiffBoundFields,
+    // Packet bytes are the launch prompt. Keep ordinary lifecycle fixtures
+    // bound to that packet even when their generic fields use HASH elsewhere.
+    ...(packet === undefined ? {} : { packet, promptHash: packet.hash }),
     ...(kind === undefined
       ? {}
       : {

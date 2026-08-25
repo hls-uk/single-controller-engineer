@@ -39,6 +39,19 @@ export function legalActions(
   const controllerActions = actionsForController(state);
   if (controllerActions !== undefined) return sortActions(controllerActions);
   if (state.controller.state !== "acquired") return [];
+  if (
+    state.wave.unitIds.length === 0 &&
+    Object.keys(state.units).length > 0 &&
+    Object.values(state.units).every((unit) => unit.state === "planned")
+  )
+    return [{ mode: "emit", type: "wave_planned" }];
+  if (
+    state.harness === undefined &&
+    Object.values(state.units).some(
+      (unit) => unit.state === "worktree_observed",
+    )
+  )
+    return [{ mode: "emit", type: "harness_configured" }];
 
   return sortActions(
     Object.values(state.units)

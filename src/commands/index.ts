@@ -1,8 +1,10 @@
 import { Type, type Static, type TProperties } from "@sinclair/typebox";
 import { Ajv, type ValidateFunction } from "ajv";
+import { createPacket } from "../harness/index.js";
 
 import {
   RepositoryRunSchema,
+  HarnessPacketInputSchema,
   validate,
   ProtocolEventSchema,
   type ProtocolEvent,
@@ -14,15 +16,18 @@ import {
   createProductionRecoveryRunner,
   type ProductionRecoveryRunnerOptions,
 } from "./production-recovery.js";
+import type { RecoveryRequest } from "./recovery.js";
 
 export * from "./recovery.js";
 export * from "./production-recovery.js";
 
 export const commandNames = [
   "inspect",
+  "harness-packet",
   "acquire-controller",
   "next",
   "plan-wave",
+  "configure-harness",
   "prepare-wave",
   "dispatch-request",
   "record-dispatch",
@@ -118,13 +123,25 @@ const StateOptionsSchema = strictObject({
   ...RequestMetadataSchema,
   request: StateRequestSchema,
 });
+const HarnessPacketOptionsSchema = strictObject({
+  json: Type.Boolean(),
+  request: HarnessPacketInputSchema,
+});
 const NoPayloadOptionsSchema = strictObject(RequestMetadataSchema);
-const RecoveryPayloadSchema = strictObject({
+const RecoveryEventPayloadSchema = strictObject({
   event: Type.Optional(ProtocolEventSchema),
+});
+const RecoveryAcknowledgementPayloadSchema = strictObject({
+  harnessAcknowledgement: JsonObjectSchema,
 });
 const RecoveryOptionsSchema = strictObject({
   ...RequestMetadataSchema,
-  request: Type.Optional(RecoveryPayloadSchema),
+  request: Type.Optional(
+    Type.Union([
+      RecoveryEventPayloadSchema,
+      RecoveryAcknowledgementPayloadSchema,
+    ]),
+  ),
 });
 
 const StateCommandSchema = strictObject({
@@ -134,6 +151,12 @@ const StateCommandSchema = strictObject({
     Type.Literal("status"),
   ]),
   options: Type.Union([StateOptionsSchema, NoPayloadOptionsSchema]),
+  schema: Type.Literal("sce.command.request"),
+  version: Type.Literal(1),
+});
+const HarnessPacketCommandSchema = strictObject({
+  command: Type.Literal("harness-packet"),
+  options: HarnessPacketOptionsSchema,
   schema: Type.Literal("sce.command.request"),
   version: Type.Literal(1),
 });
@@ -148,6 +171,7 @@ const UnavailableCommandSchema = strictObject({
   command: Type.Union([
     Type.Literal("acquire-controller"),
     Type.Literal("plan-wave"),
+    Type.Literal("configure-harness"),
     Type.Literal("prepare-wave"),
     Type.Literal("dispatch-request"),
     Type.Literal("record-dispatch"),
@@ -168,6 +192,7 @@ const UnavailableCommandSchema = strictObject({
 
 export const CommandRequestSchema = Type.Union([
   StateCommandSchema,
+  HarnessPacketCommandSchema,
   FeedbackCommandSchema,
   UnavailableCommandSchema,
 ]);
@@ -273,6 +298,22 @@ export function validateCommandPayload(input: unknown): input is JsonObject {
 }
 export const stateOnlyCommandRunner: CommandRunner = (request) => {
   if (!validateCommandRequest(request)) return invalidStateRequest();
+  if (isHarnessPacketCommandRequest(request)) {
+    const packet = createPacket(request.options.request);
+    return packet.ok
+      ? {
+          result: {
+            hash: packet.hash,
+            payload: packet.payload,
+            schema: packet.schema,
+            version: packet.version,
+          },
+          schema: "sce.command.result",
+          status: "ok",
+          version: 1,
+        }
+      : invalidStateRequest();
+  }
   if (!isStateCommandRequest(request)) return unavailable();
   if (!("request" in request.options)) return invalidStateRequest();
   const parsedRun = validate<RepositoryRun>(
@@ -341,12 +382,18 @@ const commandEvent: Readonly<
   Partial<Record<CommandName, readonly ProtocolEvent["type"][]>>
 > = {
   "acquire-controller": ["controller_acquire_intent"],
+  "plan-wave": ["wave_planned"],
+  "configure-harness": ["harness_configured"],
   "prepare-wave": ["reservation_intent", "branch_intent", "worktree_intent"],
   "dispatch-request": ["dispatch_intent"],
-  "record-dispatch": ["dispatch_observed"],
-  "collect-candidate": ["candidate_intent"],
+  "record-dispatch": [
+    "dispatch_observed",
+    "repair_observed",
+    "reviewer_observed",
+  ],
+  "collect-candidate": ["collect_intent", "candidate_intent"],
   qualify: ["verification_intent"],
-  "review-prepare": ["reviewer_dispatch_intent"],
+  "review-prepare": ["reviewer_dispatch_intent", "review_collect_intent"],
   "review-record": ["review_collected"],
   publish: ["publish_intent"],
   integrate: ["integrate_intent"],
@@ -359,7 +406,7 @@ const commandEvent: Readonly<
  * closed until a topology composition root supplies that runner.
  */
 export function createRecoveryCommandRunner(
-  runner: (event?: ProtocolEvent) => Promise<
+  runner: (request?: RecoveryRequest) => Promise<
     | { readonly status: string }
     | {
         readonly status: string;
@@ -370,6 +417,8 @@ export function createRecoveryCommandRunner(
 ): CommandRunner {
   return async (request) => {
     if (!validateCommandRequest(request)) return invalidStateRequest();
+    if (isHarnessPacketCommandRequest(request))
+      return stateOnlyCommandRunner(request);
     if (isStateCommandRequest(request)) {
       const outcome = await runner();
       if (!("run" in outcome))
@@ -380,14 +429,29 @@ export function createRecoveryCommandRunner(
     }
     if (request.command === "feedback") return unavailable();
     const payload = request.options.request;
-    const event = payload?.event;
+    const event =
+      payload !== undefined && "event" in payload ? payload.event : undefined;
+    const acknowledgement =
+      payload !== undefined && "harnessAcknowledgement" in payload
+        ? payload.harnessAcknowledgement
+        : undefined;
     const expected = commandEvent[request.command];
+    const acknowledgementCommand =
+      request.command === "record-dispatch" ||
+      request.command === "collect-candidate" ||
+      request.command === "review-record";
+    if (acknowledgement !== undefined && !acknowledgementCommand)
+      return invalidStateRequest();
     if (
       expected !== undefined &&
+      acknowledgement === undefined &&
       (event === undefined || !expected.includes(event.type))
     )
       return invalidStateRequest();
-    if (expected === undefined && event !== undefined)
+    if (
+      expected === undefined &&
+      (event !== undefined || acknowledgement !== undefined)
+    )
       return invalidStateRequest();
     if (
       event !== undefined &&
@@ -398,7 +462,11 @@ export function createRecoveryCommandRunner(
             request.options.idempotencyKey !== event.idempotencyKey)))
     )
       return invalidStateRequest();
-    const outcome = await runner(event);
+    const outcome = await runner(
+      acknowledgement === undefined
+        ? event
+        : { harnessAcknowledgement: acknowledgement },
+    );
     if (!("revision" in outcome) || outcome.revision < 0)
       return outcome.status === "unavailable"
         ? unavailable()
@@ -407,6 +475,9 @@ export function createRecoveryCommandRunner(
       result: {
         revision: outcome.revision,
         status: outcome.status,
+        ...("toolRequest" in outcome && isJsonObject(outcome.toolRequest)
+          ? { toolRequest: outcome.toolRequest }
+          : {}),
       },
       schema: "sce.command.result",
       status: "ok",
@@ -455,6 +526,12 @@ function isStateCommandRequest(
     request.command === "next" ||
     request.command === "status"
   );
+}
+
+function isHarnessPacketCommandRequest(
+  request: CommandRequest,
+): request is Extract<CommandRequest, { readonly command: "harness-packet" }> {
+  return request.command === "harness-packet";
 }
 
 function invalidStateRequest(): CommandRunnerResult {

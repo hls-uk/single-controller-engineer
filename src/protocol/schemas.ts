@@ -20,12 +20,22 @@ export const LIMITS = {
   text: 8_192,
   findings: 64,
 } as const;
+/** Four concurrent bounded packets stay well within the run envelope. */
+export const HARNESS_PACKET_BYTES = 8_192;
 const utf8 = new TextEncoder();
 const identifier = () =>
   Type.String({
     minLength: 1,
     maxLength: 160,
     pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+  });
+/** Canonical POSIX-relative ownership path, not a platform alias. */
+const ownedPath = () =>
+  Type.String({
+    minLength: 1,
+    maxLength: 192,
+    pattern:
+      "^(?![A-Za-z]:)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\\\)(?!.*\\/$)[A-Za-z0-9][A-Za-z0-9._/-]*$",
   });
 const effectIdentifier = () =>
   Type.String({
@@ -278,6 +288,94 @@ const PullRequestObservationSchema = strictObject({
   baseOid: oid(),
   remoteHeadOid: oid(),
 });
+const packetStrings = (minItems: number, maxItems: number) =>
+  Type.Array(text(), { minItems, maxItems, uniqueItems: true });
+const HarnessPacketInputCommon = {
+  acceptance: packetStrings(1, 64),
+  baseOid: oid(),
+  mandatoryVerification: packetStrings(1, 32),
+  ownedPaths: Type.Array(ownedPath(), {
+    minItems: 1,
+    maxItems: 128,
+    uniqueItems: true,
+  }),
+  unitId: identifier(),
+};
+/** Exact bounded input accepted by the public packet command. */
+export const HarnessPacketInputSchema = Type.Union([
+  strictObject({ ...HarnessPacketInputCommon, role: Type.Literal("worker") }),
+  strictObject({
+    ...HarnessPacketInputCommon,
+    diff: text(),
+    headOid: oid(),
+    role: Type.Literal("reviewer"),
+  }),
+]);
+export type HarnessPacketInput = Static<typeof HarnessPacketInputSchema>;
+const HarnessPacketCommon = {
+  ...HarnessPacketInputCommon,
+  schema: Type.Literal("sce.harness-packet"),
+  version: Type.Literal(1),
+};
+export const HarnessPacketSchema = Type.Union([
+  strictObject({ ...HarnessPacketCommon, role: Type.Literal("worker") }),
+  strictObject({
+    ...HarnessPacketCommon,
+    diff: text(),
+    headOid: oid(),
+    role: Type.Literal("reviewer"),
+  }),
+]);
+export type HarnessPacket = Static<typeof HarnessPacketSchema>;
+/** Canonical payload/hash pair persisted with every advertised launch. */
+export const HarnessPacketBindingSchema = strictObject({
+  hash: hash(),
+  payload: Type.String({
+    minLength: 1,
+    maxLength: HARNESS_PACKET_BYTES,
+    maxUtf8Bytes: HARNESS_PACKET_BYTES,
+  }),
+  schema: Type.Literal("sce.harness-packet"),
+  version: Type.Literal(1),
+});
+export type HarnessPacketBinding = Static<typeof HarnessPacketBindingSchema>;
+/** Validated Beads task metadata supplied to the deterministic wave planner. */
+export const WaveTaskMetadataSchema = strictObject({
+  acceptanceIds: Type.Array(identifier(), {
+    minItems: 1,
+    maxItems: 64,
+    uniqueItems: true,
+  }),
+  conflictDomains: Type.Array(identifier(), {
+    maxItems: 64,
+    uniqueItems: true,
+  }),
+  dependencies: Type.Array(identifier(), {
+    maxItems: 64,
+    uniqueItems: true,
+  }),
+  independence: Type.Union([Type.Literal("ambiguous"), Type.Literal("proven")]),
+  mandatoryVerification: packetStrings(1, 32),
+  ownedPaths: Type.Array(ownedPath(), {
+    minItems: 1,
+    maxItems: 128,
+    uniqueItems: true,
+  }),
+  priority: Type.Integer({ minimum: 0, maximum: 4 }),
+  reservations: Type.Array(identifier(), {
+    maxItems: 64,
+    uniqueItems: true,
+  }),
+  risk: Type.Union([
+    Type.Literal("critical"),
+    Type.Literal("high"),
+    Type.Literal("medium"),
+    Type.Literal("low"),
+  ]),
+  unitId: identifier(),
+});
+export type WaveTaskMetadata = Static<typeof WaveTaskMetadataSchema>;
+
 export const UnitSchema = strictObject({
   id: identifier(),
   // Stable at planning time and never reassigned, even after a unit leaves
@@ -286,6 +384,8 @@ export const UnitSchema = strictObject({
   revision: revision(),
   state: UnitStateSchema,
   baseOid: oid(),
+  /** Durable controller plan binding; absent only on a legacy v1 run. */
+  taskMetadata: Type.Optional(WaveTaskMetadataSchema),
   branchRef: Type.Optional(identifier()),
   worktreePath: Type.Optional(text()),
   reservationIds: Type.Array(identifier(), {
@@ -294,16 +394,19 @@ export const UnitSchema = strictObject({
   }),
   candidateHead: Type.Optional(oid()),
   candidateTree: Type.Optional(oid()),
+  candidateDiffHash: Type.Optional(hash()),
   publishedHeadOid: Type.Optional(oid()),
   openPullRequest: Type.Optional(PullRequestObservationSchema),
   workerSessionId: Type.Optional(identifier()),
   workerRequestedModel: Type.Optional(text()),
   workerReturnedModel: Type.Optional(text()),
   workerPromptHash: Type.Optional(hash()),
+  workerPacket: Type.Optional(HarnessPacketBindingSchema),
   reviewerSessionId: Type.Optional(identifier()),
   reviewerRequestedModel: Type.Optional(text()),
   reviewerReturnedModel: Type.Optional(text()),
   reviewPromptHash: Type.Optional(hash()),
+  reviewerPacket: Type.Optional(HarnessPacketBindingSchema),
   verificationBaseOid: Type.Optional(oid()),
   verificationHeadOid: Type.Optional(oid()),
   verificationTree: Type.Optional(oid()),
@@ -544,6 +647,14 @@ export const ControllerOwnershipSchema = strictObject({
   ]),
 });
 export type ControllerOwnership = Static<typeof ControllerOwnershipSchema>;
+/** Explicit adapter family/mapping pin, absent from pre-harness v1 runs. */
+export const HarnessConfigurationSchema = strictObject({
+  adapterVersion: Type.Integer({ minimum: 1, maximum: 1_000_000 }),
+  family: identifier(),
+  harnessVersion: Type.Integer({ minimum: 1, maximum: 1_000_000 }),
+  supportCommitment: hash(),
+});
+export type HarnessConfiguration = Static<typeof HarnessConfigurationSchema>;
 export const RepositoryRunSchema = strictObject({
   revision: revision(),
   state: AggregateStateSchema,
@@ -556,6 +667,7 @@ export const RepositoryRunSchema = strictObject({
   gitObjectFormat: GitObjectFormatSchema,
   controllerFencingToken: identifier(),
   controller: ControllerOwnershipSchema,
+  harness: Type.Optional(HarnessConfigurationSchema),
   units: Type.Record(identifier(), UnitSchema, {
     maxProperties: LIMITS.units,
     additionalProperties: false,
@@ -644,7 +756,7 @@ const session = {
   returnedModel: text(),
   promptHash: hash(),
 };
-const WorkerResultSchema = strictObject({
+export const WorkerResultSchema = strictObject({
   status: Type.Union([
     Type.Literal("completed"),
     Type.Literal("needs_repair"),
@@ -719,7 +831,7 @@ const WorkerJudgmentSchema = strictObject({
     Type.Literal("cancel"),
   ]),
 });
-const ReviewerJudgmentSchema = strictObject({
+export const ReviewerJudgmentSchema = strictObject({
   ...judgmentBase,
   role: Type.Literal("reviewer"),
   kind: Type.Literal("review_verdict"),
@@ -743,6 +855,22 @@ export type Judgment = Static<typeof JudgmentSchema>;
 export type ReviewerJudgment = Static<typeof ReviewerJudgmentSchema>;
 
 export const ProtocolEventSchema = Type.Union([
+  strictObject({
+    configuration: HarnessConfigurationSchema,
+    eventId: identifier(),
+    expectedRevision: revision(),
+    type: Type.Literal("harness_configured"),
+  }),
+  strictObject({
+    eventId: identifier(),
+    expectedRevision: revision(),
+    type: Type.Literal("wave_planned"),
+    tasks: Type.Array(WaveTaskMetadataSchema, {
+      minItems: 1,
+      maxItems: LIMITS.units,
+    }),
+    waveId: identifier(),
+  }),
   strictObject({
     ...controllerEventBase,
     type: Type.Literal("controller_acquire_intent"),
@@ -813,6 +941,7 @@ export const ProtocolEventSchema = Type.Union([
     ...eventBase,
     type: Type.Literal("dispatch_intent"),
     ...effectIntent,
+    packet: HarnessPacketBindingSchema,
     requestedModel: text(),
     promptHash: hash(),
   }),
@@ -831,6 +960,7 @@ export const ProtocolEventSchema = Type.Union([
     ...eventBase,
     type: Type.Literal("worker_collected"),
     ...observedEffect,
+    ...session,
     workerResult: WorkerResultSchema,
   }),
   strictObject({
@@ -844,6 +974,7 @@ export const ProtocolEventSchema = Type.Union([
     ...observedEffect,
     headOid: oid(),
     treeOid: oid(),
+    candidateDiffHash: hash(),
   }),
   strictObject({
     ...eventBase,
@@ -863,6 +994,7 @@ export const ProtocolEventSchema = Type.Union([
     ...eventBase,
     type: Type.Literal("reviewer_dispatch_intent"),
     ...effectIntent,
+    packet: HarnessPacketBindingSchema,
     requestedModel: text(),
     promptHash: hash(),
   }),
@@ -933,6 +1065,7 @@ export const ProtocolEventSchema = Type.Union([
     type: Type.Literal("repair_intent"),
     ...effectIntent,
     judgment: RepairDispositionJudgmentSchema,
+    packet: HarnessPacketBindingSchema,
     requestedModel: text(),
     promptHash: hash(),
   }),
@@ -981,6 +1114,21 @@ export const ProtocolEventSchema = Type.Union([
     ...eventBase,
     type: Type.Literal("cancel_observed"),
     ...observedEffect,
+    role: Type.Literal("none"),
+  }),
+  strictObject({
+    ...eventBase,
+    type: Type.Literal("cancel_observed"),
+    ...observedEffect,
+    ...session,
+    role: Type.Literal("worker"),
+  }),
+  strictObject({
+    ...eventBase,
+    type: Type.Literal("cancel_observed"),
+    ...observedEffect,
+    ...session,
+    role: Type.Literal("reviewer"),
   }),
   strictObject({
     eventId: identifier(),
@@ -1010,6 +1158,7 @@ const RuntimeReservationRequestSchema = strictObject({
 });
 const WorkerBindingSchema = strictObject({
   branchRef: identifier(),
+  packet: HarnessPacketBindingSchema,
   worktreePath: text(),
   requestedModel: text(),
   promptHash: hash(),
@@ -1096,6 +1245,7 @@ export const RuntimeEffectSchema = Type.Union([
     unitId: identifier(),
     params: strictObject({
       candidate: CandidateBindingSchema,
+      packet: HarnessPacketBindingSchema,
       requestedModel: text(),
       promptHash: hash(),
     }),

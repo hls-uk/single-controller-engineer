@@ -7,12 +7,13 @@ import {
   RuntimeEffectSchema,
   parseEnvelope,
   validate,
+  type ProtocolEvent,
 } from "../../src/protocol/schemas.js";
 import {
   deriveIdempotencyKey,
   runInvariantErrors,
 } from "../../src/protocol/reducer.js";
-import { HASH, OID_A, OID_B, OID_C, run, unit } from "./fixtures.js";
+import { HASH, OID_A, OID_B, OID_C, event, run, unit } from "./fixtures.js";
 
 const OID_64 = "e".repeat(64);
 
@@ -81,13 +82,9 @@ test("text fields enforce both character and UTF-8 byte limits", () => {
     }).ok,
     false,
   );
+  const state = run();
   const dispatch = {
-    eventId: "dispatch-1",
-    expectedRevision: 0,
-    unitId: "unit-1",
-    type: "dispatch_intent" as const,
-    idempotencyKey: "dispatch-key",
-    promptHash: HASH,
+    ...event(state, "dispatch_intent"),
     requestedModel: atByteLimit,
   };
   assert.equal(validate(ProtocolEventSchema, dispatch).ok, true);
@@ -168,6 +165,7 @@ test("Git object observations reject abbreviated OIDs", () => {
       observationHash: HASH,
       headOid: "a".repeat(39),
       treeOid: OID_C,
+      candidateDiffHash: HASH,
     }).ok,
     false,
   );
@@ -186,6 +184,12 @@ test("runtime effects are strict executable discriminants, not opaque hashes", (
       worktreePath: "/tmp/unit-1",
       requestedModel: "workhorse-1",
       promptHash: HASH,
+      packet: (
+        event(run(), "dispatch_intent") as Extract<
+          ProtocolEvent,
+          { type: "dispatch_intent" }
+        >
+      ).packet,
     },
   };
   assert.equal(validate(RuntimeEffectSchema, effect).ok, true);

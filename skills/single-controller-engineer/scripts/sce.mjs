@@ -1061,10 +1061,10 @@ var require_util = __commonJS({
     var codegen_1 = require_codegen();
     var code_1 = require_code();
     function toHash(arr) {
-      const hash3 = {};
+      const hash4 = {};
       for (const item of arr)
-        hash3[item] = true;
-      return hash3;
+        hash4[item] = true;
+      return hash4;
     }
     exports.toHash = toHash;
     function alwaysValidSchema(it, schema) {
@@ -2235,8 +2235,8 @@ var require_resolve = __commonJS({
       }
       return count;
     }
-    function getFullPath(resolver, id = "", normalize5) {
-      if (normalize5 !== false)
+    function getFullPath(resolver, id = "", normalize6) {
+      if (normalize6 !== false)
         id = normalizeId(id);
       const p = resolver.parse(id);
       return _getFullPath(resolver, p);
@@ -2984,7 +2984,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve5.call(this, root, ref);
+      let _sch = resolve6.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3011,7 +3011,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve5(root, ref) {
+    function resolve6(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3826,7 +3826,7 @@ var require_fast_uri = __commonJS({
       }
       return decodedScheme;
     }
-    function normalize5(uri, options) {
+    function normalize6(uri, options) {
       if (typeof uri === "string") {
         uri = /** @type {T} */
         normalizeString2(uri, options);
@@ -3836,7 +3836,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve5(baseURI, relativeURI, options) {
+    function resolve6(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -4197,8 +4197,8 @@ var require_fast_uri = __commonJS({
     }
     var fastUri = {
       SCHEMES,
-      normalize: normalize5,
-      resolve: resolve5,
+      normalize: normalize6,
+      resolve: resolve6,
       resolveComponent,
       equal: equal2,
       serialize,
@@ -6872,7 +6872,7 @@ var require_ajv = __commonJS({
 
 // src/cli.ts
 import { realpathSync as realpathSync5 } from "node:fs";
-import { isAbsolute as isAbsolute7, normalize as normalize4, resolve as resolve4 } from "node:path";
+import { isAbsolute as isAbsolute8, normalize as normalize5, resolve as resolve5 } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // node_modules/@sinclair/typebox/build/esm/type/guard/value.mjs
@@ -9484,6 +9484,87 @@ var Type = type_exports2;
 // src/commands/index.ts
 var import_ajv4 = __toESM(require_ajv(), 1);
 
+// src/harness/index.ts
+import { isAbsolute, normalize, resolve } from "node:path";
+
+// src/protocol/canonical.ts
+var preserveStrings = () => "exact";
+function canonicalJson(value, stringPolicy = preserveStrings) {
+  return canonical(value, stringPolicy, []);
+}
+function canonical(value, stringPolicy, path2) {
+  if (value === null || typeof value === "boolean")
+    return JSON.stringify(value);
+  if (typeof value === "number") {
+    if (!Number.isFinite(value))
+      throw new TypeError("canonical JSON does not permit non-finite numbers");
+    return JSON.stringify(value);
+  }
+  if (typeof value === "string")
+    return JSON.stringify(normalizeString(value, stringPolicy(path2, "value")));
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index += 1) {
+      if (!Object.hasOwn(value, index))
+        throw new TypeError("canonical JSON rejects sparse arrays");
+    }
+    return `[${value.map((item, index) => canonical(item, stringPolicy, [...path2, index])).join(",")}]`;
+  }
+  if (typeof value !== "object")
+    throw new TypeError("canonical JSON only permits JSON values");
+  const object5 = value;
+  const entries = Object.keys(object5).map((key) => ({
+    key,
+    normalizedKey: normalizeString(key, stringPolicy([...path2, key], "key"))
+  }));
+  entries.sort(
+    (left, right) => left.normalizedKey < right.normalizedKey ? -1 : left.normalizedKey > right.normalizedKey ? 1 : 0
+  );
+  for (let index = 1; index < entries.length; index += 1) {
+    if (entries[index - 1].normalizedKey === entries[index].normalizedKey)
+      throw new TypeError(
+        "canonical JSON rejects duplicate normalized object keys"
+      );
+  }
+  return `{${entries.map(
+    ({ key, normalizedKey }) => `${JSON.stringify(normalizedKey)}:${canonical(
+      object5[key],
+      stringPolicy,
+      [...path2, key]
+    )}`
+  ).join(",")}}`;
+}
+function normalizeString(value, normalization) {
+  if (normalization !== "exact" && normalization !== "nfc")
+    throw new TypeError(
+      "canonical JSON string policy must return exact or nfc"
+    );
+  return validString(normalization === "nfc" ? value.normalize("NFC") : value);
+}
+function validString(value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 55296 && code <= 56319) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 56320 && next <= 57343))
+        throw new TypeError(
+          "canonical JSON rejects unpaired surrogate code units"
+        );
+      index += 1;
+    } else if (code >= 56320 && code <= 57343) {
+      throw new TypeError(
+        "canonical JSON rejects unpaired surrogate code units"
+      );
+    }
+  }
+  return value;
+}
+
+// src/protocol/evidence.ts
+import { createHash } from "node:crypto";
+function sha256(value) {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
 // src/protocol/schemas.ts
 var import_ajv = __toESM(require_ajv(), 1);
 var SCHEMA_VERSION = 1;
@@ -9500,11 +9581,17 @@ var LIMITS = {
   text: 8192,
   findings: 64
 };
+var HARNESS_PACKET_BYTES = 8192;
 var utf8 = new TextEncoder();
 var identifier = () => Type.String({
   minLength: 1,
   maxLength: 160,
   pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+});
+var ownedPath = () => Type.String({
+  minLength: 1,
+  maxLength: 192,
+  pattern: "^(?![A-Za-z]:)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\\\)(?!.*\\/$)[A-Za-z0-9][A-Za-z0-9._/-]*$"
 });
 var effectIdentifier = () => Type.String({
   minLength: 1,
@@ -9717,6 +9804,85 @@ var PullRequestObservationSchema = strictObject({
   baseOid: oid(),
   remoteHeadOid: oid()
 });
+var packetStrings = (minItems, maxItems) => Type.Array(text(), { minItems, maxItems, uniqueItems: true });
+var HarnessPacketInputCommon = {
+  acceptance: packetStrings(1, 64),
+  baseOid: oid(),
+  mandatoryVerification: packetStrings(1, 32),
+  ownedPaths: Type.Array(ownedPath(), {
+    minItems: 1,
+    maxItems: 128,
+    uniqueItems: true
+  }),
+  unitId: identifier()
+};
+var HarnessPacketInputSchema = Type.Union([
+  strictObject({ ...HarnessPacketInputCommon, role: Type.Literal("worker") }),
+  strictObject({
+    ...HarnessPacketInputCommon,
+    diff: text(),
+    headOid: oid(),
+    role: Type.Literal("reviewer")
+  })
+]);
+var HarnessPacketCommon = {
+  ...HarnessPacketInputCommon,
+  schema: Type.Literal("sce.harness-packet"),
+  version: Type.Literal(1)
+};
+var HarnessPacketSchema = Type.Union([
+  strictObject({ ...HarnessPacketCommon, role: Type.Literal("worker") }),
+  strictObject({
+    ...HarnessPacketCommon,
+    diff: text(),
+    headOid: oid(),
+    role: Type.Literal("reviewer")
+  })
+]);
+var HarnessPacketBindingSchema = strictObject({
+  hash: hash(),
+  payload: Type.String({
+    minLength: 1,
+    maxLength: HARNESS_PACKET_BYTES,
+    maxUtf8Bytes: HARNESS_PACKET_BYTES
+  }),
+  schema: Type.Literal("sce.harness-packet"),
+  version: Type.Literal(1)
+});
+var WaveTaskMetadataSchema = strictObject({
+  acceptanceIds: Type.Array(identifier(), {
+    minItems: 1,
+    maxItems: 64,
+    uniqueItems: true
+  }),
+  conflictDomains: Type.Array(identifier(), {
+    maxItems: 64,
+    uniqueItems: true
+  }),
+  dependencies: Type.Array(identifier(), {
+    maxItems: 64,
+    uniqueItems: true
+  }),
+  independence: Type.Union([Type.Literal("ambiguous"), Type.Literal("proven")]),
+  mandatoryVerification: packetStrings(1, 32),
+  ownedPaths: Type.Array(ownedPath(), {
+    minItems: 1,
+    maxItems: 128,
+    uniqueItems: true
+  }),
+  priority: Type.Integer({ minimum: 0, maximum: 4 }),
+  reservations: Type.Array(identifier(), {
+    maxItems: 64,
+    uniqueItems: true
+  }),
+  risk: Type.Union([
+    Type.Literal("critical"),
+    Type.Literal("high"),
+    Type.Literal("medium"),
+    Type.Literal("low")
+  ]),
+  unitId: identifier()
+});
 var UnitSchema = strictObject({
   id: identifier(),
   // Stable at planning time and never reassigned, even after a unit leaves
@@ -9725,6 +9891,8 @@ var UnitSchema = strictObject({
   revision: revision(),
   state: UnitStateSchema,
   baseOid: oid(),
+  /** Durable controller plan binding; absent only on a legacy v1 run. */
+  taskMetadata: Type.Optional(WaveTaskMetadataSchema),
   branchRef: Type.Optional(identifier()),
   worktreePath: Type.Optional(text()),
   reservationIds: Type.Array(identifier(), {
@@ -9733,16 +9901,19 @@ var UnitSchema = strictObject({
   }),
   candidateHead: Type.Optional(oid()),
   candidateTree: Type.Optional(oid()),
+  candidateDiffHash: Type.Optional(hash()),
   publishedHeadOid: Type.Optional(oid()),
   openPullRequest: Type.Optional(PullRequestObservationSchema),
   workerSessionId: Type.Optional(identifier()),
   workerRequestedModel: Type.Optional(text()),
   workerReturnedModel: Type.Optional(text()),
   workerPromptHash: Type.Optional(hash()),
+  workerPacket: Type.Optional(HarnessPacketBindingSchema),
   reviewerSessionId: Type.Optional(identifier()),
   reviewerRequestedModel: Type.Optional(text()),
   reviewerReturnedModel: Type.Optional(text()),
   reviewPromptHash: Type.Optional(hash()),
+  reviewerPacket: Type.Optional(HarnessPacketBindingSchema),
   verificationBaseOid: Type.Optional(oid()),
   verificationHeadOid: Type.Optional(oid()),
   verificationTree: Type.Optional(oid()),
@@ -9965,6 +10136,12 @@ var ControllerOwnershipSchema = strictObject({
     Type.Literal("released")
   ])
 });
+var HarnessConfigurationSchema = strictObject({
+  adapterVersion: Type.Integer({ minimum: 1, maximum: 1e6 }),
+  family: identifier(),
+  harnessVersion: Type.Integer({ minimum: 1, maximum: 1e6 }),
+  supportCommitment: hash()
+});
 var RepositoryRunSchema = strictObject({
   revision: revision(),
   state: AggregateStateSchema,
@@ -9977,6 +10154,7 @@ var RepositoryRunSchema = strictObject({
   gitObjectFormat: GitObjectFormatSchema,
   controllerFencingToken: identifier(),
   controller: ControllerOwnershipSchema,
+  harness: Type.Optional(HarnessConfigurationSchema),
   units: Type.Record(identifier(), UnitSchema, {
     maxProperties: LIMITS.units,
     additionalProperties: false
@@ -10156,6 +10334,22 @@ var JudgmentSchema = Type.Union([
 ]);
 var ProtocolEventSchema = Type.Union([
   strictObject({
+    configuration: HarnessConfigurationSchema,
+    eventId: identifier(),
+    expectedRevision: revision(),
+    type: Type.Literal("harness_configured")
+  }),
+  strictObject({
+    eventId: identifier(),
+    expectedRevision: revision(),
+    type: Type.Literal("wave_planned"),
+    tasks: Type.Array(WaveTaskMetadataSchema, {
+      minItems: 1,
+      maxItems: LIMITS.units
+    }),
+    waveId: identifier()
+  }),
+  strictObject({
     ...controllerEventBase,
     type: Type.Literal("controller_acquire_intent"),
     ...effectIntent,
@@ -10225,6 +10419,7 @@ var ProtocolEventSchema = Type.Union([
     ...eventBase,
     type: Type.Literal("dispatch_intent"),
     ...effectIntent,
+    packet: HarnessPacketBindingSchema,
     requestedModel: text(),
     promptHash: hash()
   }),
@@ -10243,6 +10438,7 @@ var ProtocolEventSchema = Type.Union([
     ...eventBase,
     type: Type.Literal("worker_collected"),
     ...observedEffect,
+    ...session,
     workerResult: WorkerResultSchema
   }),
   strictObject({
@@ -10255,7 +10451,8 @@ var ProtocolEventSchema = Type.Union([
     type: Type.Literal("candidate_observed"),
     ...observedEffect,
     headOid: oid(),
-    treeOid: oid()
+    treeOid: oid(),
+    candidateDiffHash: hash()
   }),
   strictObject({
     ...eventBase,
@@ -10275,6 +10472,7 @@ var ProtocolEventSchema = Type.Union([
     ...eventBase,
     type: Type.Literal("reviewer_dispatch_intent"),
     ...effectIntent,
+    packet: HarnessPacketBindingSchema,
     requestedModel: text(),
     promptHash: hash()
   }),
@@ -10345,6 +10543,7 @@ var ProtocolEventSchema = Type.Union([
     type: Type.Literal("repair_intent"),
     ...effectIntent,
     judgment: RepairDispositionJudgmentSchema,
+    packet: HarnessPacketBindingSchema,
     requestedModel: text(),
     promptHash: hash()
   }),
@@ -10392,7 +10591,22 @@ var ProtocolEventSchema = Type.Union([
   strictObject({
     ...eventBase,
     type: Type.Literal("cancel_observed"),
-    ...observedEffect
+    ...observedEffect,
+    role: Type.Literal("none")
+  }),
+  strictObject({
+    ...eventBase,
+    type: Type.Literal("cancel_observed"),
+    ...observedEffect,
+    ...session,
+    role: Type.Literal("worker")
+  }),
+  strictObject({
+    ...eventBase,
+    type: Type.Literal("cancel_observed"),
+    ...observedEffect,
+    ...session,
+    role: Type.Literal("reviewer")
   }),
   strictObject({
     eventId: identifier(),
@@ -10420,6 +10634,7 @@ var RuntimeReservationRequestSchema = strictObject({
 });
 var WorkerBindingSchema = strictObject({
   branchRef: identifier(),
+  packet: HarnessPacketBindingSchema,
   worktreePath: text(),
   requestedModel: text(),
   promptHash: hash()
@@ -10500,6 +10715,7 @@ var RuntimeEffectSchema = Type.Union([
     unitId: identifier(),
     params: strictObject({
       candidate: CandidateBindingSchema,
+      packet: HarnessPacketBindingSchema,
       requestedModel: text(),
       promptHash: hash()
     })
@@ -10625,84 +10841,6 @@ function formatError(error) {
 // src/protocol/reducer.ts
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 
-// src/protocol/canonical.ts
-var preserveStrings = () => "exact";
-function canonicalJson(value, stringPolicy = preserveStrings) {
-  return canonical(value, stringPolicy, []);
-}
-function canonical(value, stringPolicy, path2) {
-  if (value === null || typeof value === "boolean")
-    return JSON.stringify(value);
-  if (typeof value === "number") {
-    if (!Number.isFinite(value))
-      throw new TypeError("canonical JSON does not permit non-finite numbers");
-    return JSON.stringify(value);
-  }
-  if (typeof value === "string")
-    return JSON.stringify(normalizeString(value, stringPolicy(path2, "value")));
-  if (Array.isArray(value)) {
-    for (let index = 0; index < value.length; index += 1) {
-      if (!Object.hasOwn(value, index))
-        throw new TypeError("canonical JSON rejects sparse arrays");
-    }
-    return `[${value.map((item, index) => canonical(item, stringPolicy, [...path2, index])).join(",")}]`;
-  }
-  if (typeof value !== "object")
-    throw new TypeError("canonical JSON only permits JSON values");
-  const object5 = value;
-  const entries = Object.keys(object5).map((key) => ({
-    key,
-    normalizedKey: normalizeString(key, stringPolicy([...path2, key], "key"))
-  }));
-  entries.sort(
-    (left, right) => left.normalizedKey < right.normalizedKey ? -1 : left.normalizedKey > right.normalizedKey ? 1 : 0
-  );
-  for (let index = 1; index < entries.length; index += 1) {
-    if (entries[index - 1].normalizedKey === entries[index].normalizedKey)
-      throw new TypeError(
-        "canonical JSON rejects duplicate normalized object keys"
-      );
-  }
-  return `{${entries.map(
-    ({ key, normalizedKey }) => `${JSON.stringify(normalizedKey)}:${canonical(
-      object5[key],
-      stringPolicy,
-      [...path2, key]
-    )}`
-  ).join(",")}}`;
-}
-function normalizeString(value, normalization) {
-  if (normalization !== "exact" && normalization !== "nfc")
-    throw new TypeError(
-      "canonical JSON string policy must return exact or nfc"
-    );
-  return validString(normalization === "nfc" ? value.normalize("NFC") : value);
-}
-function validString(value) {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code >= 55296 && code <= 56319) {
-      const next = value.charCodeAt(index + 1);
-      if (!(next >= 56320 && next <= 57343))
-        throw new TypeError(
-          "canonical JSON rejects unpaired surrogate code units"
-        );
-      index += 1;
-    } else if (code >= 56320 && code <= 57343) {
-      throw new TypeError(
-        "canonical JSON rejects unpaired surrogate code units"
-      );
-    }
-  }
-  return value;
-}
-
-// src/protocol/evidence.ts
-import { createHash } from "node:crypto";
-function sha256(value) {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
-
 // src/protocol/guards.ts
 var TERMINAL_INTENT_STATES = /* @__PURE__ */ new Set([
   "planned",
@@ -10727,15 +10865,225 @@ var utf82 = new TextEncoder();
 function reduce(stateInput, eventInput) {
   return reduceInternal(stateInput, eventInput);
 }
+function reduceHarnessConfiguration(state, event) {
+  if (state.state !== "active" || state.controller.state !== "acquired")
+    return reject(
+      "illegal_transition",
+      "controller ownership has not been acquired"
+    );
+  if (state.harness !== void 0 || state.activeModifyingUnitIds.length !== 0 || state.currentReviewerUnitId !== void 0 || state.effectJournal.some(
+    (entry) => entry.status !== "observed" && ["dispatch", "repair", "review_dispatch"].includes(entry.kind)
+  ))
+    return reject(
+      "illegal_transition",
+      "harness configuration is immutable once session work begins"
+    );
+  return commit({ ...state, harness: event.configuration }, event, []);
+}
+function hasHarnessConfiguration(state) {
+  return state.harness !== void 0;
+}
+function deriveCandidateDiffHash(diff) {
+  return sha256(`sce.protocol.candidate-diff/v1
+${diff}`);
+}
+function committedTaskMetadataError(unit) {
+  if (unit.taskMetadata === void 0)
+    return "lacks committed wave task metadata";
+  if (unit.taskMetadata.unitId !== unit.id)
+    return "has committed wave task metadata for a different unit";
+  return void 0;
+}
+function committedVerificationError(unit) {
+  const metadataError = committedTaskMetadataError(unit);
+  if (metadataError !== void 0) return metadataError;
+  if (unit.verificationCommands === void 0 || unit.verificationCommands.length === 0)
+    return "lacks committed mandatory verification commands";
+  if (!sameStringArray(
+    unit.verificationCommands,
+    unit.taskMetadata.mandatoryVerification
+  ))
+    return "verification commands do not match committed wave task metadata";
+  return void 0;
+}
+function launchPacketError(packet, unit, role) {
+  try {
+    const decoded = JSON.parse(packet.payload);
+    const parsed = validate(HarnessPacketSchema, decoded);
+    if (!parsed.ok || parsed.value === void 0)
+      return "launch packet has invalid schema";
+    if (canonicalJson(parsed.value) !== packet.payload || sha256(`sce.harness-packet/v1
+${packet.payload}`) !== packet.hash)
+      return "launch packet payload/hash mismatch";
+    const value = parsed.value;
+    if (value.role !== role || value.unitId !== unit.id || value.baseOid !== unit.baseOid)
+      return "launch packet is not bound to the exact unit/base/role";
+    const metadataError = committedTaskMetadataError(unit);
+    if (metadataError !== void 0) return `launch packet ${metadataError}`;
+    const taskMetadata = unit.taskMetadata;
+    if (taskMetadata === void 0)
+      return "launch packet lacks committed wave task metadata";
+    if (taskMetadata.unitId !== unit.id || !sameStringArray(value.acceptance, taskMetadata.acceptanceIds) || !sameStringArray(value.ownedPaths, taskMetadata.ownedPaths) || !sameStringArray(
+      value.mandatoryVerification,
+      taskMetadata.mandatoryVerification
+    ))
+      return "launch packet does not bind committed wave task metadata";
+    if (role === "reviewer") {
+      if (value.role !== "reviewer" || value.headOid !== unit.candidateHead || unit.candidateHead === void 0 || unit.candidateTree === void 0 || unit.candidateDiffHash === void 0 || deriveCandidateDiffHash(value.diff) !== unit.candidateDiffHash)
+        return "review packet is not bound to the exact candidate diff";
+    }
+    return void 0;
+  } catch {
+    return "launch packet cannot be parsed";
+  }
+}
+function reduceWavePlan(state, event) {
+  if (state.state !== "active" || state.controller.state !== "acquired")
+    return reject(
+      "illegal_transition",
+      "controller ownership has not been acquired"
+    );
+  if (state.wave.unitIds.length !== 0 || state.activeModifyingUnitIds.length !== 0 || state.qualificationOwnerUnitId !== void 0 || state.integrationOwnerUnitId !== void 0 || state.currentReviewerUnitId !== void 0 || state.qualificationQueue.length !== 0 || state.integrationQueue.length !== 0 || state.effectJournal.some(
+    (entry) => entry.status === "intended" || entry.status === "ambiguous"
+  ))
+    return reject("illegal_transition", "prior wave has not drained");
+  if (Object.values(state.units).some((unit) => unit.state !== "planned"))
+    return reject(
+      "illegal_transition",
+      "only planned units may form a new wave"
+    );
+  const selected = selectWaveUnits(state, event.tasks);
+  if (!selected.ok) return reject("invalid_event", selected.reason);
+  const metadata = event.tasks.map(canonicalTaskMetadata);
+  if (!metadataFitsEnvelope(metadata))
+    return reject(
+      "invalid_event",
+      "wave task metadata exceeds durable envelope"
+    );
+  const byUnitId = new Map(metadata.map((task) => [task.unitId, task]));
+  return commit(
+    {
+      ...state,
+      units: Object.fromEntries(
+        Object.entries(state.units).map(([unitId, unit]) => [
+          unitId,
+          { ...unit, taskMetadata: byUnitId.get(unitId) }
+        ])
+      ),
+      wave: { id: event.waveId, unitIds: [...selected.value] }
+    },
+    event,
+    []
+  );
+}
+function canonicalTaskMetadata(task) {
+  return {
+    ...task,
+    acceptanceIds: sortedStrings(task.acceptanceIds),
+    conflictDomains: sortedStrings(task.conflictDomains),
+    dependencies: sortedStrings(task.dependencies),
+    mandatoryVerification: sortedStrings(task.mandatoryVerification),
+    ownedPaths: sortedStrings(task.ownedPaths),
+    reservations: sortedStrings(task.reservations)
+  };
+}
+function metadataFitsEnvelope(metadata) {
+  try {
+    return utf82.encode(canonicalJson(metadata)).byteLength <= LIMITS.envelopeBytes / 2;
+  } catch {
+    return false;
+  }
+}
+function sameStringArray(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+function sortedStrings(values) {
+  return [...values].sort((left, right) => left.localeCompare(right));
+}
+function selectWaveUnits(state, metadata) {
+  if (metadata.length !== Object.keys(state.units).length || new Set(metadata.map((task) => task.unitId)).size !== metadata.length || metadata.some((task) => state.units[task.unitId] === void 0))
+    return {
+      ok: false,
+      reason: "wave metadata must cover every remaining unit exactly once"
+    };
+  const byId = new Map(metadata.map((task) => [task.unitId, task]));
+  if (metadata.some(
+    (task) => task.dependencies.some(
+      (dependency) => byId.get(dependency) === void 0
+    ) || task.dependencies.includes(task.unitId) || task.ownedPaths.some((path2) => !validOwnedPath(path2))
+  ))
+    return {
+      ok: false,
+      reason: "wave metadata has unknown dependency or invalid owned path"
+    };
+  const depth = /* @__PURE__ */ new Map();
+  const visiting = /* @__PURE__ */ new Set();
+  const visit = (id) => {
+    const known = depth.get(id);
+    if (known !== void 0) return known;
+    if (visiting.has(id)) return void 0;
+    visiting.add(id);
+    const task = byId.get(id);
+    let current = 0;
+    for (const dependency of task.dependencies) {
+      const found = visit(dependency);
+      if (found === void 0) {
+        visiting.delete(id);
+        return void 0;
+      }
+      current = Math.max(current, found + 1);
+    }
+    visiting.delete(id);
+    depth.set(id, current);
+    return current;
+  };
+  if (metadata.some((task) => visit(task.unitId) === void 0))
+    return { ok: false, reason: "wave dependency graph contains a cycle" };
+  const ordered = metadata.filter((task) => task.dependencies.length === 0).sort(
+    (left, right) => depth.get(left.unitId) - depth.get(right.unitId) || riskOrder(left.risk) - riskOrder(right.risk) || left.priority - right.priority || left.unitId.localeCompare(right.unitId)
+  );
+  const first = ordered[0];
+  if (first === void 0)
+    return { ok: false, reason: "wave has no dependency-ready unit" };
+  if (ordered.some((task) => task.independence !== "proven"))
+    return { ok: true, value: [first.unitId] };
+  const selected = [first];
+  for (const candidate of ordered.slice(1)) {
+    if (candidate.independence !== "proven" || selected.some((other) => taskConflict(other, candidate)))
+      continue;
+    selected.push(candidate);
+    if (selected.length === 3) break;
+  }
+  return { ok: true, value: selected.map((task) => task.unitId) };
+}
+function validOwnedPath(path2) {
+  return path2.length > 0 && path2 !== "." && !path2.startsWith("/") && !path2.endsWith("/") && !path2.includes("//") && !path2.includes("\\") && !/^[A-Za-z]:/u.test(path2) && path2.split("/").every((part) => part !== "." && part !== "..");
+}
+function riskOrder(value) {
+  return { critical: 0, high: 1, low: 3, medium: 2 }[value];
+}
+function taskConflict(left, right) {
+  return left.acceptanceIds.some(
+    (acceptance) => right.acceptanceIds.includes(acceptance)
+  ) || left.conflictDomains.some(
+    (domain) => right.conflictDomains.includes(domain)
+  ) || left.reservations.some(
+    (reservation) => right.reservations.includes(reservation)
+  ) || left.ownedPaths.some(
+    (path2) => right.ownedPaths.some(
+      (other) => path2 === other || path2.startsWith(`${other}/`) || other.startsWith(`${path2}/`)
+    )
+  );
+}
 function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = false) {
   const parsedState = validate(RepositoryRunSchema, stateInput);
   if (!parsedState.ok || parsedState.value === void 0)
     return reject("invalid_state", parsedState.errors.join("; "));
-  const parsedEvent = validate(ProtocolEventSchema, eventInput);
-  if (!parsedEvent.ok || parsedEvent.value === void 0)
-    return reject("invalid_event", parsedEvent.errors.join("; "));
+  const parsedEvent2 = validate(ProtocolEventSchema, eventInput);
+  if (!parsedEvent2.ok || parsedEvent2.value === void 0)
+    return reject("invalid_event", parsedEvent2.errors.join("; "));
   const state = parsedState.value;
-  const event = parsedEvent.value;
+  const event = parsedEvent2.value;
   if (!reconcilingBlockedObservation) {
     const errors = runInvariantErrors(state);
     if (errors.length) return reject("invariant", errors.join("; "));
@@ -10763,6 +11111,9 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
       "invalid_event",
       "idempotency key is not deterministic for this run, revision, unit, and effect"
     );
+  if (event.type === "wave_planned") return reduceWavePlan(state, event);
+  if (event.type === "harness_configured")
+    return reduceHarnessConfiguration(state, event);
   if (event.type === "controller_acquire_intent" || event.type === "controller_acquired" || event.type === "controller_release_intent" || event.type === "controller_released")
     return reduceController(state, event);
   if (state.state === "released")
@@ -10894,6 +11245,23 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
       break;
     case "dispatch_intent":
       if (unit.state !== "worktree_observed") return illegal(unit, event.type);
+      if (!hasHarnessConfiguration(state))
+        return reject(
+          "illegal_transition",
+          "harness must be configured before dispatch"
+        );
+      const dispatchPacketError = launchPacketError(
+        event.packet,
+        unit,
+        "worker"
+      );
+      if (dispatchPacketError !== void 0)
+        return reject("invalid_event", dispatchPacketError);
+      if (event.promptHash !== event.packet.hash)
+        return reject(
+          "invalid_event",
+          "launch prompt hash must equal packet hash"
+        );
       if (state.activeModifyingUnitIds.length >= 3)
         return reject("invariant", "all three modifying slots are occupied");
       result2 = modifyingIntent(
@@ -10904,7 +11272,8 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
         "dispatch",
         {
           workerRequestedModel: event.requestedModel,
-          workerPromptHash: event.promptHash
+          workerPromptHash: event.promptHash,
+          workerPacket: event.packet
         }
       );
       break;
@@ -10930,10 +11299,20 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
       break;
     case "collect_intent":
       if (unit.state !== "dispatched") return illegal(unit, event.type);
+      if (!hasHarnessConfiguration(state))
+        return reject(
+          "illegal_transition",
+          "harness must be configured before collection"
+        );
       result2 = intent(state, unit, "collect_intent", event, "worker_collect");
       break;
     case "worker_collected":
       if (unit.state !== "collect_intent") return illegal(unit, event.type);
+      if (event.sessionId !== unit.workerSessionId || event.requestedModel !== unit.workerRequestedModel || event.returnedModel !== unit.workerReturnedModel || event.promptHash !== unit.workerPromptHash)
+        return reject(
+          "illegal_transition",
+          "worker collection is not bound to the dispatched session identity"
+        );
       if (!matchesIntended(state, event, unit.id, "worker_collect"))
         return badObservation();
       result2 = event.workerResult.status === "failed" ? observe(
@@ -11014,7 +11393,8 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
         event,
         {
           candidateHead: event.headOid,
-          candidateTree: event.treeOid
+          candidateTree: event.treeOid,
+          candidateDiffHash: event.candidateDiffHash
         },
         { qualificationQueue: insertSorted(state.qualificationQueue, unit.id) }
       );
@@ -11022,6 +11402,19 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
     case "verification_intent":
       if (unit.state !== "candidate_committed")
         return illegal(unit, event.type);
+      if (unit.taskMetadata === void 0)
+        return reject(
+          "invalid_event",
+          "verification lacks committed wave task metadata"
+        );
+      if (unit.taskMetadata.unitId !== unit.id || !sameStringArray(
+        event.commands,
+        unit.taskMetadata.mandatoryVerification
+      ))
+        return reject(
+          "invalid_event",
+          "verification commands do not bind committed wave task metadata"
+        );
       if (state.qualificationOwnerUnitId !== void 0 && state.qualificationOwnerUnitId !== unit.id)
         return reject(
           "invariant",
@@ -11055,6 +11448,23 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
     case "reviewer_dispatch_intent":
       if (unit.state !== "qualified" || state.qualificationOwnerUnitId !== unit.id || state.currentReviewerUnitId !== void 0)
         return illegal(unit, event.type);
+      if (!hasHarnessConfiguration(state))
+        return reject(
+          "illegal_transition",
+          "harness must be configured before review"
+        );
+      const reviewerPacketError = launchPacketError(
+        event.packet,
+        unit,
+        "reviewer"
+      );
+      if (reviewerPacketError !== void 0)
+        return reject("invalid_event", reviewerPacketError);
+      if (event.promptHash !== event.packet.hash)
+        return reject(
+          "invalid_event",
+          "launch prompt hash must equal packet hash"
+        );
       result2 = intent(
         state,
         unit,
@@ -11066,7 +11476,8 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
           units: replaceUnit(state, {
             ...unit,
             reviewerRequestedModel: event.requestedModel,
-            reviewPromptHash: event.promptHash
+            reviewPromptHash: event.promptHash,
+            reviewerPacket: event.packet
           })
         }
       );
@@ -11094,6 +11505,11 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
     case "review_collect_intent":
       if (unit.state !== "reviewer_dispatched" || state.currentReviewerUnitId !== unit.id)
         return illegal(unit, event.type);
+      if (!hasHarnessConfiguration(state))
+        return reject(
+          "illegal_transition",
+          "harness must be configured before review collection"
+        );
       result2 = intent(
         state,
         unit,
@@ -11293,6 +11709,19 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
           "illegal_transition",
           "repair judgment is not bound to this unit and revision"
         );
+      if (!hasHarnessConfiguration(state))
+        return reject(
+          "illegal_transition",
+          "harness must be configured before repair"
+        );
+      const repairPacketError = launchPacketError(event.packet, unit, "worker");
+      if (repairPacketError !== void 0)
+        return reject("invalid_event", repairPacketError);
+      if (event.promptHash !== event.packet.hash)
+        return reject(
+          "invalid_event",
+          "launch prompt hash must equal packet hash"
+        );
       if (unit.branchRef === void 0 || unit.worktreePath === void 0)
         return reject(
           "illegal_transition",
@@ -11302,7 +11731,8 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
         return reject("invariant", "all three modifying slots are occupied");
       result2 = modifyingIntent(state, unit, "repair_intent", event, "repair", {
         workerRequestedModel: event.requestedModel,
-        workerPromptHash: event.promptHash
+        workerPromptHash: event.promptHash,
+        workerPacket: event.packet
       });
       result2 = {
         ...result2,
@@ -11385,11 +11815,21 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
       break;
     case "cancel_intent":
       if (!canEnterTerminalIntent(unit.state)) return illegal(unit, event.type);
+      if ((state.activeModifyingUnitIds.includes(unit.id) || state.currentReviewerUnitId === unit.id) && !hasHarnessConfiguration(state))
+        return reject(
+          "illegal_transition",
+          "harness must be configured before session cancellation"
+        );
       result2 = terminalIntent(state, unit, "cancel_intent", event, "cancel");
       break;
     case "cancel_observed":
       if (unit.state !== "cancel_intent" || !matchesIntended(state, event, unit.id, "cancel"))
         return illegal(unit, event.type);
+      if (!matchesTerminalSession(state, unit, event))
+        return reject(
+          "illegal_transition",
+          "cancellation is not bound to the active session readback"
+        );
       result2 = observe(
         state,
         unit,
@@ -12038,6 +12478,7 @@ function runtimeEffectParams(state, unitId, kind, slotTransition) {
   if (unit === void 0) throw new Error(`${kind} has an unknown unit`);
   const worker = () => ({
     branchRef: required(unit.branchRef, "branch ref", kind),
+    packet: required(unit.workerPacket, "worker packet", kind),
     worktreePath: required(unit.worktreePath, "worktree path", kind),
     requestedModel: required(unit.workerRequestedModel, "worker model", kind),
     promptHash: required(unit.workerPromptHash, "worker prompt", kind)
@@ -12104,6 +12545,7 @@ function runtimeEffectParams(state, unitId, kind, slotTransition) {
     case "review_dispatch":
       return {
         candidate: candidate(),
+        packet: required(unit.reviewerPacket, "reviewer packet", kind),
         requestedModel: required(
           unit.reviewerRequestedModel,
           "reviewer model",
@@ -12163,6 +12605,13 @@ function terminalEffectParams(state, unit, kind) {
       sessionId: required(unit.workerSessionId, "worker session", kind)
     };
   return { role: "none" };
+}
+function matchesTerminalSession(state, unit, event) {
+  if (state.currentReviewerUnitId === unit.id)
+    return event.role === "reviewer" && event.sessionId === unit.reviewerSessionId && event.requestedModel === unit.reviewerRequestedModel && event.returnedModel === unit.reviewerReturnedModel && event.promptHash === unit.reviewPromptHash;
+  if (state.activeModifyingUnitIds.includes(unit.id))
+    return event.role === "worker" && event.sessionId === unit.workerSessionId && event.requestedModel === unit.workerRequestedModel && event.returnedModel === unit.workerReturnedModel && event.promptHash === unit.workerPromptHash;
+  return event.role === "none";
 }
 function required(value, name, kind) {
   if (value === void 0) throw new Error(`${kind} lacks ${name}`);
@@ -12517,10 +12966,10 @@ function denseJournalEntry(value) {
     intentCommitment,
     paramsHash,
     status,
-    observationHash2,
+    observationHash3,
     schemaVersion
   ] = values;
-  if (observationHash2 !== null && typeof observationHash2 !== "string")
+  if (observationHash3 !== null && typeof observationHash3 !== "string")
     return void 0;
   return {
     effectId,
@@ -12531,7 +12980,7 @@ function denseJournalEntry(value) {
     intentCommitment,
     paramsHash,
     status,
-    ...observationHash2 === null ? {} : { observationHash: observationHash2 },
+    ...observationHash3 === null ? {} : { observationHash: observationHash3 },
     schemaVersion
   };
 }
@@ -12891,12 +13340,12 @@ function observe(state, unit, next, event, unitChanges = {}, aggregateChanges = 
     effects: []
   };
 }
-function markObserved(state, effectId, observationHash2, changes = {}) {
+function markObserved(state, effectId, observationHash3, changes = {}) {
   return {
     ...state,
     ...changes,
     effectJournal: state.effectJournal.map(
-      (entry) => entry.effectId === effectId ? { ...entry, status: "observed", observationHash: observationHash2 } : entry
+      (entry) => entry.effectId === effectId ? { ...entry, status: "observed", observationHash: observationHash3 } : entry
     )
   };
 }
@@ -13314,6 +13763,16 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
       }
     }
   }
+  if (state.harness === void 0 && state.effectJournal.some(
+    (effect2) => (effect2.status === "intended" || effect2.status === "ambiguous") && [
+      "dispatch",
+      "worker_collect",
+      "review_dispatch",
+      "review_collect",
+      "repair"
+    ].includes(effect2.kind)
+  ))
+    errors.push("unresolved harness effects require harness configuration");
   const intentByState = {
     reservation_intent: "reservation_acquire",
     branch_intent: "branch_create",
@@ -13392,6 +13851,20 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
     if (["worktree_intent", "worktree_observed"].includes(unit.state) && unit.worktreePath === void 0)
       errors.push(`worktree lifecycle ${id} lacks worktree path`);
     if ([
+      "dispatch_intent",
+      "dispatched",
+      "collect_intent",
+      "collected",
+      "candidate_intent",
+      "repair_intent"
+    ].includes(unit.state) && unit.workerPacket === void 0)
+      errors.push(`worker lifecycle ${id} lacks exact launch packet`);
+    if (unit.workerPacket !== void 0) {
+      const packetError = launchPacketError(unit.workerPacket, unit, "worker");
+      if (packetError !== void 0)
+        errors.push(`worker packet ${id} ${packetError}`);
+    }
+    if ([
       "dispatched",
       "collect_intent",
       "collected",
@@ -13411,7 +13884,7 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
       "integrate_intent",
       "landed",
       "handoff"
-    ].includes(unit.state) && (unit.candidateHead === void 0 || unit.candidateTree === void 0))
+    ].includes(unit.state) && (unit.candidateHead === void 0 || unit.candidateTree === void 0 || unit.candidateDiffHash === void 0))
       errors.push(`candidate lifecycle ${id} lacks exact objects`);
     if ([
       "qualified",
@@ -13426,8 +13899,43 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
       "handoff"
     ].includes(unit.state) && (unit.verificationBaseOid === void 0 || unit.verificationHeadOid === void 0 || unit.verificationTree === void 0 || unit.verificationEvidenceHash === void 0))
       errors.push(`qualification lifecycle ${id} lacks verification evidence`);
-    if (unit.state === "verification_intent" && (unit.verificationCommands === void 0 || unit.verificationCommands.length === 0))
-      errors.push(`verification intent ${id} lacks commands`);
+    if (unit.verificationCommands !== void 0) {
+      const verificationError = committedVerificationError(unit);
+      if (verificationError !== void 0)
+        errors.push(`verification commands ${id} ${verificationError}`);
+    }
+    if ([
+      "verification_intent",
+      "qualified",
+      "reviewer_dispatch_intent",
+      "reviewer_dispatched",
+      "review_collect_intent",
+      "approved",
+      "publish_intent",
+      "published",
+      "integrate_intent",
+      "landed",
+      "handoff"
+    ].includes(unit.state)) {
+      const verificationError = committedVerificationError(unit);
+      if (verificationError !== void 0)
+        errors.push(`qualification ${id} ${verificationError}`);
+    }
+    if ([
+      "reviewer_dispatch_intent",
+      "reviewer_dispatched",
+      "review_collect_intent"
+    ].includes(unit.state) && unit.reviewerPacket === void 0)
+      errors.push(`review lifecycle ${id} lacks exact launch packet`);
+    if (unit.reviewerPacket !== void 0) {
+      const packetError = launchPacketError(
+        unit.reviewerPacket,
+        unit,
+        "reviewer"
+      );
+      if (packetError !== void 0)
+        errors.push(`review packet ${id} ${packetError}`);
+    }
     if (["reviewer_dispatched", "review_collect_intent"].includes(unit.state) && (unit.reviewerSessionId === void 0 || unit.reviewPromptHash === void 0 || unit.reviewerRequestedModel === void 0 || unit.reviewerReturnedModel === void 0))
       errors.push(`review lifecycle ${id} lacks bound session`);
     if ([
@@ -13616,6 +14124,669 @@ function exhaustive(value) {
   throw new Error(`Unhandled protocol event: ${JSON.stringify(value)}`);
 }
 
+// src/harness/index.ts
+var HARNESS_VERSION = 1;
+var PACKET_BYTES = HARNESS_PACKET_BYTES;
+var TOOL_REQUEST_BYTES = PACKET_BYTES + 4096;
+var strictObject2 = (properties) => Type.Object(properties, { additionalProperties: false });
+var identifier2 = () => Type.String({
+  minLength: 1,
+  maxLength: 160,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+});
+var model = () => Type.String({ minLength: 1, maxLength: 256 });
+var hash2 = () => Type.String({ minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" });
+var absolutePath = () => Type.String({ minLength: 2, maxLength: 8192, pattern: "^/[^\\u0000]*$" });
+var HarnessCapabilitiesSchema = strictObject2({
+  adapterVersion: Type.Literal(HARNESS_VERSION),
+  family: identifier2(),
+  harnessVersion: Type.Literal(HARNESS_VERSION),
+  operations: strictObject2({
+    cancel: Type.Boolean(),
+    collect: Type.Boolean(),
+    controllerIdentity: Type.Boolean(),
+    inspect: Type.Boolean(),
+    launch: Type.Boolean(),
+    lookupByClientKey: Type.Boolean(),
+    poll: Type.Boolean(),
+    returnedModelIdentity: Type.Boolean()
+  }),
+  schema: Type.Literal("sce.harness-capabilities"),
+  version: Type.Literal(HARNESS_VERSION)
+});
+var HarnessControllerIdentitySchema = strictObject2({
+  harnessFamily: identifier2(),
+  harnessVersion: Type.Literal(HARNESS_VERSION),
+  requestedModel: model(),
+  returnedModel: model(),
+  sessionId: identifier2()
+});
+var ModelRouteSchema = strictObject2({
+  acceptedReturnedModels: Type.Array(model(), {
+    minItems: 1,
+    maxItems: 16,
+    uniqueItems: true
+  }),
+  requestedModel: model()
+});
+var HarnessSupportSchema = strictObject2({
+  capabilities: HarnessCapabilitiesSchema,
+  controller: ModelRouteSchema,
+  frontier: ModelRouteSchema,
+  schema: Type.Literal("sce.harness-support"),
+  version: Type.Literal(HARNESS_VERSION),
+  workhorse: ModelRouteSchema
+});
+var HarnessLaunchRequestSchema = strictObject2({
+  clientKey: identifier2(),
+  packet: HarnessPacketBindingSchema,
+  promptHash: hash2(),
+  readOnly: Type.Boolean(),
+  requestedModel: model(),
+  role: Type.Union([Type.Literal("reviewer"), Type.Literal("worker")]),
+  unitId: identifier2(),
+  worktreePath: absolutePath()
+});
+var HarnessSessionSchema = strictObject2({
+  clientKey: identifier2(),
+  fresh: Type.Literal(true),
+  harnessFamily: identifier2(),
+  harnessVersion: Type.Literal(HARNESS_VERSION),
+  promptHash: hash2(),
+  readOnly: Type.Boolean(),
+  requestedModel: model(),
+  returnedModel: model(),
+  role: Type.Union([Type.Literal("reviewer"), Type.Literal("worker")]),
+  sessionId: identifier2(),
+  worktreePath: absolutePath()
+});
+var HarnessToolRequestBase = {
+  effectId: identifier2(),
+  effectKind: Type.Union([
+    Type.Literal("dispatch"),
+    Type.Literal("worker_collect"),
+    Type.Literal("review_dispatch"),
+    Type.Literal("review_collect"),
+    Type.Literal("repair"),
+    Type.Literal("cancel")
+  ]),
+  idempotencyKey: identifier2(),
+  schema: Type.Literal("sce.harness-tool-request"),
+  version: Type.Literal(HARNESS_VERSION)
+};
+var HarnessToolRequestSchema = Type.Union([
+  strictObject2({
+    ...HarnessToolRequestBase,
+    operation: Type.Literal("launch"),
+    request: HarnessLaunchRequestSchema
+  }),
+  strictObject2({
+    ...HarnessToolRequestBase,
+    operation: Type.Literal("lookup_inspect"),
+    request: HarnessLaunchRequestSchema
+  }),
+  strictObject2({
+    ...HarnessToolRequestBase,
+    operation: Type.Literal("collect"),
+    session: HarnessSessionSchema
+  }),
+  strictObject2({
+    ...HarnessToolRequestBase,
+    operation: Type.Literal("cancel"),
+    session: HarnessSessionSchema
+  }),
+  strictObject2({
+    ...HarnessToolRequestBase,
+    operation: Type.Literal("poll"),
+    session: HarnessSessionSchema
+  })
+]);
+var ToolAcknowledgementBase = {
+  effectId: identifier2(),
+  schema: Type.Literal("sce.harness-tool-acknowledgement"),
+  version: Type.Literal(HARNESS_VERSION)
+};
+var HarnessToolAcknowledgementSchema = Type.Union([
+  strictObject2({
+    ...ToolAcknowledgementBase,
+    kind: Type.Literal("launch"),
+    session: HarnessSessionSchema
+  }),
+  strictObject2({
+    ...ToolAcknowledgementBase,
+    kind: Type.Literal("launch_inspected"),
+    lookupSessionId: identifier2(),
+    session: HarnessSessionSchema
+  }),
+  strictObject2({
+    ...ToolAcknowledgementBase,
+    kind: Type.Literal("worker_collected"),
+    sessionId: identifier2(),
+    workerResult: WorkerResultSchema
+  }),
+  strictObject2({
+    ...ToolAcknowledgementBase,
+    judgment: ReviewerJudgmentSchema,
+    kind: Type.Literal("review_collected"),
+    sessionId: identifier2()
+  }),
+  strictObject2({
+    ...ToolAcknowledgementBase,
+    kind: Type.Literal("cancelled"),
+    sessionId: identifier2()
+  })
+]);
+function parseHarnessSupport(input) {
+  let parsed;
+  try {
+    parsed = validate(HarnessSupportSchema, input);
+  } catch {
+    return { ok: false, reason: "invalid harness support matrix" };
+  }
+  if (!parsed.ok || parsed.value === void 0)
+    return { ok: false, reason: "invalid harness support matrix" };
+  const support = parsed.value;
+  if (!support.capabilities.operations.launch || !support.capabilities.operations.inspect || !support.capabilities.operations.lookupByClientKey || !support.capabilities.operations.controllerIdentity || !support.capabilities.operations.poll || !support.capabilities.operations.collect || !support.capabilities.operations.cancel || !support.capabilities.operations.returnedModelIdentity)
+    return {
+      ok: false,
+      reason: "harness lacks a complete trusted lifecycle capability"
+    };
+  const workhorseIdentities = [
+    support.workhorse.requestedModel,
+    ...support.workhorse.acceptedReturnedModels
+  ];
+  const frontierTierIdentities = [
+    support.frontier.requestedModel,
+    ...support.frontier.acceptedReturnedModels,
+    support.controller.requestedModel,
+    ...support.controller.acceptedReturnedModels
+  ];
+  if (intersects(workhorseIdentities, frontierTierIdentities))
+    return { ok: false, reason: "model identities alias capability tiers" };
+  return { ok: true, value: support };
+}
+function harnessSupportCommitment(input) {
+  const parsed = parseHarnessSupport(input);
+  if (!parsed.ok) return parsed;
+  try {
+    return ok(sha256(canonicalJson(parsed.value)));
+  } catch {
+    return fail("support matrix cannot be canonicalized");
+  }
+}
+function createPacket(input) {
+  try {
+    const parsed = validate(
+      HarnessPacketInputSchema,
+      input
+    );
+    if (!parsed.ok || parsed.value === void 0)
+      return { ok: false, reason: "invalid harness packet" };
+    const packet = parsed.value;
+    const value = {
+      acceptance: sortedStrings2(packet.acceptance),
+      baseOid: packet.baseOid,
+      ...packet.role === "reviewer" ? { diff: packet.diff } : {},
+      ...packet.role === "reviewer" ? { headOid: packet.headOid } : {},
+      mandatoryVerification: sortedStrings2(packet.mandatoryVerification),
+      ownedPaths: sortedStrings2(packet.ownedPaths),
+      role: packet.role,
+      schema: "sce.harness-packet",
+      unitId: packet.unitId,
+      version: HARNESS_VERSION
+    };
+    const checked = validate(HarnessPacketSchema, value);
+    if (!checked.ok || checked.value === void 0)
+      return { ok: false, reason: "invalid harness packet" };
+    const canonical2 = checked.value;
+    const payload = canonicalJson(canonical2);
+    if (new TextEncoder().encode(payload).byteLength > PACKET_BYTES)
+      return { ok: false, reason: "packet exceeds bounded launch size" };
+    return {
+      hash: sha256(`sce.harness-packet/v1
+${payload}`),
+      ok: true,
+      payload,
+      schema: "sce.harness-packet",
+      version: HARNESS_VERSION
+    };
+  } catch {
+    return { ok: false, reason: "packet cannot be canonicalized" };
+  }
+}
+function createHarnessRecoveryEffectAdapter(supportInput, port) {
+  const parsedSupport = parseHarnessSupport(supportInput);
+  const support = parsedSupport.ok ? parsedSupport.value : void 0;
+  return {
+    canExecute: (effect2) => support !== void 0 && harnessEffect(effect2),
+    canReconcile: (effect2) => support !== void 0 && harnessEffect(effect2),
+    execute: async (effect2, run2) => await execute(effect2, run2, support, port),
+    reconcile: async (effect2, run2) => await reconcile(effect2, run2, support, port),
+    acknowledge: async (acknowledgement, run2) => acknowledgeHarnessTool(acknowledgement, run2, support)
+  };
+}
+function harnessEffect(effect2) {
+  return [
+    "dispatch",
+    "worker_collect",
+    "review_dispatch",
+    "review_collect",
+    "repair"
+  ].includes(effect2.kind) || effect2.kind === "cancel" && effect2.params.role !== "none";
+}
+async function execute(effect2, run2, support, port) {
+  if (!harnessEffect(effect2)) return { status: "unavailable" };
+  if (support === void 0) return { status: "unavailable" };
+  if (port === void 0) return toolRequest(effect2, run2, support);
+  const checked = await supportMatches(support, port);
+  if (!checked.ok) return { status: "ambiguous" };
+  if (!matchesConfiguration(run2, checked.value) || !controllerMatches(run2, checked.value))
+    return { status: "ambiguous" };
+  if (!await trustedController(run2, checked.value, port))
+    return { status: "ambiguous" };
+  if (effect2.kind === "dispatch" || effect2.kind === "repair" || effect2.kind === "review_dispatch") {
+    if (!checked.value.capabilities.operations.launch)
+      return { status: "ambiguous" };
+    const request = launchRequest(effect2, run2, checked.value);
+    if (!request.ok) return { status: "ambiguous" };
+    try {
+      const acknowledgement = await port.launch(request.value);
+      const launched = exactSession(
+        checked.value,
+        request.value,
+        acknowledgement
+      );
+      if (!launched.ok) return { status: "ambiguous" };
+      const inspected = await port.inspect(launched.value.sessionId);
+      if (inspected === void 0) return { status: "ambiguous" };
+      return observationForLaunch(
+        effect2,
+        run2,
+        checked.value,
+        request.value,
+        inspected
+      );
+    } catch {
+      return { status: "ambiguous" };
+    }
+  }
+  const session2 = sessionForEffect(effect2, run2, checked.value);
+  if (!session2.ok) return { status: "ambiguous" };
+  if ((effect2.kind === "worker_collect" || effect2.kind === "review_collect") && !checked.value.capabilities.operations.collect || effect2.kind === "cancel" && !checked.value.capabilities.operations.cancel)
+    return { status: "ambiguous" };
+  try {
+    const raw = effect2.kind === "worker_collect" || effect2.kind === "review_collect" ? await port.collect(effect2, session2.value) : await port.cancel(effect2, session2.value);
+    return acknowledgeHarnessTool(raw, run2, checked.value, effect2.effectId);
+  } catch {
+    return { status: "ambiguous" };
+  }
+}
+async function reconcile(effect2, run2, support, port) {
+  if (!harnessEffect(effect2)) return { status: "unavailable" };
+  if (support === void 0) return { status: "unavailable" };
+  if (port === void 0) return recoveryToolRequest(effect2, run2, support);
+  const checked = await supportMatches(support, port);
+  if (!checked.ok) return { status: "ambiguous" };
+  if (!matchesConfiguration(run2, checked.value) || !controllerMatches(run2, checked.value))
+    return { status: "ambiguous" };
+  if (!await trustedController(run2, checked.value, port))
+    return { status: "ambiguous" };
+  if (effect2.kind === "dispatch" || effect2.kind === "repair" || effect2.kind === "review_dispatch") {
+    if (!checked.value.capabilities.operations.lookupByClientKey)
+      return { status: "ambiguous" };
+    try {
+      const found = await port.lookupByClientKey(effect2.idempotencyKey);
+      if (found === void 0) return { status: "ambiguous" };
+      const request = launchRequest(effect2, run2, checked.value);
+      if (!request.ok) return { status: "ambiguous" };
+      const launched = exactSession(checked.value, request.value, found);
+      if (!launched.ok) return { status: "ambiguous" };
+      const inspected = await port.inspect(launched.value.sessionId);
+      return inspected === void 0 ? { status: "ambiguous" } : asReconcile(
+        observationForLaunch(
+          effect2,
+          run2,
+          checked.value,
+          request.value,
+          inspected
+        )
+      );
+    } catch {
+      return { status: "ambiguous" };
+    }
+  }
+  if (!checked.value.capabilities.operations.poll)
+    return { status: "ambiguous" };
+  const session2 = sessionForEffect(effect2, run2, checked.value);
+  if (!session2.ok) return { status: "ambiguous" };
+  try {
+    const terminal = await port.poll(session2.value.sessionId);
+    if (terminal === void 0) return { status: "ambiguous" };
+    return asReconcile(
+      acknowledgeHarnessTool(terminal, run2, checked.value, effect2.effectId)
+    );
+  } catch {
+    return { status: "ambiguous" };
+  }
+}
+function launchRequest(effect2, run2, support) {
+  if (effect2.unitId === null) return fail("harness effect lacks unit");
+  const unit = run2.units[effect2.unitId];
+  if (unit === void 0) return fail("harness unit is absent");
+  const reviewer = effect2.kind === "review_dispatch";
+  const worker = effect2.kind === "dispatch" || effect2.kind === "repair";
+  if (!reviewer && !worker) return fail("effect does not launch a session");
+  const params = effect2.params;
+  const worktreePath = canonicalAbsolutePath(unit.worktreePath);
+  if (worktreePath === void 0)
+    return fail("unit worktree is not canonical absolute");
+  if (!matchesConfiguration(run2, support) || !controllerMatches(run2, support) || params.requestedModel !== (reviewer ? support.frontier : support.workhorse).requestedModel)
+    return fail("model route does not match trusted support matrix");
+  if (params.promptHash !== params.packet.hash)
+    return fail("launch prompt hash is not bound to the exact packet");
+  return ok({
+    clientKey: effect2.idempotencyKey,
+    packet: params.packet,
+    promptHash: params.packet.hash,
+    readOnly: reviewer,
+    requestedModel: params.requestedModel,
+    role: reviewer ? "reviewer" : "worker",
+    unitId: unit.id,
+    worktreePath
+  });
+}
+function observationForLaunch(effect2, run2, support, request, raw) {
+  const session2 = exactSession(support, request, raw);
+  if (!session2.ok) return { status: "ambiguous" };
+  const type = request.role === "reviewer" ? "reviewer_observed" : effect2.kind === "repair" ? "repair_observed" : "dispatch_observed";
+  const event = {
+    effectId: effect2.effectId,
+    effectKind: effect2.kind,
+    eventId: `harness-${effect2.effectId}`,
+    expectedRevision: run2.revision,
+    observationHash: observationHash(effect2, session2.value),
+    promptHash: session2.value.promptHash,
+    requestedModel: session2.value.requestedModel,
+    returnedModel: session2.value.returnedModel,
+    sessionId: session2.value.sessionId,
+    type,
+    unitId: effect2.unitId
+  };
+  return parsedEvent(event);
+}
+function sessionForEffect(effect2, run2, support) {
+  if (effect2.unitId === null) return fail("harness effect lacks unit");
+  const unit = run2.units[effect2.unitId];
+  if (unit === void 0) return fail("harness unit is absent");
+  const reviewer = effect2.kind === "review_collect" || effect2.kind === "cancel" && effect2.params.role === "reviewer";
+  const sessionId = reviewer ? unit.reviewerSessionId : unit.workerSessionId;
+  const requestedModel = reviewer ? unit.reviewerRequestedModel : unit.workerRequestedModel;
+  const returnedModel = reviewer ? unit.reviewerReturnedModel : unit.workerReturnedModel;
+  const packet = reviewer ? unit.reviewerPacket : unit.workerPacket;
+  const promptHash = reviewer ? unit.reviewPromptHash : unit.workerPromptHash;
+  const worktreePath = canonicalAbsolutePath(unit.worktreePath);
+  if (sessionId === void 0 || requestedModel === void 0 || returnedModel === void 0 || packet === void 0 || promptHash === void 0 || worktreePath === void 0)
+    return fail("durable session binding is incomplete");
+  if (promptHash !== packet.hash)
+    return fail("durable prompt hash is not bound to the exact packet");
+  const request = {
+    clientKey: launchClientKey(run2, unit.id, reviewer ? "reviewer" : "worker"),
+    packet,
+    promptHash: packet.hash,
+    readOnly: reviewer,
+    requestedModel,
+    role: reviewer ? "reviewer" : "worker",
+    unitId: unit.id,
+    worktreePath
+  };
+  return exactSession(support, request, {
+    clientKey: request.clientKey,
+    fresh: true,
+    harnessFamily: support.capabilities.family,
+    harnessVersion: support.capabilities.harnessVersion,
+    promptHash: request.promptHash,
+    readOnly: request.readOnly,
+    requestedModel: request.requestedModel,
+    returnedModel,
+    role: request.role,
+    sessionId,
+    worktreePath: request.worktreePath
+  });
+}
+function acknowledgeHarnessTool(raw, run2, support, expectedEffectId) {
+  if (support === void 0) return { status: "unavailable" };
+  let parsed;
+  try {
+    parsed = validate(
+      HarnessToolAcknowledgementSchema,
+      raw
+    );
+  } catch {
+    return { status: "ambiguous" };
+  }
+  if (!parsed.ok || parsed.value === void 0) return { status: "ambiguous" };
+  const acknowledgement = parsed.value;
+  if (expectedEffectId !== void 0 && acknowledgement.effectId !== expectedEffectId || !matchesConfiguration(run2, support) || !controllerMatches(run2, support))
+    return { status: "ambiguous" };
+  const entry = run2.effectJournal.find(
+    (candidate) => candidate.effectId === acknowledgement.effectId && (candidate.status === "intended" || candidate.status === "ambiguous")
+  );
+  if (entry === void 0) return { status: "ambiguous" };
+  const effect2 = rehydrateEffect(run2, entry);
+  if (effect2 === void 0 || effect2.unitId === null)
+    return { status: "ambiguous" };
+  if (acknowledgement.kind === "launch") {
+    if (!["dispatch", "repair", "review_dispatch"].includes(effect2.kind))
+      return { status: "ambiguous" };
+    const request = launchRequest(effect2, run2, support);
+    if (!request.ok) return { status: "ambiguous" };
+    const launched = exactSession(
+      support,
+      request.value,
+      acknowledgement.session
+    );
+    return launched.ok ? recoveryToolRequest(effect2, run2, support) : { status: "ambiguous" };
+  }
+  if (acknowledgement.kind === "launch_inspected") {
+    if (!["dispatch", "repair", "review_dispatch"].includes(effect2.kind))
+      return { status: "ambiguous" };
+    if (acknowledgement.lookupSessionId !== acknowledgement.session.sessionId)
+      return { status: "ambiguous" };
+    const request = launchRequest(effect2, run2, support);
+    return request.ok ? observationForLaunch(
+      effect2,
+      run2,
+      support,
+      request.value,
+      acknowledgement.session
+    ) : { status: "ambiguous" };
+  }
+  const session2 = sessionForEffect(effect2, run2, support);
+  if (!session2.ok || acknowledgement.sessionId !== session2.value.sessionId)
+    return { status: "ambiguous" };
+  if (acknowledgement.kind === "worker_collected") {
+    if (effect2.kind !== "worker_collect") return { status: "ambiguous" };
+    return parsedEvent({
+      effectId: effect2.effectId,
+      effectKind: effect2.kind,
+      eventId: `harness-${effect2.effectId}`,
+      expectedRevision: run2.revision,
+      observationHash: observationHash(effect2, session2.value),
+      promptHash: session2.value.promptHash,
+      requestedModel: session2.value.requestedModel,
+      returnedModel: session2.value.returnedModel,
+      sessionId: session2.value.sessionId,
+      type: "worker_collected",
+      unitId: effect2.unitId,
+      workerResult: acknowledgement.workerResult
+    });
+  }
+  if (acknowledgement.kind === "review_collected") {
+    if (effect2.kind !== "review_collect" || acknowledgement.judgment.sessionId !== session2.value.sessionId || acknowledgement.judgment.requestedModel !== session2.value.requestedModel || acknowledgement.judgment.returnedModel !== session2.value.returnedModel || acknowledgement.judgment.promptHash !== session2.value.promptHash)
+      return { status: "ambiguous" };
+    return parsedEvent({
+      effectId: effect2.effectId,
+      effectKind: effect2.kind,
+      eventId: `harness-${effect2.effectId}`,
+      expectedRevision: run2.revision,
+      judgment: acknowledgement.judgment,
+      observationHash: observationHash(effect2, session2.value),
+      type: "review_collected",
+      unitId: effect2.unitId
+    });
+  }
+  if (acknowledgement.kind === "cancelled") {
+    if (effect2.kind !== "cancel") return { status: "ambiguous" };
+    return parsedEvent({
+      effectId: effect2.effectId,
+      effectKind: effect2.kind,
+      eventId: `harness-${effect2.effectId}`,
+      expectedRevision: run2.revision,
+      observationHash: observationHash(effect2, session2.value),
+      promptHash: session2.value.promptHash,
+      requestedModel: session2.value.requestedModel,
+      returnedModel: session2.value.returnedModel,
+      role: session2.value.role,
+      sessionId: session2.value.sessionId,
+      type: "cancel_observed",
+      unitId: effect2.unitId
+    });
+  }
+  return { status: "ambiguous" };
+}
+function toolRequest(effect2, run2, support, recovery = false) {
+  if (!matchesConfiguration(run2, support) || !controllerMatches(run2, support))
+    return { status: "ambiguous" };
+  const launch = ["dispatch", "repair", "review_dispatch"].includes(
+    effect2.kind
+  );
+  const request = launch ? launchRequest(effect2, run2, support) : void 0;
+  if (launch && !request?.ok) return { status: "ambiguous" };
+  const session2 = launch ? void 0 : sessionForEffect(effect2, run2, support);
+  if (!launch && !session2?.ok) return { status: "ambiguous" };
+  const raw = {
+    effectId: effect2.effectId,
+    effectKind: effect2.kind,
+    idempotencyKey: effect2.idempotencyKey,
+    operation: launch ? recovery ? "lookup_inspect" : "launch" : recovery ? "poll" : effect2.kind === "cancel" ? "cancel" : "collect",
+    ...request?.ok ? { request: request.value } : {},
+    schema: "sce.harness-tool-request",
+    ...session2?.ok ? { session: session2.value } : {},
+    version: HARNESS_VERSION
+  };
+  const parsed = validate(HarnessToolRequestSchema, raw);
+  if (!parsed.ok || parsed.value === void 0) return { status: "ambiguous" };
+  try {
+    if (new TextEncoder().encode(
+      canonicalJson(parsed.value)
+    ).byteLength > TOOL_REQUEST_BYTES)
+      return { status: "ambiguous" };
+  } catch {
+    return { status: "ambiguous" };
+  }
+  return { status: "tool_request", toolRequest: parsed.value };
+}
+function recoveryToolRequest(effect2, run2, support) {
+  const result2 = toolRequest(effect2, run2, support, true);
+  return result2.status === "tool_request" || result2.status === "unavailable" ? result2 : { status: "ambiguous" };
+}
+async function supportMatches(support, port) {
+  if (support === void 0) return fail("support matrix is invalid");
+  try {
+    const live = validate(
+      HarnessCapabilitiesSchema,
+      await port.capabilities()
+    );
+    if (!live.ok || live.value === void 0 || canonicalJson(live.value) !== canonicalJson(support.capabilities))
+      return fail("live harness capabilities do not match support matrix");
+    return ok(support);
+  } catch {
+    return fail("harness capabilities are unavailable");
+  }
+}
+async function trustedController(run2, support, port) {
+  try {
+    const parsed = validate(
+      HarnessControllerIdentitySchema,
+      await port.controllerIdentity()
+    );
+    if (!parsed.ok || parsed.value === void 0) return false;
+    const identity2 = parsed.value;
+    return identity2.harnessFamily === support.capabilities.family && identity2.harnessVersion === support.capabilities.harnessVersion && identity2.sessionId === run2.controller.incarnationId && identity2.requestedModel === run2.controller.requestedModel && identity2.returnedModel === run2.controller.returnedModel && support.controller.requestedModel === identity2.requestedModel && support.controller.acceptedReturnedModels.includes(identity2.returnedModel);
+  } catch {
+    return false;
+  }
+}
+function exactSession(support, request, raw) {
+  const parsed = parseSession(raw);
+  if (!parsed.ok) return parsed;
+  const session2 = parsed.value;
+  const route = request.role === "reviewer" ? support.frontier : support.workhorse;
+  if (session2.harnessFamily !== support.capabilities.family || session2.harnessVersion !== support.capabilities.harnessVersion || session2.clientKey !== request.clientKey || session2.promptHash !== request.promptHash || session2.readOnly !== request.readOnly || session2.requestedModel !== request.requestedModel || session2.role !== request.role || session2.worktreePath !== request.worktreePath || route.requestedModel !== session2.requestedModel || !route.acceptedReturnedModels.includes(session2.returnedModel))
+    return fail(
+      "session acknowledgement does not bind trusted launch identity"
+    );
+  return ok(session2);
+}
+function parseSession(input) {
+  try {
+    const parsed = validate(HarnessSessionSchema, input);
+    return parsed.ok && parsed.value !== void 0 ? ok(parsed.value) : fail("invalid harness session observation");
+  } catch {
+    return fail("invalid harness session observation");
+  }
+}
+function controllerMatches(run2, support) {
+  return run2.controller.requestedModel === support.controller.requestedModel && support.controller.acceptedReturnedModels.includes(
+    run2.controller.returnedModel
+  );
+}
+function matchesConfiguration(run2, support) {
+  const commitment = harnessSupportCommitment(support);
+  return commitment.ok && run2.harness !== void 0 && run2.harness.family === support.capabilities.family && run2.harness.adapterVersion === support.capabilities.adapterVersion && run2.harness.harnessVersion === support.capabilities.harnessVersion && run2.harness.supportCommitment === commitment.value;
+}
+function launchClientKey(run2, unitId, role) {
+  const entry = [...run2.effectJournal].reverse().find(
+    (candidate) => candidate.unitId === unitId && (role === "reviewer" ? candidate.kind === "review_dispatch" : candidate.kind === "dispatch" || candidate.kind === "repair")
+  );
+  return entry?.idempotencyKey ?? "missing-client-key";
+}
+function asReconcile(result2) {
+  return result2.status === "observed" ? { status: "observed", observation: result2.observation } : { status: "ambiguous" };
+}
+function parsedEvent(input) {
+  const parsed = validate(ProtocolEventSchema, input);
+  return parsed.ok && parsed.value !== void 0 ? { status: "observed", observation: parsed.value } : { status: "ambiguous" };
+}
+function observationHash(effect2, session2) {
+  return sha256(
+    canonicalJson({
+      effectId: effect2.effectId,
+      paramsHash: effect2.paramsHash,
+      returnedModel: session2.returnedModel,
+      sessionId: session2.sessionId
+    })
+  );
+}
+function canonicalAbsolutePath(value) {
+  if (value === void 0 || !isAbsolute(value) || value.includes("\0"))
+    return void 0;
+  const canonical2 = normalize(resolve(value));
+  return canonical2 === "/" || canonical2 !== value ? void 0 : canonical2;
+}
+function sortedStrings2(values) {
+  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+}
+function intersects(left, right) {
+  return left.some((value) => right.includes(value));
+}
+function ok(value) {
+  return { ok: true, value };
+}
+function fail(reason) {
+  return { ok: false, reason };
+}
+
 // src/protocol/actions.ts
 function legalActions(stateInput) {
   const parsed = validate(RepositoryRunSchema, stateInput);
@@ -13627,6 +14798,12 @@ function legalActions(stateInput) {
   const controllerActions = actionsForController(state);
   if (controllerActions !== void 0) return sortActions(controllerActions);
   if (state.controller.state !== "acquired") return [];
+  if (state.wave.unitIds.length === 0 && Object.keys(state.units).length > 0 && Object.values(state.units).every((unit) => unit.state === "planned"))
+    return [{ mode: "emit", type: "wave_planned" }];
+  if (state.harness === void 0 && Object.values(state.units).some(
+    (unit) => unit.state === "worktree_observed"
+  ))
+    return [{ mode: "emit", type: "harness_configured" }];
   return sortActions(
     Object.values(state.units).filter((unit) => state.wave.unitIds.includes(unit.id)).flatMap((unit) => actionsForUnit(state, unit)).filter(
       (action) => (action.mode !== "emit" || action.effectKind === void 0 || effectAllowed2(state, action.effectKind) && (action.unitId === void 0 || !hasUnresolvedUnitEffect2(state, action.unitId))) && (action.mode !== "record" || pendingUnitEffect(state, action))
@@ -13896,15 +15073,15 @@ import { tmpdir } from "node:os";
 import {
   basename,
   dirname,
-  isAbsolute as isAbsolute2,
+  isAbsolute as isAbsolute3,
   join,
-  normalize as normalize2,
+  normalize as normalize3,
   relative,
-  resolve as resolve2
+  resolve as resolve3
 } from "node:path";
 
 // src/preflight/identity.ts
-import { isAbsolute, normalize, resolve } from "node:path";
+import { isAbsolute as isAbsolute2, normalize as normalize2, resolve as resolve2 } from "node:path";
 
 // src/preflight/schemas.ts
 var import_ajv2 = __toESM(require_ajv(), 1);
@@ -13915,17 +15092,17 @@ var BD_CONTEXT_SCHEMA_VERSION = 1;
 var MAX_PATH_BYTES = 4096;
 var MAX_TEXT_BYTES = 8192;
 var utf83 = new TextEncoder();
-function strictObject2(properties) {
+function strictObject3(properties) {
   return Type.Object(properties, { additionalProperties: false });
 }
 var text2 = (maxLength = MAX_TEXT_BYTES) => Type.String({ minLength: 1, maxLength, maxUtf8Bytes: maxLength });
 var optionalText = (maxLength = MAX_TEXT_BYTES) => Type.Optional(text2(maxLength));
-var absolutePath = () => Type.String({
+var absolutePath2 = () => Type.String({
   minLength: 1,
   maxLength: MAX_PATH_BYTES,
   maxUtf8Bytes: MAX_PATH_BYTES
 });
-var identifier2 = () => Type.String({
+var identifier3 = () => Type.String({
   minLength: 1,
   maxLength: 160,
   pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
@@ -13948,11 +15125,11 @@ function isSchema(schema, value) {
   return ajv2.compile(schema)(value);
 }
 var InspectionCommandSchema = Type.Union([
-  strictObject2({
+  strictObject3({
     executable: Type.Literal("bd"),
     argv: Type.Tuple([Type.Literal("--version")])
   }),
-  strictObject2({
+  strictObject3({
     executable: Type.Literal("bd"),
     argv: Type.Tuple([
       Type.Literal("config"),
@@ -13961,7 +15138,7 @@ var InspectionCommandSchema = Type.Union([
       Type.Literal("--json")
     ])
   }),
-  strictObject2({
+  strictObject3({
     executable: Type.Literal("bd"),
     argv: Type.Tuple([
       Type.Literal("config"),
@@ -13970,11 +15147,11 @@ var InspectionCommandSchema = Type.Union([
       Type.Literal("--json")
     ])
   }),
-  strictObject2({
+  strictObject3({
     executable: Type.Literal("bd"),
     argv: Type.Tuple([Type.Literal("context"), Type.Literal("--json")])
   }),
-  strictObject2({
+  strictObject3({
     executable: Type.Literal("bd"),
     argv: Type.Tuple([
       Type.Literal("dolt"),
@@ -13982,7 +15159,7 @@ var InspectionCommandSchema = Type.Union([
       Type.Literal("--json")
     ])
   }),
-  strictObject2({
+  strictObject3({
     executable: Type.Literal("bd"),
     argv: Type.Tuple([
       Type.Literal("bootstrap"),
@@ -13990,28 +15167,28 @@ var InspectionCommandSchema = Type.Union([
       Type.Literal("--json")
     ])
   }),
-  strictObject2({
+  strictObject3({
     executable: Type.Literal("git"),
     argv: Type.Tuple([
       Type.Literal("rev-parse"),
       Type.Literal("--show-toplevel")
     ])
   }),
-  strictObject2({
+  strictObject3({
     executable: Type.Literal("git"),
     argv: Type.Tuple([
       Type.Literal("rev-parse"),
       Type.Literal("--git-common-dir")
     ])
   }),
-  strictObject2({
+  strictObject3({
     executable: Type.Literal("git"),
     argv: Type.Tuple([
       Type.Literal("rev-parse"),
       Type.Literal("--show-object-format")
     ])
   }),
-  strictObject2({
+  strictObject3({
     executable: Type.Literal("git"),
     argv: Type.Tuple([
       Type.Literal("config"),
@@ -14021,13 +15198,13 @@ var InspectionCommandSchema = Type.Union([
     ])
   })
 ]);
-var SanitizedSubprocessRequestSchema = strictObject2({
+var SanitizedSubprocessRequestSchema = strictObject3({
   command: InspectionCommandSchema,
-  cwd: absolutePath(),
+  cwd: absolutePath2(),
   maxOutputBytes: Type.Integer({ minimum: 1, maximum: 65536 }),
   timeoutMs: Type.Integer({ minimum: 1, maximum: 15e3 })
 });
-var SanitizedSubprocessObservationSchema = strictObject2({
+var SanitizedSubprocessObservationSchema = strictObject3({
   command: Type.String({ minLength: 1, maxLength: 80 }),
   outcome: Type.Union([
     Type.Literal("ok"),
@@ -14047,16 +15224,16 @@ var SanitizedSubprocessObservationSchema = strictObject2({
     ])
   )
 });
-var BdContextObservationSchema = strictObject2({
+var BdContextObservationSchema = strictObject3({
   backend: Type.Union([
     Type.Literal("dolt"),
     Type.Literal("none"),
     Type.Literal("uninitialized")
   ]),
   bd_version: text2(32),
-  beads_dir: Type.Optional(absolutePath()),
-  cwd_repo_root: absolutePath(),
-  database: Type.Optional(identifier2()),
+  beads_dir: Type.Optional(absolutePath2()),
+  cwd_repo_root: absolutePath2(),
+  database: Type.Optional(identifier3()),
   dolt_mode: Type.Optional(
     Type.Union([
       Type.Literal("embedded"),
@@ -14070,8 +15247,8 @@ var BdContextObservationSchema = strictObject2({
   ),
   is_redirected: Type.Optional(Type.Boolean()),
   is_worktree: Type.Optional(Type.Boolean()),
-  project_id: Type.Optional(identifier2()),
-  repo_root: Type.Optional(absolutePath()),
+  project_id: Type.Optional(identifier3()),
+  repo_root: Type.Optional(absolutePath2()),
   role: optionalText(80),
   schema_version: Type.Integer({
     minimum: 1,
@@ -14087,17 +15264,17 @@ var BdContextObservationSchema = strictObject2({
       Type.Literal("proxy")
     ])
   ),
-  prefix: Type.Optional(identifier2()),
-  rig: Type.Optional(identifier2()),
-  sync_ref: Type.Optional(identifier2()),
+  prefix: Type.Optional(identifier3()),
+  rig: Type.Optional(identifier3()),
+  sync_ref: Type.Optional(identifier3()),
   sync_remote: optionalText(1024),
   global: Type.Optional(Type.Boolean()),
   proxied: Type.Optional(Type.Boolean())
 });
-var BdDoltShowObservationSchema = strictObject2({
+var BdDoltShowObservationSchema = strictObject3({
   backend: Type.Literal("dolt"),
-  data_dir: absolutePath(),
-  database: identifier2(),
+  data_dir: absolutePath2(),
+  database: identifier3(),
   embedded: Type.Boolean(),
   schema_version: Type.Integer({
     minimum: 1,
@@ -14112,7 +15289,7 @@ var BdConfigLocationSchema = Type.Union([
   Type.Literal("config.yaml"),
   Type.Literal("database")
 ]);
-var BdConfigValueObservationSchema = strictObject2({
+var BdConfigValueObservationSchema = strictObject3({
   key: BdConfigKeySchema,
   location: Type.Optional(BdConfigLocationSchema),
   schema_version: Type.Integer({
@@ -14133,10 +15310,10 @@ var BootstrapActionSchema = Type.Union([
   Type.Literal("import"),
   Type.Literal("validate")
 ]);
-var BdBootstrapRawSchema = strictObject2({
+var BdBootstrapRawSchema = strictObject3({
   action: BootstrapActionSchema,
-  beads_dir: Type.Optional(absolutePath()),
-  database: Type.Optional(identifier2()),
+  beads_dir: Type.Optional(absolutePath2()),
+  database: Type.Optional(identifier3()),
   has_existing: Type.Boolean(),
   reason: text2(1024),
   schema_version: Type.Integer({
@@ -14145,18 +15322,18 @@ var BdBootstrapRawSchema = strictObject2({
   }),
   sync_remote: optionalText(1024)
 });
-var BootstrapPlanSchema = strictObject2({
+var BootstrapPlanSchema = strictObject3({
   action: BootstrapActionSchema,
-  beadsDir: Type.Optional(absolutePath()),
-  database: Type.Optional(identifier2())
+  beadsDir: Type.Optional(absolutePath2()),
+  database: Type.Optional(identifier3())
 });
-var DoltObservationSchema = strictObject2({
+var DoltObservationSchema = strictObject3({
   autoCommit: Type.Union([
     Type.Literal("off"),
     Type.Literal("on"),
     Type.Literal("batch")
   ]),
-  database: identifier2(),
+  database: identifier3(),
   head: Type.Optional(
     Type.String({
       minLength: 40,
@@ -14171,41 +15348,41 @@ var DoltObservationSchema = strictObject2({
     Type.Literal("unknown")
   ])
 });
-var GitInspectionSchema = strictObject2({
-  commonDir: absolutePath(),
+var GitInspectionSchema = strictObject3({
+  commonDir: absolutePath2(),
   objectFormat: Type.Union([Type.Literal("sha1"), Type.Literal("sha256")]),
-  providerId: Type.Optional(identifier2()),
+  providerId: Type.Optional(identifier3()),
   remoteUrls: Type.Array(text2(1024), { minItems: 0, maxItems: 16 }),
-  topLevel: absolutePath()
+  topLevel: absolutePath2()
 });
-var BeadsIdentitySchema = strictObject2({
-  beadsDir: Type.Optional(absolutePath()),
+var BeadsIdentitySchema = strictObject3({
+  beadsDir: Type.Optional(absolutePath2()),
   contextSchemaVersion: Type.Literal(BD_CONTEXT_SCHEMA_VERSION),
-  database: Type.Optional(identifier2()),
+  database: Type.Optional(identifier3()),
   mode: Type.Union([
     Type.Literal("embedded"),
     Type.Literal("managed_local_shared_server"),
     Type.Literal("external_server")
   ]),
-  prefix: Type.Optional(identifier2()),
-  projectId: Type.Optional(identifier2()),
+  prefix: Type.Optional(identifier3()),
+  projectId: Type.Optional(identifier3()),
   provenance: Type.Union([
     Type.Literal("embedded_config"),
     Type.Literal("shared_server_flag"),
     Type.Literal("external_server_flag")
   ]),
-  rig: Type.Optional(identifier2()),
+  rig: Type.Optional(identifier3()),
   server: Type.Optional(text2(320)),
-  storePath: Type.Optional(absolutePath()),
-  syncRef: Type.Optional(identifier2()),
+  storePath: Type.Optional(absolutePath2()),
+  syncRef: Type.Optional(identifier3()),
   syncRemote: optionalText(1024),
   toolVersion: Type.Literal(BD_VERSION)
 });
-var GitIdentitySchema = strictObject2({
-  commonDir: absolutePath(),
+var GitIdentitySchema = strictObject3({
+  commonDir: absolutePath2(),
   identity: text2(1024),
   objectFormat: Type.Union([Type.Literal("sha1"), Type.Literal("sha256")]),
-  topLevel: absolutePath()
+  topLevel: absolutePath2()
 });
 var RefusalCodeSchema = Type.Union([
   Type.Literal("PF_BD_UNAVAILABLE"),
@@ -14224,20 +15401,20 @@ var RefusalCodeSchema = Type.Union([
   Type.Literal("PF_SUBPROCESS_TIMEOUT"),
   Type.Literal("PF_SUBPROCESS_OUTPUT_LIMIT")
 ]);
-var ReadyPreflightSchema = strictObject2({
+var ReadyPreflightSchema = strictObject3({
   beads: BeadsIdentitySchema,
   git: GitIdentitySchema,
   status: Type.Literal("ready")
 });
-var UninitializedPreflightSchema = strictObject2({
+var UninitializedPreflightSchema = strictObject3({
   bootstrap: BootstrapPlanSchema,
   status: Type.Literal("uninitialized")
 });
-var RefusedPreflightSchema = strictObject2({
+var RefusedPreflightSchema = strictObject3({
   code: RefusalCodeSchema,
   status: Type.Literal("refused")
 });
-var PreflightEnvelopeSchema = strictObject2({
+var PreflightEnvelopeSchema = strictObject3({
   payload: Type.Union([
     ReadyPreflightSchema,
     UninitializedPreflightSchema,
@@ -14261,10 +15438,10 @@ function containsSecretShape(value) {
 }
 
 // src/preflight/identity.ts
-function canonicalAbsolutePath(value) {
-  if (value.includes("\0") || value.length === 0 || !isAbsolute(value) || containsSecretShape(value))
+function canonicalAbsolutePath2(value) {
+  if (value.includes("\0") || value.length === 0 || !isAbsolute2(value) || containsSecretShape(value))
     return void 0;
-  const canonical2 = normalize(resolve(value));
+  const canonical2 = normalize2(resolve2(value));
   return canonical2 === "/" ? void 0 : canonical2;
 }
 function canonicalRemotePath(value) {
@@ -14276,10 +15453,10 @@ function canonicalRemotePath(value) {
   return withoutGitSuffix;
 }
 function canonicalLocalBarePath(path2, canonicalize) {
-  const lexical = canonicalAbsolutePath(path2);
+  const lexical = canonicalAbsolutePath2(path2);
   if (lexical === void 0 || canonicalize === void 0) return void 0;
   const canonical2 = canonicalize(lexical);
-  return canonical2 === void 0 ? void 0 : canonicalAbsolutePath(canonical2);
+  return canonical2 === void 0 ? void 0 : canonicalAbsolutePath2(canonical2);
 }
 function decodeRemotePath(value) {
   try {
@@ -14291,7 +15468,7 @@ function decodeRemotePath(value) {
 function normalizeGitRemote(value, localBareCanonicalizer) {
   if (value !== value.trim() || value.length === 0 || containsSecretShape(value))
     return void 0;
-  if (isAbsolute(value)) {
+  if (isAbsolute2(value)) {
     if (!value.endsWith(".git")) return void 0;
     const path2 = canonicalLocalBarePath(value, localBareCanonicalizer);
     return path2 === void 0 ? void 0 : `local:${path2}`;
@@ -14364,7 +15541,7 @@ ajv3.addKeyword({
   validate: (limit, value) => utf84.encode(value).byteLength <= limit,
   errors: false
 });
-function strictObject3(properties) {
+function strictObject4(properties) {
   return Type.Object(properties, { additionalProperties: false });
 }
 var oid2 = () => Type.String({
@@ -14381,7 +15558,7 @@ var ProcessSignalSchema = Type.Union([
   Type.String({ minLength: 4, maxLength: 19, pattern: "^SIG[A-Z0-9]{1,16}$" }),
   Type.Null()
 ]);
-var GitResultSchema = strictObject3({
+var GitResultSchema = strictObject4({
   exitCode: Type.Union([
     Type.Integer({ minimum: 0, maximum: 255 }),
     Type.Null()
@@ -14391,7 +15568,7 @@ var GitResultSchema = strictObject3({
   timedOut: Type.Optional(Type.Boolean()),
   unavailable: Type.Optional(Type.Boolean())
 });
-var GitRepositorySchema = strictObject3({
+var GitRepositorySchema = strictObject4({
   commonDir: path(),
   cwd: path(),
   identity: Type.String({ minLength: 1, maxLength: 1024, maxUtf8Bytes: 1024 }),
@@ -14401,13 +15578,13 @@ var GitRepositorySchema = strictObject3({
     { maxItems: 16 }
   )
 });
-var GitSnapshotSchema = strictObject3({
+var GitSnapshotSchema = strictObject4({
   changedPaths: Type.Array(path(), { maxItems: 4096 }),
   clean: Type.Boolean(),
   head: oid2(),
   tree: oid2()
 });
-var GitEffectSchema = strictObject3({
+var GitEffectSchema = strictObject4({
   code: Type.Union([
     Type.Literal("GIT_OK"),
     Type.Literal("GIT_BAD_INPUT"),
@@ -14458,14 +15635,14 @@ function safePath(value) {
   return PATH.test(value) && !value.startsWith("-") && !value.includes("../");
 }
 function safeAbsolutePath(value) {
-  return isAbsolute2(value) && safePath(value) && normalize2(resolve2(value)) !== "/";
+  return isAbsolute3(value) && safePath(value) && normalize3(resolve3(value)) !== "/";
 }
 function scopedHookPath(value) {
   if (!safeAbsolutePath(value)) return false;
-  const root = normalize2(resolve2(tmpdir()));
-  const candidate = normalize2(resolve2(value));
+  const root = normalize3(resolve3(tmpdir()));
+  const candidate = normalize3(resolve3(value));
   const suffix = relative(root, candidate);
-  return !isAbsolute2(suffix) && !suffix.startsWith("../") && suffix.startsWith("sce-git-pre-push-") && !suffix.includes("/") && activeHookPaths.has(candidate);
+  return !isAbsolute3(suffix) && !suffix.startsWith("../") && suffix.startsWith("sce-git-pre-push-") && !suffix.includes("/") && activeHookPaths.has(candidate);
 }
 function allowedGitArgv(argv) {
   const [command, ...args] = argv;
@@ -14513,10 +15690,10 @@ function allowedGitArgv(argv) {
 function canonicalWorktreePath(value) {
   if (!safeAbsolutePath(value)) return void 0;
   try {
-    return normalize2(realpathSync(value));
+    return normalize3(realpathSync(value));
   } catch {
     try {
-      return join(normalize2(realpathSync(dirname(value))), basename(value));
+      return join(normalize3(realpathSync(dirname(value))), basename(value));
     } catch {
       return void 0;
     }
@@ -14524,9 +15701,9 @@ function canonicalWorktreePath(value) {
 }
 function canonicalExistingOrLexical(value) {
   try {
-    return normalize2(realpathSync(value));
+    return normalize3(realpathSync(value));
   } catch {
-    return normalize2(resolve2(value));
+    return normalize3(resolve3(value));
   }
 }
 function effect(state, code) {
@@ -14636,7 +15813,7 @@ async function verifyWorktreeOwnership(runner, repository, path2) {
   const observed2 = oneLine(result2.stdout);
   if (observed2 === void 0 || !safePath(observed2))
     return effect("refused", "GIT_FOREIGN_WORKTREE");
-  const commonDir = isAbsolute2(observed2) ? normalize2(resolve2(observed2)) : normalize2(resolve2(path2, observed2));
+  const commonDir = isAbsolute3(observed2) ? normalize3(resolve3(observed2)) : normalize3(resolve3(path2, observed2));
   return canonicalExistingOrLexical(commonDir) === canonicalExistingOrLexical(repository.commonDir) ? effect("observed", "GIT_OK") : effect("refused", "GIT_FOREIGN_WORKTREE");
 }
 async function verifyCleanWorktree(runner, repository, path2) {
@@ -14685,7 +15862,7 @@ exit 0
       { encoding: "utf8", mode: 448 }
     );
     await chmod(hook, 448);
-    activeHookPaths.add(normalize2(resolve2(directory)));
+    activeHookPaths.add(normalize3(resolve3(directory)));
     return await run(runner, repository, [
       "-c",
       `core.hooksPath=${directory}`,
@@ -14697,7 +15874,7 @@ exit 0
     return { exitCode: null, signal: null, stdout: "", unavailable: true };
   } finally {
     if (directory !== void 0) {
-      activeHookPaths.delete(normalize2(resolve2(directory)));
+      activeHookPaths.delete(normalize3(resolve3(directory)));
       await rm(directory, { force: true, recursive: true }).catch(
         () => void 0
       );
@@ -14724,7 +15901,7 @@ async function verifyRepository(runner, repository) {
   const objectFormat = oneLine(format.stdout);
   if (commonDir === void 0 || objectFormat === void 0 || !safePath(commonDir) || objectFormat !== repository.objectFormat)
     return effect("refused", "GIT_UNSUPPORTED_OBJECT_FORMAT");
-  const canonicalCommon = isAbsolute2(commonDir) ? normalize2(resolve2(commonDir)) : normalize2(resolve2(repository.cwd, commonDir));
+  const canonicalCommon = isAbsolute3(commonDir) ? normalize3(resolve3(commonDir)) : normalize3(resolve3(repository.cwd, commonDir));
   if (canonicalExistingOrLexical(canonicalCommon) !== canonicalExistingOrLexical(repository.commonDir))
     return effect("refused", "GIT_IDENTITY_MISMATCH");
   const noConfiguredRemotes = remotes.exitCode === 1 && remotes.signal === null && remotes.stdout.length === 0;
@@ -15086,7 +16263,7 @@ var FENCING_LIMITS = {
   changedRows: 64,
   projectionBytes: 196608
 };
-var identifier3 = () => Type.String({
+var identifier4 = () => Type.String({
   minLength: 1,
   maxLength: 160,
   pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
@@ -15096,25 +16273,25 @@ var holder = () => Type.String({
   maxLength: 321,
   pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
 });
-var hash2 = () => Type.String({ minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" });
+var hash3 = () => Type.String({ minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" });
 var revision2 = () => Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
 var FencingScopeSchema = strictObject({
-  beadsStoreIdentity: identifier3(),
-  gitRepositoryIdentity: identifier3(),
-  integrationBranch: identifier3()
+  beadsStoreIdentity: identifier4(),
+  gitRepositoryIdentity: identifier4(),
+  integrationBranch: identifier4()
 });
 var ChildRowReferenceSchema = strictObject({
-  commitment: hash2(),
+  commitment: hash3(),
   revision: revision2(),
-  unitId: identifier3()
+  unitId: identifier4()
 });
 var CheckpointObservationSchema = strictObject({
   aggregateRevision: revision2(),
-  changedRowsCommitment: hash2(),
-  rootCommitment: hash2()
+  changedRowsCommitment: hash3(),
+  rootCommitment: hash3()
 });
 var RootProjectionSchema = strictObject({
-  aggregateCommitment: hash2(),
+  aggregateCommitment: hash3(),
   aggregateRevision: revision2(),
   checkpoint: CheckpointObservationSchema,
   childRows: Type.Array(ChildRowReferenceSchema, {
@@ -15127,47 +16304,47 @@ var RootProjectionSchema = strictObject({
   version: Type.Literal(FENCING_SCHEMA_VERSION)
 });
 var ChildProjectionSchema = strictObject({
-  commitment: hash2(),
+  commitment: hash3(),
   holder: holder(),
   revision: revision2(),
   schema: Type.Literal("sce.fencing.child"),
   scope: FencingScopeSchema,
   unit: UnitSchema,
-  unitId: identifier3(),
+  unitId: identifier4(),
   version: Type.Literal(FENCING_SCHEMA_VERSION)
 });
 var ExpectedChildRowSchema = strictObject({
-  expectedCommitment: hash2(),
+  expectedCommitment: hash3(),
   expectedRevision: revision2(),
-  unitId: identifier3()
+  unitId: identifier4()
 });
 var ChangedRowSchema = strictObject({
-  expectedCommitment: hash2(),
+  expectedCommitment: hash3(),
   expectedRevision: revision2(),
-  nextCommitment: hash2(),
+  nextCommitment: hash3(),
   nextRevision: revision2(),
-  unitId: identifier3()
+  unitId: identifier4()
 });
 var ContinuationEvidenceSchema = strictObject({
   nextHolder: holder(),
-  observationHash: hash2(),
+  observationHash: hash3(),
   previousHolder: holder(),
-  scopeCommitment: hash2()
+  scopeCommitment: hash3()
 });
 var ReleaseEvidenceSchema = strictObject({
   available: Type.Literal(true),
   holder: holder(),
-  observationHash: hash2(),
-  scopeCommitment: hash2()
+  observationHash: hash3(),
+  scopeCommitment: hash3()
 });
 var MergeSlotObservationSchema = strictObject({
   actor: holder(),
   holder: Type.Optional(holder()),
   label: Type.Literal(MERGE_SLOT_LABEL),
-  readbackHash: hash2(),
+  readbackHash: hash3(),
   scope: FencingScopeSchema,
-  scopeCommitment: hash2(),
-  slotId: identifier3(),
+  scopeCommitment: hash3(),
+  slotId: identifier4(),
   status: Type.Union([Type.Literal("available"), Type.Literal("acquired")]),
   title: Type.Literal(MERGE_SLOT_TITLE),
   version: Type.Literal(FENCING_SCHEMA_VERSION)
@@ -15188,7 +16365,7 @@ var MutationBatchSchema = strictObject({
   }),
   checkpoint: CheckpointObservationSchema,
   continuation: Type.Optional(ContinuationEvidenceSchema),
-  expectedAggregateCommitment: hash2(),
+  expectedAggregateCommitment: hash3(),
   expectedAggregateRevision: revision2(),
   /** Exact holder predicate checked inside the topology transaction. */
   expectedHolder: holder(),
@@ -15233,8 +16410,8 @@ var RunStoreResultSchema = Type.Union([
 ]);
 var OperationLockStateSchema = strictObject({
   holder: holder(),
-  nonce: identifier3(),
-  scopeCommitment: hash2(),
+  nonce: identifier4(),
+  scopeCommitment: hash3(),
   version: Type.Literal(FENCING_SCHEMA_VERSION)
 });
 
@@ -15556,36 +16733,36 @@ function paths(commonDir) {
   }
 }
 function listen(socket) {
-  return new Promise((resolve5) => {
+  return new Promise((resolve6) => {
     const server = createServer((connection) => connection.destroy());
-    const fail = (error) => {
-      resolve5({ code: error.code ?? "UNKNOWN" });
+    const fail2 = (error) => {
+      resolve6({ code: error.code ?? "UNKNOWN" });
     };
-    server.once("error", fail);
+    server.once("error", fail2);
     server.listen(socket, () => {
-      server.removeListener("error", fail);
-      resolve5({ server });
+      server.removeListener("error", fail2);
+      resolve6({ server });
     });
   });
 }
 function socketIsLive(socketPath) {
-  return new Promise((resolve5) => {
+  return new Promise((resolve6) => {
     const socket = createConnection(socketPath);
     socket.once("connect", () => {
       socket.destroy();
-      resolve5(true);
+      resolve6(true);
     });
     socket.once("error", (error) => {
       socket.destroy();
       if (error.code === "ECONNREFUSED" || error.code === "ENOENT")
-        resolve5(false);
-      else resolve5(void 0);
+        resolve6(false);
+      else resolve6(void 0);
     });
   });
 }
 async function closeServer(server) {
-  return new Promise((resolve5) => {
-    server.close((error) => resolve5(error === void 0));
+  return new Promise((resolve6) => {
+    server.close((error) => resolve6(error === void 0));
   });
 }
 function removeSocket(path2, expected) {
@@ -15973,13 +17150,13 @@ function initialRequest(run2, holder4, scope) {
   );
   return parsed.ok && parsed.value !== void 0 ? parsed.value : void 0;
 }
-function ambiguousEvent(run2, entry, observationHash2) {
+function ambiguousEvent(run2, entry, observationHash3) {
   return {
     effectId: entry.effectId,
     effectKind: entry.kind,
     eventId: `recover-${entry.effectId}`,
     expectedRevision: run2.revision,
-    ...observationHash2 === void 0 ? {} : { observationHash: observationHash2 },
+    ...observationHash3 === void 0 ? {} : { observationHash: observationHash3 },
     type: "effect_ambiguous",
     unitId: entry.unitId
   };
@@ -16041,7 +17218,7 @@ function createRecoveryRunner(options) {
   async function persistEvent(beforeRoot, run2, event, preOwnership = false) {
     return persist(beforeRoot, reduce(run2, event), preOwnership);
   }
-  async function reconcile(root, run2) {
+  async function reconcile2(root, run2) {
     let currentRoot = root;
     let current = run2;
     for (const entry of current.effectJournal.filter(
@@ -16049,15 +17226,24 @@ function createRecoveryRunner(options) {
     )) {
       const effect2 = effectFor(entry, current);
       if (effect2 === void 0) return { status: "blocked" };
-      if (!isRecoverableEffect(effect2)) return { status: "blocked" };
+      if (!isRecoverableEffect(effect2) && !options.adapter.canReconcile?.(effect2))
+        return { status: "blocked" };
       const answer = await options.adapter.reconcile(effect2, current);
       if (answer.status === "unavailable") return { status: "unavailable" };
+      if (answer.status === "tool_request")
+        return {
+          revision: current.revision,
+          run: current,
+          status: "tool_request",
+          toolRequest: answer.toolRequest
+        };
       let settledAnswer = answer;
       if (answer.status === "absent") {
         try {
           fault("before_act");
           fault("during_act");
-          settledAnswer = await options.adapter.execute(effect2, current);
+          const acted = await options.adapter.execute(effect2, current);
+          settledAnswer = acted.status === "tool_request" ? { status: "ambiguous" } : acted;
           fault("after_act");
         } catch {
           settledAnswer = { status: "ambiguous" };
@@ -16099,7 +17285,7 @@ function createRecoveryRunner(options) {
       if (loadedResult.status !== "observed" && loadedResult.status !== "absent")
         return loadOutcome(loadedResult.status);
       if (loadedResult.status === "absent") {
-        if (requested === void 0 || options.initialRun === void 0 || options.preOwnership.createControllerAcquireIntent === void 0)
+        if (requested === void 0 || isHarnessAcknowledgementRequest(requested) || options.initialRun === void 0 || options.preOwnership.createControllerAcquireIntent === void 0)
           return { status: "uninitialized" };
         const initial = validate(
           RepositoryRunSchema,
@@ -16186,7 +17372,7 @@ function createRecoveryRunner(options) {
       if (runInvariantErrors(run2).length > 0 || loaded.root.holder !== proof.holder || run2.controller.holder !== proof.holder)
         return { status: "corrupt" };
       const root = loaded.root;
-      const reconciled = await reconcile(root, run2);
+      const reconciled = requested !== void 0 && isHarnessAcknowledgementRequest(requested) ? run2 : await reconcile2(root, run2);
       if (!isRun(reconciled)) return reconciled;
       if (requested === void 0)
         return {
@@ -16194,6 +17380,48 @@ function createRecoveryRunner(options) {
           revision: reconciled.revision,
           run: reconciled
         };
+      if (isHarnessAcknowledgementRequest(requested)) {
+        if (options.adapter.acknowledge === void 0)
+          return { status: "blocked" };
+        let acknowledged;
+        try {
+          acknowledged = await options.adapter.acknowledge(
+            requested.harnessAcknowledgement,
+            reconciled
+          );
+        } catch {
+          return { status: "ambiguous" };
+        }
+        if (acknowledged.status === "unavailable")
+          return { status: "unavailable" };
+        if (acknowledged.status === "tool_request")
+          return {
+            revision: reconciled.revision,
+            run: reconciled,
+            status: "tool_request",
+            toolRequest: acknowledged.toolRequest
+          };
+        if (acknowledged.status !== "observed") return { status: "blocked" };
+        const acknowledgementObservation = acknowledged.observation;
+        if (!("effectId" in acknowledgementObservation))
+          return { status: "blocked" };
+        const entry2 = reconciled.effectJournal.find(
+          (candidate) => candidate.effectId === acknowledgementObservation.effectId
+        );
+        if (entry2 === void 0) return { status: "blocked" };
+        const observed3 = observationFor(
+          reconciled,
+          entry2,
+          acknowledgementObservation
+        );
+        if (observed3 === void 0) return { status: "corrupt" };
+        const settled2 = await persistEvent(
+          makeRootProjection(reconciled),
+          reconciled,
+          observed3
+        );
+        return isRun(settled2) ? { status: "applied", revision: settled2.revision, run: settled2 } : settled2;
+      }
       const event = validate(ProtocolEventSchema, requested);
       if (!event.ok || event.value === void 0) return { status: "corrupt" };
       if (event.value.expectedRevision !== reconciled.revision)
@@ -16207,7 +17435,7 @@ function createRecoveryRunner(options) {
       const reduction = reduce(reconciled, prepared.event);
       if (!reduction.ok) return { status: "blocked" };
       const emitted = reduction.effects[0];
-      if (emitted !== void 0 && !isRecoverableEffect(emitted))
+      if (emitted !== void 0 && !isRecoverableEffect(emitted) && !options.adapter.canExecute?.(emitted))
         return { status: "blocked" };
       const preOwnership = isPreOwnershipAcquire(
         reconciled,
@@ -16237,6 +17465,13 @@ function createRecoveryRunner(options) {
       );
       if (entry === void 0) return { status: "corrupt" };
       if (acted.status === "unavailable") return { status: "unavailable" };
+      if (acted.status === "tool_request")
+        return {
+          revision: intent2.revision,
+          run: intent2,
+          status: "tool_request",
+          toolRequest: acted.toolRequest
+        };
       const observed2 = acted.status === "observed" ? observationFor(intent2, entry, acted.observation) : ambiguousEvent(intent2, entry, acted.observationHash);
       if (observed2 === void 0) return { status: "corrupt" };
       fault("before_observation_persist");
@@ -16258,7 +17493,10 @@ function createRecoveryRunner(options) {
     }
   };
 }
-function observationHash(value) {
+function isHarnessAcknowledgementRequest(value) {
+  return value !== null && typeof value === "object" && "harnessAcknowledgement" in value && Object.keys(value).length === 1;
+}
+function observationHash2(value) {
   return sha256(
     canonicalJson({ domain: "sce.recovery.observation.v1", value })
   );
@@ -16283,7 +17521,7 @@ function eventBase2(effect2, run2) {
     effectKind: effect2.kind,
     eventId: `recover-${effect2.effectId}`,
     expectedRevision: run2.revision,
-    observationHash: observationHash({
+    observationHash: observationHash2({
       effectId: effect2.effectId,
       kind: effect2.kind,
       paramsHash: effect2.paramsHash
@@ -16385,7 +17623,13 @@ function localIntegrationRef(branch) {
 }
 function createProductionRecoveryEffectAdapter(options) {
   const git = options.git;
+  const harness = options.harness === void 0 ? void 0 : createHarnessRecoveryEffectAdapter(
+    options.harness.support,
+    options.harness.port
+  );
   async function discover(effect2, run2) {
+    if (harness?.canReconcile?.(effect2))
+      return await harness.reconcile(effect2, run2);
     const done = observed(effect2, run2);
     if (done === void 0) return ambiguous();
     if (effect2.kind !== "controller_acquire" && effect2.kind !== "controller_release" && !gitMatchesRun(git.repository, run2) || (effect2.kind === "controller_acquire" || effect2.kind === "controller_release") && !transitionMatchesRun(effect2, run2))
@@ -16471,7 +17715,9 @@ function createProductionRecoveryEffectAdapter(options) {
       return ambiguous();
     }
   }
-  async function execute(effect2, run2) {
+  async function execute2(effect2, run2) {
+    if (harness?.canExecute?.(effect2))
+      return await harness.execute(effect2, run2);
     const done = observed(effect2, run2);
     if (done === void 0) return ambiguous();
     if (effect2.kind !== "controller_acquire" && effect2.kind !== "controller_release" && !gitMatchesRun(git.repository, run2) || (effect2.kind === "controller_acquire" || effect2.kind === "controller_release") && !transitionMatchesRun(effect2, run2))
@@ -16553,14 +17799,21 @@ function createProductionRecoveryEffectAdapter(options) {
       return ambiguous();
     }
   }
-  return { execute, reconcile: discover };
+  return {
+    canExecute: (effect2) => harness?.canExecute?.(effect2) ?? false,
+    canReconcile: (effect2) => harness?.canReconcile?.(effect2) ?? false,
+    acknowledge: async (acknowledgement, run2) => harness?.acknowledge === void 0 ? ambiguous() : await harness.acknowledge(acknowledgement, run2),
+    execute: execute2,
+    reconcile: discover
+  };
 }
 function createProductionRecoveryRunner(options) {
-  const { git, topology, ...recovery } = options;
+  const { git, topology, harness, ...recovery } = options;
   return createRecoveryRunner({
     ...recovery,
     adapter: createProductionRecoveryEffectAdapter({
       git,
+      ...harness === void 0 ? {} : { harness },
       ...topology === void 0 ? {} : { topology }
     }),
     ...topology?.prepareControllerTransition === void 0 ? {} : {
@@ -16598,9 +17851,11 @@ function executed(observedResult, result2) {
 // src/commands/index.ts
 var commandNames = [
   "inspect",
+  "harness-packet",
   "acquire-controller",
   "next",
   "plan-wave",
+  "configure-harness",
   "prepare-wave",
   "dispatch-request",
   "record-dispatch",
@@ -16626,7 +17881,7 @@ var MAX_CLI_REQUEST_BYTES = 128 * 1024;
 var MAX_CLI_RESPONSE_BYTES = 128 * 1024;
 var MAX_JSON_ITEMS = 256;
 var MAX_TEXT = 8192;
-function strictObject4(properties) {
+function strictObject5(properties) {
   return Type.Object(properties, { additionalProperties: false });
 }
 var JsonValueSchema = Type.Recursive(
@@ -16665,20 +17920,32 @@ var RequestMetadataSchema = {
   ),
   json: Type.Boolean()
 };
-var StateRequestSchema = strictObject4({ run: RepositoryRunSchema });
-var StateOptionsSchema = strictObject4({
+var StateRequestSchema = strictObject5({ run: RepositoryRunSchema });
+var StateOptionsSchema = strictObject5({
   ...RequestMetadataSchema,
   request: StateRequestSchema
 });
-var NoPayloadOptionsSchema = strictObject4(RequestMetadataSchema);
-var RecoveryPayloadSchema = strictObject4({
+var HarnessPacketOptionsSchema = strictObject5({
+  json: Type.Boolean(),
+  request: HarnessPacketInputSchema
+});
+var NoPayloadOptionsSchema = strictObject5(RequestMetadataSchema);
+var RecoveryEventPayloadSchema = strictObject5({
   event: Type.Optional(ProtocolEventSchema)
 });
-var RecoveryOptionsSchema = strictObject4({
-  ...RequestMetadataSchema,
-  request: Type.Optional(RecoveryPayloadSchema)
+var RecoveryAcknowledgementPayloadSchema = strictObject5({
+  harnessAcknowledgement: JsonObjectSchema
 });
-var StateCommandSchema = strictObject4({
+var RecoveryOptionsSchema = strictObject5({
+  ...RequestMetadataSchema,
+  request: Type.Optional(
+    Type.Union([
+      RecoveryEventPayloadSchema,
+      RecoveryAcknowledgementPayloadSchema
+    ])
+  )
+});
+var StateCommandSchema = strictObject5({
   command: Type.Union([
     Type.Literal("inspect"),
     Type.Literal("next"),
@@ -16688,17 +17955,24 @@ var StateCommandSchema = strictObject4({
   schema: Type.Literal("sce.command.request"),
   version: Type.Literal(1)
 });
-var FeedbackCommandSchema = strictObject4({
+var HarnessPacketCommandSchema = strictObject5({
+  command: Type.Literal("harness-packet"),
+  options: HarnessPacketOptionsSchema,
+  schema: Type.Literal("sce.command.request"),
+  version: Type.Literal(1)
+});
+var FeedbackCommandSchema = strictObject5({
   command: Type.Literal("feedback"),
   feedbackAction: FeedbackActionSchema,
   options: NoPayloadOptionsSchema,
   schema: Type.Literal("sce.command.request"),
   version: Type.Literal(1)
 });
-var UnavailableCommandSchema = strictObject4({
+var UnavailableCommandSchema = strictObject5({
   command: Type.Union([
     Type.Literal("acquire-controller"),
     Type.Literal("plan-wave"),
+    Type.Literal("configure-harness"),
     Type.Literal("prepare-wave"),
     Type.Literal("dispatch-request"),
     Type.Literal("record-dispatch"),
@@ -16718,28 +17992,29 @@ var UnavailableCommandSchema = strictObject4({
 });
 var CommandRequestSchema = Type.Union([
   StateCommandSchema,
+  HarnessPacketCommandSchema,
   FeedbackCommandSchema,
   UnavailableCommandSchema
 ]);
 var CommandRunnerResultSchema = Type.Union([
-  strictObject4({
+  strictObject5({
     result: JsonObjectSchema,
     schema: Type.Literal("sce.command.result"),
     status: Type.Literal("ok"),
     version: Type.Literal(1)
   }),
-  strictObject4({
+  strictObject5({
     code: Type.Literal("SCE_INVALID_STATE_REQUEST"),
     status: Type.Literal("invalid"),
     schema: Type.Literal("sce.command.result"),
     version: Type.Literal(1)
   }),
-  strictObject4({
+  strictObject5({
     schema: Type.Literal("sce.command.result"),
     status: Type.Literal("unavailable"),
     version: Type.Literal(1)
   }),
-  strictObject4({
+  strictObject5({
     code: Type.Literal("SCE_RECOVERY_BLOCKED"),
     schema: Type.Literal("sce.command.result"),
     status: Type.Literal("blocked"),
@@ -16778,6 +18053,20 @@ function validateCommandPayload(input) {
 }
 var stateOnlyCommandRunner = (request) => {
   if (!validateCommandRequest(request)) return invalidStateRequest();
+  if (isHarnessPacketCommandRequest(request)) {
+    const packet = createPacket(request.options.request);
+    return packet.ok ? {
+      result: {
+        hash: packet.hash,
+        payload: packet.payload,
+        schema: packet.schema,
+        version: packet.version
+      },
+      schema: "sce.command.result",
+      status: "ok",
+      version: 1
+    } : invalidStateRequest();
+  }
   if (!isStateCommandRequest(request)) return unavailable2();
   if (!("request" in request.options)) return invalidStateRequest();
   const parsedRun = validate(
@@ -16841,12 +18130,18 @@ var stateOnlyCommandRunner = (request) => {
 };
 var commandEvent = {
   "acquire-controller": ["controller_acquire_intent"],
+  "plan-wave": ["wave_planned"],
+  "configure-harness": ["harness_configured"],
   "prepare-wave": ["reservation_intent", "branch_intent", "worktree_intent"],
   "dispatch-request": ["dispatch_intent"],
-  "record-dispatch": ["dispatch_observed"],
-  "collect-candidate": ["candidate_intent"],
+  "record-dispatch": [
+    "dispatch_observed",
+    "repair_observed",
+    "reviewer_observed"
+  ],
+  "collect-candidate": ["collect_intent", "candidate_intent"],
   qualify: ["verification_intent"],
-  "review-prepare": ["reviewer_dispatch_intent"],
+  "review-prepare": ["reviewer_dispatch_intent", "review_collect_intent"],
   "review-record": ["review_collected"],
   publish: ["publish_intent"],
   integrate: ["integrate_intent"],
@@ -16855,6 +18150,8 @@ var commandEvent = {
 function createRecoveryCommandRunner(runner) {
   return async (request) => {
     if (!validateCommandRequest(request)) return invalidStateRequest();
+    if (isHarnessPacketCommandRequest(request))
+      return stateOnlyCommandRunner(request);
     if (isStateCommandRequest(request)) {
       const outcome2 = await runner();
       if (!("run" in outcome2))
@@ -16863,21 +18160,28 @@ function createRecoveryCommandRunner(runner) {
     }
     if (request.command === "feedback") return unavailable2();
     const payload = request.options.request;
-    const event = payload?.event;
+    const event = payload !== void 0 && "event" in payload ? payload.event : void 0;
+    const acknowledgement = payload !== void 0 && "harnessAcknowledgement" in payload ? payload.harnessAcknowledgement : void 0;
     const expected = commandEvent[request.command];
-    if (expected !== void 0 && (event === void 0 || !expected.includes(event.type)))
+    const acknowledgementCommand = request.command === "record-dispatch" || request.command === "collect-candidate" || request.command === "review-record";
+    if (acknowledgement !== void 0 && !acknowledgementCommand)
       return invalidStateRequest();
-    if (expected === void 0 && event !== void 0)
+    if (expected !== void 0 && acknowledgement === void 0 && (event === void 0 || !expected.includes(event.type)))
+      return invalidStateRequest();
+    if (expected === void 0 && (event !== void 0 || acknowledgement !== void 0))
       return invalidStateRequest();
     if (event !== void 0 && (request.options.expectedRevision !== void 0 && request.options.expectedRevision !== event.expectedRevision || request.options.idempotencyKey !== void 0 && (!("idempotencyKey" in event) || request.options.idempotencyKey !== event.idempotencyKey)))
       return invalidStateRequest();
-    const outcome = await runner(event);
+    const outcome = await runner(
+      acknowledgement === void 0 ? event : { harnessAcknowledgement: acknowledgement }
+    );
     if (!("revision" in outcome) || outcome.revision < 0)
       return outcome.status === "unavailable" ? unavailable2() : recoveryBlocked();
     return {
       result: {
         revision: outcome.revision,
-        status: outcome.status
+        status: outcome.status,
+        ..."toolRequest" in outcome && isJsonObject(outcome.toolRequest) ? { toolRequest: outcome.toolRequest } : {}
       },
       schema: "sce.command.result",
       status: "ok",
@@ -16908,6 +18212,9 @@ async function stateResult(command, run2) {
 function isStateCommandRequest(request) {
   return request.command === "inspect" || request.command === "next" || request.command === "status";
 }
+function isHarnessPacketCommandRequest(request) {
+  return request.command === "harness-packet";
+}
 function invalidStateRequest() {
   return {
     code: "SCE_INVALID_STATE_REQUEST",
@@ -16931,7 +18238,7 @@ function isJsonObject(value) {
 
 // src/controller-config.ts
 import { readFile } from "node:fs/promises";
-import { isAbsolute as isAbsolute6, normalize as normalize3, resolve as resolve3 } from "node:path";
+import { isAbsolute as isAbsolute7, normalize as normalize4, resolve as resolve4 } from "node:path";
 
 // src/adapters/beads-embedded/schemas.ts
 var PINNED_BD_ISSUE_BASE_KEYS = [
@@ -17153,7 +18460,7 @@ function validateSlotTransitionIntent(input, prefix, scope, mode, expectedHolder
 import { spawn as spawn2 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
 import { closeSync as closeSync2, openSync as openSync2, readSync, realpathSync as realpathSync3, statSync as statSync2 } from "node:fs";
-import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute3 } from "node:path";
+import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute4 } from "node:path";
 var MAX_OUTPUT_BYTES = 65536;
 var PINNED_BD_VERSION = "1.1.0";
 var PINNED_DOLT_VERSION = "2.2.1";
@@ -17169,21 +18476,21 @@ function executableDigest(path2, size) {
   let descriptor;
   try {
     descriptor = openSync2(path2, "r");
-    const hash3 = createHash2("sha256").update(`${size}:`);
+    const hash4 = createHash2("sha256").update(`${size}:`);
     const sample = Math.min(size, EXECUTABLE_SAMPLE_BYTES);
     const first = Buffer.alloc(sample);
     if (sample > 0)
-      hash3.update(first.subarray(0, readSync(descriptor, first, 0, sample, 0)));
+      hash4.update(first.subarray(0, readSync(descriptor, first, 0, sample, 0)));
     if (size > sample) {
       const last = Buffer.alloc(sample);
-      hash3.update(
+      hash4.update(
         last.subarray(
           0,
           readSync(descriptor, last, 0, sample, Math.max(0, size - sample))
         )
       );
     }
-    return hash3.digest("hex");
+    return hash4.digest("hex");
   } catch {
     return void 0;
   } finally {
@@ -18243,7 +19550,7 @@ var PinnedBdEmbeddedProcess = class {
     return this.runOnce(operational.path, argv);
   }
   async runOnce(executable, argv) {
-    return new Promise((resolve5) => {
+    return new Promise((resolve6) => {
       let stdout = "";
       let bytes2 = 0;
       let exceeded = false;
@@ -18273,14 +19580,14 @@ var PinnedBdEmbeddedProcess = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve5(void 0);
+          resolve6(void 0);
         }
       });
       child.once("close", (code) => {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve5({ code, exceeded, stdout });
+          resolve6({ code, exceeded, stdout });
         }
       });
     });
@@ -18377,7 +19684,7 @@ var PinnedBdEmbeddedProcess = class {
     return this.runDoltOnce(operational.path, cwd, argv);
   }
   executable(value) {
-    if (!isAbsolute3(value) || value.length > 4096 || value.includes("\0"))
+    if (!isAbsolute4(value) || value.length > 4096 || value.includes("\0"))
       return void 0;
     try {
       const path2 = realpathSync3.native(value);
@@ -18405,7 +19712,7 @@ var PinnedBdEmbeddedProcess = class {
     }
   }
   async runDoltOnce(executable, cwd, argv) {
-    return new Promise((resolve5) => {
+    return new Promise((resolve6) => {
       let stdout = "";
       let bytes2 = 0;
       let exceeded = false;
@@ -18435,14 +19742,14 @@ var PinnedBdEmbeddedProcess = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve5(void 0);
+          resolve6(void 0);
         }
       });
       child.once("close", (code) => {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve5({ code, exceeded, stdout });
+          resolve6({ code, exceeded, stdout });
         }
       });
     });
@@ -18453,7 +19760,7 @@ var PinnedBdEmbeddedProcess = class {
 import { spawn as spawn3 } from "node:child_process";
 import { createHash as createHash3 } from "node:crypto";
 import { closeSync as closeSync3, openSync as openSync3, readSync as readSync2, realpathSync as realpathSync4, statSync as statSync3 } from "node:fs";
-import { dirname as dirname3, isAbsolute as isAbsolute4 } from "node:path";
+import { dirname as dirname3, isAbsolute as isAbsolute5 } from "node:path";
 var MAX_OUTPUT_BYTES2 = 262144;
 var TIMEOUT_MS = 15e3;
 var PINNED_DOLT_VERSION2 = "2.2.1";
@@ -18466,21 +19773,21 @@ function executableDigest2(path2, size) {
   let descriptor;
   try {
     descriptor = openSync3(path2, "r");
-    const hash3 = createHash3("sha256").update(`${size}:`);
+    const hash4 = createHash3("sha256").update(`${size}:`);
     const sample = Math.min(size, EXECUTABLE_SAMPLE_BYTES2);
     const first = Buffer.alloc(sample);
     if (sample > 0)
-      hash3.update(first.subarray(0, readSync2(descriptor, first, 0, sample, 0)));
+      hash4.update(first.subarray(0, readSync2(descriptor, first, 0, sample, 0)));
     if (size > sample) {
       const last = Buffer.alloc(sample);
-      hash3.update(
+      hash4.update(
         last.subarray(
           0,
           readSync2(descriptor, last, 0, sample, Math.max(0, size - sample))
         )
       );
     }
-    return hash3.digest("hex");
+    return hash4.digest("hex");
   } catch {
     return void 0;
   } finally {
@@ -18951,7 +20258,7 @@ var DoltProjectionPersistence = class {
       this.rejectedExecutable = operational ?? executable;
       return void 0;
     }
-    return new Promise((resolve5) => {
+    return new Promise((resolve6) => {
       let output = "";
       let bytes2 = 0;
       let settled = false;
@@ -18982,14 +20289,14 @@ var DoltProjectionPersistence = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve5(void 0);
+          resolve6(void 0);
         }
       });
       child.once("close", (code) => {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve5(code === 0 && bytes2 <= MAX_OUTPUT_BYTES2 ? output : void 0);
+          resolve6(code === 0 && bytes2 <= MAX_OUTPUT_BYTES2 ? output : void 0);
         }
       });
     });
@@ -19000,7 +20307,7 @@ var DoltProjectionPersistence = class {
     return typeof value === "number" && Number.isSafeInteger(value) ? value : void 0;
   }
   executable() {
-    if (!isAbsolute4(this.doltExecutable) || this.doltExecutable.includes("\0"))
+    if (!isAbsolute5(this.doltExecutable) || this.doltExecutable.includes("\0"))
       return void 0;
     try {
       const path2 = realpathSync4.native(this.doltExecutable);
@@ -19025,7 +20332,7 @@ var DoltProjectionPersistence = class {
       this.versionCheck = void 0;
       this.versionExecutable = executable;
     }
-    this.versionCheck ??= new Promise((resolve5) => {
+    this.versionCheck ??= new Promise((resolve6) => {
       let output = "";
       let settled = false;
       const child = spawn3(executable.path, ["version"], {
@@ -19051,14 +20358,14 @@ var DoltProjectionPersistence = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve5(false);
+          resolve6(false);
         }
       });
       child.once("close", (code) => {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve5(
+          resolve6(
             code === 0 && output.split("\n", 1)[0] === `dolt version ${PINNED_DOLT_VERSION2}`
           );
         }
@@ -20046,7 +21353,7 @@ var EmbeddedBeadsAdapter = class {
 import { spawn as spawn4 } from "node:child_process";
 import { createHash as createHash4 } from "node:crypto";
 import { open, realpath, stat } from "node:fs/promises";
-import { dirname as dirname4, isAbsolute as isAbsolute5, join as join3 } from "node:path";
+import { dirname as dirname4, isAbsolute as isAbsolute6, join as join3 } from "node:path";
 var MAX_ENDPOINT_BYTES = 320;
 var MAX_SCHEMA_BYTES = 160;
 var MAX_FINGERPRINT_BYTES = 160;
@@ -20143,7 +21450,7 @@ var DoltSqlTransport = class {
   #executableSnapshot;
   #verifiedExecutable;
   constructor(input) {
-    if (!validIdentifier(input.user) || input.executable !== void 0 && !isAbsolute5(input.executable) || input.process === void 0 && input.executable === void 0 || input.identity.transportSecurity === "loopback_plaintext" && !loopbackEndpoint(input.identity.endpoint) || input.identity.topology === "external_server" && input.identity.transportSecurity !== "tls" && input.identity.transportSecurity !== "loopback_plaintext" || input.password !== void 0 && (!safeText(input.password, 4096) || containsSecretShape(input.password)))
+    if (!validIdentifier(input.user) || input.executable !== void 0 && !isAbsolute6(input.executable) || input.process === void 0 && input.executable === void 0 || input.identity.transportSecurity === "loopback_plaintext" && !loopbackEndpoint(input.identity.endpoint) || input.identity.topology === "external_server" && input.identity.transportSecurity !== "tls" && input.identity.transportSecurity !== "loopback_plaintext" || input.password !== void 0 && (!safeText(input.password, 4096) || containsSecretShape(input.password)))
       throw new Error("invalid Dolt SQL transport configuration");
     const role = input.role ?? (input.user === "worker" ? "worker" : "writer");
     const credentialReference = input.credentialReference ?? (role === "worker" ? input.identity.workerCredentialReference : input.identity.credentialReference);
@@ -20370,7 +21677,7 @@ var DoltSqlTransport = class {
   }
 };
 async function runDoltSql(request) {
-  return new Promise((resolve5) => {
+  return new Promise((resolve6) => {
     const child = spawn4(request.executable, request.argv, {
       env: request.env,
       stdio: ["ignore", "pipe", "pipe"]
@@ -20417,7 +21724,7 @@ async function runDoltSql(request) {
     child.once("close", (code) => {
       clearTimeout(timer);
       if (killTimer !== void 0) clearTimeout(killTimer);
-      resolve5({
+      resolve6({
         exitCode: capped || timedOut || failed ? void 0 : code ?? void 0,
         output,
         stderr,
@@ -20427,7 +21734,7 @@ async function runDoltSql(request) {
   });
 }
 async function runDoltSqlTransaction(input) {
-  return new Promise((resolve5) => {
+  return new Promise((resolve6) => {
     const child = spawn4(input.executable, input.argv, {
       env: {
         DOLT_CLI_PASSWORD: input.password ?? "",
@@ -20586,12 +21893,12 @@ async function runDoltSqlTransaction(input) {
     child.once("close", (code) => {
       clearTimeout(timer);
       if (killTimer !== void 0) clearTimeout(killTimer);
-      if (result2 !== void 0) return resolve5(result2);
+      if (result2 !== void 0) return resolve6(result2);
       if (code !== 0 || !finalSent || rowCount === void 0)
-        return resolve5({ status: "unavailable" });
+        return resolve6({ status: "unavailable" });
       if (rowCount !== input.expectedRows)
-        return resolve5({ status: "ok", rows: rowCount });
-      return resolve5(
+        return resolve6({ status: "ok", rows: rowCount });
+      return resolve6(
         postCommitClean && postCommitHead !== void 0 ? { status: "ok", rows: rowCount, committedHead: postCommitHead } : { status: "unavailable" }
       );
     });
@@ -20612,7 +21919,7 @@ var PinnedBdServerProcess = class {
   #executableSnapshot;
   #verifiedExecutable;
   constructor(input) {
-    if (!isAbsolute5(input.executable) || !isAbsolute5(input.workspace))
+    if (!isAbsolute6(input.executable) || !isAbsolute6(input.workspace))
       throw new Error("invalid pinned bd process configuration");
     this.#credentialEnvironment = input.credentialEnvironment;
     this.#executable = input.executable;
@@ -20770,7 +22077,7 @@ var PinnedBdServerProcess = class {
   }
   #matchesContext(context, identity2, workspace) {
     const endpoint = `${String(context.server_host ?? "")}:${String(context.server_port ?? "")}`;
-    if (context.backend !== "dolt" || context.database !== identity2.database || context.dolt_mode !== "server" || endpoint !== identity2.endpoint || typeof context.beads_dir !== "string" || !isAbsolute5(context.beads_dir))
+    if (context.backend !== "dolt" || context.database !== identity2.database || context.dolt_mode !== "server" || endpoint !== identity2.endpoint || typeof context.beads_dir !== "string" || !isAbsolute6(context.beads_dir))
       return false;
     if (identity2.topology === "managed_local_shared_server" && this.#runtimeEnvironment === void 0 || identity2.topology === "external_server" && this.#credentialEnvironment === void 0)
       return false;
@@ -20784,7 +22091,7 @@ var PinnedBdServerProcess = class {
       return { exitCode: void 0, output: "", timedOut: false };
     if (runtime !== void 0 && (Object.keys(runtime).some(
       (key) => key !== "HOME" && key !== "XDG_CONFIG_HOME"
-    ) || runtime.HOME !== void 0 && (!isAbsolute5(runtime.HOME) || !safeText(runtime.HOME, 4096)) || runtime.XDG_CONFIG_HOME !== void 0 && (!isAbsolute5(runtime.XDG_CONFIG_HOME) || !safeText(runtime.XDG_CONFIG_HOME, 4096))))
+    ) || runtime.HOME !== void 0 && (!isAbsolute6(runtime.HOME) || !safeText(runtime.HOME, 4096)) || runtime.XDG_CONFIG_HOME !== void 0 && (!isAbsolute6(runtime.XDG_CONFIG_HOME) || !safeText(runtime.XDG_CONFIG_HOME, 4096))))
       return { exitCode: void 0, output: "", timedOut: false };
     return this.#process({
       argv,
@@ -20804,7 +22111,7 @@ var PinnedBdServerProcess = class {
   }
 };
 async function runPinnedBd(request) {
-  return new Promise((resolve5) => {
+  return new Promise((resolve6) => {
     const child = spawn4(request.executable, request.argv, {
       env: request.env,
       stdio: ["ignore", "pipe", "ignore"]
@@ -20842,7 +22149,7 @@ async function runPinnedBd(request) {
     child.once("close", (code) => {
       clearTimeout(timer);
       if (killTimer !== void 0) clearTimeout(killTimer);
-      resolve5({
+      resolve6({
         exitCode: capped || timedOut || failed ? void 0 : code ?? void 0,
         output,
         timedOut: capped || timedOut
@@ -20925,7 +22232,7 @@ var PinnedBdManagedServerProcess = class {
   #verifiedDolt;
   #verifiedExecutable;
   constructor(input) {
-    if (!isAbsolute5(input.dataDirectory) || !isAbsolute5(input.doltExecutable) || !isAbsolute5(input.executable) || !isAbsolute5(input.workspace))
+    if (!isAbsolute6(input.dataDirectory) || !isAbsolute6(input.doltExecutable) || !isAbsolute6(input.executable) || !isAbsolute6(input.workspace))
       throw new Error("invalid pinned managed bd process configuration");
     this.#dataDirectory = input.dataDirectory;
     this.#doltExecutable = input.doltExecutable;
@@ -21027,7 +22334,7 @@ var PinnedBdManagedServerProcess = class {
         return void 0;
       if (!value.running)
         return value.data_dir === "" && value.pid === 0 && value.port === 0 ? "stopped" : void 0;
-      if (typeof value.data_dir !== "string" || !isAbsolute5(value.data_dir) || typeof value.pid !== "number" || !Number.isSafeInteger(value.pid) || value.pid <= 0 || typeof value.port !== "number" || !Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65535)
+      if (typeof value.data_dir !== "string" || !isAbsolute6(value.data_dir) || typeof value.pid !== "number" || !Number.isSafeInteger(value.pid) || value.pid <= 0 || typeof value.port !== "number" || !Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65535)
         return void 0;
       const [actual, expected] = await Promise.all([
         realpath(value.data_dir),
@@ -21050,7 +22357,7 @@ var PinnedBdManagedServerProcess = class {
     const runtime = this.#runtimeEnvironment?.();
     if (runtime !== void 0 && (Object.keys(runtime).some(
       (key) => key !== "HOME" && key !== "XDG_CONFIG_HOME"
-    ) || runtime.HOME !== void 0 && (!isAbsolute5(runtime.HOME) || !safeText(runtime.HOME, 4096)) || runtime.XDG_CONFIG_HOME !== void 0 && (!isAbsolute5(runtime.XDG_CONFIG_HOME) || !safeText(runtime.XDG_CONFIG_HOME, 4096))))
+    ) || runtime.HOME !== void 0 && (!isAbsolute6(runtime.HOME) || !safeText(runtime.HOME, 4096)) || runtime.XDG_CONFIG_HOME !== void 0 && (!isAbsolute6(runtime.XDG_CONFIG_HOME) || !safeText(runtime.XDG_CONFIG_HOME, 4096))))
       return { exitCode: void 0, output: "", timedOut: false };
     return this.#process({
       argv,
@@ -21141,7 +22448,7 @@ function mapFailure(failure2) {
 function sameServerIdentity(identity2, probe) {
   return identity2.endpoint === probe.endpoint && identity2.database === probe.database && identity2.schema === probe.schema && identity2.autoCommitPolicy === probe.autoCommitPolicy && identity2.credentialReference === probe.credentialReference && probe.workerGrant.credentialReference === identity2.workerCredentialReference && identity2.workerCredentialReference !== identity2.credentialReference;
 }
-var ServerProbeSchema = strictObject2({
+var ServerProbeSchema = strictObject3({
   autoCommitPolicy: Type.Union([
     Type.Literal("on"),
     Type.Literal("off"),
@@ -21154,7 +22461,7 @@ var ServerProbeSchema = strictObject2({
   database: Type.String({ minLength: 1, maxLength: MAX_SCHEMA_BYTES }),
   endpoint: Type.String({ minLength: 1, maxLength: MAX_ENDPOINT_BYTES }),
   schema: Type.String({ minLength: 1, maxLength: MAX_SCHEMA_BYTES }),
-  workerGrant: strictObject2({
+  workerGrant: strictObject3({
     credentialReference: Type.String({
       minLength: 1,
       maxLength: MAX_FINGERPRINT_BYTES
@@ -21163,7 +22470,7 @@ var ServerProbeSchema = strictObject2({
     writeDenied: Type.Boolean()
   })
 });
-var ServerIdentitySchema = strictObject2({
+var ServerIdentitySchema = strictObject3({
   autoCommitPolicy: Type.Union([
     Type.Literal("on"),
     Type.Literal("off"),
@@ -21194,7 +22501,7 @@ var ServerIdentitySchema = strictObject2({
     maxLength: MAX_FINGERPRINT_BYTES
   })
 });
-var ServerCommitReadbackSchema = strictObject2({
+var ServerCommitReadbackSchema = strictObject3({
   autoCommitPolicy: Type.Union([
     Type.Literal("on"),
     Type.Literal("off"),
@@ -22811,13 +24118,13 @@ function record(input, keys) {
 function text3(value, limit = 4096) {
   return typeof value === "string" && value.length > 0 && value.length <= limit && !value.includes("\0") ? value : void 0;
 }
-function absolutePath2(value) {
+function absolutePath3(value) {
   const path2 = text3(value);
-  if (path2 === void 0 || !isAbsolute6(path2)) return void 0;
-  const canonical2 = normalize3(resolve3(path2));
+  if (path2 === void 0 || !isAbsolute7(path2)) return void 0;
+  const canonical2 = normalize4(resolve4(path2));
   return canonical2 === "/" ? void 0 : canonical2;
 }
-function identifier4(value) {
+function identifier5(value) {
   const candidate = text3(value, 160);
   return candidate !== void 0 && SAFE_IDENTIFIER.test(candidate) ? candidate : void 0;
 }
@@ -22830,7 +24137,7 @@ function childRows2(value) {
     return void 0;
   const entries = Object.entries(value);
   if (entries.length > 64 || entries.some(
-    ([unit, row]) => identifier4(unit) === void 0 || identifier4(row) === void 0
+    ([unit, row]) => identifier5(unit) === void 0 || identifier5(row) === void 0
   ))
     return void 0;
   return Object.freeze(Object.fromEntries(entries));
@@ -22866,14 +24173,14 @@ function embeddedTopology(value) {
   const parsedRemote = remote2 === void 0 ? void 0 : record(remote2, ["name", "ref", "url"]);
   if (item.mode === "git-sync" && parsedRemote === void 0 || item.mode === "local-only" && parsedRemote !== void 0)
     return void 0;
-  const bdExecutable = absolutePath2(item.bdExecutable);
-  const doltExecutable = absolutePath2(item.doltExecutable);
-  const databaseDirectory = absolutePath2(item.databaseDirectory);
-  const rootBeadId = identifier4(item.rootBeadId);
-  const prefix = identifier4(item.prefix);
+  const bdExecutable = absolutePath3(item.bdExecutable);
+  const doltExecutable = absolutePath3(item.doltExecutable);
+  const databaseDirectory = absolutePath3(item.databaseDirectory);
+  const rootBeadId = identifier5(item.rootBeadId);
+  const prefix = identifier5(item.prefix);
   const mapped = childRows2(item.childBeadIds);
   const preflight = item.preflight;
-  if (bdExecutable === void 0 || doltExecutable === void 0 || databaseDirectory === void 0 || rootBeadId === void 0 || prefix === void 0 || mapped === void 0 || preflight.payload.status !== "ready" || preflight.payload.beads.mode !== "embedded" || preflight.payload.beads.prefix !== prefix || parsedRemote !== void 0 && (identifier4(parsedRemote.name) === void 0 || parsedRemote.ref !== "refs/dolt/data" || text3(parsedRemote.url, 1024) === void 0))
+  if (bdExecutable === void 0 || doltExecutable === void 0 || databaseDirectory === void 0 || rootBeadId === void 0 || prefix === void 0 || mapped === void 0 || preflight.payload.status !== "ready" || preflight.payload.beads.mode !== "embedded" || preflight.payload.beads.prefix !== prefix || parsedRemote !== void 0 && (identifier5(parsedRemote.name) === void 0 || parsedRemote.ref !== "refs/dolt/data" || text3(parsedRemote.url, 1024) === void 0))
     return void 0;
   return {
     bdExecutable,
@@ -22928,15 +24235,15 @@ function sharedServerTopology(value) {
   const identity2 = item.identity;
   if (rows === void 0 || identity2 === null || typeof identity2 !== "object" || Array.isArray(identity2))
     return void 0;
-  const bdExecutable = absolutePath2(item.bdExecutable);
-  const doltExecutable = absolutePath2(item.doltExecutable);
-  const workspace = absolutePath2(item.workspace);
-  const rootBeadId = identifier4(rows.rootBeadId);
+  const bdExecutable = absolutePath3(item.bdExecutable);
+  const doltExecutable = absolutePath3(item.doltExecutable);
+  const workspace = absolutePath3(item.workspace);
+  const rootBeadId = identifier5(rows.rootBeadId);
   const mapped = childRows2(rows.childBeadIds);
   const writerEnvironment = environmentName(item.writerEnvironment);
   const workerEnvironment = environmentName(item.workerEnvironment);
-  const writerUser = identifier4(item.writerUser);
-  const workerUser = identifier4(item.workerUser);
+  const writerUser = identifier5(item.writerUser);
+  const workerUser = identifier5(item.workerUser);
   const server = parseServerIdentity(identity2);
   if (bdExecutable === void 0 || doltExecutable === void 0 || workspace === void 0 || rootBeadId === void 0 || mapped === void 0 || writerEnvironment === void 0 || workerEnvironment === void 0 || writerEnvironment === workerEnvironment || writerUser === void 0 || workerUser === void 0 || server === void 0)
     return void 0;
@@ -22956,9 +24263,9 @@ function sharedServerTopology(value) {
       writerUser
     };
   }
-  const dataDirectory = absolutePath2(managed?.dataDirectory);
-  const runtimeHome = absolutePath2(managed?.runtimeHome);
-  const runtimeConfigHome = absolutePath2(managed?.runtimeConfigHome);
+  const dataDirectory = absolutePath3(managed?.dataDirectory);
+  const runtimeHome = absolutePath3(managed?.runtimeHome);
+  const runtimeConfigHome = absolutePath3(managed?.runtimeConfigHome);
   if (server.topology !== "managed_local_shared_server" || server.credentialProvenance !== "managed_local_runtime" || dataDirectory === void 0 || runtimeHome === void 0 || runtimeConfigHome === void 0)
     return void 0;
   return {
@@ -22998,11 +24305,11 @@ function parseServerIdentity(value) {
   const transportSecurity = item.transportSecurity;
   if (autoCommitPolicy !== "on" && autoCommitPolicy !== "off" && autoCommitPolicy !== "batch" || credentialProvenance !== "environment" && credentialProvenance !== "managed_local_runtime" || topology !== "external_server" && topology !== "managed_local_shared_server" || transportSecurity !== "tls" && transportSecurity !== "loopback_plaintext")
     return void 0;
-  const credentialReference = identifier4(item.credentialReference);
-  const workerCredentialReference = identifier4(item.workerCredentialReference);
-  const database = identifier4(item.database);
-  const prefix = identifier4(item.prefix);
-  const schema = identifier4(item.schema);
+  const credentialReference = identifier5(item.credentialReference);
+  const workerCredentialReference = identifier5(item.workerCredentialReference);
+  const database = identifier5(item.database);
+  const prefix = identifier5(item.prefix);
+  const schema = identifier5(item.schema);
   const endpoint = text3(item.endpoint, 320);
   if (credentialReference === void 0 || workerCredentialReference === void 0 || credentialReference === workerCredentialReference || database === void 0 || prefix === void 0 || schema === void 0 || endpoint === void 0)
     return void 0;
@@ -23021,7 +24328,7 @@ function parseServerIdentity(value) {
 }
 function parseControllerConfig(input) {
   if (containsSecretShape(input)) return void 0;
-  const value = record(input, [
+  const keys = [
     "git",
     "initialRun",
     "nonce",
@@ -23029,24 +24336,28 @@ function parseControllerConfig(input) {
     "scope",
     "topology",
     "version"
-  ]);
+  ];
+  const value = record(input, keys) ?? record(input, [...keys, "harnessSupport"]);
   if (value === void 0 || value.schema !== "sce.controller-config" || value.version !== 1 || !isSchema(RepositoryRunSchema, value.initialRun) || !isSchema(FencingScopeSchema, value.scope))
     return void 0;
   const git = record(value.git, ["remote", "repository"]) ?? record(value.git, ["repository"]);
   if (git === void 0 || !isSchema2(GitRepositorySchema, git.repository))
     return void 0;
-  const nonce = identifier4(value.nonce);
-  const remote2 = git.remote === void 0 ? void 0 : identifier4(git.remote);
+  const nonce = identifier5(value.nonce);
+  const remote2 = git.remote === void 0 ? void 0 : identifier5(git.remote);
   const topology = embeddedTopology(value.topology) ?? sharedServerTopology(value.topology);
   const run2 = value.initialRun;
+  const parsedHarness = value.harnessSupport === void 0 ? void 0 : parseHarnessSupport(value.harnessSupport);
+  const commitment = value.harnessSupport === void 0 ? void 0 : harnessSupportCommitment(value.harnessSupport);
   const scope = value.scope;
   const repository = git.repository;
-  if (nonce === void 0 || git.remote !== void 0 && remote2 === void 0 || topology === void 0 || canonicalGitCommonDir(repository.commonDir) !== repository.commonDir || absolutePath2(repository.cwd) !== repository.cwd || run2.controller.holder.length === 0 || run2.repositoryIdentity !== repository.identity || run2.repositoryIdentity !== scope.gitRepositoryIdentity || run2.storeIdentity !== scope.beadsStoreIdentity || run2.integrationBranch !== scope.integrationBranch)
+  if (nonce === void 0 || git.remote !== void 0 && remote2 === void 0 || topology === void 0 || parsedHarness !== void 0 && !parsedHarness.ok || commitment !== void 0 && !commitment.ok || run2.harness !== void 0 && parsedHarness === void 0 || parsedHarness !== void 0 && (run2.harness === void 0 || commitment === void 0 || !commitment.ok || run2.harness.family !== parsedHarness.value.capabilities.family || run2.harness.adapterVersion !== parsedHarness.value.capabilities.adapterVersion || run2.harness.harnessVersion !== parsedHarness.value.capabilities.harnessVersion || run2.harness.supportCommitment !== commitment.value) || canonicalGitCommonDir(repository.commonDir) !== repository.commonDir || absolutePath3(repository.cwd) !== repository.cwd || run2.controller.holder.length === 0 || run2.repositoryIdentity !== repository.identity || run2.repositoryIdentity !== scope.gitRepositoryIdentity || run2.storeIdentity !== scope.beadsStoreIdentity || run2.integrationBranch !== scope.integrationBranch)
     return void 0;
   if (topology.kind === "embedded" && (topology.preflight.payload.status !== "ready" || topology.preflight.payload.git.commonDir !== repository.commonDir || topology.preflight.payload.git.identity !== repository.identity || topology.preflight.payload.git.objectFormat !== repository.objectFormat))
     return void 0;
   return {
     git: { repository, ...remote2 === void 0 ? {} : { remote: remote2 } },
+    ...parsedHarness === void 0 ? {} : { harnessSupport: parsedHarness.value },
     initialRun: run2,
     nonce,
     scope,
@@ -23108,6 +24419,7 @@ function embeddedRunner(config, topology) {
   });
   return createProductionRecoveryCommandRunner({
     git: { ...config.git, runner: nodeGitRunner },
+    ...config.harnessSupport === void 0 ? {} : { harness: { support: config.harnessSupport } },
     initialRun: config.initialRun,
     nonce: config.nonce,
     preOwnership: adapter,
@@ -23167,6 +24479,7 @@ async function sharedServerRunner(config, topology, environment = (name) => proc
     if ((await adapter.preflight()).status !== "ready") return void 0;
     return createProductionRecoveryCommandRunner({
       git: { ...config.git, runner: nodeGitRunner },
+      ...config.harnessSupport === void 0 ? {} : { harness: { support: config.harnessSupport } },
       initialRun: config.initialRun,
       nonce: config.nonce,
       preOwnership: adapter,
@@ -23179,7 +24492,7 @@ async function sharedServerRunner(config, topology, environment = (name) => proc
   }
 }
 async function createControllerConfigRunner(path2, dependencies = {}) {
-  if (!isAbsolute6(path2)) return void 0;
+  if (!isAbsolute7(path2)) return void 0;
   let source;
   try {
     source = await readFile(path2, "utf8");
@@ -23395,12 +24708,12 @@ function parseOptions(values) {
   };
 }
 function parseControllerConfigPath(value) {
-  if (!isAbsolute7(value) || value.length > 4096 || value.includes("\0"))
+  if (!isAbsolute8(value) || value.length > 4096 || value.includes("\0"))
     throw new CliError(
       "SCE_INVALID_OPTION_VALUE",
       "--controller-config must be an absolute path."
     );
-  const path2 = normalize4(resolve4(value));
+  const path2 = normalize5(resolve5(value));
   if (path2 === "/")
     throw new CliError(
       "SCE_INVALID_OPTION_VALUE",
