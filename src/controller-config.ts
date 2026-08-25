@@ -591,12 +591,14 @@ async function sharedServerRunner(
       executable: topology.doltExecutable,
       identity: topology.identity,
       password: writerPassword,
+      role: "writer",
       user: topology.writerUser,
     });
     const worker = new DoltSqlTransport({
       executable: topology.doltExecutable,
       identity: topology.identity,
       password: workerPassword,
+      role: "worker",
       user: topology.workerUser,
     });
     const childRuntime = topology.managed

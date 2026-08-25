@@ -2604,6 +2604,145 @@ test("concrete Dolt transport allows plaintext only for loopback endpoints", () 
   );
 });
 
+test("explicit transport roles bind nonliteral controller and reader principals", async () => {
+  const serverIdentity = externalIdentity();
+  const observedUsers: string[] = [];
+  const sql = async ({ argv }: { argv: readonly string[] }) => {
+    const user = argv[argv.indexOf("--user") + 1] ?? "";
+    const query = argv[argv.indexOf("-q") + 1] ?? "";
+    observedUsers.push(user);
+    if (query.startsWith("UPDATE `sce`.issues"))
+      return {
+        exitCode: 1,
+        output: "",
+        stderr: `error on line 1 for query ${query}: Error 1105 (HY000): command denied to user '${user}'@'%'`,
+        timedOut: false,
+      };
+    if (
+      query.startsWith("SELECT table_name FROM") &&
+      query.includes("table_name = 'issues'")
+    )
+      return {
+        exitCode: 0,
+        output: '[{"table_name":"issues"}]',
+        timedOut: false,
+      };
+    if (
+      query.startsWith("SELECT table_name FROM") &&
+      query.includes("table_name = 'labels'")
+    )
+      return {
+        exitCode: 0,
+        output: '[{"table_name":"labels"}]',
+        timedOut: false,
+      };
+    if (
+      query.includes("information_schema.columns") &&
+      query.includes("issues")
+    )
+      return {
+        exitCode: 0,
+        output:
+          '[{"column_name":"id","data_type":"varchar"},{"column_name":"status","data_type":"varchar"},{"column_name":"metadata","data_type":"json"},{"column_name":"external_ref","data_type":"varchar"},{"column_name":"title","data_type":"varchar"},{"column_name":"design","data_type":"longtext"}]',
+        timedOut: false,
+      };
+    if (
+      query.includes("information_schema.columns") &&
+      query.includes("labels")
+    )
+      return {
+        exitCode: 0,
+        output:
+          '[{"column_name":"issue_id","data_type":"varchar"},{"column_name":"label","data_type":"varchar"}]',
+        timedOut: false,
+      };
+    if (query === "SELECT @@autocommit AS auto_commit")
+      return { exitCode: 0, output: '[{"auto_commit":"1"}]', timedOut: false };
+    if (query.startsWith("SET @@SESSION.dolt_transaction_commit"))
+      return {
+        exitCode: 0,
+        output: '[]\n[{"dolt_transaction_commit":"1"}]',
+        timedOut: false,
+      };
+    if (query === "SELECT * FROM dolt_status")
+      return { exitCode: 0, output: "[]", timedOut: false };
+    if (query === "SELECT DOLT_HASHOF('HEAD') AS head")
+      return {
+        exitCode: 0,
+        output: `[{"head":"${"a".repeat(40)}"}]`,
+        timedOut: false,
+      };
+    if (query === "SELECT DATABASE() AS current_database")
+      return {
+        exitCode: 0,
+        output: '[{"current_database":"sce"}]',
+        timedOut: false,
+      };
+    if (query === "SELECT DOLT_VERSION() AS dolt_version")
+      return {
+        exitCode: 0,
+        output: '[{"dolt_version":"2.2.1"}]',
+        timedOut: false,
+      };
+    if (query === "SELECT CURRENT_USER() AS current_principal")
+      return {
+        exitCode: 0,
+        output: `[{"current_principal":"${user}@%"}]`,
+        timedOut: false,
+      };
+    if (query.startsWith("SHOW GRANTS FOR 'reader'"))
+      return {
+        exitCode: 0,
+        output:
+          '[{"Grants for reader@%":"GRANT USAGE ON *.* TO `reader`@`%`"},{"Grants for reader@%":"GRANT SELECT ON `sce`.* TO `reader`@`%`"}]',
+        timedOut: false,
+      };
+    return { exitCode: 0, output: "[]", timedOut: false };
+  };
+  const slotProcess = new PinnedBdServerProcess({
+    credentialEnvironment: () => ({ BEADS_DOLT_PASSWORD: "writer-value" }),
+    executable: "/fixture/bd",
+    identity: serverIdentity,
+    process: async ({ argv }) =>
+      argv[0] === "version"
+        ? { exitCode: 0, output: "bd version 1.1.0\n", timedOut: false }
+        : {
+            exitCode: 0,
+            output: JSON.stringify({
+              backend: "dolt",
+              beads_dir: "/fixture/workspace/.beads",
+              database: "sce",
+              dolt_mode: "server",
+              server_host: "127.0.0.1",
+              server_port: 3306,
+            }),
+            timedOut: false,
+          },
+    workspace: "/fixture/workspace",
+  });
+  const driver = new DoltBeadsServerDriver({
+    identity: serverIdentity,
+    rows: { childBeadIds: { "unit-1": "sce-1" }, rootBeadId: "sce-root" },
+    slotProcess,
+    worker: new DoltSqlTransport({
+      identity: serverIdentity,
+      process: sql,
+      role: "worker",
+      user: "reader",
+    }),
+    writer: new DoltSqlTransport({
+      identity: serverIdentity,
+      process: sql,
+      role: "writer",
+      user: "controller",
+    }),
+  });
+
+  assert.equal((await driver.probe(serverIdentity)).status, "ok");
+  assert.ok(observedUsers.includes("controller"));
+  assert.ok(observedUsers.includes("reader"));
+});
+
 test("exported Dolt transport reflection exposes no SQL operation", async () => {
   const directory = await mkdtemp("/private/tmp/sce-closed-read-");
   const outfile = join(directory, "must-not-exist");

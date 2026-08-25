@@ -326,6 +326,156 @@ test("composition rejects an exact common-dir/scope/run mismatch before lock or 
   assert.equal(gitCalls, 0);
 });
 
+test("loaded SHA-256 run is refused before recovery persistence or Git action", async () => {
+  const initial = localRun();
+  const loadedRun = {
+    ...initial,
+    gitObjectFormat: "sha256" as const,
+    units: {
+      "unit-1": {
+        ...initial.units["unit-1"]!,
+        baseOid: "a".repeat(64),
+      },
+    },
+  };
+  const root = makeRootProjection(loadedRun);
+  const children = [makeChildProjection(root, "unit-1")!];
+  let mutations = 0;
+  const calls: string[] = [];
+  const runner = createProductionRecoveryRunner({
+    acquireOperationLock: async () => ({
+      status: "acquired",
+      lock: {
+        async release() {
+          return { status: "released" as const };
+        },
+      },
+    }),
+    git: {
+      repository,
+      runner: async ({ argv }) => {
+        calls.push(argv.join(" "));
+        if (argv.join(" ") === "rev-parse --git-common-dir")
+          return { exitCode: 0, signal: null, stdout: ".git\n" };
+        if (argv.join(" ") === "rev-parse --show-object-format")
+          return { exitCode: 0, signal: null, stdout: "sha1\n" };
+        return { exitCode: 1, signal: null, stdout: "" };
+      },
+    },
+    nonce: "nonce-loaded-format",
+    preOwnership: {
+      async persistControllerAcquireIntent() {
+        mutations += 1;
+        return { status: "unavailable" as const };
+      },
+    },
+    proveTopology: async () => ({
+      commonDir: repository.commonDir,
+      holder: loadedRun.controller.holder,
+      scope: {
+        beadsStoreIdentity: loadedRun.storeIdentity,
+        gitRepositoryIdentity: repository.identity,
+        integrationBranch: loadedRun.integrationBranch,
+      },
+    }),
+    store: {
+      async compareAndSet() {
+        mutations += 1;
+        return { status: "unavailable" as const };
+      },
+      async load() {
+        return { status: "observed" as const, value: { children, root } };
+      },
+    } as never,
+  });
+
+  assert.deepEqual(await runner(), { status: "unavailable" });
+  assert.equal(mutations, 0);
+  assert.equal(
+    calls.some((call) => /^(?:branch|worktree|push|merge)\b/u.test(call)),
+    false,
+  );
+});
+
+test("loaded repository, scope, and holder mismatches fail before persistence", async () => {
+  const initial = localRun();
+  const mismatches: readonly RepositoryRun[] = [
+    { ...initial, repositoryIdentity: "local:/foreign/.git" },
+    { ...initial, storeIdentity: "foreign-store" },
+    { ...initial, integrationBranch: "foreign-main" },
+    {
+      ...initial,
+      controller: {
+        ...initial.controller,
+        holder: "other-run/other-incarnation",
+        incarnationId: "other-incarnation",
+        runId: "other-run",
+      },
+    },
+  ];
+  for (const loadedRun of mismatches) {
+    const root = makeRootProjection(loadedRun);
+    const children = [makeChildProjection(root, "unit-1")!];
+    let mutations = 0;
+    const recovery = createProductionRecoveryRunner({
+      acquireOperationLock: async () => ({
+        status: "acquired",
+        lock: {
+          async release() {
+            return { status: "released" as const };
+          },
+        },
+      }),
+      git: {
+        repository,
+        runner: async ({ argv }) => {
+          if (argv.join(" ") === "rev-parse --git-common-dir")
+            return { exitCode: 0, signal: null, stdout: ".git\n" };
+          if (argv.join(" ") === "rev-parse --show-object-format")
+            return { exitCode: 0, signal: null, stdout: "sha1\n" };
+          return { exitCode: 1, signal: null, stdout: "" };
+        },
+      },
+      nonce: "nonce-loaded-binding",
+      preOwnership: {
+        async persistControllerAcquireIntent() {
+          mutations += 1;
+          return { status: "unavailable" as const };
+        },
+      },
+      proveTopology: async () => ({
+        commonDir: repository.commonDir,
+        holder: initial.controller.holder,
+        scope: {
+          beadsStoreIdentity: initial.storeIdentity,
+          gitRepositoryIdentity: repository.identity,
+          integrationBranch: initial.integrationBranch,
+        },
+      }),
+      store: {
+        async compareAndSet() {
+          mutations += 1;
+          return { status: "unavailable" as const };
+        },
+        async load() {
+          return { status: "observed" as const, value: { children, root } };
+        },
+      } as never,
+    });
+    assert.deepEqual(
+      await recovery(),
+      { status: "unavailable" },
+      JSON.stringify({
+        holder: loadedRun.controller.holder,
+        repositoryIdentity: loadedRun.repositoryIdentity,
+        storeIdentity: loadedRun.storeIdentity,
+        integrationBranch: loadedRun.integrationBranch,
+      }),
+    );
+    assert.equal(mutations, 0);
+  }
+});
+
 test("production command composition resumes an authoritative branch intent through the CLI", async () => {
   let state = localRun();
   state = transition(

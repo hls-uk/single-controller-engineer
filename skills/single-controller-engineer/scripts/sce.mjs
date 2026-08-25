@@ -16159,8 +16159,27 @@ function createRecoveryRunner(options) {
         requested = void 0;
       }
       if (loaded === void 0) return { status: "corrupt" };
+      const loadedRoot = validateRootProjection(loaded.root);
+      if (!loadedRoot.ok || loadedRoot.value === void 0)
+        return { status: "corrupt" };
+      let loadedRunValidation;
+      try {
+        loadedRunValidation = options.validateLoadedRun?.({
+          proof,
+          run: loadedRoot.value.run
+        }) ?? {
+          status: "ok"
+        };
+      } catch {
+        return { status: "unavailable" };
+      }
+      if (loadedRunValidation.status !== "ok")
+        return {
+          status: loadedRunValidation.status === "blocked" ? "blocked" : "unavailable"
+        };
       const run2 = validReadback(loaded, proof.scope);
-      if (run2 === void 0 || runInvariantErrors(run2).length > 0 || loaded.root.holder !== proof.holder || run2.controller.holder !== proof.holder)
+      if (run2 === void 0) return { status: "corrupt" };
+      if (runInvariantErrors(run2).length > 0 || loaded.root.holder !== proof.holder || run2.controller.holder !== proof.holder)
         return { status: "corrupt" };
       const root = loaded.root;
       const reconciled = await reconcile(root, run2);
@@ -16545,6 +16564,7 @@ function createProductionRecoveryRunner(options) {
         scope: input.scope
       })
     },
+    validateLoadedRun: ({ proof, run: run2 }) => run2.repositoryIdentity === git.repository.identity && run2.gitObjectFormat === git.repository.objectFormat && run2.storeIdentity === proof.scope.beadsStoreIdentity && run2.repositoryIdentity === proof.scope.gitRepositoryIdentity && run2.integrationBranch === proof.scope.integrationBranch && run2.controller.holder === proof.holder ? { status: "ok" } : { status: "unavailable" },
     proveTopology: async () => {
       let proof;
       try {
@@ -23100,12 +23120,14 @@ async function sharedServerRunner(config, topology, environment = (name) => proc
       executable: topology.doltExecutable,
       identity: topology.identity,
       password: writerPassword,
+      role: "writer",
       user: topology.writerUser
     });
     const worker = new DoltSqlTransport({
       executable: topology.doltExecutable,
       identity: topology.identity,
       password: workerPassword,
+      role: "worker",
       user: topology.workerUser
     });
     const childRuntime = topology.managed ? runtimeEnvironment(topology) : void 0;

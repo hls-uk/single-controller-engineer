@@ -496,6 +496,15 @@ export function createProductionRecoveryRunner(
               scope: input.scope,
             }),
         }),
+    validateLoadedRun: ({ proof, run }) =>
+      run.repositoryIdentity === git.repository.identity &&
+      run.gitObjectFormat === git.repository.objectFormat &&
+      run.storeIdentity === proof.scope.beadsStoreIdentity &&
+      run.repositoryIdentity === proof.scope.gitRepositoryIdentity &&
+      run.integrationBranch === proof.scope.integrationBranch &&
+      run.controller.holder === proof.holder
+        ? { status: "ok" }
+        : { status: "unavailable" },
     proveTopology: async () => {
       let proof;
       try {

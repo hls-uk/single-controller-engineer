@@ -169,6 +169,13 @@ export type RecoveryTopologyProof = Readonly<{
   scope: FencingScope;
 }>;
 
+/**
+ * Binds an authoritative, already-read aggregate to the live topology proof
+ * before recovery can write a reconciliation, intent, or ambiguity record.
+ */
+export type LoadedRunValidation =
+  Readonly<{ status: "ok" }> | Readonly<{ status: "blocked" | "unavailable" }>;
+
 export type ControllerTransitionPlanResult =
   | Readonly<{ status: "planned"; transition: SlotTransitionIntent }>
   | Readonly<{
@@ -203,6 +210,13 @@ export interface RecoveryRunnerOptions {
   /** Must perform topology-specific preflight before returning a scope. */
   readonly proveTopology: () => Promise<RecoveryTopologyProof | undefined>;
   readonly store: AuthoritativeRunStore;
+  /**
+   * Production binds the loaded aggregate to its already-verified repository
+   * and topology. A refusal must happen before any ordinary persistence.
+   */
+  readonly validateLoadedRun?: (
+    input: Readonly<{ proof: RecoveryTopologyProof; run: RepositoryRun }>,
+  ) => LoadedRunValidation;
 }
 
 export type RecoveryOperationLockAcquire =
@@ -740,9 +754,34 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
         requested = undefined;
       }
       if (loaded === undefined) return { status: "corrupt" };
+      // Parse the authoritative root before comparing it to the supplied
+      // proof. This exposes no unvalidated data to the hook, while allowing a
+      // production repository/scope mismatch to fail unavailable rather than
+      // being mistaken for generic projection corruption.
+      const loadedRoot = validateRootProjection(loaded.root);
+      if (!loadedRoot.ok || loadedRoot.value === undefined)
+        return { status: "corrupt" };
+      let loadedRunValidation: LoadedRunValidation;
+      try {
+        loadedRunValidation = options.validateLoadedRun?.({
+          proof,
+          run: loadedRoot.value.run,
+        }) ?? {
+          status: "ok",
+        };
+      } catch {
+        return { status: "unavailable" };
+      }
+      if (loadedRunValidation.status !== "ok")
+        return {
+          status:
+            loadedRunValidation.status === "blocked"
+              ? "blocked"
+              : "unavailable",
+        };
       const run = validReadback(loaded, proof.scope);
+      if (run === undefined) return { status: "corrupt" };
       if (
-        run === undefined ||
         runInvariantErrors(run).length > 0 ||
         loaded.root.holder !== proof.holder ||
         run.controller.holder !== proof.holder
