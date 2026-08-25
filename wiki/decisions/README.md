@@ -38,3 +38,4 @@ may recommend decisions, but the controller records the accepted disposition.
 | [DEC-20260825-004](2026-08-25-004-explicit-production-recovery-authority.md) | Accepted | Production recovery requires explicit exact authority | `sce-1kv.2.6` |
 | [DEC-20260825-005](2026-08-25-005-path-independent-vendored-bundle.md) | Accepted | Vendored bundles must be path-independent | `sce-1kv.2.6` |
 | [DEC-20260825-006](2026-08-25-006-existing-feedback-labels.md) | Accepted | Feedback automation uses only confirmed existing labels | `sce-1kv.4.1`, `sce-1kv.4.2` |
+| [DEC-20260825-007](2026-08-25-007-disabled-release-and-feedback-workflows.md) | Accepted | Release and feedback workflows ship disabled | `sce-1kv.4.2`, `sce-1kv.4.3`, `sce-1kv.5.6` |

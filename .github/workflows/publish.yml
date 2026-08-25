@@ -1,0 +1,233 @@
+name: Publish
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: ${{ github.repository == 'hls-uk/single-controller-engineer' && github.ref_type == 'tag' && github.ref_protected && vars.SCE_NPM_RELEASE_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+      - name: Require a protected release tag
+        env:
+          REPOSITORY: ${{ github.repository }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+        run: test "$REPOSITORY" = hls-uk/single-controller-engineer && test "$GITHUB_REF_TYPE" = tag && test "$REF_PROTECTED" = true
+      - name: Require a protected release environment
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const environment = await github.rest.repos.getEnvironment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              environment_name: "npm-release",
+            });
+            const hasProtectionRule = environment.data.protection_rules.some(
+              (rule) =>
+                rule.type === "required_reviewers" ||
+                (rule.type === "wait_timer" && rule.wait_timer > 0),
+            );
+            if (
+              environment.data.deployment_branch_policy?.protected_branches !== true ||
+              !hasProtectionRule
+            ) core.setFailed("npm-release must have protected-branch policy and protection rules");
+      - name: Require npm 11.5.1 or newer
+        run: npm --version | node --input-type=module -e "let data = ''; process.stdin.on('data', (chunk) => { data += chunk; }); process.stdin.on('end', () => { const actual = data.trim().split('.').map(Number); const minimum = [11, 5, 1]; if (actual.length !== 3 || actual.some((part) => !Number.isSafeInteger(part) || part < 0)) process.exit(1); for (let index = 0; index < minimum.length; index += 1) { if (actual[index] > minimum[index]) return; if (actual[index] < minimum[index]) process.exit(1); } });"
+      - run: npm ci --ignore-scripts
+      - run: npm run check:format
+      - run: npm run typecheck
+      - run: npm run test:release
+      - run: npm run build
+      - run: git diff --exit-code
+      - name: Verify tag, version, and main lineage
+        run: |
+          git fetch --no-tags origin main
+          node scripts/release-gates.mjs verify-source
+      - name: Pack without lifecycle scripts
+        env:
+          npm_config_ignore_scripts: "true"
+        run: |
+          mkdir -p release-artifact
+          npm pack --ignore-scripts --pack-destination release-artifact
+          node scripts/release-gates.mjs prepare-artifact release-artifact
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sce-release-artifact
+          path: |
+            release-artifact/*.tgz
+            release-artifact/release-artifact.json
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    if: ${{ github.repository == 'hls-uk/single-controller-engineer' && github.ref_type == 'tag' && github.ref_protected && vars.SCE_NPM_RELEASE_ENABLED == 'true' }}
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: npm-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Recheck release guard
+        env:
+          RELEASE_ENABLED: ${{ vars.SCE_NPM_RELEASE_ENABLED }}
+          REPOSITORY: ${{ github.repository }}
+          REF_PROTECTED: ${{ github.ref_protected }}
+        run: test "$RELEASE_ENABLED" = true && test "$REPOSITORY" = hls-uk/single-controller-engineer && test "$GITHUB_REF_TYPE" = tag && test "$REF_PROTECTED" = true
+      - name: Recheck exact source, tag, and protected main lineage
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const comparison = await github.rest.repos.compareCommits({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              base: context.sha,
+              head: "main",
+            });
+            if (!["ahead", "identical"].includes(comparison.data.status))
+              core.setFailed("release tag is not on main");
+            const source = await github.rest.repos.getContent({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              path: "package.json",
+              ref: context.sha,
+            });
+            if (Array.isArray(source.data) || source.data.type !== "file")
+              core.setFailed("missing package metadata");
+            const metadata = JSON.parse(
+              Buffer.from(source.data.content, source.data.encoding).toString("utf8"),
+            );
+            if (`v${metadata.version}` !== process.env.GITHUB_REF_NAME)
+              core.setFailed("source package version does not match release tag");
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.19.0
+      - name: Recheck npm 11.5.1 or newer
+        run: npm --version | node --input-type=module -e "let data = ''; process.stdin.on('data', (chunk) => { data += chunk; }); process.stdin.on('end', () => { const actual = data.trim().split('.').map(Number); const minimum = [11, 5, 1]; if (actual.length !== 3 || actual.some((part) => !Number.isSafeInteger(part) || part < 0)) process.exit(1); for (let index = 0; index < minimum.length; index += 1) { if (actual[index] > minimum[index]) return; if (actual[index] < minimum[index]) process.exit(1); } });"
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: sce-release-artifact
+          path: release-artifact
+      - name: Verify the exact release artifact
+        run: |
+          node --input-type=module <<'EOF'
+          import { createHash } from "node:crypto";
+          import { readdir, readFile } from "node:fs/promises";
+
+          const directory = "release-artifact";
+          const manifestName = "release-artifact.json";
+          const manifest = JSON.parse(await readFile(`${directory}/${manifestName}`, "utf8"));
+          const expectedName = "@hls-uk/single-controller-engineer";
+          const expectedTarball = `hls-uk-single-controller-engineer-${manifest.version}.tgz`;
+          const files = (await readdir(directory)).sort();
+          if (
+            JSON.stringify(files) !== JSON.stringify([expectedTarball, manifestName].sort()) ||
+            manifest.schema !== "sce.release-artifact" ||
+            manifest.name !== expectedName ||
+            typeof manifest.version !== "string" ||
+            manifest.tarball !== expectedTarball ||
+            !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(manifest.version) ||
+            !/^[a-f0-9]{64}$/u.test(manifest.sha256) ||
+            !/^sha512-[A-Za-z0-9+/]{86}==$/u.test(manifest.integrity)
+          ) throw new Error("invalid release artifact manifest");
+          const bytes = await readFile(`${directory}/${expectedTarball}`);
+          const sha256 = createHash("sha256").update(bytes).digest("hex");
+          const integrity = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
+          if (sha256 !== manifest.sha256 || integrity !== manifest.integrity)
+            throw new Error("release artifact digest mismatch");
+          if (`v${manifest.version}` !== process.env.GITHUB_REF_NAME)
+            throw new Error("release artifact version does not match tag");
+          EOF
+      - name: Publish the verified tarball with OIDC
+        run: npm publish "release-artifact/hls-uk-single-controller-engineer-${GITHUB_REF_NAME#v}.tgz" --access public --ignore-scripts --provenance
+      - name: Read back registry version, integrity, access, and provenance
+        run: |
+          node --input-type=module <<'EOF'
+          import { execFileSync } from "node:child_process";
+          import { readFile } from "node:fs/promises";
+
+          const manifest = JSON.parse(await readFile("release-artifact/release-artifact.json", "utf8"));
+          const value = JSON.parse(execFileSync("npm", ["view", `${manifest.name}@${manifest.version}`, "--registry=https://registry.npmjs.org", "--userconfig=/dev/null", "--json"], { encoding: "utf8" }));
+          const attestations = value.dist?.attestations;
+          if (
+            attestations === null ||
+            typeof attestations !== "object" ||
+            Array.isArray(attestations) ||
+            Object.keys(attestations).sort().join("|") !== "provenance|url" ||
+            typeof attestations.url !== "string" ||
+            attestations.provenance === null ||
+            typeof attestations.provenance !== "object" ||
+            Array.isArray(attestations.provenance) ||
+            Object.keys(attestations.provenance).sort().join("|") !== "predicateType" ||
+            attestations.provenance.predicateType !== "https://slsa.dev/provenance/v1"
+          ) throw new Error("registry metadata has no exact attestation URL");
+          const attestationUrl = new URL(attestations.url);
+          if (
+            attestationUrl.origin !== "https://registry.npmjs.org" ||
+            !attestationUrl.pathname.startsWith("/-/npm/v1/attestations/") ||
+            attestationUrl.search !== "" ||
+            attestationUrl.hash !== ""
+          ) throw new Error("registry metadata points outside the fixed attestation endpoint");
+          if (
+            value.name !== manifest.name ||
+            value.version !== manifest.version ||
+            value.dist?.integrity !== manifest.integrity
+          ) throw new Error("unauthenticated registry readback does not prove the published public provenance artifact");
+          const response = await fetch(attestationUrl, {
+            headers: { accept: "application/json" },
+            redirect: "error",
+          });
+          const raw = await response.text();
+          if (!response.ok || Buffer.byteLength(raw, "utf8") > 262_144)
+            throw new Error("invalid unauthenticated registry attestation response");
+          const body = JSON.parse(raw);
+          if (
+            body === null ||
+            typeof body !== "object" ||
+            Array.isArray(body) ||
+            Object.keys(body).sort().join("\\0") !== "attestations" ||
+            !Array.isArray(body.attestations) ||
+            body.attestations.length < 2 ||
+            body.attestations.length > 4
+          ) throw new Error("invalid registry attestation envelope");
+          const predicateTypes = new Set(
+            body.attestations.map((attestation) => {
+              if (
+                attestation === null ||
+                typeof attestation !== "object" ||
+                Array.isArray(attestation) ||
+                typeof attestation.predicateType !== "string" ||
+                attestation.bundle === null ||
+                typeof attestation.bundle !== "object" ||
+                Array.isArray(attestation.bundle)
+              ) throw new Error("invalid registry attestation bundle");
+              return attestation.predicateType;
+            }),
+          );
+          for (const predicateType of [
+            "https://github.com/npm/attestation/tree/main/specs/publish/v0.1",
+            "https://slsa.dev/provenance/v1",
+          ])
+            if (!predicateTypes.has(predicateType))
+              throw new Error("missing required registry provenance predicate");
+          EOF
