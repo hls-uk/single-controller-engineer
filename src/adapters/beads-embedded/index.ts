@@ -21,6 +21,7 @@ import {
 
 import {
   EMBEDDED_ADAPTER_VERSION,
+  type CrashDiscovery,
   type CrashPoint,
   type EmbeddedMode,
   type EmbeddedProcessIdentity,
@@ -470,6 +471,12 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     if (recovery.workingSet === "pending") {
       const discovered = await this.discover("before_commit", batch);
       if (discovered.status !== "observed") return { status: "ambiguous" };
+      const baseline = this.checkpointBaseline(recovery);
+      if (
+        baseline === undefined ||
+        !this.matchesCheckpointBaseline(discovered, baseline)
+      )
+        return { status: "ambiguous" };
       // A replacement process must not commit/push a previously written batch
       // after its controller lost or released the built-in slot. This check is
       // deliberately before `durableCheckpoint`, which otherwise can commit.
@@ -481,7 +488,7 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
         slot.holder !== this.holder
       )
         return { status: "holder_mismatch" };
-      const durable = await this.durableCheckpoint(batch);
+      const durable = await this.durableCheckpoint(batch, baseline);
       if (durable.code !== "applied") return this.storeFailure(durable.code);
       const readback = await this.readback(batch);
       return readback === undefined ||
@@ -497,8 +504,52 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
           };
     }
     if (recovery.workingSet !== "clean") return { status: "ambiguous" };
+    // A replacement process may hold the exact one-parent checkpoint commit
+    // while the remote remains at its proved parent. Reconcile and push that
+    // commit; do not feed it through pull, which must reject local-ahead work.
+    if (
+      this.mode === "git-sync" &&
+      recovery.head !== undefined &&
+      recovery.remoteHead !== undefined &&
+      recovery.head !== recovery.remoteHead
+    ) {
+      const discovered = await this.discover("before_push", batch);
+      if (
+        discovered.status === "observed" &&
+        discovered.head === recovery.head &&
+        discovered.baseHead !== undefined &&
+        discovered.remoteHead === recovery.remoteHead
+      ) {
+        const slot = await this.slot("check");
+        if (
+          slot === undefined ||
+          slot.status !== "acquired" ||
+          slot.actor !== this.holder ||
+          slot.holder !== this.holder
+        )
+          return { status: "holder_mismatch" };
+        const durable = await this.durableCheckpoint(batch, {
+          head: discovered.baseHead,
+          remoteHead: discovered.remoteHead,
+        });
+        if (durable.code !== "applied") return this.storeFailure(durable.code);
+        const readback = await this.readback(batch);
+        return readback === undefined ||
+          !same(readback.root, batch.next.root) ||
+          !same(readback.children, batch.next.children)
+          ? { status: "quarantined" }
+          : {
+              affectedRowCount: 1 + batch.changedRows.length,
+              checkpoint: batch.checkpoint,
+              children: [...readback.children],
+              root: readback.root,
+              status: "applied",
+            };
+      }
+    }
     const prepared = await this.prepareSharedState();
-    if (prepared.code !== "applied") return this.storeFailure(prepared.code);
+    if (prepared.result.code !== "applied")
+      return this.storeFailure(prepared.result.code);
     const slot = await this.slot("check");
     if (
       slot === undefined ||
@@ -507,6 +558,8 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       slot.holder !== this.holder
     )
       return { status: "holder_mismatch" };
+    const baseline = this.checkpointBaseline(prepared.state);
+    if (baseline === undefined) return { status: "ambiguous" };
     const mutation = await this.call({ kind: "mutation", batch });
     if (mutation?.kind !== "mutation") return { status: "ambiguous" };
     if (mutation.value !== "applied") {
@@ -514,13 +567,33 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       // A prior process can have completed the exact CAS before crashing. The
       // controller journal supplies the same batch to a new process, which
       // proves that state rather than relying on a remembered write.
-      const discovered = await this.discover("before_commit", batch);
-      if (discovered.status !== "observed")
+      const discovered = await this.discover(
+        this.mode === "git-sync" ? "after_push" : "after_commit",
+        batch,
+      );
+      if (
+        discovered.status !== "observed" ||
+        discovered.head !== baseline.head ||
+        (this.mode === "git-sync" &&
+          discovered.remoteHead !== baseline.remoteHead)
+      )
         return {
           status: discovered.status === "absent" ? "stale" : "ambiguous",
         };
+      const readback = await this.readback(batch);
+      return readback === undefined ||
+        !same(readback.root, batch.next.root) ||
+        !same(readback.children, batch.next.children)
+        ? { status: "quarantined" }
+        : {
+            affectedRowCount: 1 + batch.changedRows.length,
+            checkpoint: batch.checkpoint,
+            children: [...readback.children],
+            root: readback.root,
+            status: "applied",
+          };
     }
-    const durable = await this.durableCheckpoint(batch);
+    const durable = await this.durableCheckpoint(batch, baseline);
     if (durable.code !== "applied") return this.storeFailure(durable.code);
     const readback = await this.readback(batch);
     if (
@@ -587,21 +660,28 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       : result("worker_mutation");
   }
 
-  private async prepareSharedState(): Promise<EmbeddedResult> {
+  private async prepareSharedState(): Promise<
+    Readonly<{
+      result: EmbeddedResult;
+      state?: EmbeddedState;
+    }>
+  > {
     const before = await this.state();
-    if (before === undefined || !before.reachable) return result("unavailable");
-    if (before.workingSet !== "clean") return result("blocked");
-    if (this.mode === "local-only") return result("applied");
+    if (before === undefined || !before.reachable)
+      return { result: result("unavailable") };
+    if (before.workingSet !== "clean") return { result: result("blocked") };
+    if (this.mode === "local-only")
+      return { result: result("applied"), state: before };
     const pull = await this.call({ kind: "pull" });
-    if (pull?.kind !== "pull") return result("ambiguous");
-    if (pull.value === "conflict") return result("conflict");
-    if (pull.value !== "applied") return result(pull.value);
+    if (pull?.kind !== "pull") return { result: result("ambiguous") };
+    if (pull.value === "conflict") return { result: result("conflict") };
+    if (pull.value !== "applied") return { result: result(pull.value) };
     const after = await this.state();
     return after === undefined || !after.reachable
-      ? result("unavailable")
+      ? { result: result("unavailable") }
       : after.workingSet === "clean"
-        ? result("applied")
-        : result("blocked");
+        ? { result: result("applied"), state: after }
+        : { result: result("blocked") };
   }
 
   private expectedSlot(
@@ -950,6 +1030,7 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
   /** Commit state and sync it without force; discovery brackets commit/push. */
   private async durableCheckpoint(
     batch?: MutationBatch,
+    baseline?: Readonly<{ head: string; remoteHead?: string }>,
   ): Promise<EmbeddedResult> {
     const initial = await this.state();
     if (initial === undefined || !initial.reachable)
@@ -961,7 +1042,12 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
         batch === undefined
           ? undefined
           : await this.discover("before_commit", batch);
-      if (beforeCommit !== undefined && beforeCommit.status !== "observed")
+      if (
+        beforeCommit !== undefined &&
+        (beforeCommit.status !== "observed" ||
+          (baseline !== undefined &&
+            !this.matchesCheckpointBaseline(beforeCommit, baseline)))
+      )
         return result(
           beforeCommit.status === "ambiguous" ? "ambiguous" : "blocked",
         );
@@ -977,7 +1063,10 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
           : await this.discover("after_commit", batch);
       if (
         afterCommit !== undefined &&
-        (afterCommit.status !== "observed" || afterCommit.head === undefined)
+        (afterCommit.status !== "observed" ||
+          afterCommit.head === undefined ||
+          (baseline !== undefined &&
+            !this.matchesCheckpointBaseline(afterCommit, baseline)))
       )
         return result("ambiguous");
       committedHead = afterCommit?.head;
@@ -995,7 +1084,12 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       batch === undefined
         ? undefined
         : await this.discover("before_push", batch);
-    if (beforePush !== undefined && beforePush.status !== "observed")
+    if (
+      beforePush !== undefined &&
+      (beforePush.status !== "observed" ||
+        (baseline !== undefined &&
+          !this.matchesCheckpointBaseline(beforePush, baseline)))
+    )
       return result("ambiguous");
     const push = await this.call({ kind: "push" });
     if (push?.kind !== "push") return result("ambiguous");
@@ -1037,6 +1131,30 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
   private async state(): Promise<EmbeddedState | undefined> {
     const response = await this.call({ kind: "state" });
     return response?.kind === "state" ? response.value : undefined;
+  }
+
+  private checkpointBaseline(
+    state: EmbeddedState | undefined,
+  ): Readonly<{ head: string; remoteHead?: string }> | undefined {
+    if (state === undefined || !state.reachable || !head(state.head))
+      return undefined;
+    if (this.mode === "local-only") return { head: state.head };
+    return head(state.remoteHead)
+      ? { head: state.head, remoteHead: state.remoteHead }
+      : undefined;
+  }
+
+  private matchesCheckpointBaseline(
+    discovery: CrashDiscovery,
+    baseline: Readonly<{ head: string; remoteHead?: string }>,
+  ): boolean {
+    return (
+      discovery.baseHead === baseline.head &&
+      (this.mode === "local-only"
+        ? baseline.remoteHead === undefined
+        : baseline.remoteHead !== undefined &&
+          discovery.remoteHead === baseline.remoteHead)
+    );
   }
 
   private validWorkerBaseline(input: unknown): input is WorkerTrackerBaseline {

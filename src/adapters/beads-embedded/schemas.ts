@@ -9,6 +9,150 @@ import {
 } from "../../fencing/index.js";
 import type { DoltObservation } from "../../preflight/index.js";
 
+/** Exact pinned bd 1.1.0 `issues` data-diff row envelope. */
+const PINNED_BD_ISSUE_BASE_KEYS = [
+  "acceptance_criteria",
+  "actor",
+  "agent_state",
+  "await_id",
+  "await_type",
+  "close_reason",
+  "closed_by_session",
+  "compaction_level",
+  "content_hash",
+  "created_at",
+  "created_by",
+  "description",
+  "design",
+  "ephemeral",
+  "event_kind",
+  "external_ref",
+  "hook_bead",
+  "id",
+  "is_blocked",
+  "is_template",
+  "issue_type",
+  "metadata",
+  "mol_type",
+  "no_history",
+  "notes",
+  "owner",
+  "payload",
+  "pinned",
+  "priority",
+  "rig",
+  "role_bead",
+  "role_type",
+  "sender",
+  "source_repo",
+  "source_system",
+  "spec_id",
+  "status",
+  "target",
+  "timeout_ns",
+  "title",
+  "updated_at",
+  "waiters",
+  "wisp_type",
+  "work_type",
+] as const;
+const PINNED_BD_ISSUE_NUMERIC_KEYS = [
+  "compaction_level",
+  "ephemeral",
+  "is_blocked",
+  "is_template",
+  "no_history",
+  "pinned",
+  "priority",
+  "timeout_ns",
+] as const;
+const PINNED_BD_ISSUE_STRING_KEYS = [
+  "acceptance_criteria",
+  "actor",
+  "agent_state",
+  "await_id",
+  "await_type",
+  "close_reason",
+  "closed_by_session",
+  "content_hash",
+  "created_by",
+  "description",
+  "design",
+  "event_kind",
+  "external_ref",
+  "hook_bead",
+  "mol_type",
+  "notes",
+  "owner",
+  "payload",
+  "rig",
+  "role_bead",
+  "role_type",
+  "sender",
+  "source_repo",
+  "source_system",
+  "spec_id",
+  "target",
+  "waiters",
+  "wisp_type",
+  "work_type",
+] as const;
+
+function exactKeys(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+) {
+  return (
+    Object.keys(value).length === expected.length &&
+    expected.every((key) => Object.prototype.hasOwnProperty.call(value, key))
+  );
+}
+
+function sqlTimestamp(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u.test(value)
+  );
+}
+
+/** Rejects unknown, missing, and incorrectly typed pinned bd issue columns. */
+export function isPinnedBdIssueRow(value: Record<string, unknown>): boolean {
+  const hasStartedAt = Object.prototype.hasOwnProperty.call(
+    value,
+    "started_at",
+  );
+  // Dolt omits nullable `external_ref` from JSON rows when it is NULL. These
+  // two base forms (with/without it), plus optional `started_at`, are pinned.
+  const hasExternalRef = Object.prototype.hasOwnProperty.call(
+    value,
+    "external_ref",
+  );
+  const baseKeys = hasExternalRef
+    ? PINNED_BD_ISSUE_BASE_KEYS
+    : PINNED_BD_ISSUE_BASE_KEYS.filter((key) => key !== "external_ref");
+  const keys = hasStartedAt ? [...baseKeys, "started_at"] : baseKeys;
+  return (
+    exactKeys(value, keys) &&
+    typeof value.id === "string" &&
+    typeof value.issue_type === "string" &&
+    typeof value.status === "string" &&
+    typeof value.title === "string" &&
+    value.metadata !== null &&
+    typeof value.metadata === "object" &&
+    !Array.isArray(value.metadata) &&
+    PINNED_BD_ISSUE_STRING_KEYS.filter(
+      (key) => hasExternalRef || key !== "external_ref",
+    ).every((key) => typeof value[key] === "string") &&
+    PINNED_BD_ISSUE_NUMERIC_KEYS.every(
+      (key) =>
+        typeof value[key] === "number" && Number.isSafeInteger(value[key]),
+    ) &&
+    sqlTimestamp(value.created_at) &&
+    sqlTimestamp(value.updated_at) &&
+    (!hasStartedAt || sqlTimestamp(value.started_at))
+  );
+}
+
 /**
  * A controller-journal record for one built-in merge-slot transition.  Unlike
  * a generic checkpoint, it says exactly which durable row is allowed to move
@@ -139,6 +283,8 @@ export type EmbeddedProcessIdentity = Readonly<{
 }>;
 
 export type CrashDiscovery = Readonly<{
+  /** Exact parent/baseline whose projection was proved before this batch. */
+  baseHead?: string;
   /** Exact local Dolt head, and remote head after a push, never a boolean. */
   head?: string;
   remoteHead?: string;

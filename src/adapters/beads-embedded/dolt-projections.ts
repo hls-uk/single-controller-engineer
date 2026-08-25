@@ -19,6 +19,7 @@ import type {
   EmbeddedRequest,
   EmbeddedResponse,
 } from "./schemas.js";
+import { isPinnedBdIssueRow } from "./schemas.js";
 import type { ProjectionPersistencePort } from "./pinned-bd-process.js";
 
 const MAX_OUTPUT_BYTES = 262_144;
@@ -260,6 +261,67 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
       : { head, status: "ambiguous" };
   }
 
+  /**
+   * The selected root/child readback above establishes the requested state.
+   * This companion proof establishes that a Dolt checkpoint contains no other
+   * pending or committed data movement.
+   */
+  public matchesBatchDelta(batchInput: MutationBatch, source: string): boolean {
+    const batch = validateMutationBatch(batchInput);
+    if (!batch.ok) return false;
+    const rows = this.rows(batch.value);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(source) as unknown;
+    } catch {
+      return false;
+    }
+    const root = object(parsed);
+    if (
+      rows === undefined ||
+      root === undefined ||
+      Object.keys(root).length !== 1 ||
+      !Object.prototype.hasOwnProperty.call(root, "tables") ||
+      !Array.isArray(root.tables) ||
+      root.tables.length !== 1
+    )
+      return false;
+    const table = object(root.tables[0]);
+    if (
+      table === undefined ||
+      Object.keys(table).length !== 2 ||
+      table.name !== "issues" ||
+      !Array.isArray(table.data_diff) ||
+      table.data_diff.length !== rows.length
+    )
+      return false;
+    const expected = new Map(rows.map((row) => [row.issueId, row]));
+    const seen = new Set<string>();
+    for (const input of table.data_diff) {
+      const diff = object(input);
+      const from = diff === undefined ? undefined : object(diff.from_row);
+      const to = diff === undefined ? undefined : object(diff.to_row);
+      if (
+        diff === undefined ||
+        Object.keys(diff).length !== 2 ||
+        from === undefined ||
+        to === undefined ||
+        typeof from.id !== "string" ||
+        from.id !== to.id ||
+        seen.has(from.id)
+      )
+        return false;
+      const row = expected.get(from.id);
+      if (
+        row === undefined ||
+        !this.matchesProjectionRow(from, to, row.expectedCommitment, row.next)
+      )
+        return false;
+      seen.add(from.id);
+    }
+    return seen.size === expected.size;
+  }
+
   private writeStatement(batch: MutationBatch): string | undefined {
     const rows = this.rows(batch);
     if (rows === undefined) return undefined;
@@ -297,7 +359,11 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
     const rows = this.rows(batch);
     if (
       rows === undefined ||
-      (ref !== undefined && !/^[A-Za-z0-9._-]{1,80}\/main$/u.test(ref))
+      (ref !== undefined &&
+        !(
+          /^[A-Za-z0-9._-]{1,80}\/main$/u.test(ref) ||
+          /^[0-9a-z]{20,64}$/u.test(ref)
+        ))
     )
       return undefined;
     const statement = this.selectStatement(rows.map((row) => row.issueId));
@@ -346,6 +412,78 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
         next: unknown;
       }[]),
     ].sort((left, right) => compareCodeUnits(left.issueId, right.issueId));
+  }
+
+  private matchesProjectionRow(
+    from: Record<string, unknown>,
+    to: Record<string, unknown>,
+    expectedCommitment: string,
+    next: unknown,
+  ): boolean {
+    if (
+      !isPinnedBdIssueRow(from) ||
+      !isPinnedBdIssueRow(to) ||
+      Object.keys(from).length !== Object.keys(to).length ||
+      Object.keys(from).some(
+        (key) => !Object.prototype.hasOwnProperty.call(to, key),
+      )
+    )
+      return false;
+    for (const key of Object.keys(from)) {
+      if (
+        key !== "metadata" &&
+        key !== "updated_at" &&
+        !same(from[key], to[key])
+      )
+        return false;
+    }
+    if (
+      typeof from.updated_at !== "string" ||
+      typeof to.updated_at !== "string" ||
+      !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u.test(from.updated_at) ||
+      !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u.test(to.updated_at)
+    )
+      return false;
+    const before = object(from.metadata);
+    const after = object(to.metadata);
+    if (
+      before === undefined ||
+      after === undefined ||
+      Object.keys(before).length !== Object.keys(after).length ||
+      Object.keys(before).some(
+        (key) => !Object.prototype.hasOwnProperty.call(after, key),
+      )
+    )
+      return false;
+    for (const key of Object.keys(before)) {
+      if (key !== "sce" && !same(before[key], after[key])) return false;
+    }
+    const previous = object(before.sce);
+    if (
+      previous === undefined ||
+      Object.keys(previous).length !== 2 ||
+      previous.commitment !== expectedCommitment ||
+      !Object.prototype.hasOwnProperty.call(previous, "projection")
+    )
+      return false;
+    const projection = previous.projection;
+    const commitment =
+      projection !== null &&
+      typeof projection === "object" &&
+      "unitId" in projection
+        ? (() => {
+            const valid = validateChildProjection(projection);
+            return valid.ok ? valid.value.commitment : undefined;
+          })()
+        : (() => {
+            const valid = validateRootProjection(projection);
+            return valid.ok ? valid.value.aggregateCommitment : undefined;
+          })();
+    return (
+      commitment === expectedCommitment &&
+      same(after.sce, next) &&
+      !same(before.sce, after.sce)
+    );
   }
 
   private parseReadback(

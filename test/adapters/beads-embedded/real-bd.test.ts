@@ -278,7 +278,71 @@ test("pinned bd local embedded slot and Dolt working-set fixture", async () => {
       (await adapter.acquire({ transition: acquireIntent })).code,
       "applied",
     );
-    assert.equal((await adapter.compareAndSet(batch)).status, "applied");
+    // The old projection records the acquire intent. Once the independent
+    // built-in slot transition commits, that batch is no longer the exact
+    // checkpoint delta and cannot be replayed as an applied CAS.
+    assert.equal((await adapter.compareAndSet(batch)).status, "ambiguous");
+    const replayAcquirePort = new RecordingProcess(embeddedProcess);
+    const replayAcquire = new EmbeddedBeadsAdapter({
+      holder: "run-1/incarnation-1",
+      mode: "local-only",
+      prefix: "sce",
+      preflight: localPreflight,
+      process: replayAcquirePort,
+      scope,
+    });
+    assert.equal(
+      (await replayAcquire.acquire({ transition: acquireIntent })).code,
+      "applied",
+    );
+    assert.equal(
+      replayAcquirePort.requests.some(
+        (request) =>
+          request.kind === "commit" ||
+          request.kind === "push" ||
+          (request.kind === "slot" && request.action !== "check"),
+      ),
+      false,
+    );
+    assert.equal(transition.effects.length, 1);
+    const settled = reduce(transition.nextState, {
+      eventId: "controller-acquired",
+      expectedRevision: transition.nextState.revision,
+      effectId: transition.effects[0]?.effectId ?? "",
+      effectKind: "controller_acquire",
+      holder: transition.nextState.controller.holder,
+      controllerFencingToken: transition.nextState.controllerFencingToken,
+      observationHash: "e".repeat(64),
+      type: "controller_acquired",
+    });
+    assert.equal(settled.ok, true);
+    if (!settled.ok) throw new Error("unreachable");
+    const settledRoot = withBatchCheckpoint(
+      makeRootProjection(settled.nextState),
+      [],
+    );
+    const settledBatch = {
+      ...batch,
+      checkpoint: settledRoot.checkpoint,
+      expectedAggregateCommitment: rootProjection.aggregateCommitment,
+      expectedAggregateRevision: rootProjection.aggregateRevision,
+      expectedHolder: transition.nextState.controller.holder,
+      holder: transition.nextState.controller.holder,
+      next: { children: [], root: settledRoot },
+    };
+    assert.equal((await adapter.compareAndSet(settledBatch)).status, "applied");
+    const immediateReplay = new EmbeddedBeadsAdapter({
+      holder: "run-1/incarnation-1",
+      mode: "local-only",
+      prefix: "sce",
+      preflight: localPreflight,
+      process: embeddedProcess,
+      scope,
+    });
+    assert.equal(
+      (await immediateReplay.compareAndSet(settledBatch)).status,
+      "applied",
+    );
     const releaseIntent = await adapter.prepareReleaseTransition();
     assert.ok("idempotencyKey" in releaseIntent);
     assert.equal(
@@ -640,6 +704,70 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
     assert.equal(acquiredState.value.remoteHead, acquiredState.value.head);
     assert.equal(acquiredSlot.kind, "slot");
     assert.equal(acquiredSlot.value.holder, initial.controller.holder);
+    // A clean local commit unrelated to the controller batch must not become
+    // an implicit push parent merely because the exact batch is now pending.
+    // The replacement can prove the selected rows, but not its local A→batch
+    // checkpoint against remote R, so it performs zero commit/push effects.
+    const adversary = join(root, "adversary");
+    await run(root, "git", ["clone", "-q", remote, adversary]);
+    await run(adversary, "bd", [
+      "init",
+      "--non-interactive",
+      "--skip-agents",
+      "--skip-hooks",
+      "-p",
+      "sce",
+      "--remote",
+      `file://${remote}`,
+    ]);
+    await run(adversary, "bd", ["dolt", "pull", "--json"]);
+    const adversaryDatabase = join(adversary, ".beads", "embeddeddolt", "sce");
+    await json(adversary, [
+      "create",
+      "--id",
+      "sce-unrelated-a",
+      "unrelated local parent",
+      "--json",
+    ]);
+    await run(adversary, "bd", ["dolt", "commit", "--json"]);
+    const adversaryPersistence = new DoltProjectionPersistence({
+      childIssueId: () => undefined,
+      databaseDirectory: adversaryDatabase,
+      doltExecutable: "/opt/homebrew/bin/dolt",
+      rootIssueId: "sce-root",
+    });
+    assert.equal((await adversaryPersistence.mutate(batch)).value, "applied");
+    const adversaryProcess = processFor(
+      adversary,
+      adversaryDatabase,
+      adversaryPersistence,
+    );
+    const adversaryBefore = await adversaryProcess.execute({ kind: "state" });
+    assert.equal(adversaryBefore.kind, "state");
+    assert.equal(adversaryBefore.value.workingSet, "pending");
+    const adversaryPort = new RecordingProcess(adversaryProcess);
+    const adversaryAdapter = new EmbeddedBeadsAdapter({
+      holder: initial.controller.holder,
+      mode: "git-sync",
+      prefix: "sce",
+      preflight: preflight(adversary),
+      process: adversaryPort,
+      scope,
+    });
+    assert.equal(
+      (await adversaryAdapter.compareAndSet(batch)).status,
+      "ambiguous",
+    );
+    assert.equal(
+      adversaryPort.requests.some(
+        (request) => request.kind === "commit" || request.kind === "push",
+      ),
+      false,
+    );
+    assert.deepEqual(
+      await adversaryProcess.execute({ kind: "state" }),
+      adversaryBefore,
+    );
     // A second clone imports the already-pushed acquire. Its local Dolt head
     // is a clone-metadata merge rather than A's effect commit, so this fresh
     // adapter must use the typed remote parent→effect proof and remain wholly

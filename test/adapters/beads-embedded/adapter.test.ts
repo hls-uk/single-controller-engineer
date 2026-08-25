@@ -460,6 +460,45 @@ test("git-sync acquisition is ambiguous when fetched remote head differs", async
   assert.equal(moved.code, "ambiguous");
 });
 
+test("git-sync compare-and-set does not mutate after a clean local-ahead refusal", async () => {
+  const local = "b".repeat(40);
+  const remote = "a".repeat(40);
+  const port = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: local,
+        reachable: true,
+        remoteHead: remote,
+        workingSet: "clean",
+      },
+    },
+    { kind: "discover", value: { status: "absent" } },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: local,
+        reachable: true,
+        remoteHead: remote,
+        workingSet: "clean",
+      },
+    },
+    { kind: "pull", value: "conflict" },
+  ]);
+  assert.deepEqual(
+    await adapter(port, "git-sync").compareAndSet(journalBatch()),
+    {
+      status: "ambiguous",
+    },
+  );
+  assert.deepEqual(
+    port.requests.map((request) => request.kind),
+    ["state", "discover", "state", "pull"],
+  );
+});
+
 function postPushPort(
   afterPush: Extract<EmbeddedResponse, { readonly kind: "discover" }>["value"],
   finalState?: EmbeddedState,
@@ -468,28 +507,54 @@ function postPushPort(
   return new ScriptedPort([
     {
       kind: "state",
-      value: { autoCommit: "on", head, reachable: true, workingSet: "clean" },
+      value: {
+        autoCommit: "on",
+        head,
+        reachable: true,
+        remoteHead: head,
+        workingSet: "clean",
+      },
     },
     {
       kind: "state",
-      value: { autoCommit: "on", head, reachable: true, workingSet: "clean" },
+      value: {
+        autoCommit: "on",
+        head,
+        reachable: true,
+        remoteHead: head,
+        workingSet: "clean",
+      },
     },
     { kind: "pull", value: "applied" },
     {
       kind: "state",
-      value: { autoCommit: "on", head, reachable: true, workingSet: "clean" },
+      value: {
+        autoCommit: "on",
+        head,
+        reachable: true,
+        remoteHead: head,
+        workingSet: "clean",
+      },
     },
     { kind: "slot", value: slot("acquired", holder) },
     { kind: "mutation", value: "applied" },
     {
       kind: "state",
-      value: { autoCommit: "on", head, reachable: true, workingSet: "pending" },
+      value: {
+        autoCommit: "on",
+        head,
+        reachable: true,
+        remoteHead: head,
+        workingSet: "pending",
+      },
     },
     {
       kind: "discover",
       value: {
         childCommitments: [],
-        head: "b".repeat(40),
+        baseHead: head,
+        head,
+        remoteHead: head,
         rootCommitment: journalBatch().next.root.aggregateCommitment,
         status: "observed",
       },
@@ -499,7 +564,9 @@ function postPushPort(
       kind: "discover",
       value: {
         childCommitments: [],
+        baseHead: head,
         head: "b".repeat(40),
+        remoteHead: head,
         rootCommitment: journalBatch().next.root.aggregateCommitment,
         status: "observed",
       },
@@ -510,6 +577,7 @@ function postPushPort(
         autoCommit: "on",
         head: "b".repeat(40),
         reachable: true,
+        remoteHead: head,
         workingSet: "clean",
       },
     },
@@ -517,7 +585,9 @@ function postPushPort(
       kind: "discover",
       value: {
         childCommitments: [],
+        baseHead: head,
         head: "b".repeat(40),
+        remoteHead: head,
         rootCommitment: journalBatch().next.root.aggregateCommitment,
         status: "observed",
       },
@@ -829,7 +899,14 @@ test("pending exact-batch recovery rechecks the durable controller holder before
           workingSet: "pending",
         },
       },
-      { kind: "discover", value: { status: "observed" } },
+      {
+        kind: "discover",
+        value: {
+          baseHead: "e".repeat(40),
+          head: "e".repeat(40),
+          status: "observed",
+        },
+      },
       { kind: "slot", value: slotReadback },
     ]);
     assert.equal(

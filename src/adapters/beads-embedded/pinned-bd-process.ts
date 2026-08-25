@@ -14,7 +14,7 @@ import {
   validateMutationBatch,
 } from "../../fencing/index.js";
 import { canonicalJson, type JsonValue } from "../../protocol/canonical.js";
-import type { EmbeddedResult } from "./schemas.js";
+import { isPinnedBdIssueRow, type EmbeddedResult } from "./schemas.js";
 
 import type {
   CrashDiscovery,
@@ -45,6 +45,8 @@ export interface ProjectionPersistencePort {
     request: Extract<EmbeddedRequest, { readonly kind: "discover" }>,
     ref: string,
   ): Promise<CrashDiscovery | undefined>;
+  /** Proves that a complete Dolt data diff contains this batch and nothing else. */
+  matchesBatchDelta(batch: MutationBatch, source: string): boolean;
 }
 
 export const SLOT_INITIALIZATION_AUTHORITY =
@@ -499,6 +501,7 @@ function exactSlotIssueRow(
     ? [...SLOT_ISSUE_BASE_KEYS, "started_at"]
     : SLOT_ISSUE_BASE_KEYS;
   return (
+    isPinnedBdIssueRow(row) &&
     hasExactKeys(row, expectedKeys) &&
     row.id === expectedId &&
     row.issue_type === "task" &&
@@ -1008,35 +1011,13 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         const value = await this.projections.discover(request);
         if (value === undefined) throw new Error("checkpoint discovery failed");
         if (request.point !== "after_push" || this.remote === undefined)
-          return { kind: "discover", value };
-        const remoteRef = await this.fetchRemoteMain(this.remote);
-        const remote =
-          remoteRef === undefined
-            ? undefined
-            : await this.projections.discoverAt(request, remoteRef);
-        if (remote === undefined || remote.status === "ambiguous")
-          return { kind: "discover", value: { status: "ambiguous" } };
-        if (remote.status === "absent")
-          return { kind: "discover", value: { ...value, status: "absent" } };
+          return {
+            kind: "discover",
+            value: await this.proveCheckpointDelta(request, value),
+          };
         return {
           kind: "discover",
-          value: {
-            ...value,
-            ...(remote.childCommitments === undefined
-              ? {}
-              : { childCommitments: remote.childCommitments }),
-            ...(remote.head === undefined ? {} : { remoteHead: remote.head }),
-            ...(remote.rootCommitment === undefined
-              ? {}
-              : { rootCommitment: remote.rootCommitment }),
-            status:
-              value.status === "observed" &&
-              value.rootCommitment === remote.rootCommitment &&
-              canonicalJson(value.childCommitments as JsonValue) ===
-                canonicalJson(remote.childCommitments as JsonValue)
-                ? "observed"
-                : "ambiguous",
-          },
+          value: await this.proveRemoteCheckpointDelta(request, value),
         };
       }
       case "commit": {
@@ -1049,12 +1030,53 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         };
       }
       case "pull": {
+        if (this.remote === undefined)
+          return { kind: "pull", value: "ambiguous" };
+        const before = await this.doltHead(this.databaseDirectory);
+        const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+        const remote = await this.remoteHead(
+          this.databaseDirectory,
+          this.remote,
+        );
+        if (
+          before === undefined ||
+          remote === undefined ||
+          workingSet === undefined
+        )
+          return { kind: "pull", value: "unavailable" };
+        if (workingSet !== "clean") return { kind: "pull", value: "conflict" };
+        if (before === remote) return { kind: "pull", value: "applied" };
+        const fastForward = await this.isAncestor(before, remote);
+        const cloneAnchor = fastForward
+          ? undefined
+          : await this.pinnedClonePullAnchor(before, remote);
+        if (!fastForward && cloneAnchor === undefined)
+          return { kind: "pull", value: "conflict" };
         const capture = await this.run(["dolt", request.kind, "--json"]);
         if (capture === undefined || capture.exceeded)
           return { kind: "pull", value: "unavailable" };
+        const after = await this.doltHead(this.databaseDirectory);
+        const afterRemote = await this.remoteHead(
+          this.databaseDirectory,
+          this.remote,
+        );
         return {
           kind: "pull",
-          value: capture.code === 0 ? "applied" : "conflict",
+          value:
+            capture.code === 0 &&
+            afterRemote === remote &&
+            (fastForward
+              ? after === remote
+              : after !== undefined &&
+                cloneAnchor !== undefined &&
+                (await this.provePinnedClonePull(
+                  before,
+                  cloneAnchor,
+                  remote,
+                  after,
+                )))
+              ? "applied"
+              : "conflict",
         };
       }
       case "push": {
@@ -1100,6 +1122,337 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
     intent: SlotTransitionIntent,
   ): boolean {
     return isPinnedSlotTransitionDelta(source, this.prefix, intent);
+  }
+
+  /**
+   * Selected projection readback alone cannot authorize a commit: another
+   * pending or committed row could be carried with it. Bind recovery to the
+   * complete current working-set or one-parent commit delta.
+   */
+  private async proveCheckpointDelta(
+    request: Extract<EmbeddedRequest, { readonly kind: "discover" }>,
+    discovery: CrashDiscovery,
+  ): Promise<CrashDiscovery> {
+    if (discovery.status !== "observed") return discovery;
+    const head = await this.doltHead(this.databaseDirectory);
+    const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+    if (head === undefined || workingSet === undefined)
+      return { status: "ambiguous" };
+    if (workingSet === "pending") {
+      const before = await this.projections.discoverAt(request, head);
+      const diff = await this.runDolt(this.databaseDirectory, [
+        "diff",
+        "--data",
+        "-r",
+        "json",
+        head,
+      ]);
+      const proven =
+        before?.status === "absent" &&
+        diff !== undefined &&
+        diff.code === 0 &&
+        !diff.exceeded &&
+        this.projections.matchesBatchDelta(request.batch, diff.stdout)
+          ? { ...discovery, baseHead: head, head }
+          : { status: "ambiguous" as const };
+      return this.bindRemoteCheckpointBaseline(proven);
+    }
+    if (workingSet !== "clean") return { status: "ambiguous" };
+    return this.bindRemoteCheckpointBaseline(
+      await this.proveCommittedCheckpoint(request, discovery, head),
+    );
+  }
+
+  /** Exact one-parent checkpoint proof at a stable local or fetched ref. */
+  private async proveCommittedCheckpoint(
+    request: Extract<EmbeddedRequest, { readonly kind: "discover" }>,
+    discovery: CrashDiscovery,
+    head: string,
+  ): Promise<CrashDiscovery> {
+    if (discovery.status !== "observed" || discovery.head !== head)
+      return { status: "ambiguous" };
+    const parents = await this.directParents(head);
+    if (parents === undefined || parents.length !== 1)
+      return { status: "ambiguous" };
+    const parent = parents[0];
+    if (parent === undefined) return { status: "ambiguous" };
+    const before = await this.projections.discoverAt(request, parent);
+    const diff = await this.runDolt(this.databaseDirectory, [
+      "diff",
+      "--data",
+      "-r",
+      "json",
+      parent,
+      head,
+    ]);
+    return before?.status === "absent" &&
+      diff !== undefined &&
+      diff.code === 0 &&
+      !diff.exceeded &&
+      this.projections.matchesBatchDelta(request.batch, diff.stdout)
+      ? { ...discovery, baseHead: parent, head }
+      : { status: "ambiguous" };
+  }
+
+  /**
+   * Remote durable authority is an exact effect commit, not merely a selected
+   * projection. A clone may wrap it once in bd's pinned metadata merge; that
+   * preserves the clone-local head while proving the remote effect and its
+   * expected parent without accepting arbitrary later ancestry.
+   */
+  private async proveRemoteCheckpointDelta(
+    request: Extract<EmbeddedRequest, { readonly kind: "discover" }>,
+    local: CrashDiscovery,
+  ): Promise<CrashDiscovery> {
+    if (this.remote === undefined || local.status !== "observed")
+      return { status: "ambiguous" };
+    const localHead = await this.doltHead(this.databaseDirectory);
+    const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+    const remoteRef = await this.fetchRemoteMain(this.remote);
+    const remoteHead =
+      remoteRef === undefined ? undefined : await this.doltRefHead(remoteRef);
+    const remote =
+      remoteRef === undefined
+        ? undefined
+        : await this.projections.discoverAt(request, remoteRef);
+    if (
+      localHead === undefined ||
+      workingSet !== "clean" ||
+      remoteHead === undefined ||
+      remote === undefined
+    )
+      return { status: "ambiguous" };
+    const effect = await this.proveCommittedCheckpoint(
+      request,
+      remote,
+      remoteHead,
+    );
+    if (
+      effect.status !== "observed" ||
+      local.rootCommitment !== effect.rootCommitment ||
+      canonicalJson(local.childCommitments as JsonValue) !==
+        canonicalJson(effect.childCommitments as JsonValue)
+    )
+      return { status: "ambiguous" };
+    if (localHead === remoteHead && effect.baseHead !== undefined)
+      return {
+        ...local,
+        baseHead: effect.baseHead,
+        head: localHead,
+        remoteHead,
+      };
+    const parents = await this.directParents(localHead);
+    if (
+      parents === undefined ||
+      parents.length !== 2 ||
+      parents.filter((parent) => parent === remoteHead).length !== 1
+    )
+      return { status: "ambiguous" };
+    const localDiff = await this.runDolt(this.databaseDirectory, [
+      "diff",
+      "--data",
+      "-r",
+      "json",
+      remoteHead,
+      localHead,
+    ]);
+    const otherParent = parents.find((parent) => parent !== remoteHead);
+    const baseHead = effect.baseHead;
+    if (
+      otherParent === undefined ||
+      baseHead === undefined ||
+      localDiff === undefined ||
+      localDiff.code !== 0 ||
+      localDiff.exceeded ||
+      !isPinnedCloneMergeDelta(localDiff.stdout) ||
+      !(await this.isAncestor(baseHead, otherParent))
+    )
+      return { status: "ambiguous" };
+    const otherDiff = await this.runDolt(this.databaseDirectory, [
+      "diff",
+      "--data",
+      "-r",
+      "json",
+      baseHead,
+      otherParent,
+    ]);
+    return otherDiff !== undefined &&
+      otherDiff.code === 0 &&
+      !otherDiff.exceeded &&
+      isPinnedCloneMergeDelta(otherDiff.stdout)
+      ? { ...local, baseHead, head: localHead, remoteHead }
+      : { status: "ambiguous" };
+  }
+
+  /** Finds the unique remote/common anchor of a known bd clone merge. */
+  private async pinnedClonePullAnchor(
+    localHead: string,
+    remoteHead: string,
+  ): Promise<string | undefined> {
+    const parents = await this.directParents(localHead);
+    if (parents === undefined || (parents.length !== 1 && parents.length !== 2))
+      return undefined;
+    const anchors: string[] = [];
+    for (const parent of parents) {
+      if (parent !== remoteHead && (await this.isAncestor(parent, remoteHead)))
+        anchors.push(parent);
+    }
+    if (anchors.length !== 1) return undefined;
+    const anchor = anchors[0];
+    if (anchor === undefined) return undefined;
+    if (parents.length === 1)
+      return (await this.exactPinnedCloneDelta(anchor, localHead))
+        ? anchor
+        : undefined;
+    const otherParent = parents.find((parent) => parent !== anchor);
+    return otherParent === undefined
+      ? undefined
+      : this.pinnedCloneCommonAnchor(
+          anchor,
+          otherParent,
+          remoteHead,
+          localHead,
+        );
+  }
+
+  /** Verifies the exact post-pull clone merge from the pre-pull local head. */
+  private async provePinnedClonePull(
+    before: string,
+    anchor: string,
+    remote: string,
+    after: string,
+  ): Promise<boolean> {
+    const parents = await this.directParents(after);
+    if (
+      parents === undefined ||
+      parents.length !== 2 ||
+      parents.filter((parent) => parent === remote).length !== 1 ||
+      !parents.includes(before)
+    )
+      return false;
+    const mergeDiff = await this.runDolt(this.databaseDirectory, [
+      "diff",
+      "--data",
+      "-r",
+      "json",
+      remote,
+      after,
+    ]);
+    return (
+      mergeDiff !== undefined &&
+      mergeDiff.code === 0 &&
+      !mergeDiff.exceeded &&
+      isPinnedCloneMergeDelta(mergeDiff.stdout) &&
+      (await this.isAncestor(anchor, before))
+    );
+  }
+
+  /**
+   * A checkpoint may be pushed only from the fetched remote baseline itself,
+   * or from bd's exact clone-local metadata-only representation of it.
+   */
+  private async bindRemoteCheckpointBaseline(
+    discovery: CrashDiscovery,
+  ): Promise<CrashDiscovery> {
+    if (discovery.status !== "observed" || this.remote === undefined)
+      return discovery;
+    const baseHead = discovery.baseHead;
+    const remoteHead = await this.remoteHead(
+      this.databaseDirectory,
+      this.remote,
+    );
+    if (
+      baseHead === undefined ||
+      remoteHead === undefined ||
+      !(
+        baseHead === remoteHead ||
+        (await this.isPinnedCloneBaseline(remoteHead, baseHead))
+      )
+    )
+      return { status: "ambiguous" };
+    return { ...discovery, remoteHead };
+  }
+
+  /** Exact pinned clone metadata delta from a fetched remote baseline. */
+  private async isPinnedCloneBaseline(
+    remoteHead: string,
+    localHead: string,
+  ): Promise<boolean> {
+    if (remoteHead === localHead) return true;
+    if (!(await this.isAncestor(remoteHead, localHead))) return false;
+    const parents = await this.directParents(localHead);
+    if (parents === undefined || (parents.length !== 1 && parents.length !== 2))
+      return false;
+    if (parents.length === 1)
+      return (
+        parents[0] === remoteHead &&
+        (await this.exactPinnedCloneDelta(remoteHead, localHead))
+      );
+    const anchors: string[] = [];
+    for (const parent of parents) {
+      if (parent === remoteHead || (await this.isAncestor(remoteHead, parent)))
+        anchors.push(parent);
+    }
+    if (anchors.length !== 1) return false;
+    const anchor = anchors[0];
+    const otherParent = parents.find((parent) => parent !== anchor);
+    return (
+      anchor !== undefined &&
+      otherParent !== undefined &&
+      (await this.isAncestor(anchor, otherParent)) &&
+      (await this.exactPinnedCloneDelta(remoteHead, localHead)) &&
+      (await this.exactPinnedCloneDelta(anchor, otherParent))
+    );
+  }
+
+  /** The only tolerated clone-local history edge is the pinned metadata pair. */
+  private async exactPinnedCloneDelta(
+    from: string,
+    to: string,
+  ): Promise<boolean> {
+    const diff = await this.runDolt(this.databaseDirectory, [
+      "diff",
+      "--data",
+      "-r",
+      "json",
+      from,
+      to,
+    ]);
+    return (
+      diff !== undefined &&
+      diff.code === 0 &&
+      !diff.exceeded &&
+      isPinnedCloneMergeDelta(diff.stdout)
+    );
+  }
+
+  /**
+   * A clone merge may carry a later remote effect as one parent and a
+   * clone-local branch rooted at that effect's immediate common ancestor as
+   * the other. Discover only that bounded parent path; both edges remain the
+   * exact pinned metadata delta.
+   */
+  private async pinnedCloneCommonAnchor(
+    directAnchor: string,
+    otherParent: string,
+    remoteHead: string,
+    localHead: string,
+  ): Promise<string | undefined> {
+    if (!(await this.exactPinnedCloneDelta(directAnchor, localHead)))
+      return undefined;
+    const directParents = await this.directParents(directAnchor);
+    if (directParents === undefined) return undefined;
+    const candidates = [directAnchor, ...directParents];
+    const proven: string[] = [];
+    for (const candidate of candidates) {
+      if (
+        (await this.isAncestor(candidate, remoteHead)) &&
+        (await this.isAncestor(candidate, otherParent)) &&
+        (await this.exactPinnedCloneDelta(candidate, otherParent))
+      )
+        proven.push(candidate);
+    }
+    return proven.length === 1 ? proven[0] : undefined;
   }
 
   private async proveSlotTransition(

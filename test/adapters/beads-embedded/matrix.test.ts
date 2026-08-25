@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import {
   DoltProjectionPersistence,
   EmbeddedBeadsAdapter,
+  isPinnedBdIssueRow,
   isPinnedCloneMergeDelta,
   isPinnedSlotTransitionDelta,
   makeSlotTransitionIntent,
@@ -369,6 +370,37 @@ test("authoritative slot delta accepts only the pinned two-row envelope", () => 
     );
 });
 
+test("pinned issue data rows reject unknown, missing, asymmetric, and mistyped keys", () => {
+  const { delta } = exactSlotDeltaFixture();
+  const issues = delta.tables[0];
+  const issue = issues?.data_diff[0];
+  if (issue === undefined) throw new Error("unreachable");
+  assert.equal(isPinnedBdIssueRow(issue.from_row), true);
+  assert.equal(isPinnedBdIssueRow(issue.to_row), true);
+  for (const malformed of [
+    { ...issue.from_row, unknown: "same" },
+    Object.fromEntries(
+      Object.entries(issue.from_row).filter(([key]) => key !== "payload"),
+    ),
+    { ...issue.from_row, priority: "0" },
+    { ...issue.from_row, metadata: "{}" },
+    { ...issue.from_row, created_at: 1 },
+  ])
+    assert.equal(isPinnedBdIssueRow(malformed), false);
+  const asymmetric = {
+    from_row: { ...issue.from_row, unknown: "from-only" },
+    to_row: issue.to_row,
+  };
+  assert.equal(isPinnedBdIssueRow(asymmetric.from_row), false);
+  assert.equal(isPinnedBdIssueRow(asymmetric.to_row), true);
+  const reverseAsymmetric = {
+    from_row: issue.from_row,
+    to_row: { ...issue.to_row, unknown: "to-only" },
+  };
+  assert.equal(isPinnedBdIssueRow(reverseAsymmetric.from_row), true);
+  assert.equal(isPinnedBdIssueRow(reverseAsymmetric.to_row), false);
+});
+
 test("remote slot-transition proof fails closed on every malformed delta layer", async () => {
   const root = await mkdtemp("/private/tmp/sce-remote-delta-");
   const fakeBd = join(root, "bd");
@@ -511,6 +543,9 @@ test("remote slot-transition proof fails closed on every malformed delta layer",
           },
           async discoverAt() {
             return undefined;
+          },
+          matchesBatchDelta() {
+            return false;
           },
           async mutate() {
             return { kind: "mutation", value: "quarantined" } as const;
@@ -676,6 +711,9 @@ test("remote clone merge binds its non-remote parent to the exact pre-effect lin
           async discoverAt() {
             return undefined;
           },
+          matchesBatchDelta() {
+            return false;
+          },
           async mutate() {
             return { kind: "mutation", value: "quarantined" } as const;
           },
@@ -698,6 +736,137 @@ test("remote clone merge binds its non-remote parent to the exact pre-effect lin
       assert.equal(actual.value.status, expected);
       await assert.rejects(access(mutationMarker));
     }
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("batch remote discovery rejects a forged clone merge parent without effects", async () => {
+  const root = await mkdtemp("/private/tmp/sce-batch-forged-clone-");
+  const fakeBd = join(root, "bd");
+  const fakeDolt = join(root, "dolt");
+  const beforeHead = "a".repeat(32);
+  const effectHead = "b".repeat(32);
+  const localHead = "c".repeat(32);
+  const forgedParent = "d".repeat(32);
+  const mutationMarker = join(root, "unexpected-effect");
+  try {
+    const before = fixtureRun();
+    const next = reduced(before, "reservation_intent", {
+      reservations: [
+        { id: "reservation-forged", namespace: "branch", resource: "main" },
+      ],
+    });
+    const batchInput = batch(before, next);
+    const observed = {
+      childCommitments: batchInput.next.children.map(
+        (child) => child.commitment,
+      ),
+      rootCommitment: batchInput.next.root.aggregateCommitment,
+      status: "observed" as const,
+    };
+    const absent = {
+      childCommitments: batchInput.expectedChildren.map(
+        (child) => child.expectedCommitment,
+      ),
+      rootCommitment: batchInput.expectedAggregateCommitment,
+      status: "absent" as const,
+    };
+    const clone = Buffer.from(
+      JSON.stringify(pinnedCloneDelta()),
+      "utf8",
+    ).toString("base64");
+    const forged = Buffer.from(
+      JSON.stringify({
+        tables: [
+          ...pinnedCloneDelta().tables,
+          {
+            data_diff: [
+              {
+                from_row: { id: "sce-forged", status: "open" },
+                to_row: { id: "sce-forged", status: "closed" },
+              },
+            ],
+            name: "issues",
+          },
+        ],
+      }),
+      "utf8",
+    ).toString("base64");
+    await executable(fakeBd, [
+      "#!/bin/sh",
+      'if [ "$1" = "--version" ]; then printf "bd version 1.1.0\\n"; exit 0; fi',
+      `touch '${mutationMarker}'`,
+      "exit 1",
+    ]);
+    await executable(fakeDolt, [
+      "#!/bin/sh",
+      'if [ "$1" = "version" ]; then printf "dolt version 2.2.1\\n"; exit 0; fi',
+      'if [ "$1" = "remote" ]; then printf "origin git+file://sync.test/repo\\n"; exit 0; fi',
+      'if [ "$1" = "fetch" ]; then exit 0; fi',
+      'if [ "$1" = "diff" ]; then',
+      `  if [ "$5" = "${beforeHead}" ] && [ "$6" = "${effectHead}" ]; then printf '{}' ; exit 0; fi`,
+      `  if [ "$5" = "${effectHead}" ] && [ "$6" = "${localHead}" ]; then printf '%s' '${clone}' | base64 -D 2>/dev/null || printf '%s' '${clone}' | base64 -d; exit 0; fi`,
+      `  if [ "$5" = "${effectHead}" ] && [ "$6" = "${forgedParent}" ]; then printf '%s' '${forged}' | base64 -D 2>/dev/null || printf '%s' '${forged}' | base64 -d; exit 0; fi`,
+      `  if [ "$5" = "${beforeHead}" ] && [ "$6" = "${forgedParent}" ]; then printf '%s' '${forged}' | base64 -D 2>/dev/null || printf '%s' '${forged}' | base64 -d; exit 0; fi`,
+      `  touch '${mutationMarker}'; exit 1`,
+      "fi",
+      'if [ "$1" = "sql" ]; then',
+      '  case "$5" in',
+      `    *'DOLT_HASHOF("HEAD")'*) printf '{"rows":[{"head":"${localHead}"}]}' ;;`,
+      `    *"DOLT_HASHOF('origin/main')"*) printf '{"rows":[{"head":"${effectHead}"}]}' ;;`,
+      "    *'SELECT * FROM dolt_status'*) printf '{}' ;;",
+      `    *"commit_hash = '${effectHead}'"*) printf '{"rows":[{"parent_hash":"${beforeHead}","parent_index":0}]}' ;;`,
+      `    *"commit_hash = '${localHead}'"*) printf '{"rows":[{"parent_hash":"${effectHead}","parent_index":0},{"parent_hash":"${forgedParent}","parent_index":1}]}' ;;`,
+      `    *'WITH RECURSIVE ancestry'*) printf '{"rows":[{"matches":1}]}' ;;`,
+      `    *) touch '${mutationMarker}'; exit 1 ;;`,
+      "  esac",
+      "  exit 0",
+      "fi",
+      `touch '${mutationMarker}'`,
+      "exit 1",
+    ]);
+    const process = new PinnedBdEmbeddedProcess({
+      bdExecutable: fakeBd,
+      cwd: root,
+      databaseDirectory: root,
+      doltExecutable: fakeDolt,
+      prefix: "sce",
+      projections: {
+        async discover() {
+          return { ...observed, head: localHead };
+        },
+        async discoverAt(_request, ref) {
+          return ref === beforeHead
+            ? { ...absent, head: beforeHead }
+            : { ...observed, head: effectHead };
+        },
+        matchesBatchDelta() {
+          return true;
+        },
+        async mutate() {
+          return { kind: "mutation", value: "quarantined" } as const;
+        },
+        async readback() {
+          return undefined;
+        },
+      },
+      remote: {
+        name: "origin",
+        ref: "refs/dolt/data",
+        url: "git+file://sync.test/repo",
+      },
+      scope,
+    });
+    assert.deepEqual(
+      await process.execute({
+        batch: batchInput,
+        kind: "discover",
+        point: "after_push",
+      }),
+      { kind: "discover", value: { status: "ambiguous" } },
+    );
+    await assert.rejects(access(mutationMarker));
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -1045,7 +1214,8 @@ test("concrete embedded matrix atomically persists root and child, recovers cras
     const baseline = await restartedAfterCommit.workerBaseline();
     assert.ok(baseline);
     const state7 = reduced(state6, "dispatch_intent", {});
-    const unrelated = batch(state6, state7);
+    const selected = batch(state6, state7);
+    assert.equal((await persistence.mutate(selected)).value, "applied");
     await json(root, [
       "create",
       "--id",
@@ -1057,17 +1227,28 @@ test("concrete embedded matrix atomically persists root and child, recovers cras
       (await restartedAfterCommit.verifyWorkerBaseline(baseline)).code,
       "worker_mutation",
     );
-    // An unrelated pending row is not treated as proof of a controller batch;
-    // recovery does not commit, pull, or rewrite it.
+    // Even when the requested batch is present, an extra pending issue means
+    // recovery cannot commit, pull, or rewrite the whole working set.
     const pendingBefore = await process.execute({ kind: "state" });
     assert.equal(pendingBefore.kind, "state");
     assert.equal(pendingBefore.value.workingSet, "pending");
     assert.equal(
-      (await restartedAfterCommit.compareAndSet(unrelated)).status,
+      (await restartedAfterCommit.compareAndSet(selected)).status,
       "ambiguous",
     );
     const pendingAfter = await process.execute({ kind: "state" });
     assert.deepEqual(pendingAfter, pendingBefore);
+    await run(root, BD, ["dolt", "commit", "--json"]);
+    const committedBefore = await process.execute({ kind: "state" });
+    assert.equal(committedBefore.kind, "state");
+    assert.equal(committedBefore.value.workingSet, "clean");
+    // The same selected batch remains non-recoverable once an extra row is
+    // carried into a clean commit; recovery must not publish a false applied.
+    assert.equal(
+      (await restartedAfterCommit.compareAndSet(selected)).status,
+      "ambiguous",
+    );
+    assert.deepEqual(await process.execute({ kind: "state" }), committedBefore);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -1104,6 +1285,9 @@ test("pinned process refuses schema skew without surfacing subprocess secrets", 
         },
         async discoverAt() {
           return undefined;
+        },
+        matchesBatchDelta() {
+          return false;
         },
         async mutate() {
           return { kind: "mutation", value: "quarantined" } as const;
@@ -1338,6 +1522,9 @@ test("post-version executable replacement never reaches projection Dolt, pinned 
         async discoverAt() {
           return undefined;
         },
+        matchesBatchDelta() {
+          return false;
+        },
         async mutate() {
           return { kind: "mutation", value: "quarantined" } as const;
         },
@@ -1392,6 +1579,9 @@ test("post-version executable replacement never reaches projection Dolt, pinned 
         },
         async discoverAt() {
           return undefined;
+        },
+        matchesBatchDelta() {
+          return false;
         },
         async mutate() {
           return { kind: "mutation", value: "quarantined" } as const;
