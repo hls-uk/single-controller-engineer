@@ -587,6 +587,9 @@ test("remote clone merge binds its non-remote parent to the exact pre-effect lin
   const effectHead = "b".repeat(32);
   const localHead = "c".repeat(32);
   const otherParent = "d".repeat(32);
+  const unanchoredParent = "e".repeat(32);
+  const hiddenParent = "f".repeat(32);
+  const hiddenBase = "g".repeat(32);
   try {
     const { delta, intent: localIntent } = exactSlotDeltaFixture();
     const intent = makeSlotTransitionIntent(
@@ -640,20 +643,53 @@ test("remote clone merge binds its non-remote parent to the exact pre-effect lin
     const localMerge = Buffer.from(JSON.stringify(cloneDelta), "utf8").toString(
       "base64",
     );
-    for (const [name, ancestry, parentDelta, expected] of [
-      ["valid", { rows: [{ matches: 1 }] }, cloneDelta, "observed"],
-      ["non-ancestor", { rows: [{ matches: 0 }] }, cloneDelta, "ambiguous"],
+    for (const [
+      name,
+      ancestry,
+      directParent,
+      parentDelta,
+      expected,
+      hidden,
+    ] of [
+      [
+        "valid",
+        { rows: [{ matches: 1 }] },
+        beforeHead,
+        cloneDelta,
+        "observed",
+        false,
+      ],
+      [
+        "non-ancestor",
+        { rows: [{ matches: 0 }] },
+        unanchoredParent,
+        cloneDelta,
+        "ambiguous",
+        false,
+      ],
       [
         "ambiguous-output",
         { rows: [{ matches: 1, unexpected: true }] },
+        unanchoredParent,
         cloneDelta,
         "ambiguous",
+        false,
       ],
       [
         "extra-delta",
         { rows: [{ matches: 1 }] },
+        beforeHead,
         invalidCloneDelta,
         "ambiguous",
+        false,
+      ],
+      [
+        "hidden-add-revert-branch",
+        { rows: [{ matches: 1 }] },
+        unanchoredParent,
+        cloneDelta,
+        "ambiguous",
+        true,
       ],
     ] as const) {
       const mutationMarker = join(root, `lineage-mutation-${name}`);
@@ -664,6 +700,21 @@ test("remote clone merge binds its non-remote parent to the exact pre-effect lin
       const ancestor = Buffer.from(JSON.stringify(ancestry), "utf8").toString(
         "base64",
       );
+      const otherParents = Buffer.from(
+        JSON.stringify({
+          rows: hidden
+            ? [
+                { parent_hash: directParent, parent_index: 0 },
+                { parent_hash: hiddenParent, parent_index: 1 },
+              ]
+            : [{ parent_hash: directParent, parent_index: 0 }],
+        }),
+        "utf8",
+      ).toString("base64");
+      const hiddenDelta = Buffer.from(
+        JSON.stringify(invalidCloneDelta),
+        "utf8",
+      ).toString("base64");
       await executable(fakeBd, [
         "#!/bin/sh",
         'if [ "$1" = "--version" ]; then printf "bd version 1.1.0\\n"; exit 0; fi',
@@ -678,7 +729,9 @@ test("remote clone merge binds its non-remote parent to the exact pre-effect lin
         'if [ "$1" = "diff" ]; then',
         `  if [ "$5" = "${beforeHead}" ] && [ "$6" = "${effectHead}" ]; then printf '%s' '${remoteEffect}' | base64 -D 2>/dev/null || printf '%s' '${remoteEffect}' | base64 -d; exit 0; fi`,
         `  if [ "$5" = "${effectHead}" ] && [ "$6" = "${localHead}" ]; then printf '%s' '${localMerge}' | base64 -D 2>/dev/null || printf '%s' '${localMerge}' | base64 -d; exit 0; fi`,
-        `  if [ "$5" = "${beforeHead}" ] && [ "$6" = "${otherParent}" ]; then printf '%s' '${otherDelta}' | base64 -D 2>/dev/null || printf '%s' '${otherDelta}' | base64 -d; exit 0; fi`,
+        `  if [ "$5" = "${directParent}" ] && [ "$6" = "${otherParent}" ]; then printf '%s' '${otherDelta}' | base64 -D 2>/dev/null || printf '%s' '${otherDelta}' | base64 -d; exit 0; fi`,
+        `  if [ "$5" = "${hiddenBase}" ] && [ "$6" = "${hiddenParent}" ]; then printf '%s' '${hiddenDelta}' | base64 -D 2>/dev/null || printf '%s' '${hiddenDelta}' | base64 -d; exit 0; fi`,
+        `  if [ "$5" = "${beforeHead}" ] && [ "$6" = "${otherParent}" ]; then printf '%s' '${localMerge}' | base64 -D 2>/dev/null || printf '%s' '${localMerge}' | base64 -d; exit 0; fi`,
         `  touch '${mutationMarker}'; exit 1`,
         "fi",
         'if [ "$1" = "sql" ]; then',
@@ -686,8 +739,11 @@ test("remote clone merge binds its non-remote parent to the exact pre-effect lin
         `    *'DOLT_HASHOF("HEAD")'*) printf '{"rows":[{"head":"${localHead}"}]}' ;;`,
         `    *"DOLT_HASHOF('origin/main')"*) printf '{"rows":[{"head":"${effectHead}"}]}' ;;`,
         "    *'SELECT * FROM dolt_status'*) printf '{}' ;;",
-        `    *"commit_hash = '${effectHead}'"*) printf '{"rows":[{"parent_hash":"${beforeHead}","parent_index":0}]}' ;;`,
-        `    *"commit_hash = '${localHead}'"*) printf '{"rows":[{"parent_hash":"${effectHead}","parent_index":0},{"parent_hash":"${otherParent}","parent_index":1}]}' ;;`,
+        `    *"SELECT parent_hash, parent_index FROM dolt_commit_ancestors WHERE commit_hash = '${effectHead}'"*) printf '{"rows":[{"parent_hash":"${beforeHead}","parent_index":0}]}' ;;`,
+        `    *"SELECT parent_hash, parent_index FROM dolt_commit_ancestors WHERE commit_hash = '${localHead}'"*) printf '{"rows":[{"parent_hash":"${effectHead}","parent_index":0},{"parent_hash":"${otherParent}","parent_index":1}]}' ;;`,
+        `    *"SELECT parent_hash, parent_index FROM dolt_commit_ancestors WHERE commit_hash = '${otherParent}'"*) printf '%s' '${otherParents}' | base64 -D 2>/dev/null || printf '%s' '${otherParents}' | base64 -d ;;`,
+        `    *"SELECT parent_hash, parent_index FROM dolt_commit_ancestors WHERE commit_hash = '${hiddenParent}'"*) printf '{"rows":[{"parent_hash":"${hiddenBase}","parent_index":0}]}' ;;`,
+        `    *"parent_hash = '${hiddenParent}'"*) printf '{"rows":[{"matches":0}]}' ;;`,
         `    *'WITH RECURSIVE ancestry'*) printf '%s' '${ancestor}' | base64 -D 2>/dev/null || printf '%s' '${ancestor}' | base64 -d ;;`,
         `    *'FROM issues AS OF'*) printf '%s' '${remoteIssue}' | base64 -D 2>/dev/null || printf '%s' '${remoteIssue}' | base64 -d ;;`,
         `    *'FROM labels AS OF'*) printf '%s' '${remoteLabels}' | base64 -D 2>/dev/null || printf '%s' '${remoteLabels}' | base64 -d ;;`,
@@ -741,7 +797,7 @@ test("remote clone merge binds its non-remote parent to the exact pre-effect lin
   }
 });
 
-test("batch remote discovery rejects a forged clone merge parent without effects", async () => {
+test("batch remote discovery rejects hidden clone-branch history without effects", async () => {
   const root = await mkdtemp("/private/tmp/sce-batch-forged-clone-");
   const fakeBd = join(root, "bd");
   const fakeDolt = join(root, "dolt");
@@ -749,6 +805,9 @@ test("batch remote discovery rejects a forged clone merge parent without effects
   const effectHead = "b".repeat(32);
   const localHead = "c".repeat(32);
   const forgedParent = "d".repeat(32);
+  const anchorParent = "e".repeat(32);
+  const hiddenParent = "f".repeat(32);
+  const hiddenBase = "g".repeat(32);
   const mutationMarker = join(root, "unexpected-effect");
   try {
     const before = fixtureRun();
@@ -807,8 +866,9 @@ test("batch remote discovery rejects a forged clone merge parent without effects
       'if [ "$1" = "diff" ]; then',
       `  if [ "$5" = "${beforeHead}" ] && [ "$6" = "${effectHead}" ]; then printf '{}' ; exit 0; fi`,
       `  if [ "$5" = "${effectHead}" ] && [ "$6" = "${localHead}" ]; then printf '%s' '${clone}' | base64 -D 2>/dev/null || printf '%s' '${clone}' | base64 -d; exit 0; fi`,
-      `  if [ "$5" = "${effectHead}" ] && [ "$6" = "${forgedParent}" ]; then printf '%s' '${forged}' | base64 -D 2>/dev/null || printf '%s' '${forged}' | base64 -d; exit 0; fi`,
-      `  if [ "$5" = "${beforeHead}" ] && [ "$6" = "${forgedParent}" ]; then printf '%s' '${forged}' | base64 -D 2>/dev/null || printf '%s' '${forged}' | base64 -d; exit 0; fi`,
+      `  if [ "$5" = "${anchorParent}" ] && [ "$6" = "${forgedParent}" ]; then printf '%s' '${clone}' | base64 -D 2>/dev/null || printf '%s' '${clone}' | base64 -d; exit 0; fi`,
+      `  if [ "$5" = "${hiddenBase}" ] && [ "$6" = "${hiddenParent}" ]; then printf '%s' '${forged}' | base64 -D 2>/dev/null || printf '%s' '${forged}' | base64 -d; exit 0; fi`,
+      `  if [ "$5" = "${beforeHead}" ] && [ "$6" = "${forgedParent}" ]; then printf '%s' '${clone}' | base64 -D 2>/dev/null || printf '%s' '${clone}' | base64 -d; exit 0; fi`,
       `  touch '${mutationMarker}'; exit 1`,
       "fi",
       'if [ "$1" = "sql" ]; then',
@@ -816,8 +876,11 @@ test("batch remote discovery rejects a forged clone merge parent without effects
       `    *'DOLT_HASHOF("HEAD")'*) printf '{"rows":[{"head":"${localHead}"}]}' ;;`,
       `    *"DOLT_HASHOF('origin/main')"*) printf '{"rows":[{"head":"${effectHead}"}]}' ;;`,
       "    *'SELECT * FROM dolt_status'*) printf '{}' ;;",
-      `    *"commit_hash = '${effectHead}'"*) printf '{"rows":[{"parent_hash":"${beforeHead}","parent_index":0}]}' ;;`,
-      `    *"commit_hash = '${localHead}'"*) printf '{"rows":[{"parent_hash":"${effectHead}","parent_index":0},{"parent_hash":"${forgedParent}","parent_index":1}]}' ;;`,
+      `    *"SELECT parent_hash, parent_index FROM dolt_commit_ancestors WHERE commit_hash = '${effectHead}'"*) printf '{"rows":[{"parent_hash":"${beforeHead}","parent_index":0}]}' ;;`,
+      `    *"SELECT parent_hash, parent_index FROM dolt_commit_ancestors WHERE commit_hash = '${localHead}'"*) printf '{"rows":[{"parent_hash":"${effectHead}","parent_index":0},{"parent_hash":"${forgedParent}","parent_index":1}]}' ;;`,
+      `    *"SELECT parent_hash, parent_index FROM dolt_commit_ancestors WHERE commit_hash = '${forgedParent}'"*) printf '{"rows":[{"parent_hash":"${anchorParent}","parent_index":0},{"parent_hash":"${hiddenParent}","parent_index":1}]}' ;;`,
+      `    *"SELECT parent_hash, parent_index FROM dolt_commit_ancestors WHERE commit_hash = '${hiddenParent}'"*) printf '{"rows":[{"parent_hash":"${hiddenBase}","parent_index":0}]}' ;;`,
+      `    *"parent_hash = '${hiddenParent}'"*) printf '{"rows":[{"matches":0}]}' ;;`,
       `    *'WITH RECURSIVE ancestry'*) printf '{"rows":[{"matches":1}]}' ;;`,
       `    *) touch '${mutationMarker}'; exit 1 ;;`,
       "  esac",
@@ -867,6 +930,145 @@ test("batch remote discovery rejects a forged clone merge parent without effects
       { kind: "discover", value: { status: "ambiguous" } },
     );
     await assert.rejects(access(mutationMarker));
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("clone pull lineage rejects cycles, multiple authorities, and 65 nested branches before pull", async () => {
+  const root = await mkdtemp("/private/tmp/sce-clone-lineage-bounds-");
+  const fakeBd = join(root, "bd");
+  const fakeDolt = join(root, "dolt");
+  const remoteHead = "f".repeat(32);
+  const clone = Buffer.from(
+    JSON.stringify(pinnedCloneDelta()),
+    "utf8",
+  ).toString("base64");
+  const oid = (value: number) => value.toString(16).padStart(32, "0");
+  try {
+    for (const scenario of ["cycle", "multiple-authority", "depth"] as const) {
+      const localHead =
+        scenario === "cycle"
+          ? oid(1)
+          : scenario === "multiple-authority"
+            ? oid(4)
+            : oid(164);
+      const marker = join(root, `${scenario}-mutation`);
+      const parents = new Map<string, readonly string[]>();
+      const ancestor = new Map<string, boolean>();
+      const cloneEdges = new Set<string>();
+      if (scenario === "cycle") {
+        const authority = oid(2);
+        const branch = oid(3);
+        parents.set(localHead, [authority, branch]);
+        parents.set(branch, [authority, localHead]);
+        ancestor.set(authority, true);
+        ancestor.set(branch, false);
+        ancestor.set(localHead, false);
+        cloneEdges.add(`${authority}:${localHead}`);
+        cloneEdges.add(`${authority}:${branch}`);
+      } else if (scenario === "multiple-authority") {
+        const first = oid(5);
+        const second = oid(6);
+        parents.set(localHead, [first, second]);
+        ancestor.set(localHead, false);
+        ancestor.set(first, true);
+        ancestor.set(second, true);
+      } else {
+        ancestor.set(localHead, false);
+        for (let edge = 0; edge <= 64; edge += 1) {
+          const head = oid(100 + edge);
+          const authority = oid(300 + edge);
+          const other = oid(100 + edge - 1);
+          parents.set(head, [authority, other]);
+          ancestor.set(authority, true);
+          ancestor.set(other, false);
+          cloneEdges.add(`${authority}:${head}`);
+        }
+      }
+      const parentCases = [...parents.entries()].map(([head, values]) => {
+        const rows = values.map((parent_hash, parent_index) => ({
+          parent_hash,
+          parent_index,
+        }));
+        const encoded = Buffer.from(JSON.stringify({ rows }), "utf8").toString(
+          "base64",
+        );
+        return `    *"SELECT parent_hash, parent_index FROM dolt_commit_ancestors WHERE commit_hash = '${head}'"*) printf '%s' '${encoded}' | base64 -D 2>/dev/null || printf '%s' '${encoded}' | base64 -d ;;`;
+      });
+      const ancestryCases = [...ancestor.entries()].map(
+        ([head, matches]) =>
+          `    *"parent_hash = '${head}'"*) printf '{"rows":[{"matches":${matches ? 1 : 0}}]}' ;;`,
+      );
+      const diffCases = [...cloneEdges].map((edge) => {
+        const [from, to] = edge.split(":");
+        return `  if [ "$5" = "${from}" ] && [ "$6" = "${to}" ]; then printf '%s' '${clone}' | base64 -D 2>/dev/null || printf '%s' '${clone}' | base64 -d; exit 0; fi`;
+      });
+      await executable(fakeBd, [
+        "#!/bin/sh",
+        'if [ "$1" = "--version" ]; then printf "bd version 1.1.0\\n"; exit 0; fi',
+        `touch '${marker}'`,
+        "exit 1",
+      ]);
+      await executable(fakeDolt, [
+        "#!/bin/sh",
+        'if [ "$1" = "version" ]; then printf "dolt version 2.2.1\\n"; exit 0; fi',
+        'if [ "$1" = "remote" ]; then printf "origin git+file://sync.test/repo\\n"; exit 0; fi',
+        'if [ "$1" = "fetch" ]; then exit 0; fi',
+        'if [ "$1" = "diff" ]; then',
+        ...diffCases,
+        `  touch '${marker}'; exit 1`,
+        "fi",
+        'if [ "$1" = "sql" ]; then',
+        '  case "$5" in',
+        `    *'DOLT_HASHOF("HEAD")'*) printf '{"rows":[{"head":"${localHead}"}]}' ;;`,
+        `    *"DOLT_HASHOF('origin/main')"*) printf '{"rows":[{"head":"${remoteHead}"}]}' ;;`,
+        "    *'SELECT * FROM dolt_status'*) printf '{}' ;;",
+        ...parentCases,
+        ...ancestryCases,
+        `    *) touch '${marker}'; exit 1 ;;`,
+        "  esac",
+        "  exit 0",
+        "fi",
+        `touch '${marker}'`,
+        "exit 1",
+      ]);
+      const process = new PinnedBdEmbeddedProcess({
+        bdExecutable: fakeBd,
+        cwd: root,
+        databaseDirectory: root,
+        doltExecutable: fakeDolt,
+        prefix: "sce",
+        projections: {
+          async discover() {
+            return undefined;
+          },
+          async discoverAt() {
+            return undefined;
+          },
+          matchesBatchDelta() {
+            return false;
+          },
+          async mutate() {
+            return { kind: "mutation", value: "quarantined" } as const;
+          },
+          async readback() {
+            return undefined;
+          },
+        },
+        remote: {
+          name: "origin",
+          ref: "refs/dolt/data",
+          url: "git+file://sync.test/repo",
+        },
+        scope,
+      });
+      assert.deepEqual(await process.execute({ kind: "pull" }), {
+        kind: "pull",
+        value: "conflict",
+      });
+      await assert.rejects(access(marker));
+    }
   } finally {
     await rm(root, { force: true, recursive: true });
   }

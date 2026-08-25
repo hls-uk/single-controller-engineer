@@ -34,6 +34,7 @@ const PINNED_BD_VERSION = "1.1.0";
 const PINNED_DOLT_VERSION = "2.2.1";
 const PROCESS_TIMEOUT_MS = 15_000;
 const EXECUTABLE_SAMPLE_BYTES = 65_536;
+const MAX_CLONE_LINEAGE_EDGES = 64;
 
 export interface ProjectionPersistencePort {
   mutate(batch: MutationBatch): Promise<EmbeddedResponse>;
@@ -1047,10 +1048,10 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         if (workingSet !== "clean") return { kind: "pull", value: "conflict" };
         if (before === remote) return { kind: "pull", value: "applied" };
         const fastForward = await this.isAncestor(before, remote);
-        const cloneAnchor = fastForward
-          ? undefined
-          : await this.pinnedClonePullAnchor(before, remote);
-        if (!fastForward && cloneAnchor === undefined)
+        const cloneLineage = fastForward
+          ? false
+          : await this.provePinnedCloneLineage(before, remote);
+        if (!fastForward && !cloneLineage)
           return { kind: "pull", value: "conflict" };
         const capture = await this.run(["dolt", request.kind, "--json"]);
         if (capture === undefined || capture.exceeded)
@@ -1068,12 +1069,11 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
             (fastForward
               ? after === remote
               : after !== undefined &&
-                cloneAnchor !== undefined &&
                 (await this.provePinnedClonePull(
                   before,
-                  cloneAnchor,
                   remote,
                   after,
+                  cloneLineage,
                 )))
               ? "applied"
               : "conflict",
@@ -1248,79 +1248,24 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       parents.filter((parent) => parent === remoteHead).length !== 1
     )
       return { status: "ambiguous" };
-    const localDiff = await this.runDolt(this.databaseDirectory, [
-      "diff",
-      "--data",
-      "-r",
-      "json",
-      remoteHead,
-      localHead,
-    ]);
     const otherParent = parents.find((parent) => parent !== remoteHead);
     const baseHead = effect.baseHead;
     if (
       otherParent === undefined ||
       baseHead === undefined ||
-      localDiff === undefined ||
-      localDiff.code !== 0 ||
-      localDiff.exceeded ||
-      !isPinnedCloneMergeDelta(localDiff.stdout) ||
-      !(await this.isAncestor(baseHead, otherParent))
+      !(await this.exactPinnedCloneDelta(remoteHead, localHead)) ||
+      !(await this.provePinnedCloneLineage(otherParent, baseHead))
     )
       return { status: "ambiguous" };
-    const otherDiff = await this.runDolt(this.databaseDirectory, [
-      "diff",
-      "--data",
-      "-r",
-      "json",
-      baseHead,
-      otherParent,
-    ]);
-    return otherDiff !== undefined &&
-      otherDiff.code === 0 &&
-      !otherDiff.exceeded &&
-      isPinnedCloneMergeDelta(otherDiff.stdout)
-      ? { ...local, baseHead, head: localHead, remoteHead }
-      : { status: "ambiguous" };
-  }
-
-  /** Finds the unique remote/common anchor of a known bd clone merge. */
-  private async pinnedClonePullAnchor(
-    localHead: string,
-    remoteHead: string,
-  ): Promise<string | undefined> {
-    const parents = await this.directParents(localHead);
-    if (parents === undefined || (parents.length !== 1 && parents.length !== 2))
-      return undefined;
-    const anchors: string[] = [];
-    for (const parent of parents) {
-      if (parent !== remoteHead && (await this.isAncestor(parent, remoteHead)))
-        anchors.push(parent);
-    }
-    if (anchors.length !== 1) return undefined;
-    const anchor = anchors[0];
-    if (anchor === undefined) return undefined;
-    if (parents.length === 1)
-      return (await this.exactPinnedCloneDelta(anchor, localHead))
-        ? anchor
-        : undefined;
-    const otherParent = parents.find((parent) => parent !== anchor);
-    return otherParent === undefined
-      ? undefined
-      : this.pinnedCloneCommonAnchor(
-          anchor,
-          otherParent,
-          remoteHead,
-          localHead,
-        );
+    return { ...local, baseHead, head: localHead, remoteHead };
   }
 
   /** Verifies the exact post-pull clone merge from the pre-pull local head. */
   private async provePinnedClonePull(
     before: string,
-    anchor: string,
     remote: string,
     after: string,
+    prePullLineage: boolean,
   ): Promise<boolean> {
     const parents = await this.directParents(after);
     if (
@@ -1330,21 +1275,7 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       !parents.includes(before)
     )
       return false;
-    const mergeDiff = await this.runDolt(this.databaseDirectory, [
-      "diff",
-      "--data",
-      "-r",
-      "json",
-      remote,
-      after,
-    ]);
-    return (
-      mergeDiff !== undefined &&
-      mergeDiff.code === 0 &&
-      !mergeDiff.exceeded &&
-      isPinnedCloneMergeDelta(mergeDiff.stdout) &&
-      (await this.isAncestor(anchor, before))
-    );
+    return prePullLineage && (await this.exactPinnedCloneDelta(remote, after));
   }
 
   /**
@@ -1379,7 +1310,6 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
     localHead: string,
   ): Promise<boolean> {
     if (remoteHead === localHead) return true;
-    if (!(await this.isAncestor(remoteHead, localHead))) return false;
     const parents = await this.directParents(localHead);
     if (parents === undefined || (parents.length !== 1 && parents.length !== 2))
       return false;
@@ -1388,20 +1318,13 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         parents[0] === remoteHead &&
         (await this.exactPinnedCloneDelta(remoteHead, localHead))
       );
-    const anchors: string[] = [];
-    for (const parent of parents) {
-      if (parent === remoteHead || (await this.isAncestor(remoteHead, parent)))
-        anchors.push(parent);
-    }
-    if (anchors.length !== 1) return false;
-    const anchor = anchors[0];
-    const otherParent = parents.find((parent) => parent !== anchor);
+    if (parents.filter((parent) => parent === remoteHead).length !== 1)
+      return false;
+    const otherParent = parents.find((parent) => parent !== remoteHead);
     return (
-      anchor !== undefined &&
       otherParent !== undefined &&
-      (await this.isAncestor(anchor, otherParent)) &&
       (await this.exactPinnedCloneDelta(remoteHead, localHead)) &&
-      (await this.exactPinnedCloneDelta(anchor, otherParent))
+      (await this.provePinnedCloneLineage(otherParent, remoteHead))
     );
   }
 
@@ -1427,32 +1350,52 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
   }
 
   /**
-   * A clone merge may carry a later remote effect as one parent and a
-   * clone-local branch rooted at that effect's immediate common ancestor as
-   * the other. Discover only that bounded parent path; both edges remain the
-   * exact pinned metadata delta.
+   * Bounded, direct-parent proof of clone-only history. Every traversed edge
+   * is independently the pinned metadata pair; endpoint net diffs never
+   * authorize hidden add/revert history.
    */
-  private async pinnedCloneCommonAnchor(
-    directAnchor: string,
-    otherParent: string,
-    remoteHead: string,
+  private async provePinnedCloneLineage(
     localHead: string,
-  ): Promise<string | undefined> {
-    if (!(await this.exactPinnedCloneDelta(directAnchor, localHead)))
-      return undefined;
-    const directParents = await this.directParents(directAnchor);
-    if (directParents === undefined) return undefined;
-    const candidates = [directAnchor, ...directParents];
-    const proven: string[] = [];
-    for (const candidate of candidates) {
+    authoritativeHead: string,
+    depth = 0,
+    visited = new Set<string>(),
+  ): Promise<boolean> {
+    if (
+      depth >= MAX_CLONE_LINEAGE_EDGES ||
+      visited.has(localHead) ||
+      localHead === authoritativeHead
+    )
+      return false;
+    visited.add(localHead);
+    const parents = await this.directParents(localHead);
+    if (parents === undefined || (parents.length !== 1 && parents.length !== 2))
+      return false;
+    const authorityParents: string[] = [];
+    for (const parent of parents) {
       if (
-        (await this.isAncestor(candidate, remoteHead)) &&
-        (await this.isAncestor(candidate, otherParent)) &&
-        (await this.exactPinnedCloneDelta(candidate, otherParent))
+        parent === authoritativeHead ||
+        (await this.isAncestor(parent, authoritativeHead))
       )
-        proven.push(candidate);
+        authorityParents.push(parent);
     }
-    return proven.length === 1 ? proven[0] : undefined;
+    if (authorityParents.length !== 1) return false;
+    const authorityParent = authorityParents[0];
+    if (
+      authorityParent === undefined ||
+      !(await this.exactPinnedCloneDelta(authorityParent, localHead))
+    )
+      return false;
+    if (parents.length === 1) return true;
+    const otherParent = parents.find((parent) => parent !== authorityParent);
+    return (
+      otherParent !== undefined &&
+      (await this.provePinnedCloneLineage(
+        otherParent,
+        authorityParent,
+        depth + 1,
+        visited,
+      ))
+    );
   }
 
   private async proveSlotTransition(
@@ -1691,43 +1634,20 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       return this.remoteProof("ambiguous");
     if (localHead !== remoteHead) {
       const localParents = await this.directParents(localHead);
-      const localDiff = await this.runDolt(this.databaseDirectory, [
-        "diff",
-        "--data",
-        "-r",
-        "json",
-        remoteHead,
-        localHead,
-      ]);
       if (
         localParents === undefined ||
         localParents.length !== 2 ||
         localParents.filter((parent) => parent === remoteHead).length !== 1 ||
-        localDiff === undefined ||
-        localDiff.code !== 0 ||
-        localDiff.exceeded ||
-        !isPinnedCloneMergeDelta(localDiff.stdout)
+        !(await this.exactPinnedCloneDelta(remoteHead, localHead))
       )
         return this.remoteProof("ambiguous");
       const otherParent = localParents.find((parent) => parent !== remoteHead);
       if (
         otherParent === undefined ||
-        !(await this.isAncestor(intent.before.remoteHead, otherParent))
-      )
-        return this.remoteProof("ambiguous");
-      const otherParentDiff = await this.runDolt(this.databaseDirectory, [
-        "diff",
-        "--data",
-        "-r",
-        "json",
-        intent.before.remoteHead,
-        otherParent,
-      ]);
-      if (
-        otherParentDiff === undefined ||
-        otherParentDiff.code !== 0 ||
-        otherParentDiff.exceeded ||
-        !isPinnedCloneMergeDelta(otherParentDiff.stdout)
+        !(await this.provePinnedCloneLineage(
+          otherParent,
+          intent.before.remoteHead,
+        ))
       )
         return this.remoteProof("ambiguous");
     }
