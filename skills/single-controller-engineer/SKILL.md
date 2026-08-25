@@ -61,11 +61,12 @@ Requested and returned model identities must match the pinned support map. An
 unavailable tier, unreadable identity, or downgrade blocks that action; never
 silently substitute a model. Three is a cap, not a target.
 
-Run `npm run test:fast` during implementation; invoke affected integration
-smokes explicitly; reserve `npm run test:release` for tagged-release evidence.
-Never put slow topology, crash, provider, or live-agent evidence into the fast
-gate. Publication, tagging, pushing, issue submission, and other external
-mutation require current explicit authority.
+Run the adopting repository's declared fast command during implementation
+(this package uses `npm run test:fast`); invoke affected integration smokes
+explicitly; reserve its full release command for tagged-release evidence. Never
+put slow topology, crash, provider, or live-agent evidence into the fast gate.
+Publication, tagging, pushing, issue submission, and other external mutation
+require current explicit authority.
 
 Record substantive controller decisions in the adopting repository's
 source-controlled decision records (use `wiki/decisions` when no established
