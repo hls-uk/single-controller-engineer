@@ -2916,38 +2916,10 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
   ): Promise<ServerDriverResponse<ServerProbe>> {
     this.disarm();
     const expected = normalizedServerIdentity(expectedIdentity);
-    if (
-      expected === undefined ||
-      !exact(expected, this.#identity) ||
-      this.#identity.autoCommitPolicy !== "on" ||
-      !this.#transportsMatchIdentity()
-    )
+    if (expected === undefined || !exact(expected, this.#identity))
       return { status: "refused" };
-    if (this.#slotProcess === undefined) return { status: "refused" };
-    const slotBinding = await this.#slotProcess.matchesIdentity(this.#identity);
-    if (slotBinding.status !== "ok") return slotBinding;
-    const database = await executeDoltSqlRead(
-      this.#writer,
-      "SELECT DATABASE() AS current_database",
-    );
-    if (database.status !== "ok") return { status: database.status };
-    if (
-      database.rows.length !== 1 ||
-      database.rows[0]?.current_database !== this.#identity.database
-    )
-      return { status: "refused" };
-    const serverVersion = await executeDoltSqlRead(
-      this.#writer,
-      "SELECT DOLT_VERSION() AS dolt_version",
-    );
-    if (
-      serverVersion.status !== "ok" ||
-      serverVersion.rows.length !== 1 ||
-      serverVersion.rows[0]?.dolt_version !== "2.2.1"
-    )
-      return serverVersion.status === "ok"
-        ? { status: "refused" }
-        : serverVersion;
+    const liveBinding = await this.#liveDiscoveryBinding();
+    if (liveBinding.status !== "ok") return liveBinding;
     const issuesTable = await executeDoltSqlRead(
       this.#writer,
       `SELECT table_name FROM information_schema.tables WHERE table_schema = ${sqlLiteral(this.#identity.database)} AND table_name = 'issues'`,
@@ -3335,18 +3307,30 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     }>,
   ): Promise<ServerDriverResponse<ServerDiscovery>> {
     const discovery = this.#discoveryInput(input);
-    if (discovery === undefined || !exact(discovery.identity, this.#identity))
+    if (
+      discovery === undefined ||
+      discovery.prefix !== this.#identity.prefix ||
+      !exact(discovery.identity, this.#identity)
+    )
       return this.#invalidate({ status: "refused" });
+    // Discovery is deliberately usable after a mutation fault has revoked
+    // readiness, but it is never a declaration-only read. Reprove the live
+    // writer/worker bindings, bd workspace/context/prefix, database, server
+    // version, and writer principal before treating any row as authoritative.
+    // This check does not (and must not) arm mutation readiness.
+    const liveBinding = await this.#liveDiscoveryBinding();
+    if (liveBinding.status !== "ok") return this.#invalidate(liveBinding);
     const slot = await this.#slotReadback(discovery.prefix, discovery.scope);
-    if (slot.status !== "ok") return slot;
+    if (slot.status !== "ok") return this.#invalidate(slot);
     const metadata = await this.#metadata([
       this.#rows.rootBeadId,
       ...Object.values(this.#rows.childBeadIds),
     ]);
-    if (metadata.status !== "ok") return { status: metadata.status };
+    if (metadata.status !== "ok")
+      return this.#invalidate({ status: metadata.status });
     const root = metadata.value.get(this.#rows.rootBeadId)?.sce;
     const parsedRoot = validateRootProjection(root);
-    if (!parsedRoot.ok) return { status: "refused" };
+    if (!parsedRoot.ok) return this.#invalidate({ status: "refused" });
     const children = Object.values(this.#rows.childBeadIds).map(
       (id) => metadata.value.get(id)?.sce,
     );
@@ -3354,7 +3338,7 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       children.length !== parsedRoot.value.childRows.length ||
       children.some((child) => !validateChildProjection(child).ok)
     )
-      return { status: "refused" };
+      return this.#invalidate({ status: "refused" });
     return {
       status: "ok",
       value: {
@@ -3415,6 +3399,62 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       writer.credentialReference === this.#identity.credentialReference &&
       worker.credentialReference === this.#identity.workerCredentialReference
     );
+  }
+
+  /**
+   * A non-mutating identity proof shared by preflight and fault
+   * reconciliation. The public driver can be called directly, so discovery
+   * cannot trust a caller-supplied identity or a formerly-ready flag: it must
+   * bind the exact configured transports to the live server and pinned bd
+   * workspace each time before it reads an authoritative row.
+   */
+  async #liveDiscoveryBinding(): Promise<ServerDriverResponse<void>> {
+    if (
+      this.#identity.autoCommitPolicy !== "on" ||
+      !this.#transportsMatchIdentity() ||
+      this.#slotProcess === undefined
+    )
+      return { status: "refused" };
+    const slotBinding = await this.#slotProcess.matchesIdentity(this.#identity);
+    if (slotBinding.status !== "ok") return slotBinding;
+    const database = await executeDoltSqlRead(
+      this.#writer,
+      "SELECT DATABASE() AS current_database",
+    );
+    if (database.status !== "ok") return { status: database.status };
+    if (
+      database.rows.length !== 1 ||
+      database.rows[0]?.current_database !== this.#identity.database
+    )
+      return { status: "refused" };
+    const serverVersion = await executeDoltSqlRead(
+      this.#writer,
+      "SELECT DOLT_VERSION() AS dolt_version",
+    );
+    if (
+      serverVersion.status !== "ok" ||
+      serverVersion.rows.length !== 1 ||
+      serverVersion.rows[0]?.dolt_version !== "2.2.1"
+    )
+      return serverVersion.status === "ok"
+        ? { status: "refused" }
+        : serverVersion;
+    const writer = doltSqlTransportBinding(this.#writer);
+    if (writer === undefined || writer.role !== "writer")
+      return { status: "refused" };
+    const currentWriter = await executeDoltSqlRead(
+      this.#writer,
+      "SELECT CURRENT_USER() AS current_principal",
+    );
+    if (
+      currentWriter.status !== "ok" ||
+      currentWriter.rows.length !== 1 ||
+      currentWriter.rows[0]?.current_principal !== `${writer.user}@%`
+    )
+      return currentWriter.status === "ok"
+        ? { status: "refused" }
+        : currentWriter;
+    return { status: "ok", value: undefined };
   }
 
   #isReady(identity: unknown = this.#identity): boolean {
@@ -3600,7 +3640,7 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
   async #slotReadback(
     prefix: string,
     scope: FencingScope,
-    actor = "slot-observer",
+    actor = "slot-observer/0",
   ): Promise<ServerDriverResponse<ServerSlotReadback>> {
     // Discovery shares this readback path, so bind its prefix/scope too before
     // issuing either SQL read. Slot operations never infer a prefix from SQL.

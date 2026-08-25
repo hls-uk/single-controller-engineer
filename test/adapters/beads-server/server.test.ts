@@ -655,16 +655,25 @@ type ManagedBdServer = Readonly<{
 
 async function startRealDoltServer(
   input: Readonly<{
+    /** Fixture-only seam: makes port-allocation cleanup deterministic. */
+    allocatePort?: (directory: string) => Promise<number>;
     identityForEndpoint?: (endpoint: string) => ServerIdentity;
   }> = {},
 ): Promise<RealDoltServer> {
   const executable =
     process.env.DOLT_TEST_EXECUTABLE ?? "/opt/homebrew/bin/dolt";
-  const directory = await mkdtemp("/private/tmp/sce-real-dolt-");
-  const databaseDirectory = join(directory, "sce");
-  const port = await unusedLoopbackPort();
+  let directory: string | undefined;
   let server: ChildProcess | undefined;
   try {
+    // The root becomes cleanup-owned before allocating a port. A failed bind
+    // or allocation must never strand a Beads/Dolt fixture below the repo.
+    const createdDirectory = await mkdtemp("/private/tmp/sce-real-dolt-");
+    directory = createdDirectory;
+    const databaseDirectory = join(createdDirectory, "sce");
+    const port =
+      input.allocatePort === undefined
+        ? await unusedLoopbackPort()
+        : await input.allocatePort(createdDirectory);
     await mkdir(databaseDirectory);
     await runDolt(["init"], { cwd: databaseDirectory, executable });
     server = spawn(
@@ -672,18 +681,18 @@ async function startRealDoltServer(
       [
         "sql-server",
         "--data-dir",
-        directory,
+        createdDirectory,
         "--host",
         "127.0.0.1",
         "--port",
         String(port),
         "--socket",
-        join(directory, "mysql.sock"),
+        join(createdDirectory, "mysql.sock"),
         "--allow-cleartext-passwords",
         "--loglevel=error",
       ],
       {
-        cwd: directory,
+        cwd: createdDirectory,
         env: { PATH: `${dirname(executable)}:/usr/bin:/bin` },
         stdio: ["ignore", "ignore", "ignore"],
       },
@@ -695,7 +704,7 @@ async function startRealDoltServer(
       if (
         (
           await readFixtureDolt(
-            { cwd: directory, endpoint, executable },
+            { cwd: createdDirectory, endpoint, executable },
             "SELECT 1 AS ready",
           )
         ).status === "ok"
@@ -719,7 +728,7 @@ async function startRealDoltServer(
         "sql",
       ],
       {
-        cwd: directory,
+        cwd: createdDirectory,
         executable,
         stdin: [
           `CREATE USER 'writer' IDENTIFIED BY '${writerPassword}';`,
@@ -730,13 +739,13 @@ async function startRealDoltServer(
       },
     );
     return {
-      directory,
+      directory: createdDirectory,
       endpoint,
       executable,
       readWorker: (query) =>
         readFixtureDolt(
           {
-            cwd: directory,
+            cwd: createdDirectory,
             endpoint,
             executable,
             password: workerPassword,
@@ -747,7 +756,7 @@ async function startRealDoltServer(
       readWriter: (query) =>
         readFixtureDolt(
           {
-            cwd: directory,
+            cwd: createdDirectory,
             endpoint,
             executable,
             password: writerPassword,
@@ -773,7 +782,8 @@ async function startRealDoltServer(
     };
   } catch (error) {
     if (server !== undefined) await stopDoltServer(server);
-    await rm(directory, { force: true, recursive: true });
+    if (directory !== undefined)
+      await rm(directory, { force: true, recursive: true });
     throw error;
   }
 }
@@ -1315,13 +1325,18 @@ class FakeServer implements BeadsServerDriver {
 
 type ConcreteProbeFault =
   | "context"
+  | "discovery_version"
   | "error"
   | "grants"
   | "identity"
   | "malformed"
   | "schema"
+  | "swapped_database"
+  | "swapped_endpoint"
   | "version"
-  | "worker";
+  | "worker"
+  | "writer_principal"
+  | "workspace";
 
 /**
  * A complete in-memory protocol fixture for concrete-driver readiness gates.
@@ -1332,7 +1347,22 @@ function concreteReadinessHarness(fault?: ConcreteProbeFault) {
   const driverIdentity = identity();
   const adapterIdentity =
     fault === "identity" ? identity("on", "127.0.0.1:3307") : driverIdentity;
-  const calls = { bd: 0, worker: 0, writer: 0 };
+  const transportIdentity =
+    fault === "swapped_endpoint"
+      ? identity("on", "127.0.0.1:3307")
+      : fault === "swapped_database"
+        ? { ...driverIdentity, database: "other" }
+        : driverIdentity;
+  const calls = {
+    bd: 0,
+    bdArgv: [] as string[][],
+    worker: 0,
+    writer: 0,
+    writerQueries: [] as string[],
+  };
+  const discoveryRoot = makeRootProjection(run());
+  const discoveryChild = makeChildProjection(discoveryRoot, "unit-1");
+  assert.ok(discoveryChild);
   const issueColumns = [
     ["id", "varchar"],
     ["status", "varchar"],
@@ -1346,7 +1376,7 @@ function concreteReadinessHarness(fault?: ConcreteProbeFault) {
     ["label", "varchar"],
   ].map(([column_name, data_type]) => ({ column_name, data_type }));
   const writer = new DoltSqlTransport({
-    identity: driverIdentity,
+    identity: transportIdentity,
     process: async (request) => {
       calls.writer += 1;
       if (request.argv[0] === "version")
@@ -1356,6 +1386,7 @@ function concreteReadinessHarness(fault?: ConcreteProbeFault) {
           timedOut: false,
         };
       const query = request.argv.at(request.argv.indexOf("-q") + 1) ?? "";
+      calls.writerQueries.push(query);
       if (
         fault === "error" &&
         query === "SELECT DATABASE() AS current_database"
@@ -1376,7 +1407,60 @@ function concreteReadinessHarness(fault?: ConcreteProbeFault) {
         return {
           exitCode: 0,
           output: JSON.stringify([
-            { dolt_version: fault === "version" ? "2.2.2" : "2.2.1" },
+            {
+              dolt_version:
+                fault === "version" || fault === "discovery_version"
+                  ? "2.2.2"
+                  : "2.2.1",
+            },
+          ]),
+          timedOut: false,
+        };
+      if (query === "SELECT CURRENT_USER() AS current_principal")
+        return {
+          exitCode: 0,
+          output:
+            fault === "writer_principal"
+              ? '[{"current_principal":"other@%"}]'
+              : '[{"current_principal":"writer@%"}]',
+          timedOut: false,
+        };
+      if (
+        query.startsWith("SELECT status, metadata, external_ref, title, design")
+      )
+        return {
+          exitCode: 0,
+          output: JSON.stringify([
+            {
+              design: canonicalJson(scope as JsonValue),
+              external_ref: slotScopeReference(scope),
+              metadata: "{}",
+              status: "open",
+              title: "Merge Slot",
+            },
+          ]),
+          timedOut: false,
+        };
+      if (query.startsWith("SELECT label FROM `sce`.labels"))
+        return {
+          exitCode: 0,
+          output: '[{"label":"gt:slot"}]',
+          timedOut: false,
+        };
+      if (
+        query.startsWith("SELECT id, JSON_UNQUOTE(JSON_EXTRACT(metadata, '$'))")
+      )
+        return {
+          exitCode: 0,
+          output: JSON.stringify([
+            {
+              id: "sce-child",
+              metadata: JSON.stringify({ sce: discoveryChild }),
+            },
+            {
+              id: "sce-root",
+              metadata: JSON.stringify({ sce: discoveryRoot }),
+            },
           ]),
           timedOut: false,
         };
@@ -1449,7 +1533,7 @@ function concreteReadinessHarness(fault?: ConcreteProbeFault) {
     user: "writer",
   });
   const worker = new DoltSqlTransport({
-    identity: driverIdentity,
+    identity: transportIdentity,
     process: async (request) => {
       calls.worker += 1;
       if (request.argv[0] === "version")
@@ -1485,6 +1569,7 @@ function concreteReadinessHarness(fault?: ConcreteProbeFault) {
     identity: driverIdentity,
     process: async (request) => {
       calls.bd += 1;
+      calls.bdArgv.push([...request.argv]);
       if (request.argv[0] === "version")
         return { exitCode: 0, output: "bd version 1.1.0\n", timedOut: false };
       if (request.argv.includes("context"))
@@ -1492,7 +1577,10 @@ function concreteReadinessHarness(fault?: ConcreteProbeFault) {
           exitCode: 0,
           output: JSON.stringify({
             backend: "dolt",
-            beads_dir: "/fixture/workspace/.beads",
+            beads_dir:
+              fault === "workspace"
+                ? "/fixture/other/.beads"
+                : "/fixture/workspace/.beads",
             database: fault === "context" ? "wrong" : "sce",
             dolt_mode: "server",
             server_host: "127.0.0.1",
@@ -1590,6 +1678,119 @@ test("concrete driver stays disarmed after every rejected preflight gate", async
     );
     assert.deepEqual(harness.calls, before, `${fault}: zero retained calls`);
   }
+});
+
+test("unprobed concrete discovery live-binds before authoritative rows", async () => {
+  for (const fault of [
+    "swapped_endpoint",
+    "swapped_database",
+    "workspace",
+    "discovery_version",
+    "writer_principal",
+  ] as const) {
+    const harness = concreteReadinessHarness(fault);
+    const result = await harness.driver.discover({
+      identity: harness.identity,
+      prefix: "sce",
+      scope,
+    });
+    assert.deepEqual(result, { status: "refused" }, fault);
+    // The identity proof can use its closed version/context/database reads,
+    // but no slot or SCE metadata row is authoritative on a bad binding.
+    assert.equal(
+      harness.calls.writerQueries.some(
+        (query) =>
+          query.startsWith("SELECT status, metadata") ||
+          query.startsWith("SELECT id, JSON_UNQUOTE"),
+      ),
+      false,
+      `${fault}: no discovery rows`,
+    );
+    assert.equal(
+      harness.calls.bdArgv.some((argv) => argv.includes("merge-slot")),
+      false,
+      `${fault}: no bd mutation`,
+    );
+    const before = {
+      bd: harness.calls.bd,
+      worker: harness.calls.worker,
+      writer: harness.calls.writer,
+    };
+    assert.deepEqual(
+      await harness.driver.mergeSlotAcquire({
+        actor: holder,
+        prefix: "sce",
+        scope,
+      }),
+      { status: "refused" },
+      `${fault}: discovery never arms readiness`,
+    );
+    assert.equal(harness.calls.bd, before.bd, `${fault}: no bd command`);
+    assert.equal(
+      harness.calls.worker,
+      before.worker,
+      `${fault}: no worker command`,
+    );
+    assert.equal(
+      harness.calls.writer,
+      before.writer,
+      `${fault}: no writer command`,
+    );
+  }
+
+  const wrongPrefix = concreteReadinessHarness();
+  assert.deepEqual(
+    await wrongPrefix.driver.discover({
+      identity: wrongPrefix.identity,
+      prefix: "wrong",
+      scope,
+    }),
+    { status: "refused" },
+  );
+  assert.equal(
+    wrongPrefix.calls.writerQueries.some((query) =>
+      query.startsWith("SELECT status, metadata"),
+    ),
+    false,
+    "wrong prefix reaches no slot row",
+  );
+  assert.equal(
+    wrongPrefix.calls.bdArgv.some((argv) => argv.includes("merge-slot")),
+    false,
+  );
+  assert.equal(wrongPrefix.calls.bd, 0, "wrong prefix has no bd command");
+  assert.equal(
+    wrongPrefix.calls.writer,
+    0,
+    "wrong prefix has no writer command",
+  );
+  assert.equal(
+    wrongPrefix.calls.worker,
+    0,
+    "wrong prefix has no worker command",
+  );
+
+  // A direct, never-probed driver can reconcile after a mutation fault only
+  // when its fresh live proof succeeds. That read does not arm a mutation.
+  const valid = concreteReadinessHarness();
+  const discovered = await valid.driver.discover({
+    identity: valid.identity,
+    prefix: "sce",
+    scope,
+  });
+  assert.equal(discovered.status, "ok");
+  const before = {
+    bd: valid.calls.bd,
+    worker: valid.calls.worker,
+    writer: valid.calls.writer,
+  };
+  assert.deepEqual(
+    await valid.driver.mergeSlotCheck({ actor: holder, prefix: "sce", scope }),
+    { status: "refused" },
+  );
+  assert.equal(valid.calls.bd, before.bd);
+  assert.equal(valid.calls.worker, before.worker);
+  assert.equal(valid.calls.writer, before.writer);
 });
 
 test("adapter revokes a driver that returns malformed, mismatched, or throws", async () => {
@@ -2955,6 +3156,12 @@ test("worker readonly preflight accepts only the exact pinned permission denial"
           output: JSON.stringify([{ dolt_version: observedServerVersion }]),
           timedOut: false,
         };
+      if (query === "SELECT CURRENT_USER() AS current_principal")
+        return {
+          exitCode: 0,
+          output: '[{"current_principal":"writer@%"}]',
+          timedOut: false,
+        };
       if (query.includes("information_schema.tables"))
         return {
           exitCode: 0,
@@ -3198,9 +3405,11 @@ test("real transaction child accepts stdin backpressure and contains an early EP
       "  exit 0",
       "fi",
       'query=""',
+      'user=""',
       'last=""',
       'for argument in "$@"; do',
-      '  if [ "$last" = "-q" ]; then query="$argument"; break; fi',
+      '  if [ "$last" = "-q" ]; then query="$argument"; fi',
+      '  if [ "$last" = "--user" ]; then user="$argument"; fi',
       '  last="$argument"',
       "done",
       'if [ -n "$query" ]; then',
@@ -3216,7 +3425,7 @@ test("real transaction child accepts stdin backpressure and contains an early EP
       `    "SELECT * FROM dolt_status") ${print("[]")} ;;`,
       `    "SELECT DOLT_HASHOF('HEAD') AS head") ${print('[{"head":"c96vvi04oug557a1fk7tcjm7ok5sqmiu"}]')} ;;`,
       '    *"issues LIMIT 1"*) ' + print("[]") + " ;;",
-      `    "SELECT CURRENT_USER() AS current_principal") ${print('[{"current_principal":"worker@%"}]')} ;;`,
+      `    "SELECT CURRENT_USER() AS current_principal") if [ "$user" = "writer" ]; then ${print('[{"current_principal":"writer@%"}]')}; else ${print('[{"current_principal":"worker@%"}]')}; fi ;;`,
       `    "SHOW GRANTS FOR 'worker'@'%'") ${print(grants)} ;;`,
       `    *"SET status = status WHERE 1 = 0"*) ${print(workerDenied)} >&2; exit 1 ;;`,
       "    *\"SELECT id, JSON_UNQUOTE(JSON_EXTRACT(metadata, '$')) AS metadata FROM\"*) " +
@@ -4941,6 +5150,22 @@ test("default Dolt session leaves direct SQL pending and the driver refuses it",
     await fixture.stop();
     await rm(fixture.directory, { force: true, recursive: true });
   }
+});
+
+test("real Dolt fixture cleans its private root before a port/listen setup failure", async () => {
+  let cleanupOwned: string | undefined;
+  await assert.rejects(
+    startRealDoltServer({
+      allocatePort: async (directory) => {
+        cleanupOwned = directory;
+        throw new Error("forced fixture port allocation failure");
+      },
+    }),
+    /forced fixture port allocation failure/u,
+  );
+  assert.ok(cleanupOwned);
+  assert.equal(cleanupOwned.startsWith("/private/tmp/sce-real-dolt-"), true);
+  await assert.rejects(stat(cleanupOwned), { code: "ENOENT" });
 });
 
 test("real disposable Dolt server preserves scoped envelopes, grants, CAS rollback, and outage boundaries", async () => {
