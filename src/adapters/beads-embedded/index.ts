@@ -6,6 +6,8 @@ import {
   type RunStorePort,
   type RunStoreResult,
   type SlotContinuationEvidence,
+  type SlotReleaseEvidence,
+  deriveSlotReadbackHash,
   decideControllerSlot,
   validateMergeSlotObservation,
   validateMutationBatch,
@@ -22,9 +24,19 @@ import {
   type EmbeddedResponse,
   type EmbeddedResult,
   type EmbeddedState,
+  type SlotTransitionIntent,
 } from "./schemas.js";
+import {
+  makeSlotTransitionIntent,
+  validateSlotTransitionIntent,
+} from "./slot-transition.js";
 
 export * from "./schemas.js";
+export {
+  deriveSlotTransitionId,
+  makeSlotTransitionIntent,
+  validateSlotTransitionIntent,
+} from "./slot-transition.js";
 export {
   PinnedBdEmbeddedProcess,
   parsePinnedBdState,
@@ -51,10 +63,30 @@ export type WorkerTrackerBaseline = Readonly<{
   workingSet: "clean";
 }>;
 
-/** Controller-journal authority for a resume or same-run continuation. */
+/** Read-only controller authority used while preparing an acquire intent. */
+export type EmbeddedAcquisitionPlanningAuthority = Readonly<{
+  continuation?: SlotContinuationEvidence;
+  knownHolder?: string;
+  /** Positive release evidence for the projected holder, if it is now free. */
+  release?: SlotReleaseEvidence;
+}>;
+
+/** Controller-journal authority for an acquire or same-run continuation. */
 export type EmbeddedAcquisitionAuthority = Readonly<{
   continuation?: SlotContinuationEvidence;
-  knownHolder: string;
+  knownHolder?: string;
+  /** Positive release evidence for the projected holder, if it is now free. */
+  release?: SlotReleaseEvidence;
+  /**
+   * Exact intent returned by `prepareAcquireTransition`, persisted by the
+   * controller journal, then read back into this mutating call.
+   */
+  transition?: SlotTransitionIntent;
+}>;
+
+/** Exact intent returned by `prepareReleaseTransition` and journalled first. */
+export type EmbeddedReleaseAuthority = Readonly<{
+  transition: SlotTransitionIntent;
 }>;
 
 export interface EmbeddedAdapterOptions {
@@ -157,10 +189,59 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
   public async acquire(
     authority?: EmbeddedAcquisitionAuthority,
   ): Promise<EmbeddedResult> {
-    if (!this.usable || !this.validAcquisitionAuthority(authority))
+    // A mutating acquire cannot manufacture its own recovery authority. The
+    // caller must first journal the exact read-only plan returned below.
+    if (
+      !this.usable ||
+      authority === undefined ||
+      !this.validAcquisitionAuthority(authority) ||
+      // A holder-less acquire is necessarily mutating, so it must carry a
+      // persisted plan before even a state probe is permitted.
+      (authority.knownHolder === undefined &&
+        authority.transition === undefined)
+    )
       return result("quarantined");
-    const prepared = await this.prepareSharedState();
-    if (prepared.code !== "applied") return prepared;
+    // Never pull a locally committed / pending slot transition over its
+    // journal authority. A stale local holder is not an applied remote lease.
+    const initial = await this.state();
+    if (initial === undefined || !initial.reachable)
+      return result("unavailable");
+    if (initial.workingSet === "unknown") return result("ambiguous");
+    if (
+      initial.workingSet !== "clean" ||
+      (this.mode === "git-sync" && initial.head !== initial.remoteHead)
+    ) {
+      // A stale clone may still prove that a different remote holder blocks
+      // it, but it may never turn a remote available row into a local acquire
+      // without a matching journalled transition.
+      if (this.mode === "git-sync" && authority.transition === undefined) {
+        const remote = await this.slot("check", "remote");
+        if (remote === undefined) return result("ambiguous");
+        const decision = decideControllerSlot(
+          this.prefix,
+          this.scope,
+          this.holder,
+          authority.knownHolder,
+          remote,
+          authority.continuation,
+          authority.release,
+        );
+        return decision.kind === "blocked"
+          ? result("blocked")
+          : result("ambiguous");
+      }
+      return this.recoverSlotTransition("acquire", authority?.transition);
+    }
+    const before = await this.state();
+    if (
+      before === undefined ||
+      !before.reachable ||
+      before.workingSet !== "clean" ||
+      before.head === undefined ||
+      (this.mode === "git-sync" &&
+        (before.remoteHead === undefined || before.remoteHead !== before.head))
+    )
+      return result("ambiguous");
     const check = await this.slot("check");
     if (check === undefined) return result("quarantined");
     const decision = decideControllerSlot(
@@ -170,25 +251,95 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       authority?.knownHolder,
       check,
       authority?.continuation,
+      authority?.release,
     );
     if (decision.kind === "blocked") return result("blocked");
     if (decision.kind === "quarantined") return result("quarantined");
-    if (decision.kind === "resume") return result("applied");
-    if (decision.kind === "continue") return result("applied");
+    if (decision.kind === "resume" || decision.kind === "continue")
+      return this.confirmDurableSlot(check);
+    const transition = authority.transition;
+    if (transition === undefined) return result("quarantined");
+    if (!this.matchesTransitionBefore(transition, "acquire", before, check))
+      return result("quarantined");
     const acquired = await this.slot("acquire");
     if (acquired === undefined) return result("quarantined");
+    if (!same(acquired, transition.after)) return result("blocked");
+    return this.durableSlotTransition(transition);
+  }
+
+  /**
+   * Read-only planning half of acquire. Persist its returned intent in the
+   * controller journal before calling `acquire`; it is the sole authority for
+   * any pending or pre-push recovery in a replacement process.
+   */
+  public async prepareAcquireTransition(
+    authority?: EmbeddedAcquisitionPlanningAuthority,
+  ): Promise<SlotTransitionIntent | EmbeddedResult> {
+    if (!this.usable || !this.validAcquisitionPlanningAuthority(authority))
+      return result("quarantined");
+    const state = await this.state();
+    if (state === undefined || !state.reachable) return result("unavailable");
     if (
-      acquired.status !== "acquired" ||
-      acquired.actor !== this.holder ||
-      acquired.holder !== this.holder
+      state.workingSet !== "clean" ||
+      state.head === undefined ||
+      (this.mode === "git-sync" &&
+        (state.remoteHead === undefined || state.remoteHead !== state.head))
     )
-      return result("blocked");
-    return this.durableCheckpoint();
+      return result("ambiguous");
+    const before = await this.slot("check");
+    if (before === undefined) return result("quarantined");
+    if (this.mode === "git-sync") {
+      const remote = await this.slot("check", "remote");
+      if (remote === undefined || !same(remote, before))
+        return result("ambiguous");
+    }
+    const decision = decideControllerSlot(
+      this.prefix,
+      this.scope,
+      this.holder,
+      authority?.knownHolder,
+      before,
+      authority?.continuation,
+      authority?.release,
+    );
+    if (decision.kind === "blocked") return result("blocked");
+    if (decision.kind === "quarantined") return result("quarantined");
+    if (decision.kind === "resume" || decision.kind === "continue")
+      return this.confirmDurableSlot(before);
+    return makeSlotTransitionIntent(
+      "acquire",
+      this.holder,
+      this.scope,
+      {
+        head: state.head,
+        ...(state.remoteHead === undefined
+          ? {}
+          : { remoteHead: state.remoteHead }),
+        slot: before,
+      },
+      this.expectedSlot("acquire", before),
+    );
   }
 
   /** Releases only after a positive available readback from the built-in slot. */
-  public async release(): Promise<EmbeddedResult> {
-    if (!this.usable) return result("quarantined");
+  public async release(
+    authority?: EmbeddedReleaseAuthority,
+  ): Promise<EmbeddedResult> {
+    if (
+      !this.usable ||
+      authority === undefined ||
+      !this.validReleaseAuthority(authority)
+    )
+      return result("quarantined");
+    const initial = await this.state();
+    if (initial === undefined || !initial.reachable)
+      return result("unavailable");
+    if (initial.workingSet === "unknown") return result("ambiguous");
+    if (
+      initial.workingSet !== "clean" ||
+      (this.mode === "git-sync" && initial.head !== initial.remoteHead)
+    )
+      return this.recoverSlotTransition("release", authority?.transition);
     const before = await this.slot("check");
     if (
       before === undefined ||
@@ -197,15 +348,65 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       before.holder !== this.holder
     )
       return result("blocked");
+    const state = await this.state();
+    if (
+      state === undefined ||
+      !state.reachable ||
+      state.workingSet !== "clean" ||
+      state.head === undefined ||
+      (this.mode === "git-sync" &&
+        (state.remoteHead === undefined || state.remoteHead !== state.head))
+    )
+      return result("ambiguous");
+    const transition = authority.transition;
+    if (!this.matchesTransitionBefore(transition, "release", state, before))
+      return result("quarantined");
     const released = await this.slot("release");
     if (released === undefined) return result("quarantined");
+    if (!same(released, transition.after)) return result("blocked");
+    return this.durableSlotTransition(transition);
+  }
+
+  /** Read-only planning half of release; see `prepareAcquireTransition`. */
+  public async prepareReleaseTransition(): Promise<
+    SlotTransitionIntent | EmbeddedResult
+  > {
+    if (!this.usable) return result("quarantined");
+    const state = await this.state();
+    if (state === undefined || !state.reachable) return result("unavailable");
     if (
-      released.status !== "available" ||
-      released.actor !== this.holder ||
-      released.holder !== undefined
+      state.workingSet !== "clean" ||
+      state.head === undefined ||
+      (this.mode === "git-sync" &&
+        (state.remoteHead === undefined || state.remoteHead !== state.head))
+    )
+      return result("ambiguous");
+    const before = await this.slot("check");
+    if (
+      before === undefined ||
+      before.status !== "acquired" ||
+      before.actor !== this.holder ||
+      before.holder !== this.holder
     )
       return result("blocked");
-    return this.durableCheckpoint();
+    if (this.mode === "git-sync") {
+      const remote = await this.slot("check", "remote");
+      if (remote === undefined || !same(remote, before))
+        return result("ambiguous");
+    }
+    return makeSlotTransitionIntent(
+      "release",
+      this.holder,
+      this.scope,
+      {
+        head: state.head,
+        ...(state.remoteHead === undefined
+          ? {}
+          : { remoteHead: state.remoteHead }),
+        slot: before,
+      },
+      this.expectedSlot("release", before),
+    );
   }
 
   /** One validated aggregate/child mutation batch, followed by exact readback. */
@@ -357,6 +558,211 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
         : result("blocked");
   }
 
+  private expectedSlot(
+    kind: "acquire" | "release",
+    before: MergeSlotObservation,
+  ): MergeSlotObservation {
+    const value = {
+      ...before,
+      actor: this.holder,
+      ...(kind === "acquire" ? { holder: this.holder } : {}),
+      ...(kind === "acquire"
+        ? { status: "acquired" as const }
+        : { status: "available" as const }),
+    };
+    if (kind === "release") delete (value as { holder?: string }).holder;
+    const { readbackHash: _ignored, ...withoutHash } = value;
+    return {
+      ...withoutHash,
+      readbackHash: deriveSlotReadbackHash(withoutHash),
+    };
+  }
+
+  private matchesTransitionBefore(
+    transition: SlotTransitionIntent,
+    kind: "acquire" | "release",
+    state: EmbeddedState,
+    slot: MergeSlotObservation,
+  ): boolean {
+    return (
+      validateSlotTransitionIntent(
+        transition,
+        this.prefix,
+        this.scope,
+        this.mode,
+        this.holder,
+      ) &&
+      transition.kind === kind &&
+      state.head !== undefined &&
+      transition.before.head === state.head &&
+      transition.before.remoteHead === state.remoteHead &&
+      same(transition.before.slot, slot) &&
+      same(transition.after, this.expectedSlot(kind, slot))
+    );
+  }
+
+  /**
+   * Resumes only a controller-journalled built-in transition. The process
+   * proves the entire local delta before this method can commit or push it.
+   */
+  private async recoverSlotTransition(
+    kind: "acquire" | "release",
+    transition: SlotTransitionIntent | undefined,
+  ): Promise<EmbeddedResult> {
+    if (
+      transition === undefined ||
+      !validateSlotTransitionIntent(
+        transition,
+        this.prefix,
+        this.scope,
+        this.mode,
+        this.holder,
+      ) ||
+      transition.kind !== kind
+    )
+      return result("ambiguous");
+    const state = await this.state();
+    const local = await this.slot("check");
+    if (
+      state === undefined ||
+      !state.reachable ||
+      state.workingSet === "unknown" ||
+      local === undefined ||
+      !same(local, transition.after) ||
+      state.head === undefined ||
+      // A pending change retains the before head; an auto-committed change
+      // must have created a new head. Either other shape is unrelated state.
+      (state.workingSet === "pending" &&
+        state.head !== transition.before.head) ||
+      (state.workingSet === "clean" && state.head === transition.before.head)
+    )
+      return result("ambiguous");
+    if (this.mode === "git-sync") {
+      const remote = await this.slot("check", "remote");
+      if (
+        state.remoteHead === undefined ||
+        state.remoteHead !== transition.before.remoteHead ||
+        remote === undefined ||
+        !same(remote, transition.before.slot)
+      )
+        return result("ambiguous");
+    }
+    return this.durableSlotTransition(transition);
+  }
+
+  /**
+   * Applies a transition only after a semantic process proof that its delta
+   * contains the built-in slot issue and its unavoidable audit event, with no
+   * other table, issue, or label movement.
+   */
+  private async durableSlotTransition(
+    transition: SlotTransitionIntent,
+  ): Promise<EmbeddedResult> {
+    const prove = await this.call({
+      kind: "slot_transition",
+      intent: transition,
+    });
+    if (prove?.kind !== "slot_transition" || prove.value !== "observed")
+      return result("ambiguous");
+    let state = await this.state();
+    if (
+      state === undefined ||
+      !state.reachable ||
+      state.workingSet === "unknown"
+    )
+      return result("ambiguous");
+    if (state.workingSet === "pending") {
+      const commit = await this.call({ kind: "commit" });
+      if (commit?.kind !== "commit" || commit.value !== "applied")
+        return result(
+          commit?.kind === "commit" && commit.value === "unavailable"
+            ? "unavailable"
+            : "ambiguous",
+        );
+      const afterCommit = await this.call({
+        kind: "slot_transition",
+        intent: transition,
+      });
+      if (
+        afterCommit?.kind !== "slot_transition" ||
+        afterCommit.value !== "observed"
+      )
+        return result("ambiguous");
+      state = await this.state();
+    }
+    if (
+      state === undefined ||
+      !state.reachable ||
+      state.workingSet !== "clean" ||
+      state.head === undefined
+    )
+      return result("ambiguous");
+    const local = await this.slot("check");
+    if (local === undefined || !same(local, transition.after))
+      return result("ambiguous");
+    if (this.mode === "local-only") return result("applied");
+    if (
+      state.remoteHead !== transition.before.remoteHead ||
+      state.head === transition.before.remoteHead
+    )
+      return result("ambiguous");
+    const remoteBefore = await this.slot("check", "remote");
+    if (
+      remoteBefore === undefined ||
+      !same(remoteBefore, transition.before.slot)
+    )
+      return result("ambiguous");
+    const push = await this.call({ kind: "push" });
+    if (push?.kind !== "push") return result("ambiguous");
+    if (push.value === "conflict") return result("conflict");
+    if (push.value !== "applied") return result("ambiguous");
+    const synced = await this.state();
+    const remoteAfter = await this.slot("check", "remote");
+    // `slot(check, remote)` performs a bounded fetch itself. Re-read state
+    // after that fetch (and therefore fetch once more) before publishing
+    // applied, so a remote-only commit which preserves the slot row cannot be
+    // hidden behind the earlier post-push head observation.
+    const final = await this.state();
+    return synced !== undefined &&
+      synced.reachable &&
+      synced.workingSet === "clean" &&
+      synced.head !== undefined &&
+      synced.remoteHead === synced.head &&
+      same(synced.head, state.head) &&
+      remoteAfter !== undefined &&
+      same(remoteAfter, transition.after) &&
+      final !== undefined &&
+      final.reachable &&
+      final.workingSet === "clean" &&
+      final.head === state.head &&
+      final.remoteHead === state.head
+      ? result("applied")
+      : result("ambiguous");
+  }
+
+  private async confirmDurableSlot(
+    local: MergeSlotObservation,
+  ): Promise<EmbeddedResult> {
+    if (this.mode === "local-only") return result("applied");
+    const state = await this.state();
+    const remote = await this.slot("check", "remote");
+    const final = await this.state();
+    return state !== undefined &&
+      state.reachable &&
+      state.workingSet === "clean" &&
+      state.head !== undefined &&
+      state.remoteHead === state.head &&
+      remote !== undefined &&
+      same(remote, local) &&
+      final !== undefined &&
+      final.reachable &&
+      final.workingSet === "clean" &&
+      final.head === state.head &&
+      final.remoteHead === state.head
+      ? result("applied")
+      : result("ambiguous");
+  }
+
   /** Commit state and sync it without force; discovery brackets commit/push. */
   private async durableCheckpoint(
     batch?: MutationBatch,
@@ -435,8 +841,11 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       synced.reachable &&
       synced.workingSet === "clean" &&
       synced.head !== undefined &&
-      (afterPush === undefined || afterPush.head === synced.head) &&
-      (afterPush === undefined || afterPush.remoteHead === afterPush.head)
+      synced.remoteHead !== undefined &&
+      synced.remoteHead === synced.head &&
+      (afterPush === undefined ||
+        (afterPush.head === synced.head &&
+          afterPush.remoteHead === synced.head))
       ? result("applied")
       : result("ambiguous");
   }
@@ -485,9 +894,41 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     if (
       input === undefined ||
       Object.keys(input).some(
-        (key) => key !== "knownHolder" && key !== "continuation",
+        (key) =>
+          key !== "knownHolder" &&
+          key !== "continuation" &&
+          key !== "release" &&
+          key !== "transition",
       ) ||
-      !holder(input.knownHolder)
+      (input.knownHolder !== undefined && !holder(input.knownHolder))
+    )
+      return false;
+    if (input.release !== undefined) {
+      // The generic decision will consume this exact readback only while the
+      // slot is available; accepting a malformed one would permit a takeover.
+      const release = object(input.release);
+      if (
+        release === undefined ||
+        Object.keys(release).some(
+          (key) => key !== "holder" && key !== "readback",
+        ) ||
+        input.knownHolder === undefined ||
+        release.holder !== input.knownHolder ||
+        !validateMergeSlotObservation(release.readback, this.prefix, this.scope)
+          .ok ||
+        release.readback === undefined
+      )
+        return false;
+    }
+    if (
+      input.transition !== undefined &&
+      !validateSlotTransitionIntent(
+        input.transition,
+        this.prefix,
+        this.scope,
+        this.mode,
+        this.holder,
+      )
     )
       return false;
     if (input.continuation === undefined) return true;
@@ -528,13 +969,51 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     );
   }
 
+  private validAcquisitionPlanningAuthority(
+    authority: unknown,
+  ): authority is EmbeddedAcquisitionPlanningAuthority | undefined {
+    if (authority === undefined) return true;
+    const input = object(authority);
+    if (
+      input === undefined ||
+      Object.keys(input).some(
+        (key) =>
+          key !== "knownHolder" && key !== "continuation" && key !== "release",
+      )
+    )
+      return false;
+    return this.validAcquisitionAuthority(input);
+  }
+
+  private validReleaseAuthority(
+    authority: unknown,
+  ): authority is EmbeddedReleaseAuthority | undefined {
+    if (authority === undefined) return true;
+    const input = object(authority);
+    return (
+      input !== undefined &&
+      Object.keys(input).length === 1 &&
+      Object.keys(input)[0] === "transition" &&
+      input.transition !== undefined &&
+      validateSlotTransitionIntent(
+        input.transition,
+        this.prefix,
+        this.scope,
+        this.mode,
+        this.holder,
+      )
+    );
+  }
+
   private async slot(
     action: "acquire" | "check" | "release",
+    source?: "remote",
   ): Promise<MergeSlotObservation | undefined> {
     const response = await this.call({
       kind: "slot",
       action,
       actor: this.holder,
+      ...(source === undefined ? {} : { source }),
     });
     if (response?.kind !== "slot") return undefined;
     const validated = validateMergeSlotObservation(

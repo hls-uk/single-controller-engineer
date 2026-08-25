@@ -270,9 +270,19 @@ test("pinned bd local embedded slot and Dolt working-set fixture", async () => {
       process: embeddedProcess,
       scope,
     });
-    assert.equal((await adapter.acquire()).code, "applied");
+    const acquireIntent = await adapter.prepareAcquireTransition();
+    assert.ok("idempotencyKey" in acquireIntent);
+    assert.equal(
+      (await adapter.acquire({ transition: acquireIntent })).code,
+      "applied",
+    );
     assert.equal((await adapter.compareAndSet(batch)).status, "applied");
-    assert.equal((await adapter.release()).code, "applied");
+    const releaseIntent = await adapter.prepareReleaseTransition();
+    assert.ok("idempotencyKey" in releaseIntent);
+    assert.equal(
+      (await adapter.release({ transition: releaseIntent })).code,
+      "applied",
+    );
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -470,7 +480,82 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
       process: firstProcess,
       scope,
     });
-    assert.equal((await firstAdapter.acquire()).code, "applied");
+    const firstAcquireIntent = await firstAdapter.prepareAcquireTransition();
+    assert.ok("idempotencyKey" in firstAcquireIntent);
+    // The intent is the controller-journal value. Simulate process death after
+    // bd changes the built-in row but before this caller receives an outcome.
+    // bd 1.1.0's active policy auto-commits this operation; assert that actual
+    // boundary instead of claiming an unobservable pending state.
+    const interruptedAcquire = await firstProcess.execute({
+      action: "acquire",
+      actor: initial.controller.holder,
+      kind: "slot",
+    });
+    assert.equal(interruptedAcquire.kind, "slot");
+    assert.equal(interruptedAcquire.value.holder, initial.controller.holder);
+    const locallyCommittedAcquire = await firstProcess.execute({
+      kind: "state",
+    });
+    assert.equal(locallyCommittedAcquire.kind, "state");
+    assert.equal(locallyCommittedAcquire.value.workingSet, "clean");
+    assert.notEqual(
+      locallyCommittedAcquire.value.head,
+      locallyCommittedAcquire.value.remoteHead,
+    );
+    const recoveredAcquireProcess = processFor(
+      first,
+      firstDatabase,
+      new DoltProjectionPersistence({
+        childIssueId: () => undefined,
+        databaseDirectory: firstDatabase,
+        doltExecutable: "/opt/homebrew/bin/dolt",
+        rootIssueId: "sce-root",
+      }),
+    );
+    const recoveredAcquire = new EmbeddedBeadsAdapter({
+      holder: initial.controller.holder,
+      mode: "git-sync",
+      prefix: "sce",
+      preflight: preflight(first),
+      process: recoveredAcquireProcess,
+      scope,
+    });
+    assert.equal(
+      (
+        await recoveredAcquire.acquire({
+          knownHolder: initial.controller.holder,
+          transition: firstAcquireIntent,
+        })
+      ).code,
+      "applied",
+    );
+    // A crash after successful push but before result persistence is an exact
+    // remote-held resume, never a second acquire or push.
+    const afterPushAcquire = new EmbeddedBeadsAdapter({
+      holder: initial.controller.holder,
+      mode: "git-sync",
+      prefix: "sce",
+      preflight: preflight(first),
+      process: processFor(
+        first,
+        firstDatabase,
+        new DoltProjectionPersistence({
+          childIssueId: () => undefined,
+          databaseDirectory: firstDatabase,
+          doltExecutable: "/opt/homebrew/bin/dolt",
+          rootIssueId: "sce-root",
+        }),
+      ),
+      scope,
+    });
+    assert.equal(
+      (
+        await afterPushAcquire.acquire({
+          knownHolder: initial.controller.holder,
+        })
+      ).code,
+      "applied",
+    );
     const acquiredState = await firstProcess.execute({ kind: "state" });
     const acquiredSlot = await firstProcess.execute({
       actor: initial.controller.holder,
@@ -585,7 +670,14 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
       process: contenderPort,
       scope,
     });
-    assert.equal((await competingAdapter.acquire()).code, "blocked");
+    assert.equal(
+      (
+        await competingAdapter.acquire({
+          knownHolder: initial.controller.holder,
+        })
+      ).code,
+      "blocked",
+    );
     assert.equal(
       contenderPort.requests.some(
         (request) =>
@@ -636,7 +728,51 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
       process: restartedProcess,
       scope,
     });
-    assert.equal((await restartAdapter.release()).code, "applied");
+    // This boundary asks for auto-commit off. bd 1.1.0 still atomically
+    // commits its built-in merge-slot release, so this test records the real
+    // post-commit / pre-push boundary rather than inventing a pending one.
+    await run(first, "bd", ["config", "set", "dolt.auto-commit", "off"]);
+    await run(first, "bd", ["dolt", "commit", "--json"]);
+    await run(first, "bd", ["dolt", "push", "--json"]);
+    const restartReleaseIntent =
+      await restartAdapter.prepareReleaseTransition();
+    assert.ok("idempotencyKey" in restartReleaseIntent);
+    const interruptedRelease = await restartedProcess.execute({
+      action: "release",
+      actor: initial.controller.holder,
+      kind: "slot",
+    });
+    assert.equal(interruptedRelease.kind, "slot");
+    assert.equal(interruptedRelease.value.status, "available");
+    const committedRelease = await restartedProcess.execute({ kind: "state" });
+    assert.equal(committedRelease.kind, "state");
+    assert.equal(committedRelease.value.workingSet, "clean");
+    assert.notEqual(
+      committedRelease.value.head,
+      committedRelease.value.remoteHead,
+    );
+    const recoveredRelease = new EmbeddedBeadsAdapter({
+      holder: initial.controller.holder,
+      mode: "git-sync",
+      prefix: "sce",
+      preflight: preflight(first),
+      process: processFor(
+        first,
+        firstDatabase,
+        new DoltProjectionPersistence({
+          childIssueId: () => undefined,
+          databaseDirectory: firstDatabase,
+          doltExecutable: "/opt/homebrew/bin/dolt",
+          rootIssueId: "sce-root",
+        }),
+      ),
+      scope,
+    });
+    assert.equal(
+      (await recoveredRelease.release({ transition: restartReleaseIntent }))
+        .code,
+      "applied",
+    );
     const releasedState = await restartedProcess.execute({ kind: "state" });
     const releasedSlot = await restartedProcess.execute({
       actor: initial.controller.holder,
@@ -658,7 +794,13 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
     });
     assert.equal(availableSlot.kind, "slot");
     assert.equal(availableSlot.value.status, "available");
-    assert.equal((await restartAdapter.acquire()).code, "applied");
+    const restartAcquireIntent =
+      await restartAdapter.prepareAcquireTransition();
+    assert.ok("idempotencyKey" in restartAcquireIntent);
+    assert.equal(
+      (await restartAdapter.acquire({ transition: restartAcquireIntent })).code,
+      "applied",
+    );
     const remoteWorkerBaseline = await restartAdapter.workerBaseline();
     assert.ok(remoteWorkerBaseline);
     assert.ok(remoteWorkerBaseline.remoteHead);
@@ -687,6 +829,12 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
       "applied",
     );
 
+    // Restore the ordinary policy before creating the deliberate stale-writer
+    // race. The preceding release probe proved bd's slot action commits even
+    // with off requested, but unrelated raw race writes should be observable.
+    await run(first, "bd", ["config", "set", "dolt.auto-commit", "on"]);
+    await run(first, "bd", ["dolt", "commit", "--json"]);
+    await run(first, "bd", ["dolt", "push", "--json"]);
     await run(second, "bd", ["create", "--id", "sce-race-b", "race", "--json"]);
     await run(first, "bd", ["create", "--id", "sce-race-a", "race", "--json"]);
     await run(first, "bd", ["dolt", "push", "--json"]);

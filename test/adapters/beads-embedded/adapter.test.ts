@@ -103,6 +103,7 @@ function processIdentity(sync: boolean): EmbeddedProcessIdentity {
 class ScriptedPort implements EmbeddedProcessPort {
   public readonly requests: EmbeddedRequest[] = [];
   public identity: EmbeddedProcessIdentity;
+  private responseIndex = 0;
 
   public constructor(
     private readonly responses: readonly EmbeddedResponse[],
@@ -112,7 +113,16 @@ class ScriptedPort implements EmbeddedProcessPort {
   }
   public async execute(request: EmbeddedRequest): Promise<EmbeddedResponse> {
     this.requests.push(request);
-    const next = this.responses[this.requests.length - 1];
+    // Most adapter tests exercise the controller's authority sequencing. The
+    // production proof itself is covered by pinned real fixtures; defaulting
+    // this semantic proof to observed keeps those traces concise while still
+    // allowing a test to script a non-observed proof explicitly.
+    if (
+      request.kind === "slot_transition" &&
+      this.responses[this.responseIndex]?.kind !== "slot_transition"
+    )
+      return { kind: "slot_transition", value: "observed" };
+    const next = this.responses[this.responseIndex++];
     if (next === undefined) throw new Error("unexpected request");
     return next;
   }
@@ -216,42 +226,43 @@ test("local-only rejects a configured remote and git-sync requires one", async (
 });
 
 test("acquisition uses only the built-in slot and binds actor, holder, and scope", async () => {
-  const port = new ScriptedPort([
-    {
-      kind: "state",
-      value: {
-        autoCommit: "on",
-        head: "a".repeat(40),
-        reachable: true,
-        workingSet: "clean",
-      },
+  const clean = {
+    kind: "state" as const,
+    value: {
+      autoCommit: "on" as const,
+      head: "a".repeat(40),
+      reachable: true,
+      workingSet: "clean" as const,
     },
+  };
+  const port = new ScriptedPort([
+    clean,
+    { kind: "slot", value: slot("available") },
+    clean,
+    clean,
     { kind: "slot", value: slot("available") },
     { kind: "slot", value: slot("acquired", holder) },
-    {
-      kind: "state",
-      value: {
-        autoCommit: "on",
-        head: "a".repeat(40),
-        reachable: true,
-        workingSet: "clean",
-      },
-    },
-    {
-      kind: "state",
-      value: {
-        autoCommit: "on",
-        head: "a".repeat(40),
-        reachable: true,
-        workingSet: "clean",
-      },
-    },
+    clean,
+    { kind: "slot", value: slot("acquired", holder) },
   ]);
-  const acquired = await adapter(port, "local-only").acquire();
+  const runtime = adapter(port, "local-only");
+  const intent = await runtime.prepareAcquireTransition();
+  assert.ok("idempotencyKey" in intent);
+  const acquired = await runtime.acquire({ transition: intent });
   assert.equal(acquired.code, "applied", JSON.stringify(port.requests));
   assert.deepEqual(
     port.requests.map((request) => request.kind),
-    ["state", "slot", "slot", "state", "state"],
+    [
+      "state",
+      "slot",
+      "state",
+      "state",
+      "slot",
+      "slot",
+      "slot_transition",
+      "state",
+      "slot",
+    ],
   );
   for (const request of port.requests.filter(
     (request) => request.kind === "slot",
@@ -261,35 +272,48 @@ test("acquisition uses only the built-in slot and binds actor, holder, and scope
   // check/acquire and therefore cannot lazily initialize a slot.
 });
 
-function syncAcquirePort(finalState: EmbeddedState): ScriptedPort {
-  const head = "b".repeat(40);
+function syncAcquirePort(
+  finalState: EmbeddedState,
+  afterRemoteReadState = finalState,
+): ScriptedPort {
+  const beforeHead = "b".repeat(40);
+  const afterHead = "c".repeat(40);
+  const before = {
+    autoCommit: "on" as const,
+    head: beforeHead,
+    reachable: true,
+    remoteHead: beforeHead,
+    workingSet: "clean" as const,
+  };
   return new ScriptedPort([
-    {
-      kind: "state",
-      value: { autoCommit: "on", head, reachable: true, workingSet: "clean" },
-    },
-    { kind: "pull", value: "applied" },
-    {
-      kind: "state",
-      value: { autoCommit: "on", head, reachable: true, workingSet: "clean" },
-    },
+    { kind: "state", value: before },
+    { kind: "slot", value: slot("available") },
+    { kind: "slot", value: slot("available") },
+    { kind: "state", value: before },
+    { kind: "state", value: before },
     { kind: "slot", value: slot("available") },
     { kind: "slot", value: slot("acquired", holder) },
     {
       kind: "state",
-      value: { autoCommit: "on", head, reachable: true, workingSet: "clean" },
+      value: {
+        autoCommit: "on",
+        head: afterHead,
+        reachable: true,
+        remoteHead: beforeHead,
+        workingSet: "clean",
+      },
     },
-    {
-      kind: "state",
-      value: { autoCommit: "on", head, reachable: true, workingSet: "clean" },
-    },
+    { kind: "slot", value: slot("acquired", holder) },
+    { kind: "slot", value: slot("available") },
     { kind: "push", value: "applied" },
     { kind: "state", value: finalState },
+    { kind: "slot", value: slot("acquired", holder) },
+    { kind: "state", value: afterRemoteReadState },
   ]);
 }
 
 test("git-sync acquisition relies on final remote-head state when no journal batch is pending", async () => {
-  const head = "b".repeat(40);
+  const head = "c".repeat(40);
   const port = syncAcquirePort({
     autoCommit: "on",
     head,
@@ -297,49 +321,147 @@ test("git-sync acquisition relies on final remote-head state when no journal bat
     remoteHead: head,
     workingSet: "clean",
   });
-  assert.equal((await adapter(port, "git-sync").acquire()).code, "applied");
+  const runtime = adapter(port, "git-sync");
+  const intent = await runtime.prepareAcquireTransition();
+  assert.ok("idempotencyKey" in intent);
+  assert.equal(
+    (await runtime.acquire({ transition: intent })).code,
+    "applied",
+    JSON.stringify(port.requests),
+  );
+  assert.equal(port.requests.at(-1)?.kind, "state");
+  assert.ok(
+    port.requests.some(
+      (request) => request.kind === "state" && request !== port.requests[0],
+    ),
+  );
+});
+
+test("slot transition is ambiguous when its last remote slot fetch advances head", async () => {
+  const pushed = "c".repeat(40);
+  const port = syncAcquirePort(
+    {
+      autoCommit: "on",
+      head: pushed,
+      reachable: true,
+      remoteHead: pushed,
+      workingSet: "clean",
+    },
+    {
+      autoCommit: "on",
+      head: pushed,
+      reachable: true,
+      remoteHead: "d".repeat(40),
+      workingSet: "clean",
+    },
+  );
+  const runtime = adapter(port, "git-sync");
+  const intent = await runtime.prepareAcquireTransition();
+  assert.ok("idempotencyKey" in intent);
+  assert.equal(
+    (await runtime.acquire({ transition: intent })).code,
+    "ambiguous",
+  );
+  assert.equal(port.requests.at(-1)?.kind, "state");
+});
+
+test("lost-result slot resume is ambiguous when final remote fetch advances head", async () => {
+  const head = "c".repeat(40);
+  const port = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head,
+        reachable: true,
+        remoteHead: head,
+        workingSet: "clean",
+      },
+    },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head,
+        reachable: true,
+        remoteHead: head,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("acquired", holder) },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head,
+        reachable: true,
+        remoteHead: head,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("acquired", holder) },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head,
+        reachable: true,
+        remoteHead: "d".repeat(40),
+        workingSet: "clean",
+      },
+    },
+  ]);
+  assert.equal(
+    (await adapter(port, "git-sync").acquire({ knownHolder: holder })).code,
+    "ambiguous",
+  );
   assert.equal(port.requests.at(-1)?.kind, "state");
 });
 
 test("git-sync acquisition is ambiguous without a fetched remote head", async () => {
   const head = "b".repeat(40);
-  assert.equal(
-    (
-      await adapter(
-        syncAcquirePort({
+  const missing = await adapter(
+    new ScriptedPort([
+      {
+        kind: "state",
+        value: {
           autoCommit: "on",
           head,
           reachable: true,
           workingSet: "clean",
-        }),
-        "git-sync",
-      ).acquire()
-    ).code,
-    "ambiguous",
-  );
+        },
+      },
+    ]),
+    "git-sync",
+  ).prepareAcquireTransition();
+  assert.ok("code" in missing);
+  assert.equal(missing.code, "ambiguous");
 });
 
 test("git-sync acquisition is ambiguous when fetched remote head differs", async () => {
   const head = "b".repeat(40);
-  assert.equal(
-    (
-      await adapter(
-        syncAcquirePort({
+  const moved = await adapter(
+    new ScriptedPort([
+      {
+        kind: "state",
+        value: {
           autoCommit: "on",
           head,
           reachable: true,
           remoteHead: "c".repeat(40),
           workingSet: "clean",
-        }),
-        "git-sync",
-      ).acquire()
-    ).code,
-    "ambiguous",
-  );
+        },
+      },
+    ]),
+    "git-sync",
+  ).prepareAcquireTransition();
+  assert.ok("code" in moved);
+  assert.equal(moved.code, "ambiguous");
 });
 
 function postPushPort(
   afterPush: Extract<EmbeddedResponse, { readonly kind: "discover" }>["value"],
+  finalState?: EmbeddedState,
 ) {
   const head = "a".repeat(40);
   return new ScriptedPort([
@@ -401,6 +523,9 @@ function postPushPort(
     },
     { kind: "push", value: "applied" },
     { kind: "discover", value: afterPush },
+    ...(finalState === undefined
+      ? []
+      : [{ kind: "state" as const, value: finalState }]),
   ]);
 }
 
@@ -422,6 +547,32 @@ test("post-push remote-head mismatch remains ambiguous with the journal batch", 
   );
   assert.ok(discoveries.length >= 3);
   assert.ok(discoveries.every((request) => request.batch === batch));
+});
+
+test("later remote movement after matching batch discovery remains ambiguous", async () => {
+  const batch = journalBatch();
+  const head = "b".repeat(40);
+  const port = postPushPort(
+    {
+      childCommitments: [],
+      head,
+      remoteHead: head,
+      rootCommitment: batch.next.root.aggregateCommitment,
+      status: "observed",
+    },
+    {
+      autoCommit: "on",
+      head,
+      reachable: true,
+      remoteHead: "c".repeat(40),
+      workingSet: "clean",
+    },
+  );
+  assert.equal(
+    (await adapter(port, "git-sync").compareAndSet(batch)).status,
+    "ambiguous",
+  );
+  assert.equal(port.requests.at(-1)?.kind, "state");
 });
 
 test("post-push remote-row mismatch remains ambiguous with the journal batch", async () => {
@@ -479,6 +630,15 @@ test("acquisition accepts only explicit projected resume or continuation authori
         workingSet: "clean",
       },
     },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: "a".repeat(40),
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
     { kind: "slot", value: slot("acquired", holder) },
   ]);
   assert.equal(
@@ -506,19 +666,6 @@ test("acquisition accepts only explicit projected resume or continuation authori
         workingSet: "clean",
       },
     },
-    { kind: "slot", value: after },
-  ]);
-  assert.equal(
-    (
-      await adapter(continued, "local-only", nextHolder).acquire({
-        continuation,
-        knownHolder: previousHolder,
-      })
-    ).code,
-    "applied",
-  );
-
-  const unproved = new ScriptedPort([
     {
       kind: "state",
       value: {
@@ -531,8 +678,19 @@ test("acquisition accepts only explicit projected resume or continuation authori
     { kind: "slot", value: after },
   ]);
   assert.equal(
+    (
+      await adapter(continued, "local-only", nextHolder).acquire({
+        continuation,
+        knownHolder: previousHolder,
+      })
+    ).code,
+    "applied",
+  );
+
+  const unproved = new ScriptedPort([]);
+  assert.equal(
     (await adapter(unproved, "local-only", nextHolder).acquire()).code,
-    "blocked",
+    "quarantined",
   );
   assert.equal(
     unproved.requests.some(
@@ -540,6 +698,7 @@ test("acquisition accepts only explicit projected resume or continuation authori
     ),
     false,
   );
+  assert.deepEqual(unproved.requests, []);
 
   for (const malformed of [
     {},
@@ -793,26 +952,65 @@ for (const autoCommit of ["off", "on", "batch"] as const)
         },
       },
     ]);
-    assert.equal((await adapter(port, "local-only").acquire()).code, "blocked");
-    assert.deepEqual(
-      port.requests.map((request) => request.kind),
-      ["state"],
+    assert.equal(
+      (await adapter(port, "local-only").acquire()).code,
+      "quarantined",
     );
+    assert.deepEqual(port.requests, []);
   });
 
 test("release requires exact current holder and positive available readback", async () => {
   const contender = "run-2/incarnation-1";
   const port = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: "f".repeat(40),
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
     { kind: "slot", value: slot("acquired", contender) },
   ]);
-  assert.equal((await adapter(port, "local-only").release()).code, "blocked");
+  const blocked = await adapter(port, "local-only").prepareReleaseTransition();
+  assert.ok("code" in blocked);
+  assert.equal(blocked.code, "blocked");
   assert.deepEqual(
     port.requests.map((request) => request.kind),
-    ["slot"],
+    ["state", "slot"],
   );
 
   const released = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: "f".repeat(40),
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
     { kind: "slot", value: slot("acquired", holder) },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: "f".repeat(40),
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("acquired", holder) },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: "f".repeat(40),
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
     { kind: "slot", value: slot("available") },
     {
       kind: "state",
@@ -823,23 +1021,24 @@ test("release requires exact current holder and positive available readback", as
         workingSet: "clean",
       },
     },
-    {
-      kind: "state",
-      value: {
-        autoCommit: "on",
-        head: "f".repeat(40),
-        reachable: true,
-        workingSet: "clean",
-      },
-    },
+    { kind: "slot", value: slot("available") },
   ]);
+  const intent = await adapter(
+    released,
+    "local-only",
+  ).prepareReleaseTransition();
+  assert.ok("idempotencyKey" in intent);
   assert.equal(
-    (await adapter(released, "local-only").release()).code,
+    (
+      await adapter(released, "local-only").release({
+        transition: intent,
+      })
+    ).code,
     "applied",
   );
 });
 
-test("unavailable discovery around a commit is ambiguous and never pushes", async () => {
+test("acquire without a persisted transition is quarantined before any command", async () => {
   const port = new ScriptedPort([
     {
       kind: "state",
@@ -864,9 +1063,201 @@ test("unavailable discovery around a commit is ambiguous and never pushes", asyn
     { kind: "discover", value: { status: "absent" } },
     { kind: "commit", value: "unavailable" },
   ]);
-  assert.equal((await adapter(port, "local-only").acquire()).code, "ambiguous");
   assert.equal(
-    port.requests.some((request) => request.kind === "push"),
+    (await adapter(port, "local-only").acquire()).code,
+    "quarantined",
+  );
+  assert.deepEqual(port.requests, []);
+});
+
+test("release refuses missing or forged transition authority before any command", async () => {
+  for (const authority of [
+    undefined,
+    { transition: {} },
+    {
+      transition: {
+        holder,
+        idempotencyKey: "0".repeat(64),
+        kind: "release",
+        schema: "sce.beads-embedded.slot-transition",
+        scope,
+        version: 1,
+      },
+    },
+  ]) {
+    const port = new ScriptedPort([]);
+    assert.equal(
+      (
+        await adapter(port, "local-only").release(
+          authority as Parameters<EmbeddedBeadsAdapter["release"]>[0],
+        )
+      ).code,
+      "quarantined",
+    );
+    assert.deepEqual(port.requests, []);
+  }
+});
+
+test("fresh adapter resumes only the persisted exact pre-push acquire intent", async () => {
+  const beforeHead = "b".repeat(40);
+  const localHead = "c".repeat(40);
+  const planning = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: beforeHead,
+        reachable: true,
+        remoteHead: beforeHead,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("available") },
+    { kind: "slot", value: slot("available") },
+  ]);
+  const planner = adapter(planning, "git-sync");
+  const intent = await planner.prepareAcquireTransition();
+  assert.ok("idempotencyKey" in intent);
+
+  // New process: bd already committed the held slot locally, but the remote
+  // still has the exact planned available row. A missing journal intent must
+  // never report this as applied.
+  const withoutIntent = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: localHead,
+        reachable: true,
+        remoteHead: beforeHead,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("available") },
+  ]);
+  assert.equal(
+    (
+      await adapter(withoutIntent, "git-sync").acquire({
+        knownHolder: holder,
+      })
+    ).code,
+    "blocked",
+  );
+  assert.deepEqual(
+    withoutIntent.requests.map((request) => request.kind),
+    ["state", "slot"],
+  );
+
+  const recovered = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: localHead,
+        reachable: true,
+        remoteHead: beforeHead,
+        workingSet: "clean",
+      },
+    },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: localHead,
+        reachable: true,
+        remoteHead: beforeHead,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("acquired", holder) },
+    { kind: "slot", value: slot("available") },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: localHead,
+        reachable: true,
+        remoteHead: beforeHead,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("acquired", holder) },
+    { kind: "slot", value: slot("available") },
+    { kind: "push", value: "applied" },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: localHead,
+        reachable: true,
+        remoteHead: localHead,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("acquired", holder) },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: localHead,
+        reachable: true,
+        remoteHead: localHead,
+        workingSet: "clean",
+      },
+    },
+  ]);
+  assert.equal(
+    (
+      await adapter(recovered, "git-sync").acquire({
+        knownHolder: holder,
+        transition: intent,
+      })
+    ).code,
+    "applied",
+  );
+  assert.equal(
+    recovered.requests.filter((request) => request.kind === "push").length,
+    1,
+  );
+});
+
+test("available slot with an unresolved projected holder does not mutate", async () => {
+  const port = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: "a".repeat(40),
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: "a".repeat(40),
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("available") },
+  ]);
+  assert.equal(
+    (
+      await adapter(port, "local-only").acquire({
+        knownHolder: "run-2/incarnation-1",
+      })
+    ).code,
+    "blocked",
+  );
+  assert.equal(
+    port.requests.some(
+      (request) =>
+        (request.kind === "slot" && request.action !== "check") ||
+        request.kind === "commit" ||
+        request.kind === "push",
+    ),
     false,
   );
 });

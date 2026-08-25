@@ -471,6 +471,30 @@ test("merge-slot decisions never create lazily and fence continuation, takeover,
       kind: "acquire",
     },
   );
+  // A controller projection which still names any holder cannot use a bare
+  // available readback as a takeover authority. This is the generic guard
+  // against an unpushed local acquire in another clone.
+  for (const projected of [holder, "run-2/incarnation-1"]) {
+    assert.deepEqual(
+      decideControllerSlot("sce", scope, holder, projected, available),
+      { kind: "blocked" },
+    );
+    assert.deepEqual(
+      decideControllerSlot(
+        "sce",
+        scope,
+        holder,
+        projected,
+        available,
+        undefined,
+        {
+          holder: projected,
+          readback: slot("available", undefined, projected),
+        },
+      ),
+      { kind: "acquire" },
+    );
+  }
   assert.deepEqual(
     decideControllerSlot(
       "sce",

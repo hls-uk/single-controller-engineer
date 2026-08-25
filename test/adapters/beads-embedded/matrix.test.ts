@@ -241,7 +241,12 @@ test("concrete embedded matrix atomically persists root and child, recovers cras
     });
     const process = localProcess(root, database, persistence);
     const adapter = localAdapter(root, process);
-    assert.equal((await adapter.acquire()).code, "applied");
+    const acquireIntent = await adapter.prepareAcquireTransition();
+    assert.ok("idempotencyKey" in acquireIntent);
+    assert.equal(
+      (await adapter.acquire({ transition: acquireIntent })).code,
+      "applied",
+    );
     const policyBatches = [
       ["off", batch(state1, state2)],
       ["on", batch(state2, state3)],

@@ -132,6 +132,8 @@ export function decideControllerSlot(
   knownHolder: string | undefined,
   observationInput: unknown,
   continuationInput?: unknown,
+  /** Positive controller-journal evidence that this projected holder released. */
+  releaseInput?: unknown,
 ): SlotDecision {
   const observation = validateMergeSlotObservation(
     observationInput,
@@ -139,7 +141,17 @@ export function decideControllerSlot(
     scope,
   );
   if (!observation.ok) return { kind: "quarantined" };
-  if (observation.value.status === "available") return { kind: "acquire" };
+  // An available slot alone is never proof that a controller projection which
+  // still names a holder may seize it. A crash can leave an unpushed local
+  // acquire while another clone sees availability. Only a genuinely fresh
+  // controller (no projected holder) or that holder's positive release
+  // readback may enter acquire.
+  if (observation.value.status === "available") {
+    if (knownHolder === undefined) return { kind: "acquire" };
+    return validateSlotRelease(prefix, scope, knownHolder, releaseInput).ok
+      ? { kind: "acquire" }
+      : { kind: "blocked" };
+  }
   // A new incarnation must present its before/after positive readbacks before
   // the generic same-holder resume path can accept it.
   if (

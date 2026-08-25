@@ -23,7 +23,9 @@ import type {
   EmbeddedRequest,
   EmbeddedResponse,
   EmbeddedState,
+  SlotTransitionIntent,
 } from "./schemas.js";
+import { validateSlotTransitionIntent } from "./slot-transition.js";
 
 const MAX_OUTPUT_BYTES = 65_536;
 const PINNED_BD_VERSION = "1.1.0";
@@ -260,9 +262,13 @@ function parseSlotDocument(
   } catch {
     return undefined;
   }
-  const raw =
-    Array.isArray(parsed) && parsed.length === 1
+  const rows = object(parsed)?.rows;
+  const raw = Array.isArray(parsed)
+    ? parsed.length === 1
       ? object(parsed[0])
+      : undefined
+    : Array.isArray(rows) && rows.length === 1
+      ? object(rows[0])
       : undefined;
   const metadata =
     raw === undefined
@@ -298,6 +304,29 @@ function parseSlotDocument(
     scope: expectedScope,
     status: raw.status === "open" ? "available" : "acquired",
   };
+}
+
+function parseRemoteSlotDocument(
+  issueSource: string,
+  labelsSource: string,
+  expectedId: string,
+  expectedScope: FencingScope,
+): SlotDocument | undefined {
+  const rows = sqlRows(issueSource);
+  const labels = sqlRows(labelsSource);
+  if (
+    rows === undefined ||
+    rows.length !== 1 ||
+    labels === undefined ||
+    labels.length !== 1 ||
+    labels[0]?.label !== MERGE_SLOT_LABEL
+  )
+    return undefined;
+  return parseSlotDocument(
+    JSON.stringify([{ ...rows[0], labels: [MERGE_SLOT_LABEL] }]),
+    expectedId,
+    expectedScope,
+  );
 }
 
 /**
@@ -464,6 +493,51 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
             };
       }
       case "slot": {
+        if (request.source === "remote") {
+          if (request.action !== "check" || this.remote === undefined)
+            throw new Error("invalid remote slot request");
+          const remoteRef = await this.fetchRemoteMain(this.remote);
+          const show =
+            remoteRef === undefined
+              ? undefined
+              : await this.runDolt(this.databaseDirectory, [
+                  "sql",
+                  "-r",
+                  "json",
+                  "-q",
+                  `SELECT id, title, status, metadata, external_ref, design FROM issues AS OF '${remoteRef}' WHERE id = '${this.prefix}-merge-slot'`,
+                ]);
+          const labels =
+            remoteRef === undefined
+              ? undefined
+              : await this.runDolt(this.databaseDirectory, [
+                  "sql",
+                  "-r",
+                  "json",
+                  "-q",
+                  `SELECT label FROM labels AS OF '${remoteRef}' WHERE issue_id = '${this.prefix}-merge-slot'`,
+                ]);
+          const slot =
+            show === undefined ||
+            show.code !== 0 ||
+            show.exceeded ||
+            labels === undefined ||
+            labels.code !== 0 ||
+            labels.exceeded
+              ? undefined
+              : parseRemoteSlotDocument(
+                  show.stdout,
+                  labels.stdout,
+                  `${this.prefix}-merge-slot`,
+                  this.scope,
+                );
+          if (slot === undefined)
+            throw new Error("remote slot readback failed");
+          return {
+            kind: "slot",
+            value: this.slotObservation(slot, request.actor),
+          };
+        }
         const action = await this.run([
           "--actor",
           request.actor,
@@ -493,28 +567,16 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
               );
         if (slot === undefined)
           throw new Error("pinned bd slot readback failed");
-        const withoutHash = {
-          // The observation actor is the durable slot holder when held; the
-          // command caller is only a request identity and must not fabricate
-          // a holder/actor agreement for a competing controller.
-          actor: slot.holder ?? request.actor,
-          ...(slot.holder === undefined ? {} : { holder: slot.holder }),
-          label: MERGE_SLOT_LABEL,
-          scope: this.scope,
-          scopeCommitment: deriveScopeCommitment(this.scope),
-          slotId: `${this.prefix}-merge-slot`,
-          status: slot.status,
-          title: MERGE_SLOT_TITLE,
-          version: 1 as const,
-        };
         return {
           kind: "slot",
-          value: {
-            ...withoutHash,
-            readbackHash: deriveSlotReadbackHash(withoutHash),
-          },
+          value: this.slotObservation(slot, request.actor),
         };
       }
+      case "slot_transition":
+        return {
+          kind: "slot_transition",
+          value: await this.proveSlotTransition(request.intent),
+        };
       case "mutation":
         if (!validateMutationBatch(request.batch).ok)
           return { kind: "mutation", value: "quarantined" };
@@ -572,17 +634,252 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
           value: capture.code === 0 ? "applied" : "ambiguous",
         };
       }
-      case "pull":
+      case "pull": {
+        const capture = await this.run(["dolt", request.kind, "--json"]);
+        if (capture === undefined || capture.exceeded)
+          return { kind: "pull", value: "unavailable" };
+        return {
+          kind: "pull",
+          value: capture.code === 0 ? "applied" : "conflict",
+        };
+      }
       case "push": {
         const capture = await this.run(["dolt", request.kind, "--json"]);
         if (capture === undefined || capture.exceeded)
-          return { kind: request.kind, value: "unavailable" };
+          return { kind: "push", value: "unavailable" };
         return {
-          kind: request.kind,
+          kind: "push",
           value: capture.code === 0 ? "applied" : "conflict",
         };
       }
     }
+  }
+
+  private slotObservation(slot: SlotDocument, actor: string) {
+    const withoutHash = {
+      // The observation actor is the durable slot holder when held; the
+      // command caller is only a request identity and must not fabricate a
+      // holder/actor agreement for a competing controller.
+      actor: slot.holder ?? actor,
+      ...(slot.holder === undefined ? {} : { holder: slot.holder }),
+      label: MERGE_SLOT_LABEL,
+      scope: this.scope,
+      scopeCommitment: deriveScopeCommitment(this.scope),
+      slotId: `${this.prefix}-merge-slot`,
+      status: slot.status,
+      title: MERGE_SLOT_TITLE,
+      version: 1 as const,
+    };
+    return {
+      ...withoutHash,
+      readbackHash: deriveSlotReadbackHash(withoutHash),
+    };
+  }
+
+  /**
+   * Validates exactly the two rows a bd 1.1.0 merge-slot action is allowed to
+   * create: its `issues` row and Beads' corresponding immutable `events`
+   * audit record. Any other table, issue, label, or field movement is refused.
+   */
+  private exactSlotDelta(
+    source: string,
+    intent: SlotTransitionIntent,
+  ): boolean {
+    const raw = json(source);
+    const tables = raw?.tables;
+    if (!Array.isArray(tables) || tables.length !== 2) return false;
+    const byName = new Map<string, Record<string, unknown>>();
+    for (const table of tables) {
+      const value = object(table);
+      const name = safeString(value?.name);
+      if (value === undefined || name === undefined || byName.has(name))
+        return false;
+      byName.set(name, value);
+    }
+    const issues = byName.get("issues");
+    const events = byName.get("events");
+    if (issues === undefined || events === undefined) return false;
+    const issueDiffs = issues.data_diff;
+    const eventDiffs = events.data_diff;
+    if (
+      !Array.isArray(issueDiffs) ||
+      issueDiffs.length !== 1 ||
+      !Array.isArray(eventDiffs) ||
+      eventDiffs.length !== 1
+    )
+      return false;
+    const issue = object(issueDiffs[0]);
+    const event = object(eventDiffs[0]);
+    const from = object(issue?.from_row);
+    const to = object(issue?.to_row);
+    const eventFrom = object(event?.from_row);
+    const eventTo = object(event?.to_row);
+    if (
+      from === undefined ||
+      to === undefined ||
+      eventFrom === undefined ||
+      Object.keys(eventFrom).length !== 0 ||
+      eventTo === undefined
+    )
+      return false;
+    const expectedId = `${this.prefix}-merge-slot`;
+    if (from.id !== expectedId || to.id !== expectedId) return false;
+    const before = intent.before.slot;
+    const after = intent.after;
+    const fromMetadata = from.metadata;
+    const toMetadata = to.metadata;
+    if (
+      from.status !==
+        (before.status === "available" ? "open" : "in_progress") ||
+      to.status !== (after.status === "available" ? "open" : "in_progress") ||
+      canonicalJson(fromMetadata as JsonValue) !==
+        canonicalJson(
+          before.holder === undefined ? {} : { holder: before.holder },
+        ) ||
+      canonicalJson(toMetadata as JsonValue) !==
+        canonicalJson(
+          after.holder === undefined ? {} : { holder: after.holder },
+        )
+    )
+      return false;
+    // Fields permitted to change in the actual slot issue are generated
+    // timestamps/commit metadata plus status and holder metadata. In
+    // particular labels, design, external_ref and every other issue field are
+    // frozen by this proof.
+    const mutable = new Set([
+      "commit",
+      "commit_date",
+      "metadata",
+      "started_at",
+      "status",
+      "updated_at",
+    ]);
+    const keys = new Set([...Object.keys(from), ...Object.keys(to)]);
+    for (const key of keys) {
+      if (mutable.has(key)) continue;
+      if (
+        canonicalJson(from[key] as JsonValue) !==
+        canonicalJson(to[key] as JsonValue)
+      )
+        return false;
+    }
+    const nextValue = object(
+      typeof eventTo.new_value === "string"
+        ? (() => {
+            try {
+              return JSON.parse(eventTo.new_value) as unknown;
+            } catch {
+              return undefined;
+            }
+          })()
+        : undefined,
+    );
+    const previousValue = object(
+      typeof eventTo.old_value === "string"
+        ? (() => {
+            try {
+              return JSON.parse(eventTo.old_value) as unknown;
+            } catch {
+              return undefined;
+            }
+          })()
+        : undefined,
+    );
+    // bd 1.1.0 elides `metadata` from an inserted event's old_value when the
+    // prior issue metadata is the empty object, and serializes a non-empty
+    // old_value metadata as an object (new_value is the string encoding). The
+    // omission is safe only for that exact canonical empty value; any present
+    // prior value must bind exactly to the issue diff.
+    const expectedPreviousMetadata = canonicalJson(fromMetadata as JsonValue);
+    const parsedPreviousMetadata =
+      typeof previousValue?.metadata === "string"
+        ? (() => {
+            try {
+              return JSON.parse(previousValue.metadata) as unknown;
+            } catch {
+              return undefined;
+            }
+          })()
+        : object(previousValue?.metadata);
+    const previousMetadataMatches =
+      previousValue?.metadata === undefined
+        ? expectedPreviousMetadata === canonicalJson({})
+        : parsedPreviousMetadata !== undefined &&
+          canonicalJson(parsedPreviousMetadata as JsonValue) ===
+            expectedPreviousMetadata;
+    return (
+      safeString(eventTo.id) !== undefined &&
+      eventTo.issue_id === expectedId &&
+      eventTo.actor === intent.holder &&
+      eventTo.event_type === "status_changed" &&
+      previousValue !== undefined &&
+      previousValue.id === expectedId &&
+      previousValue.status === from.status &&
+      previousMetadataMatches &&
+      nextValue !== undefined &&
+      nextValue.status === to.status &&
+      typeof nextValue.metadata === "string" &&
+      canonicalJson(
+        (() => {
+          try {
+            return JSON.parse(nextValue.metadata) as unknown;
+          } catch {
+            return undefined;
+          }
+        })() as JsonValue,
+      ) === canonicalJson(toMetadata as JsonValue)
+    );
+  }
+
+  private async proveSlotTransition(
+    intent: SlotTransitionIntent,
+  ): Promise<"observed" | "absent" | "ambiguous"> {
+    if (
+      !validateSlotTransitionIntent(
+        intent,
+        this.prefix,
+        this.scope,
+        this.remote === undefined ? "local-only" : "git-sync",
+      )
+    )
+      return "ambiguous";
+    const head = await this.doltHead(this.databaseDirectory);
+    const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+    const show = await this.run([
+      "show",
+      `${this.prefix}-merge-slot`,
+      "--long",
+      "--json",
+    ]);
+    const slot =
+      show === undefined || show.code !== 0 || show.exceeded
+        ? undefined
+        : parseSlotDocument(
+            show.stdout,
+            `${this.prefix}-merge-slot`,
+            this.scope,
+          );
+    if (
+      head === undefined ||
+      workingSet === undefined ||
+      slot === undefined ||
+      canonicalJson(this.slotObservation(slot, intent.holder) as JsonValue) !==
+        canonicalJson(intent.after as JsonValue) ||
+      (workingSet === "pending" && head !== intent.before.head) ||
+      (workingSet === "clean" && head === intent.before.head)
+    )
+      return "absent";
+    const args =
+      workingSet === "pending"
+        ? ["diff", "--data", "-r", "json", intent.before.head]
+        : ["diff", "--data", "-r", "json", intent.before.head, head];
+    const diff = await this.runDolt(this.databaseDirectory, args);
+    return diff !== undefined &&
+      diff.code === 0 &&
+      !diff.exceeded &&
+      this.exactSlotDelta(diff.stdout, intent)
+      ? "observed"
+      : "ambiguous";
   }
 
   private async run(argv: readonly string[]): Promise<Capture | undefined> {

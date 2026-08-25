@@ -2,11 +2,35 @@ import { Type, type Static } from "@sinclair/typebox";
 
 import {
   type ChildProjection,
+  type FencingScope,
   type MergeSlotObservation,
   type MutationBatch,
   type RootProjection,
 } from "../../fencing/index.js";
 import type { DoltObservation } from "../../preflight/index.js";
+
+/**
+ * A controller-journal record for one built-in merge-slot transition.  Unlike
+ * a generic checkpoint, it says exactly which durable row is allowed to move
+ * and which local / remote heads that movement started from.
+ */
+export type SlotTransitionKind = "acquire" | "release";
+
+export type SlotTransitionIntent = Readonly<{
+  after: MergeSlotObservation;
+  before: Readonly<{
+    head: string;
+    remoteHead?: string;
+    slot: MergeSlotObservation;
+  }>;
+  holder: string;
+  /** SHA-256 over every other immutable field in this record. */
+  idempotencyKey: string;
+  kind: SlotTransitionKind;
+  schema: "sce.beads-embedded.slot-transition";
+  scope: FencingScope;
+  version: 1;
+}>;
 
 /**
  * The embedded adapter deliberately exposes semantic operations, not argv or
@@ -25,6 +49,17 @@ export type EmbeddedRequest =
       kind: "slot";
       action: "acquire" | "check" | "release";
       actor: string;
+      /** Fetch and read the configured remote, never a stale tracking ref. */
+      source?: "remote";
+    }>
+  | Readonly<{
+      /**
+       * Proves that the uncommitted or committed local delta is exactly the
+       * controller-journalled built-in merge-slot transition, and nothing
+       * else. It is deliberately a semantic operation: no argv leaks here.
+       */
+      intent: SlotTransitionIntent;
+      kind: "slot_transition";
     }>
   | Readonly<{ kind: "mutation"; batch: MutationBatch }>
   | Readonly<{ kind: "commit" }>
@@ -86,6 +121,10 @@ export type CrashDiscovery = Readonly<{
 export type EmbeddedResponse =
   | Readonly<{ kind: "state"; value: EmbeddedState }>
   | Readonly<{ kind: "slot"; value: MergeSlotObservation }>
+  | Readonly<{
+      kind: "slot_transition";
+      value: "observed" | "absent" | "ambiguous";
+    }>
   | Readonly<{
       kind: "mutation";
       value:
