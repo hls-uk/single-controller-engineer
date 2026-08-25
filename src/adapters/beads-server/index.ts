@@ -2292,11 +2292,56 @@ export class BeadsServerAdapter implements RunStorePort {
       holder: string;
       knownHolder?: string;
       prefix: string;
+      /** Positive available readback for a projected prior holder. */
+      releaseEvidence?: unknown;
       scope: FencingScope;
     }>,
   ): Promise<ServerSlotResult> {
     this.#lastDiscovery = undefined;
     if (!this.#ready) return { status: "quarantined" };
+    // The built-in bd acquire is a mutation. First bind an exact immutable
+    // readback to the pure controller decision so a projected holder cannot
+    // be bypassed merely because the server happens to report availability.
+    let checked: ServerDriverResponse<ServerSlotReadback>;
+    try {
+      checked = await this.#driver.mergeSlotCheck({
+        actor: input.knownHolder ?? input.holder,
+        prefix: input.prefix,
+        scope: input.scope,
+      });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (checked.status !== "ok") {
+      this.#revoke();
+      return { status: mapFailure(checked.status) };
+    }
+    const before = parseSlotReadback(checked.value, input.prefix, input.scope);
+    if (before === undefined) {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+    const decision = decideControllerSlot(
+      input.prefix,
+      input.scope,
+      input.holder,
+      input.knownHolder,
+      before,
+      input.continuationEvidence,
+      input.releaseEvidence,
+    );
+    if (decision.kind === "resume" || decision.kind === "continue")
+      return { status: decision.kind, slot: before };
+    if (decision.kind === "blocked") return { status: "blocked" };
+    if (decision.kind === "quarantined") {
+      this.#revoke();
+      return { status: "quarantined" };
+    }
+
+    // Only an exact `acquire` decision reaches the authoritative bd command.
+    // A concurrent foreign acquire is a normal contention result, never a
+    // reason to retry or discard the exact foreign-holder readback.
     let result: ServerDriverResponse<ServerSlotReadback>;
     try {
       result = await this.#driver.mergeSlotAcquire({
@@ -2312,43 +2357,20 @@ export class BeadsServerAdapter implements RunStorePort {
       this.#revoke();
       return { status: mapFailure(result.status) };
     }
-    const parsed = parseSlotReadback(result.value, input.prefix, input.scope);
-    if (parsed === undefined) {
+    const after = parseSlotReadback(result.value, input.prefix, input.scope);
+    if (after === undefined) {
       this.#revoke();
       return { status: "quarantined" };
     }
-    // `bd merge-slot acquire` returns the post-CAS holder.  There is no
-    // pre-acquire available observation to feed the pure decision helper.
     if (
-      input.knownHolder === undefined &&
-      parsed.status === "acquired" &&
-      parsed.holder === input.holder &&
-      parsed.actor === input.holder
+      after.status === "acquired" &&
+      after.holder === input.holder &&
+      after.actor === input.holder
     )
-      return { status: "acquired", slot: parsed };
-    const decision = decideControllerSlot(
-      input.prefix,
-      input.scope,
-      input.holder,
-      input.knownHolder,
-      parsed,
-      input.continuationEvidence,
-    );
-    if (decision.kind === "acquire") {
-      // An acquire response must positively prove the server set this holder.
-      if (
-        parsed.status !== "acquired" ||
-        parsed.holder !== input.holder ||
-        parsed.actor !== input.holder
-      ) {
-        this.#revoke();
-        return { status: "quarantined" };
-      }
-      return { status: "acquired", slot: parsed };
-    }
-    if (decision.kind === "resume" || decision.kind === "continue")
-      return { status: decision.kind, slot: parsed };
-    return { status: decision.kind };
+      return { status: "acquired", slot: after };
+    if (after.status === "acquired") return { status: "blocked" };
+    this.#revoke();
+    return { status: "quarantined" };
   }
 
   async check(

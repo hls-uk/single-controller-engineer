@@ -129,13 +129,14 @@ function slot(
   status: "available" | "acquired",
   slotHolder: string | undefined,
   actor: string,
+  slotScope: FencingScope = scope,
 ): MergeSlotObservation {
   const withoutHash = {
     actor,
     ...(slotHolder === undefined ? {} : { holder: slotHolder }),
     label: "gt:slot" as const,
-    scope,
-    scopeCommitment: deriveScopeCommitment(scope),
+    scope: slotScope,
+    scopeCommitment: deriveScopeCommitment(slotScope),
     slotId: "sce-merge-slot",
     status,
     title: "Merge Slot" as const,
@@ -1213,6 +1214,12 @@ class FakeServer implements BeadsServerDriver {
   mutationCalls = 0;
   readOnly = true;
   slotAcquireCalls = 0;
+  slotCheckCalls = 0;
+  slotTransitions = 0;
+  lastSlotCheckActor: string | undefined;
+  afterSlotCheck: (() => void) | undefined;
+  slotAcquireMode: "malformed" | "ok" | "throw" | "unavailable" = "ok";
+  slotCheckMode: "malformed" | "ok" | "throw" | "unavailable" = "ok";
   outage: "none" | "before" | "after" = "none";
   commitOverride: "auto" | "explicit" | undefined;
   discoveryCalls = 0;
@@ -1257,14 +1264,21 @@ class FakeServer implements BeadsServerDriver {
     scope: FencingScope;
   }) {
     this.slotAcquireCalls += 1;
+    if (this.slotAcquireMode === "throw") throw new Error("acquire failed");
+    if (this.slotAcquireMode === "unavailable")
+      return { status: "unavailable" as const };
+    if (this.slotAcquireMode === "malformed")
+      return { status: "ok" as const, value: {} as never };
     if (this.slot === undefined) return { status: "refused" as const };
     if (
       input.prefix !== "sce" ||
       deriveScopeCommitment(input.scope) !== this.slot.scopeCommitment
     )
       return { status: "refused" as const };
-    if (this.slot.status === "available")
+    if (this.slot.status === "available") {
       this.slot = slot("acquired", input.actor, input.actor);
+      this.slotTransitions += 1;
+    }
     return {
       status: "ok" as const,
       value: {
@@ -1274,17 +1288,35 @@ class FakeServer implements BeadsServerDriver {
     };
   }
 
-  async mergeSlotCheck(input: { prefix: string; scope: FencingScope }) {
+  async mergeSlotCheck(input: {
+    actor?: string;
+    prefix: string;
+    scope: FencingScope;
+  }) {
+    this.slotCheckCalls += 1;
+    this.lastSlotCheckActor = input.actor;
+    if (this.slotCheckMode === "throw") throw new Error("check failed");
+    if (this.slotCheckMode === "unavailable")
+      return { status: "unavailable" as const };
+    if (this.slotCheckMode === "malformed")
+      return { status: "ok" as const, value: {} as never };
     if (
       this.slot === undefined ||
       input.prefix !== "sce" ||
       deriveScopeCommitment(input.scope) !== this.slot.scopeCommitment
     )
       return { status: "refused" as const };
+    const observation =
+      this.slot.status === "available"
+        ? slot("available", undefined, input.actor ?? "slot-observer/0")
+        : this.slot;
+    const afterSlotCheck = this.afterSlotCheck;
+    this.afterSlotCheck = undefined;
+    afterSlotCheck?.();
     return {
       status: "ok" as const,
       value: {
-        observation: this.slot,
+        observation,
         scopeReference: slotScopeReference(input.scope),
       },
     };
@@ -3659,6 +3691,218 @@ test("authoritative slot CAS has no lazy creation, validates scope, and rejects 
   assert.deepEqual(await first.acquire({ holder, prefix: "sce", scope }), {
     status: "quarantined",
   });
+});
+
+test("acquire decides from an authoritative check before invoking bd", async () => {
+  const foreignHolder = "run-2/incarnation-1";
+  const previousHolder = "run-1/incarnation-0";
+  const ready = async (server: FakeServer) => {
+    const adapter = new BeadsServerAdapter({
+      driver: server,
+      identity: identity(),
+      process: fakeManagedProcess,
+    });
+    assert.equal((await adapter.preflight()).status, "ready");
+    return adapter;
+  };
+  const input = {
+    holder,
+    prefix: "sce",
+    scope,
+  };
+
+  {
+    const server = new FakeServer(identity());
+    const adapter = await ready(server);
+    assert.deepEqual(await adapter.acquire(input), {
+      status: "acquired",
+      slot: slot("acquired", holder, holder),
+    });
+    assert.deepEqual(
+      {
+        attempts: server.slotAcquireCalls,
+        checkActor: server.lastSlotCheckActor,
+        checks: server.slotCheckCalls,
+        transitions: server.slotTransitions,
+      },
+      { attempts: 1, checkActor: holder, checks: 1, transitions: 1 },
+    );
+  }
+
+  for (const knownHolder of [holder, foreignHolder]) {
+    const server = new FakeServer(identity());
+    const adapter = await ready(server);
+    assert.deepEqual(await adapter.acquire({ ...input, knownHolder }), {
+      status: "blocked",
+    });
+    assert.deepEqual(
+      {
+        attempts: server.slotAcquireCalls,
+        checkActor: server.lastSlotCheckActor,
+        checks: server.slotCheckCalls,
+        transitions: server.slotTransitions,
+      },
+      { attempts: 0, checkActor: knownHolder, checks: 1, transitions: 0 },
+    );
+  }
+
+  for (const knownHolder of [holder, foreignHolder]) {
+    const server = new FakeServer(identity());
+    const adapter = await ready(server);
+    assert.deepEqual(
+      await adapter.acquire({
+        ...input,
+        knownHolder,
+        releaseEvidence: {
+          holder: knownHolder,
+          readback: slot("available", undefined, knownHolder),
+        },
+      }),
+      { status: "acquired", slot: slot("acquired", holder, holder) },
+    );
+    assert.deepEqual(
+      {
+        attempts: server.slotAcquireCalls,
+        checkActor: server.lastSlotCheckActor,
+        checks: server.slotCheckCalls,
+        transitions: server.slotTransitions,
+      },
+      { attempts: 1, checkActor: knownHolder, checks: 1, transitions: 1 },
+    );
+  }
+
+  for (const releaseEvidence of [
+    {
+      holder: holder,
+      readback: slot("available", undefined, holder),
+    },
+    {
+      holder: foreignHolder,
+      readback: slot("available", undefined, foreignHolder, {
+        ...scope,
+        integrationBranch: "other",
+      }),
+    },
+  ]) {
+    const server = new FakeServer(identity());
+    const adapter = await ready(server);
+    assert.deepEqual(
+      await adapter.acquire({
+        ...input,
+        knownHolder: foreignHolder,
+        releaseEvidence,
+      }),
+      { status: "blocked" },
+    );
+    assert.equal(server.slotCheckCalls, 1);
+    assert.equal(server.slotAcquireCalls, 0);
+    assert.equal(server.slotTransitions, 0);
+  }
+
+  {
+    const server = new FakeServer(identity(), slot("acquired", holder, holder));
+    const adapter = await ready(server);
+    assert.deepEqual(await adapter.acquire({ ...input, knownHolder: holder }), {
+      status: "resume",
+      slot: slot("acquired", holder, holder),
+    });
+    assert.equal(server.slotCheckCalls, 1);
+    assert.equal(server.slotAcquireCalls, 0);
+    assert.equal(server.slotTransitions, 0);
+  }
+
+  {
+    const server = new FakeServer(identity(), slot("acquired", holder, holder));
+    const adapter = await ready(server);
+    assert.deepEqual(
+      await adapter.acquire({
+        ...input,
+        continuationEvidence: {
+          after: slot("acquired", holder, holder),
+          before: slot("acquired", previousHolder, previousHolder),
+          nextHolder: holder,
+          previousHolder,
+        },
+        knownHolder: previousHolder,
+      }),
+      { status: "continue", slot: slot("acquired", holder, holder) },
+    );
+    assert.equal(server.slotCheckCalls, 1);
+    assert.equal(server.slotAcquireCalls, 0);
+    assert.equal(server.slotTransitions, 0);
+  }
+
+  {
+    const server = new FakeServer(
+      identity(),
+      slot("acquired", foreignHolder, foreignHolder),
+    );
+    const adapter = await ready(server);
+    assert.deepEqual(
+      await adapter.acquire({ ...input, knownHolder: foreignHolder }),
+      { status: "blocked" },
+    );
+    assert.equal(server.slotCheckCalls, 1);
+    assert.equal(server.slotAcquireCalls, 0);
+    assert.equal(server.slotTransitions, 0);
+  }
+
+  {
+    const server = new FakeServer(identity());
+    server.afterSlotCheck = () => {
+      server.slot = slot("acquired", foreignHolder, foreignHolder);
+    };
+    const adapter = await ready(server);
+    assert.deepEqual(await adapter.acquire(input), { status: "blocked" });
+    assert.deepEqual(
+      {
+        attempts: server.slotAcquireCalls,
+        checks: server.slotCheckCalls,
+        transitions: server.slotTransitions,
+      },
+      { attempts: 1, checks: 1, transitions: 0 },
+    );
+    assert.deepEqual(
+      server.slot,
+      slot("acquired", foreignHolder, foreignHolder),
+    );
+  }
+
+  for (const failure of [
+    { expected: "ambiguous", stage: "check", mode: "throw" },
+    { expected: "unavailable", stage: "check", mode: "unavailable" },
+    { expected: "quarantined", stage: "check", mode: "malformed" },
+    { expected: "quarantined", stage: "check", mode: "refused" },
+    { expected: "ambiguous", stage: "acquire", mode: "throw" },
+    { expected: "unavailable", stage: "acquire", mode: "unavailable" },
+    { expected: "quarantined", stage: "acquire", mode: "malformed" },
+    { expected: "quarantined", stage: "acquire", mode: "refused" },
+  ] as const) {
+    const server = new FakeServer(identity());
+    if (failure.stage === "check") {
+      if (failure.mode === "refused") server.slot = undefined;
+      else server.slotCheckMode = failure.mode;
+    } else if (failure.mode === "refused") {
+      server.afterSlotCheck = () => {
+        server.slot = undefined;
+      };
+    } else {
+      server.slotAcquireMode = failure.mode;
+    }
+    const adapter = await ready(server);
+    assert.deepEqual(await adapter.acquire(input), {
+      status: failure.expected,
+    });
+    const calls = {
+      attempts: server.slotAcquireCalls,
+      checks: server.slotCheckCalls,
+    };
+    assert.deepEqual(await adapter.acquire(input), { status: "quarantined" });
+    assert.deepEqual(
+      { attempts: server.slotAcquireCalls, checks: server.slotCheckCalls },
+      calls,
+    );
+  }
 });
 
 test("readiness disarms every mutation until the exact preflight succeeds", async () => {
