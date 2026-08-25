@@ -15008,7 +15008,7 @@ async function integrateRemoteFastForward(runner, repository, input) {
   return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
 }
 async function discoverRemoteIntegration(runner, repository, input) {
-  if (!REMOTE.test(input.remote) || !safeRef(input.integrationBranch) || !exactOid(repository.objectFormat, input.candidate))
+  if (!REMOTE.test(input.remote) || !safeRef(input.integrationBranch) || !exactOid(repository.objectFormat, input.base) || !exactOid(repository.objectFormat, input.candidate) || input.base === input.candidate)
     return effect("refused", "GIT_BAD_INPUT");
   const verified = await verifyRepository(runner, repository);
   if (verified.state !== "observed") return verified;
@@ -15027,8 +15027,9 @@ async function discoverRemoteIntegration(runner, repository, input) {
   if (observed2.state === "unreadable")
     return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
   if (observed2.state === "missing")
-    return effect("refused", "GIT_REMOTE_MISSING");
-  return observed2.oid === input.candidate ? effect("observed", "GIT_OK") : effect("refused", "GIT_MOVED_BASE");
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  if (observed2.oid === input.candidate) return effect("observed", "GIT_OK");
+  return observed2.oid === input.base ? effect("refused", "GIT_ABSENT") : effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
 }
 var nodeGitRunner = async ({ argv, cwd }) => {
   if (!safeAbsolutePath(cwd) || !allowedGitArgv(argv))
@@ -16452,6 +16453,7 @@ function createProductionRecoveryEffectAdapter(options) {
           return discovered(
             done,
             await discoverRemoteIntegration(git.runner, git.repository, {
+              base: effect2.params.candidate.baseOid,
               candidate: effect2.params.candidate.headOid,
               integrationBranch: effect2.params.integrationBranch,
               remote: configuredRemote

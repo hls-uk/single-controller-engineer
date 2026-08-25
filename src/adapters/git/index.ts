@@ -1155,6 +1155,7 @@ export async function discoverRemoteIntegration(
   runner: GitRunner,
   repository: GitRepository,
   input: Readonly<{
+    base: string;
     candidate: string;
     integrationBranch: string;
     remote: string;
@@ -1163,7 +1164,9 @@ export async function discoverRemoteIntegration(
   if (
     !REMOTE.test(input.remote) ||
     !safeRef(input.integrationBranch) ||
-    !exactOid(repository.objectFormat, input.candidate)
+    !exactOid(repository.objectFormat, input.base) ||
+    !exactOid(repository.objectFormat, input.candidate) ||
+    input.base === input.candidate
   )
     return effect("refused", "GIT_BAD_INPUT");
   const verified = await verifyRepository(runner, repository);
@@ -1183,10 +1186,13 @@ export async function discoverRemoteIntegration(
   if (observed.state === "unreadable")
     return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
   if (observed.state === "missing")
-    return effect("refused", "GIT_REMOTE_MISSING");
-  return observed.oid === input.candidate
-    ? effect("observed", "GIT_OK")
-    : effect("refused", "GIT_MOVED_BASE");
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  if (observed.oid === input.candidate) return effect("observed", "GIT_OK");
+  // Only the exact durable remote base can authorize one guarded non-force
+  // update. A missing or third-party remote tip has no positive precondition.
+  return observed.oid === input.base
+    ? effect("refused", "GIT_ABSENT")
+    : effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
 }
 
 /** Production runner for the adapter; tests normally inject a deterministic seam. */

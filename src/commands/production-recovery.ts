@@ -351,6 +351,7 @@ export function createProductionRecoveryEffectAdapter(
           return discovered(
             done,
             await discoverRemoteIntegration(git.runner, git.repository, {
+              base: effect.params.candidate.baseOid,
               candidate: effect.params.candidate.headOid,
               integrationBranch: effect.params.integrationBranch,
               remote: configuredRemote,

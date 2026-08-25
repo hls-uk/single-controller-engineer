@@ -36,6 +36,7 @@ const repository: GitRepository = {
   objectFormat: "sha1",
   remoteUrls: [],
 };
+const remoteRepositoryIdentity = "provider:fixture";
 
 function localRun(): RepositoryRun {
   return { ...run(), repositoryIdentity: repository.identity };
@@ -71,11 +72,30 @@ function localIntegrationEffect(): ProtocolEffect {
   } as ProtocolEffect;
 }
 
-function localIntegrationIntentRun(): RepositoryRun {
+function remoteIntegrationEffect(): ProtocolEffect {
+  return {
+    ...localIntegrationEffect(),
+    params: {
+      ...localIntegrationEffect().params,
+      completionBoundary: "remote-integration",
+      integrationProfile: "remote-ff",
+    },
+  } as ProtocolEffect;
+}
+
+function integrationIntentRun(
+  integrationProfile: "local-ff" | "remote-ff",
+): RepositoryRun {
   let state: RepositoryRun = {
     ...localRun(),
-    completionBoundary: "local-integration",
-    integrationProfile: "local-ff",
+    completionBoundary:
+      integrationProfile === "local-ff"
+        ? "local-integration"
+        : "remote-integration",
+    integrationProfile,
+    ...(integrationProfile === "remote-ff"
+      ? { repositoryIdentity: remoteRepositoryIdentity }
+      : {}),
   };
   const observe = (
     type: Parameters<typeof event>[1],
@@ -165,6 +185,12 @@ function localIntegrationIntentRun(): RepositoryRun {
       requestedModel: "frontier",
     },
   });
+  if (integrationProfile === "remote-ff") {
+    state = transition(state, event(state, "publish_intent"), reduce);
+    observe("publish_observed", "publish", {
+      publication: { kind: "push_branch", remoteHeadOid: OID_B },
+    });
+  }
   return transition(state, event(state, "integrate_intent"), reduce);
 }
 
@@ -447,7 +473,7 @@ test("local integration treats only the durable base as positive pre-act absence
 });
 
 test("production recovery resumes a persisted local integration intent once after pre-act crash", async () => {
-  let state = localIntegrationIntentRun();
+  let state = integrationIntentRun("local-ff");
   assert.deepEqual(runInvariantErrors(state), []);
   let root = makeRootProjection(state);
   let children = [makeChildProjection(root, "unit-1")!];
@@ -521,6 +547,99 @@ test("production recovery resumes a persisted local integration intent once afte
   assert.equal((await resumed()).status, "idle");
   assert.equal(merges, 1);
   assert.equal(root.run.effectJournal.at(-1)?.status, "observed");
+});
+
+test("production recovery resumes a persisted remote integration intent with one guarded push", async () => {
+  let state = integrationIntentRun("remote-ff");
+  assert.deepEqual(runInvariantErrors(state), []);
+  let root = makeRootProjection(state);
+  let children = [makeChildProjection(root, "unit-1")!];
+  let remoteHead = OID_A;
+  let pushes = 0;
+  const calls: string[] = [];
+  const remoteRepository: GitRepository = {
+    ...repository,
+    identity: remoteRepositoryIdentity,
+    remoteUrls: ["https://example.invalid/repo.git"],
+  };
+  const store = {
+    async compareAndSet(batch: MutationBatch) {
+      root = batch.next.root;
+      children = [...batch.next.children];
+      return {
+        affectedRowCount: batch.changedRows.length + 1,
+        checkpoint: batch.checkpoint,
+        children,
+        root,
+        status: "applied" as const,
+      };
+    },
+    async load() {
+      return { status: "observed" as const, value: { children, root } };
+    },
+    async persistControllerAcquireIntent(batch: MutationBatch) {
+      return this.compareAndSet(batch);
+    },
+  };
+  const gitRunner: GitRunner = async ({ argv }) => {
+    calls.push(argv.join(" "));
+    if (argv[0] === "rev-parse")
+      return argv[1] === "--git-common-dir"
+        ? { exitCode: 0, signal: null, stdout: ".git\n" }
+        : { exitCode: 0, signal: null, stdout: "sha1\n" };
+    if (argv[0] === "config")
+      return {
+        exitCode: 0,
+        signal: null,
+        stdout: "remote.origin.url\nhttps://example.invalid/repo.git\u0000",
+      };
+    if (argv[0] === "remote")
+      return {
+        exitCode: 0,
+        signal: null,
+        stdout: "https://example.invalid/repo.git\n",
+      };
+    if (argv[0] === "ls-remote")
+      return {
+        exitCode: 0,
+        signal: null,
+        stdout: `${remoteHead}\trefs/heads/main\n`,
+      };
+    if (argv[0] === "-c") {
+      pushes += 1;
+      remoteHead = OID_B;
+      return { exitCode: 0, signal: null, stdout: "" };
+    }
+    return { exitCode: 1, signal: null, stdout: "" };
+  };
+  const recovery = createProductionRecoveryRunner({
+    acquireOperationLock: async () => ({
+      status: "acquired" as const,
+      lock: {
+        async release() {
+          return { status: "released" as const };
+        },
+      },
+    }),
+    git: { remote: "origin", repository: remoteRepository, runner: gitRunner },
+    nonce: "nonce-remote-integrate-crash",
+    preOwnership: store,
+    proveTopology: async () => ({
+      commonDir: remoteRepository.commonDir,
+      holder: state.controller.holder,
+      scope: {
+        beadsStoreIdentity: state.storeIdentity,
+        gitRepositoryIdentity: remoteRepository.identity,
+        integrationBranch: state.integrationBranch,
+      },
+    }),
+    store,
+  });
+  assert.equal((await recovery()).status, "idle", calls.join("\n"));
+  assert.equal(pushes, 1);
+  assert.equal(root.run.effectJournal.at(-1)?.status, "observed");
+  assert.equal((await recovery()).status, "idle");
+  assert.equal(pushes, 1);
 });
 
 test("composition rejects an exact common-dir/scope/run mismatch before lock or store access", async () => {

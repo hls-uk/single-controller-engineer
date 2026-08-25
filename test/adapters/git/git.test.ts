@@ -647,7 +647,29 @@ test("real guarded remote ff accepts only the exact advertised base", async (t) 
   const candidate = (await git(fixture.cwd, "rev-parse", "HEAD")).trim();
   assert.equal(
     (
+      await discoverRemoteIntegration(nodeGitRunner, repo, {
+        base: fixture.base,
+        candidate,
+        integrationBranch: "main",
+        remote: "origin",
+      })
+    ).code,
+    "GIT_ABSENT",
+  );
+  assert.equal(
+    (
       await integrateRemoteFastForward(nodeGitRunner, repo, {
+        base: fixture.base,
+        candidate,
+        integrationBranch: "main",
+        remote: "origin",
+      })
+    ).state,
+    "observed",
+  );
+  assert.equal(
+    (
+      await discoverRemoteIntegration(nodeGitRunner, repo, {
         base: fixture.base,
         candidate,
         integrationBranch: "main",
@@ -665,6 +687,7 @@ test("real guarded remote ff accepts only the exact advertised base", async (t) 
 });
 
 test("remote discovery positively observes an already-landed candidate without pushing", async () => {
+  const base = sha1("1");
   const candidate = sha1("2");
   const calls: string[][] = [];
   const runner: GitRunner = async ({ argv }) => {
@@ -679,6 +702,7 @@ test("remote discovery positively observes an already-landed candidate without p
   assert.equal(
     (
       await discoverRemoteIntegration(runner, repository(), {
+        base,
         candidate,
         integrationBranch: "main",
         remote: "origin",
@@ -690,6 +714,47 @@ test("remote discovery positively observes an already-landed candidate without p
     calls.some((argv) => argv.includes("push")),
     false,
   );
+  const preAct = scripted(
+    ...identityResults(),
+    ok("https://example.invalid/repo.git\n"),
+    ok(`${base}\trefs/heads/main\n`),
+  );
+  assert.equal(
+    (
+      await discoverRemoteIntegration(preAct, repository(), {
+        base,
+        candidate,
+        integrationBranch: "main",
+        remote: "origin",
+      })
+    ).code,
+    "GIT_ABSENT",
+  );
+  assert.equal(
+    (
+      await discoverRemoteIntegration(
+        scripted(
+          ...identityResults(),
+          ok("https://example.invalid/repo.git\n"),
+          ok(`${sha1("3")}\trefs/heads/main\n`),
+        ),
+        repository(),
+        { base, candidate, integrationBranch: "main", remote: "origin" },
+      )
+    ).state,
+    "ambiguous",
+  );
+  assert.equal(
+    (
+      await discoverRemoteIntegration(runner, repository(), {
+        base: candidate,
+        candidate,
+        integrationBranch: "main",
+        remote: "origin",
+      })
+    ).code,
+    "GIT_BAD_INPUT",
+  );
   const missing = scripted(
     ...identityResults(),
     ok("https://example.invalid/repo.git\n"),
@@ -698,12 +763,28 @@ test("remote discovery positively observes an already-landed candidate without p
   assert.equal(
     (
       await discoverRemoteIntegration(missing, repository(), {
+        base,
         candidate,
         integrationBranch: "main",
         remote: "origin",
       })
+    ).state,
+    "ambiguous",
+  );
+  assert.equal(
+    (
+      await discoverRemoteIntegration(
+        scripted(
+          ...identityResults(),
+          ok(
+            "https://example.invalid/repo.git\nhttps://mirror.invalid/repo.git\n",
+          ),
+        ),
+        repository(),
+        { base, candidate, integrationBranch: "main", remote: "origin" },
+      )
     ).code,
-    "GIT_REMOTE_MISSING",
+    "GIT_REMOTE_AMBIGUOUS",
   );
 });
 
