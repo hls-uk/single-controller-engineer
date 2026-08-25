@@ -2,6 +2,11 @@
 
 This file provides instructions and context for AI coding agents working on this project.
 
+## Project Delivery Policy
+
+Use the accelerated-beta policy in
+[`wiki/designs/2026-08-25-accelerated-beta-engineering.md`](wiki/designs/2026-08-25-accelerated-beta-engineering.md): prefer deterministic typed checks over inference, keep the fast suite lean, run affected integration tests when their seam changes, and reserve the full release tier for the next tag. One controller owns Beads and serialized integration; it may use at most three disjoint workhorse lanes, with fresh frontier review of frozen candidates. P0/P1 findings block promised core paths; record P2/P3 follow-up. External publication and issue mutation require separate current authority.
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
 ## Beads Issue Tracker
 

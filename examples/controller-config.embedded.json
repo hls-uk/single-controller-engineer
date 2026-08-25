@@ -16,25 +16,64 @@
     "gitRepositoryIdentity": "local:/opt/sce/example/.git",
     "integrationBranch": "main"
   },
+  "harnessSupport": {
+    "schema": "sce.harness-support",
+    "version": 1,
+    "capabilities": {
+      "schema": "sce.harness-capabilities",
+      "version": 1,
+      "adapterVersion": 1,
+      "family": "codex",
+      "harnessVersion": 1,
+      "operations": {
+        "cancel": true,
+        "collect": true,
+        "controllerIdentity": true,
+        "inspect": true,
+        "launch": true,
+        "lookupByClientKey": true,
+        "poll": true,
+        "returnedModelIdentity": true
+      }
+    },
+    "controller": {
+      "requestedModel": "gpt-5.6-sol",
+      "acceptedReturnedModels": ["gpt-5.6-sol"]
+    },
+    "frontier": {
+      "requestedModel": "gpt-5.6-sol",
+      "acceptedReturnedModels": ["gpt-5.6-sol"]
+    },
+    "workhorse": {
+      "requestedModel": "gpt-5.6-terra",
+      "acceptedReturnedModels": ["gpt-5.6-terra"]
+    }
+  },
   "initialRun": {
     "revision": 0,
     "state": "active",
     "storeIdentity": "example-store",
     "repositoryIdentity": "local:/opt/sce/example/.git",
     "integrationBranch": "main",
-    "authorityProfile": "integrate",
-    "completionBoundary": "remote-integration",
-    "integrationProfile": "remote-ff",
+    "authorityProfile": "local-change-only",
+    "completionBoundary": "local-integration",
+    "integrationProfile": "local-ff",
     "gitObjectFormat": "sha1",
     "controllerFencingToken": "example-fence",
     "controller": {
       "runId": "example-run",
       "incarnationId": "example-incarnation",
       "holder": "example-run/example-incarnation",
-      "requestedModel": "frontier",
-      "returnedModel": "frontier-example",
+      "requestedModel": "gpt-5.6-sol",
+      "returnedModel": "gpt-5.6-sol",
       "promptHash": "0000000000000000000000000000000000000000000000000000000000000000",
       "state": "acquired"
+    },
+    "harness": {
+      "adapterVersion": 1,
+      "family": "codex",
+      "harnessVersion": 1,
+      "supportCommitment": "fc13cca8c309f3f3bf1e9535f8a50add3b8e27746fc256d1ecf6946a03b8da34"
     },
     "units": {},
     "reservations": {},

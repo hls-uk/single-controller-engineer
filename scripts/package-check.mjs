@@ -95,6 +95,92 @@ try {
     installedResponse.result?.version !== packageJson.version
   )
     throw new Error("offline-installed CLI reported an unexpected version");
+  const harnessRequest = {
+    acceptance: ["npm test"],
+    baseOid: "a".repeat(40),
+    mandatoryVerification: ["npm test"],
+    ownedPaths: ["src/index.ts"],
+    role: "worker",
+    unitId: "package-smoke",
+  };
+  const installedCli = join(fixture, "node_modules/.bin/sce");
+  const { stdout: harnessOutput } = await run(
+    installedCli,
+    ["harness-packet", "--request", JSON.stringify(harnessRequest)],
+    { cwd: fixture },
+  );
+  if (JSON.parse(harnessOutput).ok !== true)
+    throw new Error("offline-installed CLI could not create a harness packet");
+  const telemetry = {
+    capabilityId: "feedback.submit",
+    component: "runtime",
+    kind: "bug",
+    protocolState: "failed",
+    requestedModelTier: "workhorse",
+    stableErrorCode: "SCE_PACKAGE_SMOKE",
+    toolVersion: packageJson.version,
+    toolchain: "node-22",
+  };
+  const { stdout: preparedOutput } = await run(
+    installedCli,
+    ["feedback", "prepare", "--request", JSON.stringify({ telemetry })],
+    { cwd: fixture },
+  );
+  const prepared = JSON.parse(preparedOutput);
+  if (prepared.ok !== true || prepared.result?.packet === undefined)
+    throw new Error("offline-installed CLI could not prepare feedback");
+  const { stdout: previewOutput } = await run(
+    installedCli,
+    [
+      "feedback",
+      "preview",
+      "--request",
+      JSON.stringify({ packet: prepared.result.packet }),
+    ],
+    { cwd: fixture },
+  );
+  if (JSON.parse(previewOutput).ok !== true)
+    throw new Error("offline-installed CLI could not preview feedback");
+  const skillDestination = join(fixture, "host-skills");
+  const { stdout: dryRunOutput } = await run(
+    installedCli,
+    [
+      "install-skill",
+      "--host",
+      "codex",
+      "--destination",
+      skillDestination,
+      "--dry-run",
+    ],
+    { cwd: fixture },
+  );
+  const dryRun = JSON.parse(dryRunOutput);
+  if (dryRun.ok !== true || dryRun.result?.status !== "dry-run")
+    throw new Error(
+      "offline-installed CLI could not dry-run skill installation",
+    );
+  const { stdout: installedSkillOutput } = await run(
+    installedCli,
+    ["install-skill", "--host", "claude", "--destination", skillDestination],
+    { cwd: fixture },
+  );
+  const installedSkills = JSON.parse(installedSkillOutput);
+  const recordedManifest = JSON.parse(
+    await readFile(join(skillDestination, ".sce-skill-install.json"), "utf8"),
+  );
+  if (
+    installedSkills.ok !== true ||
+    installedSkills.result?.status !== "installed" ||
+    JSON.stringify(installedSkills.result.manifest) !==
+      JSON.stringify(recordedManifest) ||
+    JSON.stringify(dryRun.result.manifest) !==
+      JSON.stringify(recordedManifest) ||
+    recordedManifest.skills?.["single-controller-engineer"] !==
+      packageJson.version ||
+    recordedManifest.skills?.["single-controller-feedback"] !==
+      packageJson.version
+  )
+    throw new Error("offline-installed skill pair disagrees with its manifest");
   console.log(
     JSON.stringify(
       {

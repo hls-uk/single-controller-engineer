@@ -16,6 +16,11 @@ test("embedded example is accepted by the actual strict controller config parser
         "utf8",
       ),
     );
+    assert.equal(example.topology.mode, "local-only");
+    assert.equal(example.git.remote, undefined);
+    assert.equal(example.initialRun.authorityProfile, "local-change-only");
+    assert.equal(example.initialRun.completionBoundary, "local-integration");
+    assert.equal(example.initialRun.integrationProfile, "local-ff");
     const cwd = process.cwd();
     const commonDir = join(cwd, ".git");
     const identity = `local:${commonDir}`;

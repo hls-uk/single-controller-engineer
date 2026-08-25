@@ -59,6 +59,15 @@ export type OutboxResult<T = undefined> =
       status: "unavailable" | "busy" | "quota" | "not_found" | "invalid";
     }>;
 
+type SubmitIntentRecovery =
+  | Readonly<{ status: "absent"; value: OutboxEnvelope }>
+  | Readonly<{ status: "existing"; value: OutboxEnvelope }>
+  | Readonly<{
+      status: "ambiguous";
+      code: "GITHUB_UNAVAILABLE" | "GITHUB_REJECTED";
+    }>
+  | Exclude<OutboxResult<OutboxEnvelope>, Readonly<{ status: "ok" }>>;
+
 type SubmissionLockAcquire =
   | Readonly<{
       status: "ok";
@@ -230,18 +239,29 @@ export class FeedbackOutbox {
   async recoverSubmitIntent(
     fingerprint: string,
     transport: FeedbackGitHubTransport,
-  ): Promise<OutboxResult<OutboxEnvelope>> {
+  ): Promise<SubmitIntentRecovery> {
     const loaded = this.read(fingerprint);
-    if (loaded.status !== "ok" || loaded.value.status !== "submit_intent")
-      return loaded;
+    if (loaded.status !== "ok") return loaded;
+    if (loaded.value.status !== "submit_intent") return { status: "invalid" };
     try {
       const existing = await discoverExisting(loaded.value.packet, transport);
-      if (existing.status === "existing")
-        return this.markSubmitted(fingerprint, existing.issue);
-      // Absence and malformed/unavailable discovery preserve a non-idempotent intent.
-      return { status: "ok", value: loaded.value };
+      if (existing.status === "existing") {
+        const persisted = this.markSubmitted(fingerprint, existing.issue);
+        return persisted.status === "ok"
+          ? { status: "existing", value: persisted.value }
+          : persisted;
+      }
+      if (existing.status === "absent")
+        return { status: "absent", value: loaded.value };
+      return {
+        status: "ambiguous",
+        code:
+          existing.status === "invalid"
+            ? "GITHUB_REJECTED"
+            : "GITHUB_UNAVAILABLE",
+      };
     } catch {
-      return { status: "ok", value: loaded.value };
+      return { status: "ambiguous", code: "GITHUB_UNAVAILABLE" };
     }
   }
 
@@ -271,8 +291,8 @@ export class FeedbackOutbox {
           fingerprint,
           transport,
         );
-        if (recovered.status !== "ok") return recovered;
-        if (recovered.value.status === "submitted")
+        if (recovered.status === "ambiguous") return recovered;
+        if (recovered.status === "existing")
           return {
             status: "existing",
             issue: {
@@ -283,6 +303,7 @@ export class FeedbackOutbox {
               open: true,
             },
           };
+        if (recovered.status !== "absent") return recovered;
         if (
           authority === undefined ||
           recovered.value.operationNonce === authority.operationNonce

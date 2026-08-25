@@ -325,7 +325,7 @@ export function validateFeedbackPacket(
       value.narrative as ReviewedNarrativeInput | undefined,
     );
     return candidate !== undefined &&
-      JSON.stringify(candidate) === JSON.stringify(value)
+      canonicalJson(candidate as never) === canonicalJson(value as never)
       ? candidate
       : undefined;
   } catch {

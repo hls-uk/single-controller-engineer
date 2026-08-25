@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile, stat } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
@@ -11,7 +12,18 @@ import {
   MAX_CLI_RESPONSE_BYTES,
   validateCommandRequest,
 } from "../../src/commands/index.js";
-import { canonicalJson, parseCliArguments, runCli } from "../../src/cli.js";
+import {
+  canonicalJson,
+  parseCliArguments,
+  resolvePackagedSkillSource,
+  runCli,
+} from "../../src/cli.js";
+import {
+  authorityFor,
+  FeedbackOutbox,
+  prepareFeedback,
+  type FeedbackGitHubTransport,
+} from "../../src/feedback/index.js";
 import { legalActions } from "../../src/protocol/actions.js";
 import { reduce } from "../../src/protocol/reducer.js";
 import { createPacket } from "../../src/harness/index.js";
@@ -19,7 +31,10 @@ import { createPacket } from "../../src/harness/index.js";
 import { HASH, event, run, transition, unit } from "../protocol/fixtures.js";
 test("mutating and external commands report stable unavailability", async () => {
   for (const command of commandNames.filter(
-    (item) => !["inspect", "status", "next", "harness-packet"].includes(item),
+    (item) =>
+      !["inspect", "status", "next", "harness-packet", "feedback"].includes(
+        item,
+      ),
   )) {
     const argv = command === "feedback" ? [command, "prepare"] : [command];
     const execution = await runCli(argv);
@@ -43,7 +58,7 @@ test("global help and version are JSON envelopes", async () => {
   assert.deepEqual(JSON.parse(help.stdout), {
     ok: true,
     result: {
-      commands: [...commandNames],
+      commands: [...commandNames, "install-skill", "uninstall-skill"],
       name: "sce",
       usage:
         "sce <command> [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]",
@@ -64,8 +79,7 @@ test("command help exposes feedback's explicit subcommand surface", async () => 
   assert.deepEqual(JSON.parse(execution.stdout).result, {
     actions: ["prepare", "preview", "submit", "flush"],
     command: "feedback",
-    usage:
-      "sce feedback <prepare|preview|submit|flush> [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]",
+    usage: "sce feedback <prepare|preview|submit|flush> --request <json>",
   });
 });
 
@@ -414,15 +428,8 @@ test("feedback requires and validates its action", () => {
   assert.throws(() => parseCliArguments(["feedback", "unknown"]), {
     message: "Unknown feedback action.",
   });
-  assert.deepEqual(parseCliArguments(["feedback", "flush"]), {
-    kind: "command",
-    request: {
-      command: "feedback",
-      feedbackAction: "flush",
-      options: { json: false },
-      schema: "sce.command.request",
-      version: 1,
-    },
+  assert.throws(() => parseCliArguments(["feedback", "flush"]), {
+    message: "The command request is invalid.",
   });
 });
 
@@ -481,6 +488,232 @@ test("canonical JSON sorts object keys while preserving array order", () => {
     canonicalJson({ z: ["b", "a"], a: { d: 1, c: 2 } }),
     '{"a":{"c":2,"d":1},"z":["b","a"]}',
   );
+});
+
+const feedbackTelemetry = {
+  capabilityId: "feedback.submit" as const,
+  component: "runtime" as const,
+  kind: "bug" as const,
+  protocolState: "failed" as const,
+  requestedModelTier: "workhorse" as const,
+  stableErrorCode: "SCE_CLI_FEEDBACK",
+  toolVersion: "0.1.0",
+  toolchain: "node-22" as const,
+};
+
+async function temporaryFeedbackCommon(): Promise<{
+  readonly common: string;
+  readonly root: string;
+}> {
+  const root = await mkdtemp(join(tmpdir(), "sce-cli-feedback-"));
+  const common = join(root, "common");
+  await mkdir(common, { mode: 0o700 });
+  return { common, root };
+}
+
+function issueTransport(counter: { creates: number }): FeedbackGitHubTransport {
+  return {
+    async discoverExactMarker() {
+      return {
+        issues: [],
+        paginationComplete: true,
+        repositoryId: "R_kgDOUCvUmw",
+      };
+    },
+    async createIssue(request) {
+      counter.creates += 1;
+      return {
+        body: request.body,
+        number: 42,
+        open: true,
+        repositoryId: "R_kgDOUCvUmw",
+        url: "https://github.com/hls-uk/single-controller-engineer/issues/42",
+      };
+    },
+  };
+}
+
+test("feedback prepare and preview are purely local typed operations", async () => {
+  let commonLookups = 0;
+  const prepared = await runCli(
+    [
+      "feedback",
+      "prepare",
+      "--request",
+      JSON.stringify({ telemetry: feedbackTelemetry }),
+    ],
+    {
+      feedback: {
+        async resolveCommonDirectory() {
+          commonLookups += 1;
+          return undefined;
+        },
+      },
+    },
+  );
+  assert.equal(prepared.exitCode, 0);
+  const packet = JSON.parse(prepared.stdout).result.packet;
+  const preview = await runCli(
+    ["feedback", "preview", "--request", JSON.stringify({ packet })],
+    {
+      feedback: {
+        async resolveCommonDirectory() {
+          commonLookups += 1;
+          return undefined;
+        },
+      },
+    },
+  );
+  assert.equal(preview.exitCode, 0);
+  assert.equal(
+    JSON.parse(preview.stdout).result.preview.repositoryId,
+    "R_kgDOUCvUmw",
+  );
+  assert.equal(commonLookups, 0);
+});
+
+test("feedback queues before authority and fake authorized submit/flush cannot double-create", async () => {
+  const fixture = await temporaryFeedbackCommon();
+  try {
+    const packet = prepareFeedback(feedbackTelemetry);
+    assert.ok(packet);
+    if (packet === undefined) return;
+    const counter = { creates: 0 };
+    const queued = await runCli(
+      ["feedback", "submit", "--request", JSON.stringify({ packet })],
+      {
+        feedback: {
+          async resolveCommonDirectory() {
+            return fixture.common;
+          },
+          transport: issueTransport(counter),
+        },
+      },
+    );
+    assert.equal(queued.exitCode, 69);
+    assert.equal(
+      JSON.parse(queued.stdout).error.code,
+      "SCE_FEEDBACK_QUEUED_AUTHORITY",
+    );
+    assert.equal(counter.creates, 0);
+    const outbox = FeedbackOutbox.open(fixture.common);
+    assert.equal(outbox.status, "ok");
+    if (outbox.status !== "ok") return;
+    assert.equal(outbox.value.read(packet.telemetry.fingerprint).status, "ok");
+    const authority = authorityFor(
+      packet,
+      "current_user",
+      "cli-authority-nonce-0001",
+    );
+    assert.ok(authority);
+    if (authority === undefined) return;
+    const submitted = await runCli(
+      [
+        "feedback",
+        "submit",
+        "--request",
+        JSON.stringify({ authority, packet }),
+      ],
+      {
+        feedback: {
+          async resolveCommonDirectory() {
+            return fixture.common;
+          },
+          transport: issueTransport(counter),
+        },
+      },
+    );
+    assert.equal(submitted.exitCode, 0);
+    assert.equal(counter.creates, 1);
+    const flushed = await runCli(
+      [
+        "feedback",
+        "flush",
+        "--request",
+        JSON.stringify({
+          authority,
+          fingerprint: packet.telemetry.fingerprint,
+        }),
+      ],
+      {
+        feedback: {
+          async resolveCommonDirectory() {
+            return fixture.common;
+          },
+          transport: issueTransport(counter),
+        },
+      },
+    );
+    assert.equal(flushed.exitCode, 0);
+    assert.equal(JSON.parse(flushed.stdout).result.status, "existing");
+    assert.equal(counter.creates, 1);
+  } finally {
+    await rm(fixture.root, { force: true, recursive: true });
+  }
+});
+
+test("feedback common-directory refusal and executor failures never leak canaries", async () => {
+  const packet = prepareFeedback(feedbackTelemetry);
+  assert.ok(packet);
+  if (packet === undefined) return;
+  const execution = await runCli(
+    ["feedback", "submit", "--request", JSON.stringify({ packet })],
+    {
+      feedback: {
+        executor: {
+          async execute() {
+            throw new Error("ghp_secret-canary-never-print");
+          },
+        },
+      },
+    },
+  );
+  assert.equal(execution.exitCode, 69);
+  assert.equal(
+    JSON.parse(execution.stdout).error.code,
+    "SCE_FEEDBACK_OUTBOX_UNAVAILABLE",
+  );
+  assert.doesNotMatch(execution.stdout, /secret-canary/u);
+});
+
+test("skill commands install an exact pair from deterministic packaged source", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sce-cli-install-"));
+  const destination = join(root, "skills");
+  try {
+    const source = resolvePackagedSkillSource();
+    assert.equal(source, resolve("skills"));
+    const dryRun = await runCli(
+      [
+        "install-skill",
+        "--host",
+        "codex",
+        "--destination",
+        destination,
+        "--dry-run",
+      ],
+      { skillSource: source },
+    );
+    assert.equal(dryRun.exitCode, 0);
+    assert.equal(JSON.parse(dryRun.stdout).result.status, "dry-run");
+    const installed = await runCli(
+      ["install-skill", "--host=claude", "--destination", destination],
+      { skillSource: source },
+    );
+    assert.equal(installed.exitCode, 0);
+    const installedResult = JSON.parse(installed.stdout).result;
+    const manifest = JSON.parse(
+      await readFile(join(destination, ".sce-skill-install.json"), "utf8"),
+    );
+    assert.deepEqual(installedResult.manifest, manifest);
+    const removed = await runCli(
+      ["uninstall-skill", "--host", "claude", "--destination", destination],
+      { skillSource: source },
+    );
+    assert.equal(removed.exitCode, 0);
+    assert.equal(JSON.parse(removed.stdout).result.status, "uninstalled");
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
 });
 test("default runner deterministically inspects valid repository state", async () => {
   const state = run();

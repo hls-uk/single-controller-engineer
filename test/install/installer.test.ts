@@ -305,3 +305,42 @@ test("a stale operation lock is reclaimed while a live contender remains refused
     );
   });
 });
+
+test("two stale-lock contenders never overlap or remove the acquired replacement", async () => {
+  await inTemporaryDirectory(async (root) => {
+    const source = join(root, "source");
+    const destination = join(root, "destination");
+    await fixture(source);
+    await mkdir(destination);
+    await writeFile(join(destination, INSTALL_LOCK), "pid=999999\n");
+    let releaseFirst!: () => void;
+    let firstEntered!: () => void;
+    const entered = new Promise<void>((resolve) => (firstEntered = resolve));
+    const release = new Promise<void>((resolve) => (releaseFirst = resolve));
+    let held = false;
+    const first = installSkills({
+      destination,
+      source,
+      fault: async (phase) => {
+        if (phase !== "before-new" || held) return;
+        held = true;
+        firstEntered();
+        await release;
+      },
+    });
+    await entered;
+    await assert.rejects(
+      installSkills({ destination, source }),
+      SkillInstallError,
+    );
+    releaseFirst();
+    const result = await first;
+    assert.deepEqual(
+      JSON.parse(await readFile(join(destination, INSTALL_MANIFEST), "utf8")),
+      result.manifest,
+    );
+    await assert.rejects(readFile(join(destination, INSTALL_LOCK)), {
+      code: "ENOENT",
+    });
+  });
+});

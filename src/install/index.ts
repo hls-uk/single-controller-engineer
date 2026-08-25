@@ -17,6 +17,7 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 export const INSTALL_MANIFEST = ".sce-skill-install.json";
 export const INSTALL_JOURNAL = ".sce-skill-install.transaction.json";
 export const INSTALL_LOCK = ".sce-skill-install.lock";
+const INSTALL_LOCK_REAPER = ".sce-skill-install.lock-reaper";
 export const SKILL_NAMES = [
   "single-controller-engineer",
   "single-controller-feedback",
@@ -617,30 +618,62 @@ async function recover(destination: string, parent: string): Promise<void> {
 
 async function acquireLock(destination: string): Promise<() => Promise<void>> {
   const path = join(destination, INSTALL_LOCK);
+  const reaper = join(destination, INSTALL_LOCK_REAPER);
   let handle;
   try {
     handle = await open(path, "wx", 0o600);
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    const text = await readFile(path, "utf8").catch(() => "");
-    const pid = /^pid=(\d+)$/mu.exec(text)?.[1];
-    if (!pid) fail("another skill installation is active");
     try {
-      process.kill(Number(pid), 0);
-      fail("another skill installation is active");
-    } catch (probe) {
-      if ((probe as NodeJS.ErrnoException).code !== "ESRCH")
+      await mkdir(reaper, { mode: 0o700 });
+    } catch (guard: unknown) {
+      if ((guard as NodeJS.ErrnoException).code === "EEXIST")
         fail("another skill installation is active");
+      throw guard;
     }
-    await unlink(path);
-    return await acquireLock(destination);
+    try {
+      // Re-read only after winning the reap guard. This prevents two stale
+      // observers from unlinking each other's replacement lock.
+      const text = await readFile(path, "utf8").catch(() => "");
+      const pid = /^pid=(\d+)(?:\ntoken=[0-9a-f-]+)?\n?$/u.exec(text)?.[1];
+      if (!pid) fail("another skill installation is active");
+      try {
+        process.kill(Number(pid), 0);
+        fail("another skill installation is active");
+      } catch (probe) {
+        if ((probe as NodeJS.ErrnoException).code !== "ESRCH")
+          fail("another skill installation is active");
+      }
+      await unlink(path);
+      handle = await open(path, "wx", 0o600);
+    } finally {
+      await rm(reaper, { recursive: true }).catch(() => undefined);
+      await fsync(destination);
+    }
   }
-  await handle.writeFile(`pid=${process.pid}\n`, "utf8");
+  // A stale-lock reaper may have removed the previous lock immediately before
+  // this process created its own. It holds the guard until its replacement is
+  // installed, so a normal acquirer that observes the guard must stand down.
+  if (await lstat(reaper).catch(() => undefined)) {
+    await handle.close();
+    await unlink(path).catch(() => undefined);
+    fail("another skill installation is active");
+  }
+  const token = randomUUID();
+  await handle.writeFile(`pid=${process.pid}\ntoken=${token}\n`, "utf8");
   await handle.sync();
+  const acquired = await handle.stat();
   await handle.close();
   await fsync(destination);
   return async () => {
-    await unlink(path).catch(() => undefined);
+    const current = await lstat(path).catch(() => undefined);
+    const text = await readFile(path, "utf8").catch(() => undefined);
+    if (
+      current?.dev === acquired.dev &&
+      current.ino === acquired.ino &&
+      text === `pid=${process.pid}\ntoken=${token}\n`
+    )
+      await unlink(path);
     await fsync(destination);
   };
 }

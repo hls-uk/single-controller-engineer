@@ -3,6 +3,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -16,7 +17,9 @@ import {
   discoverExisting,
   feedbackFingerprint,
   FeedbackOutbox,
+  GhFeedbackTransport,
   OUTBOX_MAX_BYTES,
+  processFeedbackCommandExecutor,
   prepareFeedback,
   previewFeedback,
   reconcileExactDuplicates,
@@ -25,6 +28,13 @@ import {
   type FeedbackPacket,
   type FeedbackTarget,
 } from "../../src/feedback/index.js";
+
+test("production feedback subprocess seam refuses commands outside its allowlist", async () => {
+  assert.deepEqual(
+    await processFeedbackCommandExecutor.execute("node", ["--version"]),
+    { code: 126, stderr: "", stdout: "" },
+  );
+});
 
 const target: FeedbackTarget = {
   host: "github.com",
@@ -208,6 +218,193 @@ test("safe packet only accepts allowlisted telemetry and fingerprints exact RFC8
       } as never),
       undefined,
     );
+});
+
+test("optional gh transport uses fixed argv, full pagination, body-file create, and readback", async () => {
+  const value = packet("GH_TRANSPORT");
+  let page = 0;
+  let identityChecks = 0;
+  let bodyFile: string | undefined;
+  const transport = new GhFeedbackTransport({
+    async execute(file, args) {
+      assert.equal(file, "gh");
+      if (args[0] === "api") {
+        assert.deepEqual(args.slice(0, 2), ["api", "graphql"]);
+        assert.ok(args.includes("owner=hls-uk"));
+        assert.ok(args.includes("name=single-controller-engineer"));
+        const query = args.find((arg) => arg.startsWith("query="));
+        assert.equal(typeof query, "string");
+        if (!query?.includes("issues(")) {
+          identityChecks += 1;
+          return {
+            code: 0,
+            stderr: "",
+            stdout: JSON.stringify({
+              data: { repository: { id: "R_kgDOUCvUmw" } },
+            }),
+          };
+        }
+        page += 1;
+        if (page === 1) {
+          assert.equal(args.includes("cursor=next-page"), false);
+          return {
+            code: 0,
+            stderr: "",
+            stdout: JSON.stringify({
+              data: {
+                repository: {
+                  id: "R_kgDOUCvUmw",
+                  issues: {
+                    nodes: [],
+                    pageInfo: { endCursor: "next-page", hasNextPage: true },
+                  },
+                },
+              },
+            }),
+          };
+        }
+        assert.ok(args.includes("cursor=next-page"));
+        return {
+          code: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                id: "R_kgDOUCvUmw",
+                issues: {
+                  nodes: [],
+                  pageInfo: { endCursor: null, hasNextPage: false },
+                },
+              },
+            },
+          }),
+        };
+      }
+      if (args[0] === "issue" && args[1] === "create") {
+        assert.deepEqual(args.slice(0, 4), [
+          "issue",
+          "create",
+          "--repo",
+          "hls-uk/single-controller-engineer",
+        ]);
+        const index = args.indexOf("--body-file");
+        bodyFile = args[index + 1];
+        assert.equal(typeof bodyFile, "string");
+        assert.equal(readFileSync(bodyFile!, "utf8"), value.body);
+        return {
+          code: 0,
+          stderr: "",
+          stdout:
+            "https://github.com/hls-uk/single-controller-engineer/issues/42\n",
+        };
+      }
+      assert.deepEqual(args.slice(0, 4), ["issue", "view", "42", "--repo"]);
+      assert.equal(args[4], "hls-uk/single-controller-engineer");
+      return {
+        code: 0,
+        stderr: "",
+        stdout: JSON.stringify({
+          body: value.body,
+          number: 42,
+          state: "OPEN",
+          url: "https://github.com/hls-uk/single-controller-engineer/issues/42",
+        }),
+      };
+    },
+  });
+  const discovery = await transport.discoverExactMarker(
+    value.target,
+    value.marker,
+  );
+  assert.equal(
+    (discovery as { paginationComplete?: unknown }).paginationComplete,
+    true,
+  );
+  const created = await transport.createIssue({
+    body: value.body,
+    target: value.target,
+    title: value.title,
+  });
+  assert.equal((created as { number?: unknown }).number, 42);
+  assert.notEqual(bodyFile, undefined);
+  assert.equal(identityChecks, 2);
+});
+
+test("gh transport refuses a changed immutable repository identity before create", async () => {
+  const value = packet("GH_ID_BEFORE");
+  let mutations = 0;
+  const transport = new GhFeedbackTransport({
+    async execute(_file, args) {
+      if (args[0] === "api")
+        return {
+          code: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            data: { repository: { id: "R_changed_target" } },
+          }),
+        };
+      if (args[0] === "issue" && args[1] === "create") mutations += 1;
+      return { code: 1, stderr: "secret-canary", stdout: "" };
+    },
+  });
+  await assert.rejects(
+    transport.createIssue({
+      body: value.body,
+      target: value.target,
+      title: value.title,
+    }),
+    { code: "GITHUB_REJECTED" },
+  );
+  assert.equal(mutations, 0);
+});
+
+test("gh transport fails closed when immutable identity changes after readback", async () => {
+  const value = packet("GH_ID_AFTER");
+  let identityChecks = 0;
+  const transport = new GhFeedbackTransport({
+    async execute(_file, args) {
+      if (args[0] === "api") {
+        identityChecks += 1;
+        return {
+          code: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                id: identityChecks === 1 ? "R_kgDOUCvUmw" : "R_changed_target",
+              },
+            },
+          }),
+        };
+      }
+      if (args[0] === "issue" && args[1] === "create")
+        return {
+          code: 0,
+          stderr: "",
+          stdout:
+            "https://github.com/hls-uk/single-controller-engineer/issues/42\n",
+        };
+      return {
+        code: 0,
+        stderr: "",
+        stdout: JSON.stringify({
+          body: value.body,
+          number: 42,
+          state: "OPEN",
+          url: "https://github.com/hls-uk/single-controller-engineer/issues/42",
+        }),
+      };
+    },
+  });
+  await assert.rejects(
+    transport.createIssue({
+      body: value.body,
+      target: value.target,
+      title: value.title,
+    }),
+    { code: "GITHUB_REJECTED" },
+  );
+  assert.equal(identityChecks, 2);
 });
 
 test("narrative is explicitly reviewed, bounded, and warning-bearing previews block policy authority", () => {
@@ -707,6 +904,26 @@ test("ambiguous submit recovers through exact discovery and flush reauthorizes",
       unavailable,
     );
     assert.deepEqual(absentRetry, { status: "unauthorized" });
+    let unsafeCreates = 0;
+    const discoveryUnavailable: FeedbackGitHubTransport = {
+      async discoverExactMarker() {
+        throw new Error("provider unavailable");
+      },
+      async createIssue() {
+        unsafeCreates += 1;
+        throw new Error("must not create");
+      },
+    };
+    const blockedRetry = await opened.value.flush(
+      value.telemetry.fingerprint,
+      authorityFor(value, "current_user", "current-nonce-0004"),
+      discoveryUnavailable,
+    );
+    assert.deepEqual(blockedRetry, {
+      status: "ambiguous",
+      code: "GITHUB_UNAVAILABLE",
+    });
+    assert.equal(unsafeCreates, 0);
     const observed = {
       repositoryId: "R_kgDOUCvUmw" as const,
       number: 9,
@@ -726,6 +943,63 @@ test("ambiguous submit recovers through exact discovery and flush reauthorizes",
       submitted.status === "ok" ? submitted.value.status : undefined,
       "submitted",
     );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("an ambiguous submit retries only after complete absence and a fresh nonce", async () => {
+  const fixture = commonDirectory();
+  try {
+    const opened = FeedbackOutbox.open(fixture.common);
+    assert.equal(opened.status, "ok");
+    const value = packet("FRESH_NONCE");
+    assert.equal(opened.value.enqueue(value).status, "ok");
+    let creates = 0;
+    const transport: FeedbackGitHubTransport = {
+      async discoverExactMarker() {
+        return {
+          repositoryId: "R_kgDOUCvUmw",
+          paginationComplete: true,
+          issues: [],
+        };
+      },
+      async createIssue(request) {
+        creates += 1;
+        if (creates === 1)
+          throw Object.assign(new Error("lost response"), {
+            code: "GITHUB_UNAVAILABLE",
+          });
+        return {
+          repositoryId: "R_kgDOUCvUmw" as const,
+          number: 101,
+          url: "https://github.com/hls-uk/single-controller-engineer/issues/101",
+          body: request.body,
+          open: true,
+        };
+      },
+    };
+    assert.equal(
+      (
+        await opened.value.flush(
+          value.telemetry.fingerprint,
+          authorityFor(value, "current_user", "current-nonce-0101"),
+          transport,
+        )
+      ).status,
+      "ambiguous",
+    );
+    assert.equal(
+      (
+        await opened.value.flush(
+          value.telemetry.fingerprint,
+          authorityFor(value, "current_user", "current-nonce-0102"),
+          transport,
+        )
+      ).status,
+      "submitted",
+    );
+    assert.equal(creates, 2);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

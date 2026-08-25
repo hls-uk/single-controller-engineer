@@ -410,11 +410,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants4) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants2);
+          this.rhs = optimizeExpr(this.rhs, names, constants4);
         return this;
       }
       get names() {
@@ -431,10 +431,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants4) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants2);
+        this.rhs = optimizeExpr(this.rhs, names, constants4);
         return this;
       }
       get names() {
@@ -495,8 +495,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants2) {
-        this.code = optimizeExpr(this.code, names, constants2);
+      optimizeNames(names, constants4) {
+        this.code = optimizeExpr(this.code, names, constants4);
         return this;
       }
       get names() {
@@ -525,12 +525,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants4) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants2))
+          if (n.optimizeNames(names, constants4))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -583,12 +583,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants4) {
         var _a;
-        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants2);
-        if (!(super.optimizeNames(names, constants2) || this.else))
+        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants4);
+        if (!(super.optimizeNames(names, constants4) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants2);
+        this.condition = optimizeExpr(this.condition, names, constants4);
         return this;
       }
       get names() {
@@ -611,10 +611,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants2) {
-        if (!super.optimizeNames(names, constants2))
+      optimizeNames(names, constants4) {
+        if (!super.optimizeNames(names, constants4))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants2);
+        this.iteration = optimizeExpr(this.iteration, names, constants4);
         return this;
       }
       get names() {
@@ -650,10 +650,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants2) {
-        if (!super.optimizeNames(names, constants2))
+      optimizeNames(names, constants4) {
+        if (!super.optimizeNames(names, constants4))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants2);
+        this.iterable = optimizeExpr(this.iterable, names, constants4);
         return this;
       }
       get names() {
@@ -695,11 +695,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants2) {
+      optimizeNames(names, constants4) {
         var _a, _b;
-        super.optimizeNames(names, constants2);
-        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants2);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants2);
+        super.optimizeNames(names, constants4);
+        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants4);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants4);
         return this;
       }
       get names() {
@@ -1000,7 +1000,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants2) {
+    function optimizeExpr(expr, names, constants4) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -1015,14 +1015,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants2[n.str];
+        const c = constants4[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants2[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants4[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -2984,7 +2984,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve6.call(this, root, ref);
+      let _sch = resolve8.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3011,7 +3011,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve6(root, ref) {
+    function resolve8(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3121,14 +3121,14 @@ var require_utils = __commonJS({
         BYTE_HEX[i] = "%" + HEX_DIGITS[i >> 4] + HEX_DIGITS[i & 15];
       }
     }
-    function percentEncodeNonAscii(cp) {
-      if (cp < 2048) {
-        return BYTE_HEX[192 | cp >> 6] + BYTE_HEX[128 | cp & 63];
+    function percentEncodeNonAscii(cp2) {
+      if (cp2 < 2048) {
+        return BYTE_HEX[192 | cp2 >> 6] + BYTE_HEX[128 | cp2 & 63];
       }
-      if (cp < 65536) {
-        return BYTE_HEX[224 | cp >> 12] + BYTE_HEX[128 | cp >> 6 & 63] + BYTE_HEX[128 | cp & 63];
+      if (cp2 < 65536) {
+        return BYTE_HEX[224 | cp2 >> 12] + BYTE_HEX[128 | cp2 >> 6 & 63] + BYTE_HEX[128 | cp2 & 63];
       }
-      return BYTE_HEX[240 | cp >> 18] + BYTE_HEX[128 | cp >> 12 & 63] + BYTE_HEX[128 | cp >> 6 & 63] + BYTE_HEX[128 | cp & 63];
+      return BYTE_HEX[240 | cp2 >> 18] + BYTE_HEX[128 | cp2 >> 12 & 63] + BYTE_HEX[128 | cp2 >> 6 & 63] + BYTE_HEX[128 | cp2 & 63];
     }
     function stringArrayToHexStripped(input) {
       let acc = "";
@@ -3492,8 +3492,8 @@ var require_utils = __commonJS({
     function encodeFragment(input) {
       return encodeComponent(input, isQueryFragmentCharacter);
     }
-    function isEscapeSafe(cp) {
-      return cp >= 48 && cp <= 57 || cp >= 65 && cp <= 90 || cp >= 97 && cp <= 122 || cp === 42 || cp === 43 || cp === 45 || cp === 46 || cp === 47 || cp === 64 || cp === 95;
+    function isEscapeSafe(cp2) {
+      return cp2 >= 48 && cp2 <= 57 || cp2 >= 65 && cp2 <= 90 || cp2 >= 97 && cp2 <= 122 || cp2 === 42 || cp2 === 43 || cp2 === 45 || cp2 === 46 || cp2 === 47 || cp2 === 64 || cp2 === 95;
     }
     function normalizeQueryFragmentEncoding(input) {
       let output = "";
@@ -3836,7 +3836,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve6(baseURI, relativeURI, options) {
+    function resolve8(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -3869,49 +3869,49 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative2, options, skipNormalization) {
+    function resolveComponent(base, relative3, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse(serialize(base, options), options);
-        relative2 = parse(serialize(relative2, options), options);
+        relative3 = parse(serialize(relative3, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative2.scheme) {
-        target.scheme = relative2.scheme;
-        target.userinfo = relative2.userinfo;
-        target.host = relative2.host;
-        target.port = relative2.port;
-        target.path = removeDotSegments(relative2.path || "");
-        target.query = relative2.query;
+      if (!options.tolerant && relative3.scheme) {
+        target.scheme = relative3.scheme;
+        target.userinfo = relative3.userinfo;
+        target.host = relative3.host;
+        target.port = relative3.port;
+        target.path = removeDotSegments(relative3.path || "");
+        target.query = relative3.query;
       } else {
-        if (relative2.userinfo !== void 0 || relative2.host !== void 0 || relative2.port !== void 0) {
-          target.userinfo = relative2.userinfo;
-          target.host = relative2.host;
-          target.port = relative2.port;
-          target.path = removeDotSegments(relative2.path || "");
-          target.query = relative2.query;
+        if (relative3.userinfo !== void 0 || relative3.host !== void 0 || relative3.port !== void 0) {
+          target.userinfo = relative3.userinfo;
+          target.host = relative3.host;
+          target.port = relative3.port;
+          target.path = removeDotSegments(relative3.path || "");
+          target.query = relative3.query;
         } else {
-          if (!relative2.path) {
+          if (!relative3.path) {
             target.path = base.path;
-            if (relative2.query !== void 0) {
-              target.query = relative2.query;
+            if (relative3.query !== void 0) {
+              target.query = relative3.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative2.path[0] === "/") {
-              target.path = removeDotSegments(relative2.path);
+            if (relative3.path[0] === "/") {
+              target.path = removeDotSegments(relative3.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative2.path;
+                target.path = "/" + relative3.path;
               } else if (!base.path) {
-                target.path = relative2.path;
+                target.path = relative3.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative2.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative3.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative2.query;
+            target.query = relative3.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3919,7 +3919,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative2.fragment;
+      target.fragment = relative3.fragment;
       return target;
     }
     function equal2(uriA, uriB, options) {
@@ -4198,7 +4198,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize: normalize6,
-      resolve: resolve6,
+      resolve: resolve8,
       resolveComponent,
       equal: equal2,
       serialize,
@@ -4329,7 +4329,7 @@ var require_core = __commonJS({
         uriResolver
       };
     }
-    var Ajv5 = class {
+    var Ajv6 = class {
       constructor(opts = {}) {
         this.schemas = {};
         this.refs = {};
@@ -4613,7 +4613,7 @@ var require_core = __commonJS({
       errorsText(errors = this.errors, { separator = ", ", dataVar = "data" } = {}) {
         if (!errors || errors.length === 0)
           return "No errors";
-        return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text4, msg) => text4 + separator + msg);
+        return errors.map((e) => `${dataVar}${e.instancePath} ${e.message}`).reduce((text5, msg) => text5 + separator + msg);
       }
       $dataMetaSchema(metaSchema, keywordsJsonPointers) {
         const rules = this.RULES.all;
@@ -4699,9 +4699,9 @@ var require_core = __commonJS({
         }
       }
     };
-    Ajv5.ValidationError = validation_error_1.default;
-    Ajv5.MissingRefError = ref_error_1.default;
-    exports.default = Ajv5;
+    Ajv6.ValidationError = validation_error_1.default;
+    Ajv6.MissingRefError = ref_error_1.default;
+    exports.default = Ajv6;
     function checkOptions(checkOpts, options, msg, log = "error") {
       for (const key in checkOpts) {
         const opt = key;
@@ -5042,8 +5042,8 @@ var require_multipleOf = __commonJS({
         const { gen, data, schemaCode, it } = cxt;
         const prec = it.opts.multipleOfPrecision;
         const res = gen.let("res");
-        const invalid = prec ? (0, codegen_1._)`Math.abs(Math.round(${res}) - ${res}) > 1e-${prec}` : (0, codegen_1._)`${res} !== parseInt(${res})`;
-        cxt.fail$data((0, codegen_1._)`(${schemaCode} === 0 || (${res} = ${data}/${schemaCode}, ${invalid}))`);
+        const invalid2 = prec ? (0, codegen_1._)`Math.abs(Math.round(${res}) - ${res}) > 1e-${prec}` : (0, codegen_1._)`${res} !== parseInt(${res})`;
+        cxt.fail$data((0, codegen_1._)`(${schemaCode} === 0 || (${res} = ${data}/${schemaCode}, ${invalid2}))`);
       }
     };
     exports.default = def;
@@ -6812,7 +6812,7 @@ var require_ajv = __commonJS({
     var draft7MetaSchema = require_json_schema_draft_07();
     var META_SUPPORT_DATA = ["/properties"];
     var META_SCHEMA_ID = "http://json-schema.org/draft-07/schema";
-    var Ajv5 = class extends core_1.default {
+    var Ajv6 = class extends core_1.default {
       _addVocabularies() {
         super._addVocabularies();
         draft7_1.default.forEach((v) => this.addVocabulary(v));
@@ -6831,11 +6831,11 @@ var require_ajv = __commonJS({
         return this.opts.defaultMeta = super.defaultMeta() || (this.getSchema(META_SCHEMA_ID) ? META_SCHEMA_ID : void 0);
       }
     };
-    exports.Ajv = Ajv5;
-    module.exports = exports = Ajv5;
-    module.exports.Ajv = Ajv5;
+    exports.Ajv = Ajv6;
+    module.exports = exports = Ajv6;
+    module.exports.Ajv = Ajv6;
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.default = Ajv5;
+    exports.default = Ajv6;
     var validate_1 = require_validate();
     Object.defineProperty(exports, "KeywordCxt", { enumerable: true, get: function() {
       return validate_1.KeywordCxt;
@@ -6871,9 +6871,16 @@ var require_ajv = __commonJS({
 });
 
 // src/cli.ts
-import { realpathSync as realpathSync5 } from "node:fs";
-import { isAbsolute as isAbsolute8, normalize as normalize5, resolve as resolve5 } from "node:path";
-import { pathToFileURL } from "node:url";
+import { realpathSync as realpathSync7 } from "node:fs";
+import {
+  basename as basename4,
+  dirname as dirname6,
+  isAbsolute as isAbsolute9,
+  join as join7,
+  normalize as normalize5,
+  resolve as resolve7
+} from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 // node_modules/@sinclair/typebox/build/esm/type/guard/value.mjs
 var value_exports = {};
@@ -7006,8 +7013,8 @@ var TypeSystemPolicy;
   }
   TypeSystemPolicy2.IsExactOptionalProperty = IsExactOptionalProperty;
   function IsObjectLike(value) {
-    const isObject = IsObject2(value);
-    return TypeSystemPolicy2.AllowArrayObject ? isObject : isObject && !IsArray2(value);
+    const isObject2 = IsObject2(value);
+    return TypeSystemPolicy2.AllowArrayObject ? isObject2 : isObject2 && !IsArray2(value);
   }
   TypeSystemPolicy2.IsObjectLike = IsObjectLike;
   function IsRecordLike(value) {
@@ -8789,8 +8796,8 @@ function FromNumberKey(_, type, options) {
 function Record(key, type, options = {}) {
   return IsUnion(key) ? FromUnionKey(key.anyOf, type, options) : IsTemplateLiteral(key) ? FromTemplateLiteralKey(key, type, options) : IsLiteral(key) ? FromLiteralKey(key.const, type, options) : IsBoolean2(key) ? FromBooleanKey(key, type, options) : IsInteger(key) ? FromIntegerKey(key, type, options) : IsNumber3(key) ? FromNumberKey(key, type, options) : IsRegExp2(key) ? FromRegExpKey(key, type, options) : IsString2(key) ? FromStringKey(key, type, options) : IsAny(key) ? FromAnyKey(key, type, options) : IsNever(key) ? FromNeverKey(key, type, options) : Never(options);
 }
-function RecordPattern(record2) {
-  return globalThis.Object.getOwnPropertyNames(record2.patternProperties)[0];
+function RecordPattern(record3) {
+  return globalThis.Object.getOwnPropertyNames(record3.patternProperties)[0];
 }
 function RecordKey2(type) {
   const pattern = RecordPattern(type);
@@ -13236,15 +13243,15 @@ function decodeClosedUnitEvidenceDetails(encoded) {
     return void 0;
   }
   if (decoded.length > LIMITS.envelopeBytes) return void 0;
-  const text4 = decoded.toString("utf8");
-  if (!Buffer.from(text4, "utf8").equals(decoded)) return void 0;
+  const text5 = decoded.toString("utf8");
+  if (!Buffer.from(text5, "utf8").equals(decoded)) return void 0;
   let parsed;
   try {
-    parsed = JSON.parse(text4);
+    parsed = JSON.parse(text5);
   } catch {
     return void 0;
   }
-  if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object" || canonicalJson(parsed) !== text4)
+  if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object" || canonicalJson(parsed) !== text5)
     return void 0;
   const parsedDense = parsed;
   if (Object.keys(parsedDense).length !== 2 || parsedDense.v !== 1 || parsedDense.u === null || Array.isArray(parsedDense.u) || typeof parsedDense.u !== "object")
@@ -13268,17 +13275,17 @@ function decodeClosedUnitEvidence(encoded) {
 }
 function updateClosureReleaseEvidence(state, unitId) {
   const evidence = decodeClosedUnitEvidence(state.closedUnitEvidence);
-  const record2 = evidence?.[unitId];
+  const record3 = evidence?.[unitId];
   const release = [...state.effectJournal].reverse().find(
     (entry) => entry.unitId === unitId && entry.kind === "reservation_release"
   );
-  if (evidence === void 0 || record2 === void 0 || release === void 0)
+  if (evidence === void 0 || record3 === void 0 || release === void 0)
     throw new Error(`missing closure release lineage for ${unitId}`);
   return encodeClosedUnitEvidence({
     ...evidence,
     [unitId]: {
-      ...record2,
-      reservations: record2.reservations.map((reservation) => ({
+      ...record3,
+      reservations: record3.reservations.map((reservation) => ({
         ...reservation,
         release
       }))
@@ -13291,13 +13298,13 @@ function closeUnitAfterRelease(state, unitId) {
     throw new Error(`missing released unit ${unitId}`);
   const releasedEvidence = updateClosureReleaseEvidence(state, unitId);
   const evidence = decodeClosedUnitEvidence(releasedEvidence);
-  const record2 = evidence?.[unitId];
-  if (evidence === void 0 || record2 === void 0)
+  const record3 = evidence?.[unitId];
+  if (evidence === void 0 || record3 === void 0)
     throw new Error(`missing final closure evidence for ${unitId}`);
   const closedUnitEvidence = encodeClosedUnitEvidence({
     ...evidence,
     [unitId]: {
-      ...record2,
+      ...record3,
       repairCount: closedUnit.repairCount
     }
   });
@@ -15601,7 +15608,7 @@ function containsSecretShape(value) {
   if (Array.isArray(value)) return value.some(containsSecretShape);
   if (value === null || typeof value !== "object") return false;
   return Object.entries(value).some(
-    ([key, nested]) => secretKeyShape.test(key) || containsSecretShape(nested)
+    ([key, nested2]) => secretKeyShape.test(key) || containsSecretShape(nested2)
   );
 }
 
@@ -15676,15 +15683,15 @@ var secretRemoteName = /(?:^|[_.-])(?:api[_-]?(?:key|token)|authorization|bearer
 function parseGitRemoteConfigOutput(source) {
   if (source.includes("\uFFFD") || !source.endsWith("\0")) return void 0;
   const records = source.slice(0, -1).split("\0");
-  if (records.length === 0 || records.some((record2) => record2.length === 0))
+  if (records.length === 0 || records.some((record3) => record3.length === 0))
     return void 0;
   const urls = [];
-  for (const record2 of records) {
-    const separator = record2.indexOf("\n");
-    if (separator <= 0 || record2.indexOf("\n", separator + 1) !== -1)
+  for (const record3 of records) {
+    const separator = record3.indexOf("\n");
+    if (separator <= 0 || record3.indexOf("\n", separator + 1) !== -1)
       return void 0;
-    const key = record2.slice(0, separator);
-    const url = record2.slice(separator + 1);
+    const key = record3.slice(0, separator);
+    const url = record3.slice(separator + 1);
     if (!remoteConfigKey.test(key) || secretRemoteName.test(key) || url.length === 0 || url.length > 1024 || /[\u0000\r\n\uFFFD]/u.test(url))
       return void 0;
     urls.push(url);
@@ -16004,9 +16011,9 @@ async function remoteRefOid(runner, repository, remote2, ref) {
   if (result2.exitCode === 2 && result2.signal === null)
     return { state: "missing" };
   if (!commandOk(result2)) return { state: "unreadable" };
-  const record2 = oneLine(result2.stdout);
-  if (record2 === void 0) return { state: "unreadable" };
-  const fields = record2.split("	");
+  const record3 = oneLine(result2.stdout);
+  if (record3 === void 0) return { state: "unreadable" };
+  const fields = record3.split("	");
   return fields.length === 2 && fields[0] !== void 0 && fields[1] === ref && exactOid(repository.objectFormat, fields[0]) ? { state: "found", oid: fields[0] } : { state: "unreadable" };
 }
 function containedBy(scope, path2) {
@@ -16171,7 +16178,7 @@ async function observeCandidate(runner, repository, input) {
   const worktree = parseWorktreeList(
     listed.stdout,
     repository.objectFormat
-  )?.find((record2) => record2.path === wantedPath);
+  )?.find((record3) => record3.path === wantedPath);
   if (worktree === void 0 || worktree.branch !== `refs/heads/${input.branch}` || worktree.head === void 0)
     return effect("refused", "GIT_FOREIGN_WORKTREE");
   const ownership = await verifyWorktreeOwnership(
@@ -16310,11 +16317,11 @@ async function verifyCandidateWorktree(runner, repository, input) {
     "--porcelain"
   ]);
   if (!commandOk(listed)) return effect("refused", "GIT_REFUSED");
-  const record2 = parseWorktreeList(
+  const record3 = parseWorktreeList(
     listed.stdout,
     repository.objectFormat
   )?.find((candidate) => candidate.path === path2);
-  if (record2?.branch !== `refs/heads/${input.branch}` || record2.head !== input.head)
+  if (record3?.branch !== `refs/heads/${input.branch}` || record3.head !== input.head)
     return effect("refused", "GIT_FOREIGN_WORKTREE");
   const ownership = await verifyWorktreeOwnership(runner, repository, path2);
   if (ownership.state !== "observed") return ownership;
@@ -16427,11 +16434,11 @@ async function ensureWorktree(runner, repository, input) {
   const wantedPath = canonicalWorktreePath(input.path);
   if (wantedPath === void 0 || wantedPath !== input.path)
     return effect("refused", "GIT_FOREIGN_WORKTREE");
-  const existing = records.find((record2) => record2.path === wantedPath);
+  const existing = records.find((record3) => record3.path === wantedPath);
   const wantedBranch = `refs/heads/${input.branch}`;
   if (existing !== void 0)
     return existing.head === input.head && existing.branch === wantedBranch ? verifyCleanWorktree(runner, repository, input.path) : effect("refused", "GIT_FOREIGN_WORKTREE");
-  if (records.some((record2) => record2.branch === wantedBranch))
+  if (records.some((record3) => record3.branch === wantedBranch))
     return effect("refused", "GIT_FOREIGN_WORKTREE");
   const added = await run(runner, repository, [
     "worktree",
@@ -16448,7 +16455,7 @@ async function ensureWorktree(runner, repository, input) {
   const discovered2 = parseWorktreeList(
     reread.stdout,
     repository.objectFormat
-  )?.find((record2) => record2.path === wantedPath);
+  )?.find((record3) => record3.path === wantedPath);
   if (discovered2?.head !== input.head || discovered2.branch !== wantedBranch)
     return terminalFailure(added) === void 0 && added.exitCode !== 0 ? effect("refused", "GIT_REFUSED") : effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
   return verifyCleanWorktree(runner, repository, input.path);
@@ -16470,7 +16477,7 @@ async function discoverWorktree(runner, repository, input) {
   if (records === void 0) return effect("refused", "GIT_REFUSED");
   if (wantedPath === void 0 || wantedPath !== input.path)
     return effect("refused", "GIT_FOREIGN_WORKTREE");
-  const existing = records.find((record2) => record2.path === wantedPath);
+  const existing = records.find((record3) => record3.path === wantedPath);
   if (existing === void 0) return effect("refused", "GIT_ABSENT");
   return existing.head === input.head && existing.branch === `refs/heads/${input.branch}` ? verifyCleanWorktree(runner, repository, input.path) : effect("refused", "GIT_FOREIGN_WORKTREE");
 }
@@ -16636,7 +16643,7 @@ var nodeGitRunner = async ({ argv, cwd }) => {
     const stdoutChunks = [];
     let outputBytes = 0;
     let timedOut = false;
-    let unavailable3 = false;
+    let unavailable5 = false;
     const child = spawn("/usr/bin/git", argv, {
       cwd,
       env: {
@@ -16667,7 +16674,7 @@ var nodeGitRunner = async ({ argv, cwd }) => {
       child.kill("SIGKILL");
     }, 15e3);
     child.once("error", () => {
-      unavailable3 = true;
+      unavailable5 = true;
     });
     child.once("close", (exitCode, signal) => {
       clearTimeout(timer);
@@ -16680,7 +16687,7 @@ var nodeGitRunner = async ({ argv, cwd }) => {
       } catch {
         invalidUtf8 = true;
       }
-      done({ exitCode, invalidUtf8, signal, stdout, timedOut, unavailable: unavailable3 });
+      done({ exitCode, invalidUtf8, signal, stdout, timedOut, unavailable: unavailable5 });
     });
   });
 };
@@ -17174,36 +17181,36 @@ function paths(commonDir) {
   }
 }
 function listen(socket) {
-  return new Promise((resolve6) => {
+  return new Promise((resolve8) => {
     const server = createServer((connection) => connection.destroy());
-    const fail2 = (error) => {
-      resolve6({ code: error.code ?? "UNKNOWN" });
+    const fail3 = (error) => {
+      resolve8({ code: error.code ?? "UNKNOWN" });
     };
-    server.once("error", fail2);
+    server.once("error", fail3);
     server.listen(socket, () => {
-      server.removeListener("error", fail2);
-      resolve6({ server });
+      server.removeListener("error", fail3);
+      resolve8({ server });
     });
   });
 }
 function socketIsLive(socketPath) {
-  return new Promise((resolve6) => {
+  return new Promise((resolve8) => {
     const socket = createConnection(socketPath);
     socket.once("connect", () => {
       socket.destroy();
-      resolve6(true);
+      resolve8(true);
     });
     socket.once("error", (error) => {
       socket.destroy();
       if (error.code === "ECONNREFUSED" || error.code === "ENOENT")
-        resolve6(false);
-      else resolve6(void 0);
+        resolve8(false);
+      else resolve8(void 0);
     });
   });
 }
 async function closeServer(server) {
-  return new Promise((resolve6) => {
-    server.close((error) => resolve6(error === void 0));
+  return new Promise((resolve8) => {
+    server.close((error) => resolve8(error === void 0));
   });
 }
 function removeSocket(path2, expected) {
@@ -18458,7 +18465,7 @@ var feedbackActions = [
 var MAX_CLI_REQUEST_BYTES = 128 * 1024;
 var MAX_CLI_RESPONSE_BYTES = 128 * 1024;
 var MAX_JSON_ITEMS = 256;
-var MAX_TEXT = 8192;
+var MAX_TEXT = 16384;
 function strictObject5(properties) {
   return Type.Object(properties, { additionalProperties: false });
 }
@@ -18508,6 +18515,31 @@ var HarnessPacketOptionsSchema = strictObject5({
   request: HarnessPacketInputSchema
 });
 var NoPayloadOptionsSchema = strictObject5(RequestMetadataSchema);
+var FeedbackPrepareOptionsSchema = strictObject5({
+  json: Type.Boolean(),
+  request: strictObject5({
+    narrative: Type.Optional(Type.Unknown()),
+    telemetry: Type.Unknown()
+  })
+});
+var FeedbackPreviewOptionsSchema = strictObject5({
+  json: Type.Boolean(),
+  request: strictObject5({ packet: Type.Unknown() })
+});
+var FeedbackSubmitOptionsSchema = strictObject5({
+  json: Type.Boolean(),
+  request: strictObject5({
+    authority: Type.Optional(Type.Unknown()),
+    packet: Type.Unknown()
+  })
+});
+var FeedbackFlushOptionsSchema = strictObject5({
+  json: Type.Boolean(),
+  request: strictObject5({
+    authority: Type.Optional(Type.Unknown()),
+    fingerprint: Type.String({ pattern: "^[0-9a-f]{64}$" })
+  })
+});
 var RecoveryEventPayloadSchema = strictObject5({
   event: Type.Optional(ProtocolEventSchema)
 });
@@ -18539,13 +18571,36 @@ var HarnessPacketCommandSchema = strictObject5({
   schema: Type.Literal("sce.command.request"),
   version: Type.Literal(1)
 });
-var FeedbackCommandSchema = strictObject5({
-  command: Type.Literal("feedback"),
-  feedbackAction: FeedbackActionSchema,
-  options: NoPayloadOptionsSchema,
-  schema: Type.Literal("sce.command.request"),
-  version: Type.Literal(1)
-});
+var FeedbackCommandSchema = Type.Union([
+  strictObject5({
+    command: Type.Literal("feedback"),
+    feedbackAction: Type.Literal("prepare"),
+    options: FeedbackPrepareOptionsSchema,
+    schema: Type.Literal("sce.command.request"),
+    version: Type.Literal(1)
+  }),
+  strictObject5({
+    command: Type.Literal("feedback"),
+    feedbackAction: Type.Literal("preview"),
+    options: FeedbackPreviewOptionsSchema,
+    schema: Type.Literal("sce.command.request"),
+    version: Type.Literal(1)
+  }),
+  strictObject5({
+    command: Type.Literal("feedback"),
+    feedbackAction: Type.Literal("submit"),
+    options: FeedbackSubmitOptionsSchema,
+    schema: Type.Literal("sce.command.request"),
+    version: Type.Literal(1)
+  }),
+  strictObject5({
+    command: Type.Literal("feedback"),
+    feedbackAction: Type.Literal("flush"),
+    options: FeedbackFlushOptionsSchema,
+    schema: Type.Literal("sce.command.request"),
+    version: Type.Literal(1)
+  })
+]);
 var UnavailableCommandSchema = strictObject5({
   command: Type.Union([
     Type.Literal("acquire-controller"),
@@ -20142,7 +20197,7 @@ var PinnedBdEmbeddedProcess = class {
     return this.runOnce(operational.path, argv);
   }
   async runOnce(executable, argv) {
-    return new Promise((resolve6) => {
+    return new Promise((resolve8) => {
       let stdout = "";
       let bytes2 = 0;
       let exceeded = false;
@@ -20172,14 +20227,14 @@ var PinnedBdEmbeddedProcess = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve6(void 0);
+          resolve8(void 0);
         }
       });
       child.once("close", (code) => {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve6({ code, exceeded, stdout });
+          resolve8({ code, exceeded, stdout });
         }
       });
     });
@@ -20304,7 +20359,7 @@ var PinnedBdEmbeddedProcess = class {
     }
   }
   async runDoltOnce(executable, cwd, argv) {
-    return new Promise((resolve6) => {
+    return new Promise((resolve8) => {
       let stdout = "";
       let bytes2 = 0;
       let exceeded = false;
@@ -20334,14 +20389,14 @@ var PinnedBdEmbeddedProcess = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve6(void 0);
+          resolve8(void 0);
         }
       });
       child.once("close", (code) => {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve6({ code, exceeded, stdout });
+          resolve8({ code, exceeded, stdout });
         }
       });
     });
@@ -20543,16 +20598,16 @@ var DoltProjectionPersistence = class {
     );
     const seen = /* @__PURE__ */ new Set();
     const children = [];
-    for (const record2 of childrenRows) {
-      if (Object.keys(record2).length !== 2 || typeof record2.id !== "string" || seen.has(record2.id) || !Object.prototype.hasOwnProperty.call(record2, "sce"))
+    for (const record3 of childrenRows) {
+      if (Object.keys(record3).length !== 2 || typeof record3.id !== "string" || seen.has(record3.id) || !Object.prototype.hasOwnProperty.call(record3, "sce"))
         return { status: "ambiguous" };
-      seen.add(record2.id);
-      const envelope = object3(record2.sce);
+      seen.add(record3.id);
+      const envelope = object3(record3.sce);
       if (envelope === void 0 || Object.keys(envelope).length !== 2 || typeof envelope.commitment !== "string" || !Object.prototype.hasOwnProperty.call(envelope, "projection"))
         return { status: "ambiguous" };
       const child = validateChildProjection(envelope.projection);
       const reference = child.ok ? expected.get(child.value.unitId) : void 0;
-      if (!child.ok || reference === void 0 || child.value.commitment !== envelope.commitment || this.childIssueId(child.value.unitId) !== record2.id || child.value.revision !== reference.revision || child.value.commitment !== reference.commitment || !same4(child.value.scope, parsedRoot.value.scope) || child.value.holder !== parsedRoot.value.holder || !same4(child.value.unit, parsedRoot.value.run.units[child.value.unitId]))
+      if (!child.ok || reference === void 0 || child.value.commitment !== envelope.commitment || this.childIssueId(child.value.unitId) !== record3.id || child.value.revision !== reference.revision || child.value.commitment !== reference.commitment || !same4(child.value.scope, parsedRoot.value.scope) || child.value.holder !== parsedRoot.value.holder || !same4(child.value.unit, parsedRoot.value.run.units[child.value.unitId]))
         return { status: "ambiguous" };
       children.push(child.value);
     }
@@ -20813,14 +20868,14 @@ var DoltProjectionPersistence = class {
     const seen = /* @__PURE__ */ new Set();
     let root;
     const children = [];
-    for (const record2 of records) {
-      if (Object.keys(record2).length !== 2 || !Object.prototype.hasOwnProperty.call(record2, "id") || !Object.prototype.hasOwnProperty.call(record2, "sce") || typeof record2.id !== "string" || !expectedIds.has(record2.id) || seen.has(record2.id))
+    for (const record3 of records) {
+      if (Object.keys(record3).length !== 2 || !Object.prototype.hasOwnProperty.call(record3, "id") || !Object.prototype.hasOwnProperty.call(record3, "sce") || typeof record3.id !== "string" || !expectedIds.has(record3.id) || seen.has(record3.id))
         return void 0;
-      seen.add(record2.id);
-      const envelope = object3(record2.sce);
+      seen.add(record3.id);
+      const envelope = object3(record3.sce);
       if (envelope === void 0 || Object.keys(envelope).length !== 2 || !Object.prototype.hasOwnProperty.call(envelope, "commitment") || !Object.prototype.hasOwnProperty.call(envelope, "projection") || typeof envelope.commitment !== "string")
         return void 0;
-      if (record2.id === this.rootIssueId) {
+      if (record3.id === this.rootIssueId) {
         const candidate2 = validateRootProjection(envelope.projection);
         if (!candidate2.ok || candidate2.value.aggregateCommitment !== envelope.commitment)
           return void 0;
@@ -20828,7 +20883,7 @@ var DoltProjectionPersistence = class {
         continue;
       }
       const candidate = validateChildProjection(envelope.projection);
-      if (!candidate.ok || candidate.value.commitment !== envelope.commitment || this.childIssueId(candidate.value.unitId) !== record2.id)
+      if (!candidate.ok || candidate.value.commitment !== envelope.commitment || this.childIssueId(candidate.value.unitId) !== record3.id)
         return void 0;
       children.push(candidate.value);
     }
@@ -20850,7 +20905,7 @@ var DoltProjectionPersistence = class {
       this.rejectedExecutable = operational ?? executable;
       return void 0;
     }
-    return new Promise((resolve6) => {
+    return new Promise((resolve8) => {
       let output = "";
       let bytes2 = 0;
       let settled = false;
@@ -20881,14 +20936,14 @@ var DoltProjectionPersistence = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve6(void 0);
+          resolve8(void 0);
         }
       });
       child.once("close", (code) => {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve6(code === 0 && bytes2 <= MAX_OUTPUT_BYTES2 ? output : void 0);
+          resolve8(code === 0 && bytes2 <= MAX_OUTPUT_BYTES2 ? output : void 0);
         }
       });
     });
@@ -20924,7 +20979,7 @@ var DoltProjectionPersistence = class {
       this.versionCheck = void 0;
       this.versionExecutable = executable;
     }
-    this.versionCheck ??= new Promise((resolve6) => {
+    this.versionCheck ??= new Promise((resolve8) => {
       let output = "";
       let settled = false;
       const child = spawn3(executable.path, ["version"], {
@@ -20950,14 +21005,14 @@ var DoltProjectionPersistence = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve6(false);
+          resolve8(false);
         }
       });
       child.once("close", (code) => {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve6(
+          resolve8(
             code === 0 && output.split("\n", 1)[0] === `dolt version ${PINNED_DOLT_VERSION2}`
           );
         }
@@ -22269,7 +22324,7 @@ var DoltSqlTransport = class {
   }
 };
 async function runDoltSql(request) {
-  return new Promise((resolve6) => {
+  return new Promise((resolve8) => {
     const child = spawn4(request.executable, request.argv, {
       env: request.env,
       stdio: ["ignore", "pipe", "pipe"]
@@ -22316,7 +22371,7 @@ async function runDoltSql(request) {
     child.once("close", (code) => {
       clearTimeout(timer);
       if (killTimer !== void 0) clearTimeout(killTimer);
-      resolve6({
+      resolve8({
         exitCode: capped || timedOut || failed ? void 0 : code ?? void 0,
         output,
         stderr,
@@ -22326,7 +22381,7 @@ async function runDoltSql(request) {
   });
 }
 async function runDoltSqlTransaction(input) {
-  return new Promise((resolve6) => {
+  return new Promise((resolve8) => {
     const child = spawn4(input.executable, input.argv, {
       env: {
         DOLT_CLI_PASSWORD: input.password ?? "",
@@ -22485,12 +22540,12 @@ async function runDoltSqlTransaction(input) {
     child.once("close", (code) => {
       clearTimeout(timer);
       if (killTimer !== void 0) clearTimeout(killTimer);
-      if (result2 !== void 0) return resolve6(result2);
+      if (result2 !== void 0) return resolve8(result2);
       if (code !== 0 || !finalSent || rowCount === void 0)
-        return resolve6({ status: "unavailable" });
+        return resolve8({ status: "unavailable" });
       if (rowCount !== input.expectedRows)
-        return resolve6({ status: "ok", rows: rowCount });
-      return resolve6(
+        return resolve8({ status: "ok", rows: rowCount });
+      return resolve8(
         postCommitClean && postCommitHead !== void 0 ? { status: "ok", rows: rowCount, committedHead: postCommitHead } : { status: "unavailable" }
       );
     });
@@ -22703,7 +22758,7 @@ var PinnedBdServerProcess = class {
   }
 };
 async function runPinnedBd(request) {
-  return new Promise((resolve6) => {
+  return new Promise((resolve8) => {
     const child = spawn4(request.executable, request.argv, {
       env: request.env,
       stdio: ["ignore", "pipe", "ignore"]
@@ -22741,7 +22796,7 @@ async function runPinnedBd(request) {
     child.once("close", (code) => {
       clearTimeout(timer);
       if (killTimer !== void 0) clearTimeout(killTimer);
-      resolve6({
+      resolve8({
         exitCode: capped || timedOut || failed ? void 0 : code ?? void 0,
         output,
         timedOut: capped || timedOut
@@ -22991,14 +23046,14 @@ function safeRecord(input, keys) {
     const expected = [...keys].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index]))
       return void 0;
-    const record2 = {};
+    const record3 = {};
     for (const key of keys) {
       const descriptor = descriptors[key];
       if (descriptor === void 0 || !("value" in descriptor))
         return void 0;
-      record2[key] = descriptor.value;
+      record3[key] = descriptor.value;
     }
-    return record2;
+    return record3;
   } catch {
     return void 0;
   }
@@ -23017,14 +23072,14 @@ function safeOptionalRecord(input, required2, optional) {
     const allowed = /* @__PURE__ */ new Set([...required2, ...optional]);
     if (actual.some((key) => !allowed.has(key)) || required2.some((key) => !actual.includes(key)))
       return void 0;
-    const record2 = {};
+    const record3 = {};
     for (const key of actual) {
       const descriptor = descriptors[key];
       if (descriptor === void 0 || !("value" in descriptor))
         return void 0;
-      record2[key] = descriptor.value;
+      record3[key] = descriptor.value;
     }
-    return record2;
+    return record3;
   } catch {
     return void 0;
   }
@@ -23116,7 +23171,7 @@ function parseCommit(input) {
   return isSchema(ServerCommitReadbackSchema, input) ? input : void 0;
 }
 function normalizedServerIdentity(input) {
-  const record2 = safeRecord(input, [
+  const record3 = safeRecord(input, [
     "autoCommitPolicy",
     "credentialProvenance",
     "credentialReference",
@@ -23129,19 +23184,19 @@ function normalizedServerIdentity(input) {
     "workerCredentialReference"
   ]);
   try {
-    return record2 !== void 0 && isSchema(ServerIdentitySchema, record2) ? record2 : void 0;
+    return record3 !== void 0 && isSchema(ServerIdentitySchema, record3) ? record3 : void 0;
   } catch {
     return void 0;
   }
 }
 function normalizedScope(input) {
-  const record2 = safeRecord(input, [
+  const record3 = safeRecord(input, [
     "beadsStoreIdentity",
     "gitRepositoryIdentity",
     "integrationBranch"
   ]);
   try {
-    return record2 !== void 0 && isSchema(FencingScopeSchema, record2) ? record2 : void 0;
+    return record3 !== void 0 && isSchema(FencingScopeSchema, record3) ? record3 : void 0;
   } catch {
     return void 0;
   }
@@ -25120,6 +25175,2042 @@ async function createControllerConfigRunner(path2, dependencies = {}) {
   );
 }
 
+// src/feedback/schemas.ts
+var import_ajv5 = __toESM(require_ajv(), 1);
+var utf88 = new TextEncoder();
+var ajv5 = new import_ajv5.Ajv({
+  allErrors: true,
+  coerceTypes: false,
+  removeAdditional: false,
+  strict: true,
+  useDefaults: false
+});
+ajv5.addKeyword({
+  keyword: "maxUtf8Bytes",
+  type: "string",
+  schemaType: "number",
+  validate: (limit, value) => utf88.encode(value).byteLength <= limit,
+  errors: false
+});
+function strictObject6(properties) {
+  return Type.Object(properties, { additionalProperties: false });
+}
+var text4 = (limit) => Type.String({ minLength: 1, maxLength: limit, maxUtf8Bytes: limit });
+var SupportedToolchainSchema = Type.Literal("node-22");
+var SceCapabilitySchema = Type.Union([
+  Type.Literal("feedback.outbox"),
+  Type.Literal("feedback.recovery"),
+  Type.Literal("feedback.submit"),
+  Type.Literal("feedback.transport")
+]);
+var FeedbackTargetSchema = strictObject6({
+  host: Type.Literal("github.com"),
+  repositoryId: Type.Literal("R_kgDOUCvUmw"),
+  repository: Type.Literal("hls-uk/single-controller-engineer")
+});
+var SafeTelemetryInputSchema = strictObject6({
+  kind: Type.Union([Type.Literal("bug"), Type.Literal("enhancement")]),
+  component: Type.Union([
+    Type.Literal("adapter"),
+    Type.Literal("capability"),
+    Type.Literal("protocol"),
+    Type.Literal("runtime"),
+    Type.Literal("topology")
+  ]),
+  toolVersion: text4(80),
+  toolchain: SupportedToolchainSchema,
+  requestedModelTier: Type.Union([
+    Type.Literal("frontier"),
+    Type.Literal("workhorse")
+  ]),
+  protocolState: Type.Union([
+    Type.Literal("blocked"),
+    Type.Literal("failed"),
+    Type.Literal("preflight"),
+    Type.Literal("recovery"),
+    Type.Literal("verification")
+  ]),
+  stableErrorCode: Type.String({
+    minLength: 5,
+    maxLength: 80,
+    maxUtf8Bytes: 80,
+    pattern: "^SCE_[A-Z0-9_]{1,75}$"
+  }),
+  capabilityId: SceCapabilitySchema
+});
+var ReviewedNarrativeInputSchema = strictObject6({
+  expected: Type.Optional(text4(4096)),
+  observed: Type.Optional(text4(4096)),
+  reproduction: Type.Optional(text4(4096)),
+  limitation: Type.Optional(text4(4096)),
+  desiredCapability: Type.Optional(text4(4096)),
+  value: Type.Optional(text4(4096)),
+  workaround: Type.Optional(text4(4096)),
+  completionExample: Type.Optional(text4(4096))
+});
+var FeedbackAuthoritySchema = strictObject6({
+  schemaVersion: Type.Literal(1),
+  operation: Type.Literal("create_issue"),
+  source: Type.Union([
+    Type.Literal("current_user"),
+    Type.Literal("policy_safe_telemetry")
+  ]),
+  targetRepositoryId: Type.Literal("R_kgDOUCvUmw"),
+  fingerprint: Type.String({
+    minLength: 64,
+    maxLength: 64,
+    pattern: "^[0-9a-f]{64}$"
+  }),
+  previewHash: Type.String({
+    minLength: 64,
+    maxLength: 64,
+    pattern: "^[0-9a-f]{64}$"
+  }),
+  operationNonce: Type.String({
+    minLength: 16,
+    maxLength: 160,
+    pattern: "^[A-Za-z0-9._:-]+$"
+  })
+});
+var GitHubIssueSchema = strictObject6({
+  repositoryId: Type.Literal("R_kgDOUCvUmw"),
+  number: Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+  url: Type.String({ minLength: 1, maxLength: 1024, maxUtf8Bytes: 1024 }),
+  body: Type.String({ minLength: 0, maxLength: 16384, maxUtf8Bytes: 16384 }),
+  open: Type.Boolean()
+});
+var GitHubDiscoverySchema = strictObject6({
+  repositoryId: Type.Literal("R_kgDOUCvUmw"),
+  paginationComplete: Type.Literal(true),
+  issues: Type.Array(GitHubIssueSchema, { maxItems: 1e4 })
+});
+var GitHubCreateRequestSchema = strictObject6({
+  target: FeedbackTargetSchema,
+  title: text4(512),
+  body: Type.String({ minLength: 1, maxLength: 16384, maxUtf8Bytes: 16384 })
+});
+function isFeedbackSchema(schema, value) {
+  return ajv5.compile(schema)(value);
+}
+
+// src/feedback/normalize.ts
+var utf89 = new TextEncoder();
+var MAX_NARRATIVE_BYTES = 4 * 1024;
+var DISALLOWED = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u200e\u200f\u061c\u202a-\u202e\u2066-\u2069]/u;
+function normalizedText(value, maxBytes) {
+  if (typeof value !== "string" || value.includes("\r") || hasUnpairedSurrogate(value))
+    return void 0;
+  const normalized = value.normalize("NFC");
+  if (DISALLOWED.test(normalized) || utf89.encode(normalized).byteLength > maxBytes)
+    return void 0;
+  return normalized;
+}
+function hasUnpairedSurrogate(value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 55296 && code <= 56319) {
+      const next = value.charCodeAt(index + 1);
+      if (!Number.isInteger(next) || next < 56320 || next > 57343)
+        return true;
+      index += 1;
+    } else if (code >= 56320 && code <= 57343) return true;
+  }
+  return false;
+}
+function normalizedSingleLine(value, maxBytes) {
+  const normalized = normalizedText(value, maxBytes);
+  return normalized === void 0 || normalized.includes("\n") ? void 0 : normalized;
+}
+function safeTelemetryText(value, maxBytes) {
+  const normalized = normalizedSingleLine(value, maxBytes);
+  return normalized === void 0 || credentialShaped(normalized) ? void 0 : normalized;
+}
+function credentialShaped(value) {
+  return containsSecretShape(value) || /\b(?:gh[pousr]_|github_pat_|glpat-|xox[baprs]-|sk-[A-Za-z0-9]|rk_live_|pk_live_|AKIA|ASIA|AIza|ya29\.|eyJ[A-Za-z0-9_-]{6,})[A-Za-z0-9._-]{8,}/u.test(
+    value
+  );
+}
+function inspectNarrative(value) {
+  const findings = [];
+  if (/https?:\/\//iu.test(value)) findings.push("url");
+  if (/(?:^|[\s"'])\/(?:Users|home|private|var|tmp)\//mu.test(value))
+    findings.push("absolute_path");
+  if (/\b(?:password|secret|api[_-]?key|authorization)\s*[:=]/iu.test(value))
+    findings.push("credential_like");
+  if (/\b(?:ghp_|github_pat_|sk-[A-Za-z0-9]|AKIA)[A-Za-z0-9_-]{8,}/u.test(value))
+    findings.push("token_like");
+  if (/```|\b(?:function|const|import|class)\s+[A-Za-z_$]/u.test(value))
+    findings.push("source_like");
+  return findings;
+}
+
+// src/feedback/packet.ts
+var FEEDBACK_SCHEMA_VERSION = 1;
+var FIXED_TARGET_NAME = "hls-uk/single-controller-engineer";
+var FIXED_TARGET_HOST = "github.com";
+var FIXED_TARGET_REPOSITORY_ID = "R_kgDOUCvUmw";
+var FEEDBACK_RELEASE_MANIFEST = {
+  schemaVersion: FEEDBACK_SCHEMA_VERSION,
+  target: {
+    host: FIXED_TARGET_HOST,
+    repositoryId: FIXED_TARGET_REPOSITORY_ID,
+    repository: FIXED_TARGET_NAME
+  }
+};
+var FIXED_FEEDBACK_TARGET = FEEDBACK_RELEASE_MANIFEST.target;
+var SEMVER = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:\.[0-9]+)?(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u;
+var KINDS = /* @__PURE__ */ new Set(["bug", "enhancement"]);
+var COMPONENTS = /* @__PURE__ */ new Set([
+  "adapter",
+  "capability",
+  "protocol",
+  "runtime",
+  "topology"
+]);
+var TIERS = /* @__PURE__ */ new Set(["frontier", "workhorse"]);
+var STATES = /* @__PURE__ */ new Set([
+  "blocked",
+  "failed",
+  "preflight",
+  "recovery",
+  "verification"
+]);
+var NARRATIVE_KEYS = [
+  "expected",
+  "observed",
+  "reproduction",
+  "limitation",
+  "desiredCapability",
+  "value",
+  "workaround",
+  "completionExample"
+];
+function majorMinor(version) {
+  const match = SEMVER.exec(version);
+  return match === null ? void 0 : `${match[1]}.${match[2]}`;
+}
+function fingerprintInput(telemetry) {
+  return {
+    capability_id: telemetry.capabilityId,
+    component: telemetry.component,
+    destination_repository_id: telemetry.destinationRepositoryId,
+    kind: telemetry.kind,
+    protocol_state: telemetry.protocolState,
+    schema_version: telemetry.schemaVersion,
+    stable_error_code: telemetry.stableErrorCode,
+    tool_major_minor: telemetry.toolMajorMinor
+  };
+}
+function feedbackFingerprint(telemetry) {
+  return sha256(canonicalJson(fingerprintInput(telemetry)));
+}
+function feedbackMarker(telemetry) {
+  return `<!-- sce-feedback:v${telemetry.schemaVersion};kind=${telemetry.kind};component=${telemetry.component};tool=${telemetry.toolMajorMinor};fingerprint=${telemetry.fingerprint} -->`;
+}
+function previewFeedback(packet) {
+  const valid = validateFeedbackPacket(packet);
+  if (valid === void 0) return void 0;
+  return {
+    targetUrl: "https://github.com/hls-uk/single-controller-engineer",
+    repositoryId: valid.target.repositoryId,
+    title: valid.title,
+    body: valid.body,
+    marker: valid.marker,
+    requiresCurrentUserAuthority: valid.narrative !== void 0 || valid.narrativeFindings.length > 0,
+    narrativeFindings: valid.narrativeFindings
+  };
+}
+function normalizeNarrative(input) {
+  if (input === void 0) return void 0;
+  if (!isFeedbackSchema(
+    ReviewedNarrativeInputSchema,
+    input
+  ))
+    return void 0;
+  const source = input;
+  const normalized = {};
+  for (const key of NARRATIVE_KEYS) {
+    const value = source[key];
+    if (value === void 0) continue;
+    const result2 = normalizedText(value, MAX_NARRATIVE_BYTES);
+    if (result2 === void 0 || result2.length === 0) return void 0;
+    normalized[key] = result2;
+  }
+  if (Object.keys(normalized).length === 0) return void 0;
+  const bytes2 = new TextEncoder().encode(
+    Object.values(normalized).join("\n")
+  ).byteLength;
+  return bytes2 <= MAX_NARRATIVE_BYTES ? normalized : void 0;
+}
+function narrativeBody(narrative) {
+  return NARRATIVE_KEYS.flatMap((key) => {
+    const value = narrative[key];
+    return value === void 0 ? [] : [`## ${key}
+${value}`];
+  }).join("\n\n");
+}
+function prepareFeedback(input, narrativeInput) {
+  if (!isFeedbackSchema(SafeTelemetryInputSchema, input))
+    return void 0;
+  const toolVersion = safeTelemetryText(input.toolVersion, 80);
+  const toolchain = safeTelemetryText(input.toolchain, 80);
+  const stableErrorCode = safeTelemetryText(input.stableErrorCode, 80);
+  const capabilityId = safeTelemetryText(input.capabilityId, 160);
+  if (toolVersion === void 0 || toolchain === void 0 || stableErrorCode === void 0 || capabilityId === void 0 || !SEMVER.test(toolVersion) || !KINDS.has(input.kind) || !COMPONENTS.has(input.component) || !TIERS.has(input.requestedModelTier) || !STATES.has(input.protocolState))
+    return void 0;
+  const toolMajorMinor = majorMinor(toolVersion);
+  if (toolMajorMinor === void 0) return void 0;
+  const unsigned = {
+    schemaVersion: FEEDBACK_SCHEMA_VERSION,
+    destinationRepositoryId: FIXED_TARGET_REPOSITORY_ID,
+    kind: input.kind,
+    component: input.component,
+    toolVersion,
+    toolchain,
+    requestedModelTier: input.requestedModelTier,
+    protocolState: input.protocolState,
+    stableErrorCode,
+    capabilityId,
+    toolMajorMinor
+  };
+  const telemetry = {
+    ...unsigned,
+    fingerprint: feedbackFingerprint(unsigned)
+  };
+  const narrative = normalizeNarrative(narrativeInput);
+  if (narrativeInput !== void 0 && narrative === void 0) return void 0;
+  const marker = feedbackMarker(telemetry);
+  const title = `[SCE ${telemetry.kind}] ${telemetry.component}: ${telemetry.stableErrorCode}`;
+  const body = [
+    "<!-- Generated controlled telemetry. -->",
+    `- Component: ${telemetry.component}`,
+    `- Tool version: ${telemetry.toolVersion}`,
+    `- Toolchain: ${telemetry.toolchain}`,
+    `- Requested model tier: ${telemetry.requestedModelTier}`,
+    `- Protocol state: ${telemetry.protocolState}`,
+    `- Stable error code: ${telemetry.stableErrorCode}`,
+    `- Capability: ${telemetry.capabilityId}`,
+    ...narrative === void 0 ? [] : ["", "# Reviewed narrative", narrativeBody(narrative)],
+    "",
+    marker
+  ].join("\n");
+  const narrativeFindings = narrative === void 0 ? [] : inspectNarrative(narrativeBody(narrative));
+  return {
+    schemaVersion: FEEDBACK_SCHEMA_VERSION,
+    target: FIXED_FEEDBACK_TARGET,
+    telemetry,
+    ...narrative === void 0 ? {} : { narrative },
+    title,
+    body,
+    marker,
+    narrativeFindings
+  };
+}
+function validateFeedbackPacket(value) {
+  try {
+    if (!isRecord(value) || !isRecord(value.telemetry)) return void 0;
+    const source = value.telemetry;
+    const candidate = prepareFeedback(
+      {
+        kind: source.kind,
+        component: source.component,
+        toolVersion: source.toolVersion,
+        toolchain: source.toolchain,
+        requestedModelTier: source.requestedModelTier,
+        protocolState: source.protocolState,
+        stableErrorCode: source.stableErrorCode,
+        capabilityId: source.capabilityId
+      },
+      value.narrative
+    );
+    return candidate !== void 0 && canonicalJson(candidate) === canonicalJson(value) ? candidate : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// src/feedback/authority.ts
+var FEEDBACK_AUTHORITY_VERSION = 1;
+function packetPreviewHashUnchecked(packet) {
+  return sha256(
+    canonicalJson({
+      body: packet.body,
+      target_repository_id: packet.target.repositoryId,
+      title: packet.title
+    })
+  );
+}
+function authorizes(packet, authority) {
+  const valid = validateFeedbackPacket(packet);
+  if (valid === void 0 || authority === void 0 || !isFeedbackSchema(FeedbackAuthoritySchema, authority))
+    return false;
+  if (authority.schemaVersion !== FEEDBACK_AUTHORITY_VERSION || authority.operation !== "create_issue" || authority.targetRepositoryId !== valid.target.repositoryId || authority.fingerprint !== valid.telemetry.fingerprint || authority.previewHash !== packetPreviewHashUnchecked(valid))
+    return false;
+  return authority.source === "current_user" || authority.source === "policy_safe_telemetry" && valid.narrative === void 0 && valid.narrativeFindings.length === 0;
+}
+
+// src/feedback/github.ts
+import { mkdtemp as mkdtemp2, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
+import { tmpdir as tmpdir2 } from "node:os";
+import { join as join4 } from "node:path";
+var MAX_PROVIDER_OUTPUT_BYTES = 128 * 1024;
+var PAGE_SIZE = 100;
+var MAX_ISSUES = 1e4;
+var discoveryQuery = `query($owner:String!,$name:String!,$cursor:String){repository(owner:$owner,name:$name){id issues(first:${PAGE_SIZE},after:$cursor,states:OPEN){nodes{number url body state} pageInfo{hasNextPage endCursor}}}}`;
+var repositoryIdentityQuery = "query($owner:String!,$name:String!){repository(owner:$owner,name:$name){id}}";
+var GhFeedbackTransport = class {
+  constructor(executor) {
+    this.executor = executor;
+  }
+  executor;
+  async discoverExactMarker(target, _marker) {
+    if (target.repository !== FIXED_TARGET_NAME || target.repositoryId !== FIXED_TARGET_REPOSITORY_ID)
+      throw unavailable3();
+    const issues = [];
+    let cursor = null;
+    while (true) {
+      const response = await this.graphql(discoveryQuery, cursor);
+      const page = parseIssuePage(response);
+      if (page === void 0) throw unavailable3();
+      issues.push(...page.issues);
+      if (issues.length > MAX_ISSUES) throw unavailable3();
+      if (!page.hasNextPage) break;
+      if (page.endCursor === null || page.endCursor.length === 0)
+        throw unavailable3();
+      cursor = page.endCursor;
+    }
+    const discovery = {
+      repositoryId: FIXED_TARGET_REPOSITORY_ID,
+      paginationComplete: true,
+      issues
+    };
+    return discovery;
+  }
+  async createIssue(request) {
+    if (request.target.repository !== FIXED_TARGET_NAME || request.target.repositoryId !== FIXED_TARGET_REPOSITORY_ID)
+      throw rejected();
+    const directory = await mkdtemp2(join4(tmpdir2(), "sce-feedback-gh-"));
+    const bodyFile = join4(directory, "body.md");
+    try {
+      await writeFile2(bodyFile, request.body, {
+        encoding: "utf8",
+        mode: 384
+      });
+      if (!await this.hasFixedRepositoryIdentity()) throw rejected();
+      const created = await this.invoke("gh", [
+        "issue",
+        "create",
+        "--repo",
+        FIXED_TARGET_NAME,
+        "--title",
+        request.title,
+        "--body-file",
+        bodyFile
+      ]);
+      if (created === void 0) throw unavailable3();
+      const number = issueNumber(created);
+      if (number === void 0) throw rejected();
+      const readback = await this.invoke("gh", [
+        "issue",
+        "view",
+        String(number),
+        "--repo",
+        FIXED_TARGET_NAME,
+        "--json",
+        "number,url,body,state"
+      ]);
+      const issue = readback === void 0 ? void 0 : parseReadback(readback);
+      if (issue === void 0) throw rejected();
+      if (!await this.hasFixedRepositoryIdentity()) throw rejected();
+      return issue;
+    } finally {
+      await rm2(directory, { force: true, recursive: true });
+    }
+  }
+  async graphql(query, cursor) {
+    const result2 = await this.invoke("gh", [
+      "api",
+      "graphql",
+      "--raw-field",
+      `query=${query}`,
+      "--raw-field",
+      "owner=hls-uk",
+      "--raw-field",
+      "name=single-controller-engineer",
+      ...cursor === null ? [] : ["--raw-field", `cursor=${cursor}`]
+    ]);
+    if (result2 === void 0) throw unavailable3();
+    return parseJson(result2);
+  }
+  async hasFixedRepositoryIdentity() {
+    const response = await this.graphql(repositoryIdentityQuery, null);
+    const repository = nested(response, ["data", "repository"]);
+    const candidate = record2(repository);
+    return candidate !== void 0 && exactKeys2(candidate, ["id"]) && candidate.id === FIXED_TARGET_REPOSITORY_ID;
+  }
+  async invoke(file, args) {
+    try {
+      const result2 = await this.executor.execute(file, args);
+      if (result2.code !== 0 || !bounded(result2.stdout)) return void 0;
+      return result2.stdout;
+    } catch {
+      return void 0;
+    }
+  }
+};
+function parseIssuePage(value) {
+  const repository = nested(value, ["data", "repository"]);
+  const issues = nested(repository, ["issues"]);
+  if (record2(repository)?.id !== FIXED_TARGET_REPOSITORY_ID || !record2(issues))
+    return void 0;
+  const nodes = record2(issues)?.nodes;
+  const pageInfo = record2(issues)?.pageInfo;
+  if (!Array.isArray(nodes) || !record2(pageInfo)) return void 0;
+  const parsed = nodes.map(parseIssue);
+  if (parsed.some((issue) => issue === void 0)) return void 0;
+  const hasNextPage = record2(pageInfo)?.hasNextPage;
+  const endCursor = record2(pageInfo)?.endCursor;
+  if (typeof hasNextPage !== "boolean" || endCursor !== null && typeof endCursor !== "string")
+    return void 0;
+  return {
+    endCursor,
+    hasNextPage,
+    issues: parsed
+  };
+}
+function parseReadback(value) {
+  return parseIssue(parseJson(value));
+}
+function parseIssue(value) {
+  const candidate = record2(value);
+  if (candidate === void 0 || !exactKeys2(candidate, ["number", "url", "body", "state"]) || !Number.isSafeInteger(candidate.number) || candidate.number < 1 || typeof candidate.url !== "string" || typeof candidate.body !== "string" || candidate.state !== "OPEN" && candidate.state !== "CLOSED")
+    return void 0;
+  const number = candidate.number;
+  const url = `https://github.com/${FIXED_TARGET_NAME}/issues/${number}`;
+  if (candidate.url !== url) return void 0;
+  return {
+    repositoryId: FIXED_TARGET_REPOSITORY_ID,
+    number,
+    url,
+    body: candidate.body,
+    open: candidate.state === "OPEN"
+  };
+}
+function parseJson(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return void 0;
+  }
+}
+function issueNumber(value) {
+  const match = /^https:\/\/github\.com\/hls-uk\/single-controller-engineer\/issues\/([1-9][0-9]*)\s*$/u.exec(
+    value
+  );
+  if (!match?.[1]) return void 0;
+  const number = Number(match[1]);
+  return Number.isSafeInteger(number) ? number : void 0;
+}
+function record2(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : void 0;
+}
+function nested(value, path2) {
+  let current = value;
+  for (const key of path2) {
+    const next = record2(current);
+    if (next === void 0) return void 0;
+    current = next[key];
+  }
+  return current;
+}
+function exactKeys2(value, keys) {
+  return Object.keys(value).sort().join("\0") === [...keys].sort().join("\0");
+}
+function bounded(value) {
+  return new TextEncoder().encode(value).byteLength <= MAX_PROVIDER_OUTPUT_BYTES;
+}
+function unavailable3() {
+  return Object.assign(new Error("provider unavailable"), {
+    code: "GITHUB_UNAVAILABLE"
+  });
+}
+function rejected() {
+  return Object.assign(new Error("provider rejected"), {
+    code: "GITHUB_REJECTED"
+  });
+}
+
+// src/feedback/outbox.ts
+import {
+  chmodSync as chmodSync2,
+  closeSync as closeSync4,
+  constants as constants2,
+  fstatSync as fstatSync2,
+  fsyncSync,
+  lstatSync as lstatSync2,
+  mkdirSync as mkdirSync2,
+  openSync as openSync4,
+  readFileSync as readFileSync2,
+  readdirSync,
+  realpathSync as realpathSync5,
+  renameSync,
+  statSync as statSync4,
+  unlinkSync as unlinkSync2,
+  writeFileSync as writeFileSync2
+} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { join as join5 } from "node:path";
+
+// src/feedback/submit.ts
+function canonicalIssueUrl(number) {
+  return `https://github.com/hls-uk/single-controller-engineer/issues/${number}`;
+}
+function validIssueReadback(packet, value, bodyProof) {
+  return isFeedbackSchema(GitHubIssueSchema, value) && value.repositoryId === packet.target.repositoryId && value.url === canonicalIssueUrl(value.number) && (bodyProof === "exact_generated" ? value.body === packet.body : value.body.includes(packet.marker));
+}
+function discoveredMarkerMatches(packet, issues) {
+  return issues.filter(
+    (issue) => issue.open && validIssueReadback(packet, issue, "marker")
+  ).sort((left, right) => left.number - right.number);
+}
+async function discoverExisting(packet, transport) {
+  const valid = validateFeedbackPacket(packet);
+  if (valid === void 0) return { status: "invalid" };
+  let raw;
+  try {
+    raw = await transport.discoverExactMarker(valid.target, valid.marker);
+  } catch {
+    return { status: "unavailable" };
+  }
+  if (!isFeedbackSchema(GitHubDiscoverySchema, raw))
+    return { status: "invalid" };
+  if (raw.repositoryId !== valid.target.repositoryId)
+    return { status: "invalid" };
+  const matches = discoveredMarkerMatches(valid, raw.issues);
+  return matches[0] === void 0 ? { status: "absent" } : { status: "existing", issue: matches[0] };
+}
+async function executeDurableIntent(packet, authority, transport) {
+  const valid = validateFeedbackPacket(packet);
+  if (valid === void 0)
+    return { status: "ambiguous", code: "GITHUB_REJECTED" };
+  if (!authorizes(valid, authority)) return { status: "unauthorized" };
+  const discovery = await discoverExisting(valid, transport);
+  if (discovery.status === "existing")
+    return { status: "existing", issue: discovery.issue };
+  if (discovery.status === "invalid")
+    return { status: "ambiguous", code: "GITHUB_REJECTED" };
+  if (discovery.status === "unavailable")
+    return { status: "ambiguous", code: "GITHUB_UNAVAILABLE" };
+  try {
+    const request = {
+      target: valid.target,
+      title: valid.title,
+      body: valid.body
+    };
+    if (!isFeedbackSchema(GitHubCreateRequestSchema, request))
+      return { status: "ambiguous", code: "GITHUB_REJECTED" };
+    const issue = await transport.createIssue(request);
+    return validIssueReadback(valid, issue, "exact_generated") ? { status: "submitted", issue } : { status: "ambiguous", code: "GITHUB_REJECTED" };
+  } catch (error) {
+    return {
+      status: "ambiguous",
+      code: error.code === "GITHUB_REJECTED" ? "GITHUB_REJECTED" : "GITHUB_UNAVAILABLE"
+    };
+  }
+}
+
+// src/feedback/outbox.ts
+var OUTBOX_MAX_PACKETS = 100;
+var OUTBOX_MAX_BYTES = 5 * 1024 * 1024;
+var OUTBOX_SCHEMA_VERSION = 1;
+var FINGERPRINT = /^[0-9a-f]{64}$/u;
+var activeFlushes = /* @__PURE__ */ new Set();
+var FeedbackOutbox = class _FeedbackOutbox {
+  constructor(directory, hooks) {
+    this.hooks = hooks;
+    this.directory = directory;
+    this.lockPath = join5(directory, ".lock");
+  }
+  hooks;
+  directory;
+  lockPath;
+  static open(commonDir, hooks = {}) {
+    const directory = outboxDirectory(commonDir);
+    return directory === void 0 ? { status: "unavailable" } : { status: "ok", value: new _FeedbackOutbox(directory, hooks) };
+  }
+  enqueue(packet) {
+    return this.withLock(() => {
+      const valid = validateFeedbackPacket(packet);
+      if (valid === void 0) return { status: "invalid" };
+      const path2 = this.packetPath(valid.telemetry.fingerprint);
+      const existing = safeFile(path2);
+      if (existing !== void 0) {
+        const envelope = parseEnvelope(existing);
+        return envelope !== void 0 && samePacket(envelope.packet, valid) ? { status: "ok", value: void 0 } : { status: "invalid" };
+      }
+      const source = sourceFor({
+        schemaVersion: OUTBOX_SCHEMA_VERSION,
+        status: "pending",
+        packet: valid
+      });
+      const quota = this.hasCapacity(
+        new TextEncoder().encode(source).byteLength
+      );
+      if (quota !== "ok") return { status: quota };
+      return this.write(path2, {
+        schemaVersion: OUTBOX_SCHEMA_VERSION,
+        status: "pending",
+        packet: valid
+      });
+    });
+  }
+  read(fingerprint) {
+    if (!FINGERPRINT.test(fingerprint)) return { status: "invalid" };
+    const source = safeFile(this.packetPath(fingerprint));
+    if (source === void 0) return { status: "not_found" };
+    const envelope = parseEnvelope(source);
+    return envelope === void 0 || envelope.packet.telemetry.fingerprint !== fingerprint ? { status: "invalid" } : { status: "ok", value: envelope };
+  }
+  list() {
+    const names = safeNames(this.directory);
+    if (names === void 0) return { status: "unavailable" };
+    const envelopes = [];
+    for (const name of names.filter(
+      (entry) => /^[0-9a-f]{64}\.json$/u.test(entry)
+    )) {
+      const source = safeFile(join5(this.directory, name));
+      const envelope = source === void 0 ? void 0 : parseEnvelope(source);
+      if (envelope === void 0 || envelope.packet.telemetry.fingerprint !== name.slice(0, -5))
+        return { status: "invalid" };
+      envelopes.push(envelope);
+    }
+    return {
+      status: "ok",
+      value: envelopes.sort(
+        (a, b) => a.packet.telemetry.fingerprint.localeCompare(
+          b.packet.telemetry.fingerprint
+        )
+      )
+    };
+  }
+  findExactMarker(marker) {
+    const listed = this.list();
+    return listed.status !== "ok" ? listed : {
+      status: "ok",
+      value: listed.value.filter((entry) => entry.packet.marker === marker)
+    };
+  }
+  markSubmitIntent(fingerprint, operationNonce) {
+    if (!/^[A-Za-z0-9._:-]{16,160}$/u.test(operationNonce))
+      return { status: "invalid" };
+    return this.transition(
+      fingerprint,
+      ["pending", "submit_intent"],
+      "submit_intent",
+      { operationNonce }
+    );
+  }
+  markSubmitted(fingerprint, issue) {
+    const current = this.read(fingerprint);
+    if (current.status !== "ok" || !isFeedbackSchema(GitHubIssueSchema, issue) || issue.repositoryId !== FIXED_TARGET_REPOSITORY_ID || issue.url !== `https://github.com/hls-uk/single-controller-engineer/issues/${issue.number}` || issue.body !== current.value.packet.body)
+      return { status: "invalid" };
+    return this.transition(
+      fingerprint,
+      ["pending", "submit_intent"],
+      "submitted",
+      {
+        issue: { number: issue.number, url: issue.url }
+      }
+    );
+  }
+  quarantine(fingerprint, stableErrorCode) {
+    if (!/^[A-Z][A-Z0-9_]{0,79}$/u.test(stableErrorCode))
+      return { status: "invalid" };
+    return this.transition(
+      fingerprint,
+      ["pending", "submit_intent", "submitted", "quarantined"],
+      "quarantined",
+      { stableErrorCode }
+    );
+  }
+  async recoverSubmitIntent(fingerprint, transport) {
+    const loaded = this.read(fingerprint);
+    if (loaded.status !== "ok") return loaded;
+    if (loaded.value.status !== "submit_intent") return { status: "invalid" };
+    try {
+      const existing = await discoverExisting(loaded.value.packet, transport);
+      if (existing.status === "existing") {
+        const persisted = this.markSubmitted(fingerprint, existing.issue);
+        return persisted.status === "ok" ? { status: "existing", value: persisted.value } : persisted;
+      }
+      if (existing.status === "absent")
+        return { status: "absent", value: loaded.value };
+      return {
+        status: "ambiguous",
+        code: existing.status === "invalid" ? "GITHUB_REJECTED" : "GITHUB_UNAVAILABLE"
+      };
+    } catch {
+      return { status: "ambiguous", code: "GITHUB_UNAVAILABLE" };
+    }
+  }
+  async flush(fingerprint, authority, transport) {
+    const flushKey = `${this.directory}/${fingerprint}`;
+    if (activeFlushes.has(flushKey)) return { status: "busy" };
+    activeFlushes.add(flushKey);
+    const submissionLock = this.acquireSubmissionLock(fingerprint);
+    if (submissionLock.status !== "ok") {
+      activeFlushes.delete(flushKey);
+      return submissionLock;
+    }
+    try {
+      const loaded = this.read(fingerprint);
+      if (loaded.status !== "ok") return loaded;
+      if (loaded.value.status === "quarantined" || loaded.value.status === "submitted")
+        return { status: "invalid" };
+      if (loaded.value.status === "submit_intent") {
+        const recovered = await this.recoverSubmitIntent(
+          fingerprint,
+          transport
+        );
+        if (recovered.status === "ambiguous") return recovered;
+        if (recovered.status === "existing")
+          return {
+            status: "existing",
+            issue: {
+              repositoryId: recovered.value.packet.target.repositoryId,
+              number: recovered.value.issue.number,
+              url: recovered.value.issue.url,
+              body: recovered.value.packet.body,
+              open: true
+            }
+          };
+        if (recovered.status !== "absent") return recovered;
+        if (authority === void 0 || recovered.value.operationNonce === authority.operationNonce)
+          return { status: "unauthorized" };
+      }
+      if (authority === void 0 || !authorizes(loaded.value.packet, authority))
+        return { status: "unauthorized" };
+      const intent2 = this.markSubmitIntent(
+        fingerprint,
+        authority.operationNonce
+      );
+      if (intent2.status !== "ok") return intent2;
+      const result2 = await executeDurableIntent(
+        intent2.value.packet,
+        authority,
+        transport
+      );
+      if (result2.status === "submitted" || result2.status === "existing") {
+        const persisted = this.markSubmitted(fingerprint, result2.issue);
+        if (persisted.status !== "ok") return persisted;
+      }
+      return result2;
+    } finally {
+      this.releaseLock(
+        submissionLock.descriptor,
+        submissionLock.identity,
+        submissionLock.path
+      );
+      activeFlushes.delete(flushKey);
+    }
+  }
+  transition(fingerprint, allowed, status, extra = {}) {
+    return this.withLock(() => {
+      const current = this.read(fingerprint);
+      if (current.status !== "ok") return current;
+      if (!allowed.includes(current.value.status)) return { status: "invalid" };
+      const next = { ...current.value, status, ...extra };
+      const written = this.write(this.packetPath(fingerprint), next);
+      return written.status === "ok" ? { status: "ok", value: next } : written;
+    });
+  }
+  withLock(operation) {
+    let descriptor;
+    let opened;
+    try {
+      if (constants2.O_NOFOLLOW === void 0) return { status: "unavailable" };
+      descriptor = openSync4(
+        this.lockPath,
+        constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | constants2.O_NOFOLLOW,
+        384
+      );
+      const stat2 = fstatSync2(descriptor);
+      if (!stat2.isFile() || (stat2.mode & 511) !== 384)
+        return { status: "unavailable" };
+      opened = { dev: stat2.dev, ino: stat2.ino };
+      return operation();
+    } catch (error) {
+      if (error.code !== "EEXIST")
+        return { status: "unavailable" };
+      return this.recoverKilledLock(this.lockPath) ? this.withLock(operation) : { status: "busy" };
+    } finally {
+      if (descriptor !== void 0) {
+        closeSync4(descriptor);
+        try {
+          const stat2 = lstatSync2(this.lockPath);
+          if (stat2.isFile() && !stat2.isSymbolicLink() && (stat2.mode & 511) === 384 && stat2.dev === opened?.dev && stat2.ino === opened?.ino)
+            unlinkSync2(this.lockPath);
+        } catch {
+        }
+      }
+    }
+  }
+  recoverKilledLock(path2) {
+    try {
+      const stat2 = lstatSync2(path2);
+      if (!stat2.isFile() || stat2.isSymbolicLink() || (stat2.mode & 511) !== 384)
+        return false;
+      const identity2 = { dev: stat2.dev, ino: stat2.ino };
+      if (this.hooks.recoverKilledLock?.(identity2) !== true) return false;
+      const current = lstatSync2(path2);
+      if (current.dev !== identity2.dev || current.ino !== identity2.ino || current.isSymbolicLink())
+        return false;
+      unlinkSync2(path2);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  acquireSubmissionLock(fingerprint) {
+    const path2 = join5(this.directory, `.submit-${fingerprint}.lock`);
+    try {
+      if (constants2.O_NOFOLLOW === void 0) return { status: "unavailable" };
+      const descriptor = openSync4(
+        path2,
+        constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | constants2.O_NOFOLLOW,
+        384
+      );
+      const stat2 = fstatSync2(descriptor);
+      if (!stat2.isFile() || (stat2.mode & 511) !== 384) {
+        closeSync4(descriptor);
+        return { status: "unavailable" };
+      }
+      return {
+        status: "ok",
+        descriptor,
+        identity: { dev: stat2.dev, ino: stat2.ino },
+        path: path2
+      };
+    } catch (error) {
+      if (error.code !== "EEXIST")
+        return { status: "unavailable" };
+      return this.recoverKilledLock(path2) ? this.acquireSubmissionLock(fingerprint) : { status: "busy" };
+    }
+  }
+  releaseLock(descriptor, identity2, path2) {
+    closeSync4(descriptor);
+    try {
+      const stat2 = lstatSync2(path2);
+      if (stat2.isFile() && !stat2.isSymbolicLink() && stat2.dev === identity2.dev && stat2.ino === identity2.ino)
+        unlinkSync2(path2);
+    } catch {
+    }
+  }
+  hasCapacity(incomingBytes) {
+    const names = safeNames(this.directory);
+    if (names === void 0) return "unavailable";
+    let packets = 0;
+    let bytes2 = 0;
+    for (const name of names) {
+      if (name === ".lock") continue;
+      const stat2 = safeStat(join5(this.directory, name));
+      if (stat2 === void 0) return "unavailable";
+      bytes2 += stat2.size;
+      if (/^[0-9a-f]{64}\.json$/u.test(name)) packets += 1;
+    }
+    return packets >= OUTBOX_MAX_PACKETS || bytes2 + incomingBytes > OUTBOX_MAX_BYTES ? "quota" : "ok";
+  }
+  write(path2, envelope) {
+    const source = sourceFor(envelope);
+    if (new TextEncoder().encode(source).byteLength > OUTBOX_MAX_BYTES)
+      return { status: "quota" };
+    const temporary = join5(
+      this.directory,
+      `.${envelope.packet.telemetry.fingerprint}.${randomUUID()}.tmp`
+    );
+    let descriptor;
+    try {
+      if (constants2.O_NOFOLLOW === void 0) return { status: "unavailable" };
+      descriptor = openSync4(
+        temporary,
+        constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | constants2.O_NOFOLLOW,
+        384
+      );
+      writeFileSync2(descriptor, source, "utf8");
+      fsyncSync(descriptor);
+      this.hooks.afterTempFsync?.();
+      closeSync4(descriptor);
+      descriptor = void 0;
+      renameSync(temporary, path2);
+      fsyncDirectory(this.directory);
+      this.hooks.afterRename?.();
+      return { status: "ok", value: void 0 };
+    } catch {
+      return { status: "unavailable" };
+    } finally {
+      if (descriptor !== void 0) closeSync4(descriptor);
+    }
+  }
+  packetPath(fingerprint) {
+    return join5(this.directory, `${fingerprint}.json`);
+  }
+};
+function outboxDirectory(commonDir) {
+  try {
+    if (lstatSync2(commonDir).isSymbolicLink()) return void 0;
+    const resolved = realpathSync5(commonDir);
+    if (!strictDirectory2(resolved)) return void 0;
+    const sce = join5(resolved, "sce");
+    createStrictDirectory(sce);
+    const outbox = join5(sce, "feedback-outbox");
+    createStrictDirectory(outbox);
+    return statSync4(resolved).dev === statSync4(outbox).dev ? outbox : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function createStrictDirectory(path2) {
+  let created = false;
+  try {
+    mkdirSync2(path2, { mode: 448 });
+    created = true;
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+  }
+  if (!strictDirectory2(path2)) throw new Error("unsafe outbox directory");
+  if (created) chmodSync2(path2, 448);
+  if (!strictDirectory2(path2, 448)) throw new Error("unsafe outbox directory");
+}
+function strictDirectory2(path2, mode) {
+  try {
+    const stat2 = lstatSync2(path2);
+    return stat2.isDirectory() && !stat2.isSymbolicLink() && (typeof process.getuid !== "function" || stat2.uid === process.getuid()) && (mode === void 0 || (stat2.mode & 511) === mode);
+  } catch {
+    return false;
+  }
+}
+function safeNames(directory) {
+  try {
+    return readdirSync(directory);
+  } catch {
+    return void 0;
+  }
+}
+function safeStat(path2) {
+  try {
+    const stat2 = lstatSync2(path2);
+    return stat2.isFile() && !stat2.isSymbolicLink() ? stat2 : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function safeFile(path2) {
+  let descriptor;
+  try {
+    const before = lstatSync2(path2);
+    if (!before.isFile() || before.isSymbolicLink() || (before.mode & 511) !== 384 || constants2.O_NOFOLLOW === void 0)
+      return void 0;
+    descriptor = openSync4(path2, constants2.O_RDONLY | constants2.O_NOFOLLOW);
+    const opened = fstatSync2(descriptor);
+    if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.size > OUTBOX_MAX_BYTES)
+      return void 0;
+    return readFileSync2(descriptor, "utf8");
+  } catch {
+    return void 0;
+  } finally {
+    if (descriptor !== void 0) closeSync4(descriptor);
+  }
+}
+function fsyncDirectory(directory) {
+  const descriptor = openSync4(directory, constants2.O_RDONLY);
+  try {
+    fsyncSync(descriptor);
+  } finally {
+    closeSync4(descriptor);
+  }
+}
+function samePacket(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+function sourceFor(envelope) {
+  return JSON.stringify(envelope);
+}
+function parseEnvelope(value) {
+  try {
+    const parsed = JSON.parse(value);
+    if (!isObject(parsed) || !hasExactKeys2(parsed, [
+      "schemaVersion",
+      "status",
+      "packet",
+      "stableErrorCode",
+      "issue",
+      "operationNonce"
+    ]))
+      return void 0;
+    const status = parsed.status;
+    if (!isStatus(status) || parsed.schemaVersion !== OUTBOX_SCHEMA_VERSION || !isObject(parsed.packet))
+      return void 0;
+    const packet = parsed.packet;
+    const valid = validateFeedbackPacket(packet);
+    if (valid === void 0) return void 0;
+    const stableErrorCode = parsed.stableErrorCode;
+    const issue = parsed.issue;
+    const operationNonce = parsed.operationNonce;
+    if (stableErrorCode !== void 0 && (typeof stableErrorCode !== "string" || !/^[A-Z][A-Z0-9_]{0,79}$/u.test(stableErrorCode)))
+      return void 0;
+    if (issue !== void 0 && !validIssue(issue)) return void 0;
+    if (operationNonce !== void 0 && (typeof operationNonce !== "string" || !/^[A-Za-z0-9._:-]{16,160}$/u.test(operationNonce)))
+      return void 0;
+    if (status === "submitted" && issue === void 0) return void 0;
+    if (status === "submit_intent" && operationNonce === void 0)
+      return void 0;
+    if (status === "quarantined" && stableErrorCode === void 0)
+      return void 0;
+    return {
+      schemaVersion: OUTBOX_SCHEMA_VERSION,
+      status,
+      packet: valid,
+      ...stableErrorCode === void 0 ? {} : { stableErrorCode },
+      ...issue === void 0 ? {} : { issue: { number: issue.number, url: issue.url } },
+      ...operationNonce === void 0 ? {} : { operationNonce }
+    };
+  } catch {
+    return void 0;
+  }
+}
+function isObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function hasExactKeys2(value, allowed) {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+function validIssue(value) {
+  return isObject(value) && typeof value.number === "number" && Number.isSafeInteger(value.number) && value.number >= 1 && typeof value.url === "string" && value.url === `https://github.com/hls-uk/single-controller-engineer/issues/${value.number}` && Object.keys(value).every((key) => key === "number" || key === "url");
+}
+function isStatus(value) {
+  return value === "pending" || value === "submit_intent" || value === "submitted" || value === "quarantined";
+}
+
+// src/feedback/runtime.ts
+import { execFile } from "node:child_process";
+import { constants as constants3, accessSync, lstatSync as lstatSync3, realpathSync as realpathSync6 } from "node:fs";
+import { isAbsolute as isAbsolute8, resolve as resolve5 } from "node:path";
+import { promisify } from "node:util";
+var executeFile = promisify(execFile);
+var MAX_COMMAND_OUTPUT_BYTES = 128 * 1024;
+var MAX_GIT_COMMON_DIR_BYTES = 4 * 1024;
+var EXECUTABLE_CANDIDATES = {
+  gh: ["/usr/bin/gh", "/usr/local/bin/gh", "/opt/homebrew/bin/gh"],
+  git: ["/usr/bin/git"]
+};
+var processFeedbackCommandExecutor = {
+  async execute(file, args, options = {}) {
+    const executable = productionExecutable(file);
+    if (executable === void 0) return { code: 126, stderr: "", stdout: "" };
+    try {
+      const result2 = await executeFile(executable, [...args], {
+        cwd: options.cwd,
+        encoding: "utf8",
+        env: feedbackEnvironment(file),
+        maxBuffer: MAX_COMMAND_OUTPUT_BYTES,
+        shell: false,
+        timeout: 15e3,
+        windowsHide: true
+      });
+      return {
+        code: 0,
+        stderr: typeof result2.stderr === "string" ? result2.stderr : "",
+        stdout: typeof result2.stdout === "string" ? result2.stdout : ""
+      };
+    } catch (error) {
+      const failure2 = error;
+      return {
+        code: typeof failure2.code === "number" ? failure2.code : 1,
+        stderr: boundedText(failure2.stderr) ?? "",
+        stdout: boundedText(failure2.stdout) ?? ""
+      };
+    }
+  }
+};
+function productionExecutable(file) {
+  if (file !== "git" && file !== "gh") return void 0;
+  for (const candidate of EXECUTABLE_CANDIDATES[file]) {
+    try {
+      const real = realpathSync6(candidate);
+      const entry = lstatSync3(real);
+      accessSync(real, constants3.X_OK);
+      if (isAbsolute8(real) && entry.isFile() && !entry.isSymbolicLink())
+        return real;
+    } catch {
+    }
+  }
+  return void 0;
+}
+function feedbackEnvironment(file) {
+  const environment = {
+    GH_PROMPT_DISABLED: "1",
+    LANG: "C",
+    LC_ALL: "C",
+    NO_COLOR: "1",
+    PATH: "/usr/bin:/bin",
+    TZ: "UTC"
+  };
+  if (file !== "gh") return environment;
+  for (const key of [
+    "GH_CONFIG_DIR",
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "HOME",
+    "XDG_CONFIG_HOME"
+  ]) {
+    const value = process.env[key];
+    if (value !== void 0 && !value.includes("\0"))
+      environment[key] = value;
+  }
+  return environment;
+}
+async function resolveGitCommonDirectory(executor, cwd = process.cwd()) {
+  let result2;
+  try {
+    result2 = await executor.execute("git", ["rev-parse", "--git-common-dir"], {
+      cwd
+    });
+  } catch {
+    return void 0;
+  }
+  if (result2.code !== 0) return void 0;
+  const output = boundedText(result2.stdout, MAX_GIT_COMMON_DIR_BYTES);
+  if (output === void 0) return void 0;
+  const lines2 = output.split("\n");
+  const candidate = lines2[0];
+  if (lines2.length !== 2 || lines2[1] !== "" || candidate === void 0 || candidate === "")
+    return void 0;
+  if (candidate.includes("\0") || candidate.includes("\r") || candidate.includes("\n"))
+    return void 0;
+  try {
+    const real = realpathSync6(resolve5(cwd, candidate));
+    const entry = lstatSync3(real);
+    return entry.isDirectory() && !entry.isSymbolicLink() ? real : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function boundedText(value, limit = MAX_COMMAND_OUTPUT_BYTES) {
+  if (typeof value !== "string") return void 0;
+  return new TextEncoder().encode(value).byteLength <= limit ? value : void 0;
+}
+
+// src/feedback/cli.ts
+async function runFeedbackCliAction(action, request, dependencies = {}) {
+  if (action === "prepare") return prepare(request);
+  if (action === "preview") return preview(request);
+  if (action === "submit") return submit(request, dependencies);
+  return flush(request, dependencies);
+}
+function prepare(request) {
+  const source = exactObject(request, ["telemetry", "narrative"]);
+  if (source === void 0)
+    return invalid(
+      "SCE_INVALID_FEEDBACK_REQUEST",
+      "Feedback request is invalid."
+    );
+  const packet = prepareFeedback(
+    source.telemetry,
+    source.narrative
+  );
+  return packet === void 0 ? invalid("SCE_INVALID_FEEDBACK_REQUEST", "Feedback request is invalid.") : { ok: true, result: { packet } };
+}
+function preview(request) {
+  const source = exactObject(request, ["packet"]);
+  if (source === void 0)
+    return invalid(
+      "SCE_INVALID_FEEDBACK_REQUEST",
+      "Feedback request is invalid."
+    );
+  const preview2 = previewFeedback(source.packet);
+  return preview2 === void 0 ? invalid("SCE_INVALID_FEEDBACK_PACKET", "Feedback packet is invalid.") : { ok: true, result: { preview: preview2 } };
+}
+async function submit(request, dependencies) {
+  const source = exactObject(request, ["packet", "authority"]);
+  if (source === void 0)
+    return invalid(
+      "SCE_INVALID_FEEDBACK_REQUEST",
+      "Feedback request is invalid."
+    );
+  const packet = validateFeedbackPacket(source.packet);
+  if (packet === void 0)
+    return invalid(
+      "SCE_INVALID_FEEDBACK_PACKET",
+      "Feedback packet is invalid."
+    );
+  const authority = parseAuthority(source.authority);
+  const outbox = await openOutbox(dependencies);
+  if (outbox === void 0)
+    return unavailable4(
+      "SCE_FEEDBACK_OUTBOX_UNAVAILABLE",
+      "Feedback outbox is unavailable."
+    );
+  const enqueued = outbox.enqueue(packet);
+  if (enqueued.status !== "ok")
+    return unavailable4(
+      "SCE_FEEDBACK_OUTBOX_UNAVAILABLE",
+      "Feedback outbox is unavailable."
+    );
+  if (authority === void 0 || !authorizes(packet, authority))
+    return queued("SCE_FEEDBACK_QUEUED_AUTHORITY");
+  return await executeFlush(
+    outbox,
+    packet.telemetry.fingerprint,
+    authority,
+    dependencies
+  );
+}
+async function flush(request, dependencies) {
+  const source = exactObject(request, ["fingerprint", "authority"]);
+  if (source === void 0 || typeof source.fingerprint !== "string" || !/^[0-9a-f]{64}$/u.test(source.fingerprint))
+    return invalid(
+      "SCE_INVALID_FEEDBACK_REQUEST",
+      "Feedback request is invalid."
+    );
+  const outbox = await openOutbox(dependencies);
+  if (outbox === void 0)
+    return unavailable4(
+      "SCE_FEEDBACK_OUTBOX_UNAVAILABLE",
+      "Feedback outbox is unavailable."
+    );
+  const loaded = outbox.read(source.fingerprint);
+  if (loaded.status === "not_found")
+    return invalid("SCE_FEEDBACK_NOT_FOUND", "Feedback packet is not queued.");
+  if (loaded.status !== "ok")
+    return unavailable4(
+      "SCE_FEEDBACK_OUTBOX_UNAVAILABLE",
+      "Feedback outbox is unavailable."
+    );
+  if (loaded.value.status === "submitted" && loaded.value.issue !== void 0)
+    return {
+      ok: true,
+      result: { issue: loaded.value.issue, status: "existing" }
+    };
+  const authority = parseAuthority(source.authority);
+  if (authority === void 0 || !authorizes(loaded.value.packet, authority))
+    return queued("SCE_FEEDBACK_QUEUED_AUTHORITY");
+  return await executeFlush(
+    outbox,
+    source.fingerprint,
+    authority,
+    dependencies
+  );
+}
+async function executeFlush(outbox, fingerprint, authority, dependencies) {
+  const transport = dependencies.transport ?? new GhFeedbackTransport(
+    dependencies.executor ?? processFeedbackCommandExecutor
+  );
+  let result2;
+  try {
+    result2 = await outbox.flush(fingerprint, authority, transport);
+  } catch {
+    return unavailable4(
+      "SCE_FEEDBACK_QUEUED_UNAVAILABLE",
+      "Feedback remains queued."
+    );
+  }
+  if (result2.status === "submitted" || result2.status === "existing") {
+    return {
+      ok: true,
+      result: { issue: publicIssue(result2.issue), status: result2.status }
+    };
+  }
+  if (result2.status === "unauthorized")
+    return queued("SCE_FEEDBACK_QUEUED_AUTHORITY");
+  if (result2.status === "ambiguous")
+    return unavailable4(
+      "SCE_FEEDBACK_QUEUED_UNAVAILABLE",
+      "Feedback remains queued."
+    );
+  return unavailable4(
+    "SCE_FEEDBACK_OUTBOX_UNAVAILABLE",
+    "Feedback outbox is unavailable."
+  );
+}
+async function openOutbox(dependencies) {
+  const common = await (dependencies.resolveCommonDirectory ?? (() => resolveGitCommonDirectory(
+    dependencies.executor ?? processFeedbackCommandExecutor,
+    dependencies.cwd
+  )))().catch(() => void 0);
+  if (common === void 0) return void 0;
+  const opened = FeedbackOutbox.open(common);
+  return opened.status === "ok" ? opened.value : void 0;
+}
+function parseAuthority(value) {
+  const source = exactObject(value, [
+    "schemaVersion",
+    "operation",
+    "source",
+    "targetRepositoryId",
+    "fingerprint",
+    "previewHash",
+    "operationNonce"
+  ]);
+  if (source === void 0 || source.schemaVersion !== 1 || source.operation !== "create_issue" || source.source !== "current_user" && source.source !== "policy_safe_telemetry" || source.targetRepositoryId !== "R_kgDOUCvUmw" || typeof source.fingerprint !== "string" || typeof source.previewHash !== "string" || typeof source.operationNonce !== "string")
+    return void 0;
+  return source;
+}
+function exactObject(value, allowed) {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    return void 0;
+  const record3 = value;
+  return Object.keys(record3).every((key) => allowed.includes(key)) ? record3 : void 0;
+}
+function publicIssue(issue) {
+  return { number: issue.number, url: issue.url };
+}
+function invalid(code, message) {
+  return { code, exitCode: 64, message, ok: false };
+}
+function queued(code) {
+  return {
+    code,
+    exitCode: 69,
+    message: "Feedback remains durably queued.",
+    ok: false
+  };
+}
+function unavailable4(code, message) {
+  return { code, exitCode: 69, message, ok: false };
+}
+
+// src/install/index.ts
+import { createHash as createHash5, randomUUID as randomUUID2 } from "node:crypto";
+import {
+  cp,
+  lstat,
+  mkdir,
+  open as open2,
+  readFile as readFile2,
+  readdir,
+  rename,
+  rm as rm3,
+  unlink,
+  writeFile as writeFile3
+} from "node:fs/promises";
+import { basename as basename3, dirname as dirname5, join as join6, resolve as resolve6 } from "node:path";
+var INSTALL_MANIFEST = ".sce-skill-install.json";
+var INSTALL_JOURNAL = ".sce-skill-install.transaction.json";
+var INSTALL_LOCK = ".sce-skill-install.lock";
+var INSTALL_LOCK_REAPER = ".sce-skill-install.lock-reaper";
+var SKILL_NAMES = [
+  "single-controller-engineer",
+  "single-controller-feedback"
+];
+var PACKAGE_NAME = "@hls-uk/single-controller-engineer";
+var SEMVER2 = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+var HASH = /^[a-f0-9]{64}$/u;
+var JOURNAL_PREFIX = ".sce-install-";
+var SkillInstallError = class extends Error {
+  name = "SkillInstallError";
+};
+var SimulatedProcessLoss = class extends Error {
+  name = "SimulatedProcessLoss";
+};
+function fail2(message) {
+  throw new SkillInstallError(message);
+}
+function asRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : void 0;
+}
+function hasExactKeys3(value, keys) {
+  return Object.keys(value).sort().join("\0") === [...keys].sort().join("\0");
+}
+function skillPath(path2) {
+  const segments = path2.split("/");
+  return segments.length >= 2 && (segments[0] === SKILL_NAMES[0] || segments[0] === SKILL_NAMES[1]) && segments.every((part) => part.length > 0 && part !== "." && part !== "..");
+}
+function canonicalRelative(path2) {
+  if (path2.startsWith("/") || path2.includes("\\") || !skillPath(path2))
+    fail2(`unsafe manifest path: ${path2}`);
+  return path2;
+}
+function parseManifest(value) {
+  const root = asRecord(value);
+  if (root === void 0 || !hasExactKeys3(root, ["files", "package", "schema", "skills", "version"]) || root.schema !== "sce.skill-install" || root.version !== 1 || root.package !== PACKAGE_NAME || !Array.isArray(root.files))
+    fail2("invalid skill-install manifest");
+  const skills = asRecord(root.skills);
+  if (skills === void 0 || !hasExactKeys3(skills, SKILL_NAMES))
+    fail2("invalid skill-install manifest skill versions");
+  const parsedSkills = {};
+  for (const name of SKILL_NAMES) {
+    const version = skills[name];
+    if (typeof version !== "string" || !SEMVER2.test(version))
+      fail2("invalid skill-install manifest skill version");
+    parsedSkills[name] = version;
+  }
+  if (parsedSkills[SKILL_NAMES[0]] !== parsedSkills[SKILL_NAMES[1]])
+    fail2("paired skills must declare the same version");
+  const files = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const candidate of root.files) {
+    const file = asRecord(candidate);
+    if (file === void 0 || !hasExactKeys3(file, ["path", "sha256"]) || typeof file.path !== "string" || typeof file.sha256 !== "string" || !HASH.test(file.sha256))
+      fail2("invalid skill-install manifest file");
+    const path2 = canonicalRelative(file.path);
+    if (seen.has(path2)) fail2("duplicate skill-install manifest path");
+    seen.add(path2);
+    files.push({ path: path2, sha256: file.sha256 });
+  }
+  if (files.length === 0 || SKILL_NAMES.some((name) => !seen.has(`${name}/SKILL.md`)))
+    fail2("skill-install manifest lacks a complete pair");
+  return {
+    files: files.sort((left, right) => left.path.localeCompare(right.path)),
+    package: PACKAGE_NAME,
+    schema: "sce.skill-install",
+    skills: parsedSkills,
+    version: 1
+  };
+}
+function parseJournal(value) {
+  const journal = asRecord(value);
+  if (journal === void 0 || !hasExactKeys3(journal, [
+    "backup",
+    "manifest",
+    "operation",
+    "phase",
+    "previous",
+    "schema",
+    "stage",
+    "version"
+  ]) || journal.schema !== "sce.skill-install.transaction" || journal.version !== 1 || journal.operation !== "install" && journal.operation !== "uninstall" || journal.phase !== "staged" && journal.phase !== "backing-up" && journal.phase !== "swapping" && journal.phase !== "committed" || typeof journal.stage !== "string" || typeof journal.backup !== "string" || !journal.stage.startsWith(JOURNAL_PREFIX) || !journal.stage.endsWith(".stage") || !journal.backup.startsWith(JOURNAL_PREFIX) || !journal.backup.endsWith(".backup"))
+    fail2("invalid skill-install transaction journal");
+  return {
+    backup: journal.backup,
+    manifest: parseManifest(journal.manifest),
+    operation: journal.operation,
+    phase: journal.phase,
+    previous: journal.previous === null ? null : parseManifest(journal.previous),
+    schema: "sce.skill-install.transaction",
+    stage: journal.stage,
+    version: 1
+  };
+}
+async function sha2562(path2) {
+  return createHash5("sha256").update(await readFile2(path2)).digest("hex");
+}
+async function fsync(path2) {
+  const handle = await open2(path2, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+async function fsyncTree(root) {
+  const entry = await lstat(root);
+  if (entry.isSymbolicLink())
+    fail2(`symbolic links are not installable: ${root}`);
+  if (entry.isFile()) return await fsync(root);
+  if (!entry.isDirectory()) fail2(`unsupported install entry: ${root}`);
+  for (const child of await readdir(root)) await fsyncTree(join6(root, child));
+  await fsync(root);
+}
+async function assertSafeExistingAncestors(path2) {
+  let current = resolve6(path2);
+  while (true) {
+    const entry = await lstat(current).catch(() => void 0);
+    if (entry?.isSymbolicLink() && current !== "/var" && current !== "/tmp")
+      fail2(`refusing symlinked install parent: ${current}`);
+    const parent = dirname5(current);
+    if (parent === current) return;
+    current = parent;
+  }
+}
+async function assertDirectory(path2, create = false) {
+  await assertSafeExistingAncestors(path2);
+  if (create) await mkdir(path2, { recursive: true, mode: 448 });
+  const entry = await lstat(path2).catch(() => void 0);
+  if (!entry?.isDirectory() || entry.isSymbolicLink())
+    fail2(`refusing non-directory install path: ${path2}`);
+}
+async function filesAt(root, prefix = "") {
+  const entries = await readdir(root, { withFileTypes: true });
+  const result2 = [];
+  for (const entry of entries.sort(
+    (left, right) => left.name.localeCompare(right.name)
+  )) {
+    const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
+    const fullPath = join6(root, entry.name);
+    if (entry.isSymbolicLink())
+      fail2(`symbolic links are not installable: ${relativePath}`);
+    if (entry.isDirectory())
+      result2.push(...await filesAt(fullPath, relativePath));
+    else if (entry.isFile())
+      result2.push({
+        path: canonicalRelative(relativePath),
+        sha256: await sha2562(fullPath)
+      });
+    else fail2(`unsupported install entry: ${relativePath}`);
+  }
+  return result2;
+}
+async function skillVersion(path2) {
+  const text5 = await readFile2(join6(path2, "SKILL.md"), "utf8").catch(
+    () => fail2(`missing SKILL.md in ${basename3(path2)}`)
+  );
+  const match = /^<!--\s*sce-skill-version:\s*([^\s#]+)\s*-->\s*$/mu.exec(text5);
+  if (!match?.[1] || !SEMVER2.test(match[1]))
+    fail2(`invalid skill version in ${basename3(path2)}`);
+  return match[1];
+}
+async function createSkillInstallManifest(source) {
+  const resolved = resolve6(source);
+  await assertDirectory(resolved);
+  const skills = {};
+  const files = [];
+  for (const name of SKILL_NAMES) {
+    const skillRoot = join6(resolved, name);
+    const entry = await lstat(skillRoot).catch(() => void 0);
+    if (!entry?.isDirectory() || entry.isSymbolicLink())
+      fail2(`missing regular skill directory: ${name}`);
+    skills[name] = await skillVersion(skillRoot);
+    files.push(...await filesAt(skillRoot, name));
+  }
+  return parseManifest({
+    files,
+    package: PACKAGE_NAME,
+    schema: "sce.skill-install",
+    skills,
+    version: 1
+  });
+}
+function stable(value) {
+  return `${JSON.stringify(value, null, 2)}
+`;
+}
+async function writeDurable(path2, value) {
+  const temporary = `${path2}.${randomUUID2()}.tmp`;
+  await writeFile3(temporary, stable(value), { mode: 384 });
+  await fsync(temporary);
+  await rename(temporary, path2);
+  await fsync(dirname5(path2));
+}
+async function readManifest(destination) {
+  const path2 = join6(destination, INSTALL_MANIFEST);
+  const entry = await lstat(path2).catch(() => void 0);
+  if (entry === void 0) return void 0;
+  if (!entry.isFile() || entry.isSymbolicLink())
+    fail2("invalid existing skill-install manifest");
+  try {
+    return parseManifest(JSON.parse(await readFile2(path2, "utf8")));
+  } catch (error) {
+    if (error instanceof SkillInstallError) throw error;
+    fail2("invalid existing skill-install manifest");
+  }
+}
+async function readJournal(destination) {
+  const path2 = join6(destination, INSTALL_JOURNAL);
+  const entry = await lstat(path2).catch(() => void 0);
+  if (entry === void 0) return void 0;
+  if (!entry.isFile() || entry.isSymbolicLink())
+    fail2("invalid skill-install transaction journal");
+  try {
+    return parseJournal(JSON.parse(await readFile2(path2, "utf8")));
+  } catch (error) {
+    if (error instanceof SkillInstallError) throw error;
+    fail2("invalid skill-install transaction journal");
+  }
+}
+function localTransactionPath(parent, name) {
+  if (basename3(name) !== name || !name.startsWith(JOURNAL_PREFIX))
+    fail2("unsafe skill-install transaction path");
+  return join6(parent, name);
+}
+async function validateTree(root, manifest) {
+  for (const name of SKILL_NAMES) {
+    const directory = join6(root, name);
+    const entry = await lstat(directory).catch(() => void 0);
+    if (!entry?.isDirectory() || entry.isSymbolicLink())
+      fail2(`installed skill missing: ${name}`);
+    if (await skillVersion(directory) !== manifest.skills[name])
+      fail2(`installed skill version differs: ${name}`);
+  }
+  const actual = (await Promise.all(
+    SKILL_NAMES.map((name) => filesAt(join6(root, name), name))
+  )).flat().sort((left, right) => left.path.localeCompare(right.path));
+  const expected = manifest.files;
+  if (actual.length !== expected.length)
+    fail2("installed tree differs from manifest");
+  for (let index = 0; index < expected.length; index += 1) {
+    const wanted = expected[index];
+    const found = actual[index];
+    if (wanted === void 0 || found === void 0 || wanted.path !== found.path || wanted.sha256 !== found.sha256)
+      fail2("installed tree differs from manifest");
+  }
+}
+async function validateInstalled(destination, manifest) {
+  const recorded = await readManifest(destination);
+  if (recorded === void 0 || stable(recorded) !== stable(manifest))
+    fail2("installed manifest differs from expected manifest");
+  await validateTree(destination, manifest);
+}
+async function assertOwnedOrAbsent(destination, manifest) {
+  const entries = await Promise.all(
+    SKILL_NAMES.map(
+      async (name) => [
+        name,
+        await lstat(join6(destination, name)).catch(() => void 0)
+      ]
+    )
+  );
+  const anySkill = entries.some(([, entry]) => entry !== void 0);
+  if (manifest === void 0) {
+    if (anySkill || await lstat(join6(destination, INSTALL_MANIFEST)).catch(() => void 0))
+      fail2("refusing unrelated skill collision");
+    return;
+  }
+  await validateInstalled(destination, manifest);
+}
+async function move(from, to, phase, fault) {
+  await fault?.(`before-${phase}`);
+  await rename(from, to);
+  await fsync(dirname5(from));
+  if (dirname5(to) !== dirname5(from)) await fsync(dirname5(to));
+  await fault?.(`after-${phase}`);
+}
+async function movePresent(from, to, phase, fault) {
+  if (!await lstat(from).catch(() => void 0)) return false;
+  await move(from, to, phase, fault);
+  return true;
+}
+async function removeJournal(destination) {
+  await unlink(join6(destination, INSTALL_JOURNAL));
+  await fsync(destination);
+}
+async function cleanCommitted(destination, parent, journal) {
+  const stage = localTransactionPath(parent, journal.stage);
+  const backup = localTransactionPath(parent, journal.backup);
+  if (journal.operation === "install")
+    await validateInstalled(destination, journal.manifest);
+  else {
+    if (await readManifest(destination))
+      fail2("uninstall transaction did not remove manifest");
+    for (const name of SKILL_NAMES) {
+      if (await lstat(join6(destination, name)).catch(() => void 0))
+        fail2("uninstall transaction did not remove skill pair");
+    }
+  }
+  await rm3(stage, { force: true, recursive: true });
+  await rm3(backup, { force: true, recursive: true });
+  await fsync(parent);
+  await removeJournal(destination);
+}
+async function preserveForRecovery(parent, source) {
+  const entry = await lstat(source).catch(() => void 0);
+  if (!entry) return;
+  const preserved = join6(
+    parent,
+    `.sce-recovery-${randomUUID2()}-${basename3(source)}`
+  );
+  await rename(source, preserved);
+  await fsync(parent);
+}
+async function restoreBackup(destination, parent, journal) {
+  const backup = localTransactionPath(parent, journal.backup);
+  try {
+    if (journal.previous !== null) {
+      for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
+        const target = join6(destination, name);
+        const source = join6(backup, name);
+        if (!await lstat(target).catch(() => void 0) && await lstat(source).catch(() => void 0))
+          await rename(source, target);
+      }
+      try {
+        await validatePrior(destination, journal);
+        await writeDurable(join6(destination, INSTALL_JOURNAL), {
+          ...journal,
+          phase: "committed"
+        });
+        return;
+      } catch {
+      }
+    }
+    for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
+      await preserveForRecovery(parent, join6(destination, name));
+    for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
+      const source = join6(backup, name);
+      if (await lstat(source).catch(() => void 0))
+        await rename(source, join6(destination, name));
+    }
+    await fsync(destination);
+    if (journal.previous === null) {
+      for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
+        if (await lstat(join6(destination, name)).catch(() => void 0))
+          fail2(
+            "recovery-needed: prior empty installation could not be restored"
+          );
+      }
+    } else await validateInstalled(destination, journal.previous);
+    await writeDurable(join6(destination, INSTALL_JOURNAL), {
+      ...journal,
+      phase: "committed"
+    });
+  } catch {
+    fail2("recovery-needed: rollback failed; backup was preserved");
+  }
+}
+async function validatePrior(destination, journal) {
+  if (journal.previous === null) {
+    for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
+      if (await lstat(join6(destination, name)).catch(() => void 0))
+        fail2("recovery-needed: prior empty installation could not be restored");
+    }
+  } else await validateInstalled(destination, journal.previous);
+}
+async function cleanRollback(destination, parent, journal) {
+  await validatePrior(destination, journal);
+  await rm3(localTransactionPath(parent, journal.stage), {
+    force: true,
+    recursive: true
+  });
+  await rm3(localTransactionPath(parent, journal.backup), {
+    force: true,
+    recursive: true
+  });
+  await fsync(parent);
+  await removeJournal(destination);
+}
+async function recover(destination, parent) {
+  const journal = await readJournal(destination);
+  if (!journal) return;
+  if (journal.operation === "install") {
+    try {
+      await validateInstalled(destination, journal.manifest);
+      await writeDurable(join6(destination, INSTALL_JOURNAL), {
+        ...journal,
+        phase: "committed"
+      });
+      await cleanCommitted(destination, parent, {
+        ...journal,
+        phase: "committed"
+      });
+      return;
+    } catch (error) {
+      if (journal.phase === "staged") {
+        await cleanRollback(destination, parent, journal);
+        return;
+      }
+      await restoreBackup(destination, parent, journal);
+      await cleanRollback(destination, parent, journal);
+      return;
+    }
+  }
+  if (journal.phase === "committed") {
+    await cleanCommitted(destination, parent, journal);
+    return;
+  }
+  await restoreBackup(destination, parent, journal);
+  await cleanRollback(destination, parent, journal);
+}
+async function acquireLock(destination) {
+  const path2 = join6(destination, INSTALL_LOCK);
+  const reaper = join6(destination, INSTALL_LOCK_REAPER);
+  let handle;
+  try {
+    handle = await open2(path2, "wx", 384);
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    try {
+      await mkdir(reaper, { mode: 448 });
+    } catch (guard) {
+      if (guard.code === "EEXIST")
+        fail2("another skill installation is active");
+      throw guard;
+    }
+    try {
+      const text5 = await readFile2(path2, "utf8").catch(() => "");
+      const pid = /^pid=(\d+)(?:\ntoken=[0-9a-f-]+)?\n?$/u.exec(text5)?.[1];
+      if (!pid) fail2("another skill installation is active");
+      try {
+        process.kill(Number(pid), 0);
+        fail2("another skill installation is active");
+      } catch (probe) {
+        if (probe.code !== "ESRCH")
+          fail2("another skill installation is active");
+      }
+      await unlink(path2);
+      handle = await open2(path2, "wx", 384);
+    } finally {
+      await rm3(reaper, { recursive: true }).catch(() => void 0);
+      await fsync(destination);
+    }
+  }
+  if (await lstat(reaper).catch(() => void 0)) {
+    await handle.close();
+    await unlink(path2).catch(() => void 0);
+    fail2("another skill installation is active");
+  }
+  const token = randomUUID2();
+  await handle.writeFile(`pid=${process.pid}
+token=${token}
+`, "utf8");
+  await handle.sync();
+  const acquired = await handle.stat();
+  await handle.close();
+  await fsync(destination);
+  return async () => {
+    const current = await lstat(path2).catch(() => void 0);
+    const text5 = await readFile2(path2, "utf8").catch(() => void 0);
+    if (current?.dev === acquired.dev && current.ino === acquired.ino && text5 === `pid=${process.pid}
+token=${token}
+`)
+      await unlink(path2);
+    await fsync(destination);
+  };
+}
+async function withLock(destination, operation) {
+  const release = await acquireLock(destination);
+  try {
+    return await operation();
+  } finally {
+    await release();
+  }
+}
+async function installSkills(options) {
+  const source = resolve6(options.source);
+  const destination = resolve6(options.destination);
+  const manifest = await createSkillInstallManifest(source);
+  if (options.dryRun) {
+    const entry = await lstat(destination).catch(() => void 0);
+    if (entry !== void 0) {
+      await assertDirectory(destination);
+      await assertOwnedOrAbsent(destination, await readManifest(destination));
+    }
+    return { manifest, status: "dry-run" };
+  }
+  await assertDirectory(destination, true);
+  if (options.stagingDirectory !== void 0 && resolve6(options.stagingDirectory) !== destination)
+    fail2("staging must be destination-local for deterministic recovery");
+  const parent = destination;
+  return await withLock(destination, async () => {
+    await recover(destination, parent);
+    const previous = await readManifest(destination);
+    await assertOwnedOrAbsent(destination, previous);
+    const transaction = `${JOURNAL_PREFIX}${randomUUID2()}`;
+    const stage = `${transaction}.stage`;
+    const backup = `${transaction}.backup`;
+    const stagePath = localTransactionPath(parent, stage);
+    const backupPath = localTransactionPath(parent, backup);
+    await mkdir(stagePath, { mode: 448 });
+    for (const name of SKILL_NAMES)
+      await cp(join6(source, name), join6(stagePath, name), {
+        recursive: true,
+        verbatimSymlinks: true
+      });
+    await writeDurable(join6(stagePath, INSTALL_MANIFEST), manifest);
+    await fsyncTree(stagePath);
+    await mkdir(backupPath, { mode: 448 });
+    let journal = {
+      backup,
+      manifest,
+      operation: "install",
+      phase: "staged",
+      previous: previous ?? null,
+      schema: "sce.skill-install.transaction",
+      stage,
+      version: 1
+    };
+    await writeDurable(join6(destination, INSTALL_JOURNAL), journal);
+    try {
+      journal = { ...journal, phase: "backing-up" };
+      await writeDurable(join6(destination, INSTALL_JOURNAL), journal);
+      for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
+        await movePresent(
+          join6(destination, name),
+          join6(backupPath, name),
+          "backup",
+          options.fault
+        );
+      journal = { ...journal, phase: "swapping" };
+      await writeDurable(join6(destination, INSTALL_JOURNAL), journal);
+      for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
+        await move(
+          join6(stagePath, name),
+          join6(destination, name),
+          "new",
+          options.fault
+        );
+      await validateInstalled(destination, manifest);
+      await options.fault?.("after-post-swap-validation");
+      journal = { ...journal, phase: "committed" };
+      await writeDurable(join6(destination, INSTALL_JOURNAL), journal);
+      await cleanCommitted(destination, parent, journal);
+      return { manifest, status: "installed" };
+    } catch (error) {
+      if (error instanceof SimulatedProcessLoss) throw error;
+      try {
+        if (journal.phase === "staged")
+          await cleanRollback(destination, parent, journal);
+        else {
+          await restoreBackup(destination, parent, journal);
+          await cleanRollback(destination, parent, journal);
+        }
+      } catch (rollback) {
+        throw rollback;
+      }
+      throw error;
+    }
+  });
+}
+async function uninstallSkills(destinationInput, options = {}) {
+  const destination = resolve6(destinationInput);
+  await assertDirectory(destination);
+  await withLock(destination, async () => {
+    await recover(destination, destination);
+    const manifest = await readManifest(destination);
+    if (!manifest) fail2("no recorded skill installation to remove");
+    await validateInstalled(destination, manifest);
+    const transaction = `${JOURNAL_PREFIX}${randomUUID2()}`;
+    const backup = `${transaction}.backup`;
+    const backupPath = localTransactionPath(destination, backup);
+    await mkdir(backupPath, { mode: 448 });
+    const journal = {
+      backup,
+      manifest,
+      operation: "uninstall",
+      phase: "backing-up",
+      previous: manifest,
+      schema: "sce.skill-install.transaction",
+      stage: `${transaction}.stage`,
+      version: 1
+    };
+    await writeDurable(join6(destination, INSTALL_JOURNAL), journal);
+    try {
+      for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
+        await move(
+          join6(destination, name),
+          join6(backupPath, name),
+          "backup",
+          options.fault
+        );
+      await fsync(destination);
+      const committed = {
+        ...journal,
+        phase: "committed"
+      };
+      await writeDurable(join6(destination, INSTALL_JOURNAL), committed);
+      await cleanCommitted(destination, destination, committed);
+    } catch (error) {
+      if (error instanceof SimulatedProcessLoss) throw error;
+      try {
+        await recover(destination, destination);
+      } catch (rollback) {
+        throw rollback;
+      }
+      throw error;
+    }
+  });
+}
+
 // src/cli.ts
 var CLI_VERSION = "0.1.0";
 var REQUEST_SCHEMA = "sce.command.request";
@@ -25136,6 +27227,14 @@ var knownOptions = /* @__PURE__ */ new Set([
   "--json",
   "--request"
 ]);
+var installerOptions = /* @__PURE__ */ new Set([
+  "--host",
+  "--destination",
+  "--dry-run",
+  "--help"
+]);
+var installerCommands = ["install-skill", "uninstall-skill"];
+var cliCommandNames = [...commandNames, ...installerCommands];
 var CliError = class extends Error {
   code;
   exitCode;
@@ -25175,10 +27274,77 @@ function parseCliArguments(argv) {
   if (first.startsWith("-")) {
     throw new CliError("SCE_UNKNOWN_OPTION", "Unknown option.");
   }
+  if (isInstallerCommand(first))
+    return parseInstallerCommand(first, argv.slice(1));
   if (!isCommandName(first)) {
     throw new CliError("SCE_UNKNOWN_COMMAND", "Unknown command.");
   }
   return parseCommand(first, argv.slice(1));
+}
+function isInstallerCommand(value) {
+  return installerCommands.includes(value);
+}
+function parseInstallerCommand(command, argv) {
+  const values = /* @__PURE__ */ new Map();
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token === void 0) continue;
+    if (!token.startsWith("-"))
+      throw new CliError("SCE_UNEXPECTED_ARGUMENT", "Unexpected argument.");
+    const [option, inlineValue] = splitOption(
+      token === "-h" ? "--help" : token
+    );
+    if (!installerOptions.has(option))
+      throw new CliError("SCE_UNKNOWN_OPTION", "Unknown option.");
+    if (option === "--dry-run" || option === "--help") {
+      if (inlineValue !== void 0)
+        throw new CliError(
+          "SCE_INVALID_OPTION_VALUE",
+          `${option} does not accept a value.`
+        );
+      setOption(values, option, true);
+      continue;
+    }
+    const value = inlineValue ?? argv[++index];
+    if (value === void 0 || value === "--" || value.startsWith("--"))
+      throw new CliError(
+        "SCE_MISSING_OPTION_VALUE",
+        `${option} requires a value.`
+      );
+    setOption(values, option, value);
+  }
+  if (values.has("--help")) {
+    if (values.size !== 1)
+      throw new CliError(
+        "SCE_UNEXPECTED_ARGUMENT",
+        "--help does not accept arguments."
+      );
+    return { command, kind: "help" };
+  }
+  const host = optionValue(values, "--host");
+  const destination = optionValue(values, "--destination");
+  if (host !== "codex" && host !== "claude")
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      "--host must be codex or claude."
+    );
+  if (destination === void 0)
+    throw new CliError(
+      "SCE_MISSING_OPTION_VALUE",
+      "--destination requires a value."
+    );
+  if (command === "uninstall-skill" && values.has("--dry-run"))
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      "--dry-run is only supported by install-skill."
+    );
+  return {
+    command,
+    destination: parseDestination(destination),
+    dryRun: values.has("--dry-run"),
+    host,
+    kind: "installer"
+  };
 }
 function parseCommand(command, argv) {
   const positionals = [];
@@ -25233,6 +27399,11 @@ function parseCommand(command, argv) {
     }
     return { command, kind: "help" };
   }
+  if (command === "feedback" && (values.has("--controller-config") || values.has("--expected-revision") || values.has("--idempotency-key") || values.has("--json")))
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      "This feedback action accepts only --request."
+    );
   const feedbackAction = parsePositionals(command, positionals);
   const request = {
     command,
@@ -25300,18 +27471,32 @@ function parseOptions(values) {
   };
 }
 function parseControllerConfigPath(value) {
-  if (!isAbsolute8(value) || value.length > 4096 || value.includes("\0"))
+  if (!isAbsolute9(value) || value.length > 4096 || value.includes("\0"))
     throw new CliError(
       "SCE_INVALID_OPTION_VALUE",
       "--controller-config must be an absolute path."
     );
-  const path2 = normalize5(resolve5(value));
+  const path2 = normalize5(resolve7(value));
   if (path2 === "/")
     throw new CliError(
       "SCE_INVALID_OPTION_VALUE",
       "--controller-config must be an absolute path."
     );
   return path2;
+}
+function parseDestination(value) {
+  if (!isAbsolute9(value) || value.length > 4096 || value.includes("\0"))
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      "--destination must be an absolute non-root path."
+    );
+  const destination = normalize5(resolve7(value));
+  if (destination === "/")
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      "--destination must be an absolute non-root path."
+    );
+  return destination;
 }
 function optionValue(values, option) {
   const value = values.get(option);
@@ -25371,6 +27556,22 @@ async function runCli(argv, dependencies = {}) {
     }
     if (invocation.kind === "version") {
       return success({ version: dependencies.version ?? CLI_VERSION });
+    }
+    if (invocation.kind === "installer") {
+      return await runInstaller(invocation, dependencies);
+    }
+    if (invocation.request.command === "feedback") {
+      const feedback = await runFeedbackCliAction(
+        invocation.request.feedbackAction,
+        invocation.request.options.request,
+        dependencies.feedback
+      );
+      return feedback.ok ? success(feedback.result, "feedback") : failure(
+        feedback.code,
+        feedback.message,
+        feedback.exitCode,
+        "feedback"
+      );
     }
     const runner = invocation.controllerConfig === void 0 ? dependencies.runner ?? stateOnlyCommandRunner : await (dependencies.controllerConfigRunner ?? createControllerConfigRunner)(invocation.controllerConfig);
     if (runner === void 0)
@@ -25435,6 +27636,44 @@ async function runCli(argv, dependencies = {}) {
     );
   }
 }
+async function runInstaller(invocation, dependencies) {
+  try {
+    const source = dependencies.skillSource ?? resolvePackagedSkillSource();
+    if (invocation.command === "install-skill") {
+      const result2 = await installSkills({
+        destination: invocation.destination,
+        dryRun: invocation.dryRun,
+        source
+      });
+      return success(
+        {
+          host: invocation.host,
+          manifest: result2.manifest,
+          status: result2.status
+        },
+        invocation.command
+      );
+    }
+    await uninstallSkills(invocation.destination);
+    return success(
+      { host: invocation.host, status: "uninstalled" },
+      invocation.command
+    );
+  } catch {
+    return failure(
+      "SCE_SKILL_INSTALL_FAILED",
+      "The packaged skill operation could not be completed.",
+      EXIT_UNAVAILABLE,
+      invocation.command
+    );
+  }
+}
+function resolvePackagedSkillSource(moduleUrl = import.meta.url) {
+  const modulePath = fileURLToPath(moduleUrl);
+  const moduleDirectory = dirname6(modulePath);
+  const packageRoot = basename4(moduleDirectory) === "src" ? resolve7(moduleDirectory, "..") : resolve7(moduleDirectory, "../../..");
+  return join7(packageRoot, "skills");
+}
 async function main(argv, dependencies = {}, write = (value) => process.stdout.write(value)) {
   const execution2 = await runCli(argv, dependencies);
   write(execution2.stdout);
@@ -25488,7 +27727,7 @@ function execution(response, exitCode) {
 function helpResult(command, version) {
   if (command === void 0) {
     return {
-      commands: [...commandNames],
+      commands: [...cliCommandNames],
       name: "sce",
       usage: "sce <command> [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]",
       version
@@ -25497,7 +27736,7 @@ function helpResult(command, version) {
   return {
     ...command === "feedback" ? { actions: [...feedbackActions] } : {},
     command,
-    usage: command === "feedback" ? "sce feedback <prepare|preview|submit|flush> [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]" : `sce ${command} [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]`
+    usage: command === "feedback" ? "sce feedback <prepare|preview|submit|flush> --request <json>" : command === "install-skill" ? "sce install-skill --host <codex|claude> --destination <absolute path> [--dry-run]" : command === "uninstall-skill" ? "sce uninstall-skill --host <codex|claude> --destination <absolute path>" : `sce ${command} [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]`
   };
 }
 function canonicalJson2(value) {
@@ -25525,7 +27764,7 @@ function isEntrypoint() {
     return false;
   }
   try {
-    return import.meta.url === pathToFileURL(realpathSync5(entrypoint)).href;
+    return import.meta.url === pathToFileURL(realpathSync7(entrypoint)).href;
   } catch {
     return false;
   }
@@ -25544,5 +27783,6 @@ export {
   canonicalJson2 as canonicalJson,
   main,
   parseCliArguments,
+  resolvePackagedSkillSource,
   runCli
 };

@@ -75,7 +75,7 @@ export interface CommandOptions {
 export const MAX_CLI_REQUEST_BYTES = 128 * 1024;
 export const MAX_CLI_RESPONSE_BYTES = 128 * 1024;
 const MAX_JSON_ITEMS = 256;
-const MAX_TEXT = 8_192;
+const MAX_TEXT = 16_384;
 
 function strictObject<T extends TProperties>(properties: T) {
   return Type.Object(properties, { additionalProperties: false });
@@ -132,6 +132,31 @@ const HarnessPacketOptionsSchema = strictObject({
   request: HarnessPacketInputSchema,
 });
 const NoPayloadOptionsSchema = strictObject(RequestMetadataSchema);
+const FeedbackPrepareOptionsSchema = strictObject({
+  json: Type.Boolean(),
+  request: strictObject({
+    narrative: Type.Optional(Type.Unknown()),
+    telemetry: Type.Unknown(),
+  }),
+});
+const FeedbackPreviewOptionsSchema = strictObject({
+  json: Type.Boolean(),
+  request: strictObject({ packet: Type.Unknown() }),
+});
+const FeedbackSubmitOptionsSchema = strictObject({
+  json: Type.Boolean(),
+  request: strictObject({
+    authority: Type.Optional(Type.Unknown()),
+    packet: Type.Unknown(),
+  }),
+});
+const FeedbackFlushOptionsSchema = strictObject({
+  json: Type.Boolean(),
+  request: strictObject({
+    authority: Type.Optional(Type.Unknown()),
+    fingerprint: Type.String({ pattern: "^[0-9a-f]{64}$" }),
+  }),
+});
 const RecoveryEventPayloadSchema = strictObject({
   event: Type.Optional(ProtocolEventSchema),
 });
@@ -164,13 +189,36 @@ const HarnessPacketCommandSchema = strictObject({
   schema: Type.Literal("sce.command.request"),
   version: Type.Literal(1),
 });
-const FeedbackCommandSchema = strictObject({
-  command: Type.Literal("feedback"),
-  feedbackAction: FeedbackActionSchema,
-  options: NoPayloadOptionsSchema,
-  schema: Type.Literal("sce.command.request"),
-  version: Type.Literal(1),
-});
+const FeedbackCommandSchema = Type.Union([
+  strictObject({
+    command: Type.Literal("feedback"),
+    feedbackAction: Type.Literal("prepare"),
+    options: FeedbackPrepareOptionsSchema,
+    schema: Type.Literal("sce.command.request"),
+    version: Type.Literal(1),
+  }),
+  strictObject({
+    command: Type.Literal("feedback"),
+    feedbackAction: Type.Literal("preview"),
+    options: FeedbackPreviewOptionsSchema,
+    schema: Type.Literal("sce.command.request"),
+    version: Type.Literal(1),
+  }),
+  strictObject({
+    command: Type.Literal("feedback"),
+    feedbackAction: Type.Literal("submit"),
+    options: FeedbackSubmitOptionsSchema,
+    schema: Type.Literal("sce.command.request"),
+    version: Type.Literal(1),
+  }),
+  strictObject({
+    command: Type.Literal("feedback"),
+    feedbackAction: Type.Literal("flush"),
+    options: FeedbackFlushOptionsSchema,
+    schema: Type.Literal("sce.command.request"),
+    version: Type.Literal(1),
+  }),
+]);
 const UnavailableCommandSchema = strictObject({
   command: Type.Union([
     Type.Literal("acquire-controller"),
