@@ -9,7 +9,8 @@
 import { canonicalJson, type JsonValue } from "../../protocol/canonical.js";
 import { Type } from "@sinclair/typebox";
 import { spawn } from "node:child_process";
-import { realpath, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { open, realpath, stat } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 
 import {
@@ -64,11 +65,21 @@ export type ServerIdentity = Readonly<{
 }>;
 
 const DOLT_SQL_TIMEOUT_MS = 15_000;
-const DOLT_SQL_MAX_OUTPUT_BYTES = 65_536;
+// A schema-valid mutation batch is bounded at 256 KiB. Rendering its canonical
+// JSON as hex SQL literals doubles that payload, and the guarded statement
+// repeats compact predicates/readback framing. Keep one bounded 1 MiB ceiling
+// for that concrete wire form and for the corresponding JSON readback.
+const DOLT_SQL_MAX_STATEMENT_BYTES = 1_048_576;
+const DOLT_SQL_MAX_OUTPUT_BYTES = 1_048_576;
 const BD_PROCESS_TIMEOUT_MS = 15_000;
 const BD_PROCESS_MAX_OUTPUT_BYTES = 16_384;
+const PROCESS_TERM_GRACE_MS = 250;
+const EXECUTABLE_SAMPLE_BYTES = 4_096;
 const doltServerExecute = Symbol("doltServerExecute");
 const doltServerTransactionExecute = Symbol("doltServerTransactionExecute");
+/** @internal Test-only access to the otherwise module-private transaction seam. */
+export const __doltSqlTransportTransactionForTests: typeof doltServerTransactionExecute =
+  doltServerTransactionExecute;
 
 export type DoltSqlProcessRequest = Readonly<{
   argv: readonly string[];
@@ -91,6 +102,95 @@ type DoltSqlExecution =
 type DoltSqlTransactionExecution =
   | Readonly<{ status: "ok"; rows: number }>
   | Readonly<{ status: "unavailable" | "refused" }>;
+
+type ExecutableSnapshot = Readonly<{
+  canonical: string;
+  fingerprint: string;
+}>;
+
+/**
+ * Fingerprint a canonical executable without reading an unbounded binary into
+ * memory. Metadata catches replacement and a bounded first/last digest closes
+ * the same-inode, same-size substitution gap. Callers poison their pin on any
+ * difference rather than accepting a later matching-version replacement.
+ */
+async function executableSnapshot(
+  executable: string,
+): Promise<ExecutableSnapshot | undefined> {
+  try {
+    const canonical = await realpath(executable);
+    const information = await stat(canonical);
+    if (!information.isFile() || (information.mode & 0o111) === 0)
+      return undefined;
+    const sampleSize = Math.min(information.size, EXECUTABLE_SAMPLE_BYTES);
+    const handle = await open(canonical, "r");
+    try {
+      const first = Buffer.alloc(sampleSize);
+      const firstRead = await handle.read(first, 0, sampleSize, 0);
+      const lastOffset = Math.max(0, information.size - sampleSize);
+      const last = Buffer.alloc(sampleSize);
+      const lastRead = await handle.read(last, 0, sampleSize, lastOffset);
+      const digest = createHash("sha256")
+        .update("first\0")
+        .update(first.subarray(0, firstRead.bytesRead))
+        .update("last\0")
+        .update(last.subarray(0, lastRead.bytesRead))
+        .digest("hex");
+      return {
+        canonical,
+        fingerprint: [
+          canonical,
+          information.dev,
+          information.ino,
+          information.size,
+          information.mtimeMs,
+          information.ctimeMs,
+          information.mode,
+          digest,
+        ].join(":"),
+      };
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Internal fault boundaries for the one real `dolt sql` transaction child.
+ * This deliberately exposes no SQL, environment, credential, or stdin
+ * authority: tests can only stop or pause the already-spawned child.
+ *
+ * @internal Test-only qualification seam. Production leaves it unset.
+ */
+export type DoltSqlTransactionTestPhase =
+  | "after_guarded_write_before_rowcount"
+  | "after_rowcount_before_commit"
+  | "after_commit_before_outcome"
+  | "after_commit_marker_before_close";
+
+type DoltSqlTransactionTestHook = (
+  input: Readonly<{
+    abort: () => void;
+    pause: () => void;
+    phase: DoltSqlTransactionTestPhase;
+  }>,
+) => void;
+
+let doltSqlTransactionTestHook: DoltSqlTransactionTestHook | undefined;
+
+/** @internal Installs a child-lifecycle-only hook for real transport tests. */
+export function __setDoltSqlTransactionTestHookForTests(
+  hook: DoltSqlTransactionTestHook | undefined,
+): () => void {
+  const previous = doltSqlTransactionTestHook;
+  doltSqlTransactionTestHook = hook;
+  return () => {
+    if (doltSqlTransactionTestHook === hook)
+      doltSqlTransactionTestHook = previous;
+  };
+}
 
 function parseDoltRows(
   output: string,
@@ -146,7 +246,8 @@ export class DoltSqlTransport {
   readonly #password: string | undefined;
   readonly #process: DoltSqlProcess;
   readonly #user: string;
-  #executableFingerprint: string | undefined;
+  #executablePoisoned = false;
+  #executableSnapshot: ExecutableSnapshot | undefined;
   #verifiedExecutable: string | undefined;
 
   constructor(
@@ -187,7 +288,7 @@ export class DoltSqlTransport {
     | Readonly<{ status: "unavailable" | "refused" }>
   > {
     if (
-      !safeText(query, 32_768) ||
+      !safeText(query, DOLT_SQL_MAX_STATEMENT_BYTES) ||
       containsSecretShape(query) ||
       !readOnlySql(query)
     )
@@ -214,7 +315,8 @@ export class DoltSqlTransport {
     // This symbol is module-private and receives only SQL assembled from
     // validated projections. Do not apply heuristic text secret matching to
     // canonical protocol JSON: legitimate field names include `Token`.
-    if (!safeText(query, 32_768)) return { status: "refused" };
+    if (!safeText(query, DOLT_SQL_MAX_STATEMENT_BYTES))
+      return { status: "refused" };
     const result = await this.#execute(query);
     if (result.status !== "ok") return result;
     try {
@@ -242,7 +344,7 @@ export class DoltSqlTransport {
     expectedRows: number,
   ): Promise<DoltSqlTransactionExecution> {
     if (
-      !safeText(statement, 32_768) ||
+      !safeText(statement, DOLT_SQL_MAX_STATEMENT_BYTES) ||
       !Number.isSafeInteger(expectedRows) ||
       expectedRows < 1 ||
       this.#process !== runDoltSql
@@ -251,6 +353,8 @@ export class DoltSqlTransport {
     const [host, port] = this.#endpointParts();
     const executable = await this.#verifiedDoltExecutable();
     if (host === undefined || port === undefined || executable === undefined)
+      return { status: "refused" };
+    if ((await this.#pinnedDoltExecutable()) !== executable)
       return { status: "refused" };
     const argv = [
       ...(this.#identity.transportSecurity === "loopback_plaintext"
@@ -282,6 +386,8 @@ export class DoltSqlTransport {
     if (host === undefined || port === undefined) return { status: "refused" };
     const executable = await this.#verifiedDoltExecutable();
     if (executable === undefined) return { status: "refused" };
+    if ((await this.#pinnedDoltExecutable()) !== executable)
+      return { status: "refused" };
     const argv = [
       ...(this.#identity.transportSecurity === "loopback_plaintext"
         ? ["--no-tls"]
@@ -333,45 +439,50 @@ export class DoltSqlTransport {
   }
 
   async #verifiedDoltExecutable(): Promise<string | undefined> {
-    // A supplied process is a deterministic test seam. Real execution pins a
-    // canonical, executable file and rechecks it if its path is replaced.
-    if (this.#process !== runDoltSql) return this.#executable ?? "";
-    if (this.#executable === undefined) return undefined;
-    try {
-      const canonical = await realpath(this.#executable);
-      const information = await stat(canonical);
-      if (!information.isFile() || (information.mode & 0o111) === 0)
-        return undefined;
-      const fingerprint = [
-        canonical,
-        information.dev,
-        information.ino,
-        information.size,
-        information.mtimeMs,
-      ].join(":");
-      if (fingerprint !== this.#executableFingerprint) {
-        this.#executableFingerprint = fingerprint;
-        this.#verifiedExecutable = undefined;
-      }
-      if (this.#verifiedExecutable === canonical) return canonical;
-      const version = await this.#process({
-        argv: ["version"],
-        executable: canonical,
-        env: { PATH: `${dirname(canonical)}:/usr/bin:/bin` },
-        timeoutMs: DOLT_SQL_TIMEOUT_MS,
-      });
-      if (
-        version.timedOut ||
-        version.exitCode !== 0 ||
-        Buffer.byteLength(version.output, "utf8") > DOLT_SQL_MAX_OUTPUT_BYTES ||
-        !/^dolt version 2\.2\.1(?:\s|$)/u.test(version.output)
-      )
-        return undefined;
-      this.#verifiedExecutable = canonical;
-      return canonical;
-    } catch {
+    if (this.#process !== runDoltSql && this.#executable === undefined)
+      return "";
+    const executable = await this.#pinnedDoltExecutable();
+    if (executable === undefined) return undefined;
+    if (this.#verifiedExecutable === executable) return executable;
+    const version = await this.#process({
+      argv: ["version"],
+      executable,
+      env: { PATH: `${dirname(executable)}:/usr/bin:/bin` },
+      timeoutMs: DOLT_SQL_TIMEOUT_MS,
+    });
+    // A version process is not an authority to refresh the pin. Recheck the
+    // exact object after it closes so a self-replacing version binary poisons
+    // this transport before any query or transaction child can be spawned.
+    if ((await this.#pinnedDoltExecutable()) !== executable) return undefined;
+    if (
+      version.timedOut ||
+      version.exitCode !== 0 ||
+      Buffer.byteLength(version.output, "utf8") > DOLT_SQL_MAX_OUTPUT_BYTES ||
+      !/^dolt version 2\.2\.1(?:\s|$)/u.test(version.output)
+    )
+      return undefined;
+    this.#verifiedExecutable = executable;
+    return executable;
+  }
+
+  async #pinnedDoltExecutable(): Promise<string | undefined> {
+    if (this.#executablePoisoned) return undefined;
+    if (this.#executable === undefined)
+      return this.#process === runDoltSql ? undefined : "";
+    const snapshot = await executableSnapshot(this.#executable);
+    // Synthetic process tests may use a non-existent fixture path. Real
+    // process execution never has this escape hatch.
+    if (snapshot === undefined)
+      return this.#process === runDoltSql ? undefined : this.#executable;
+    if (
+      this.#executableSnapshot !== undefined &&
+      this.#executableSnapshot.fingerprint !== snapshot.fingerprint
+    ) {
+      this.#executablePoisoned = true;
       return undefined;
     }
+    this.#executableSnapshot ??= snapshot;
+    return snapshot.canonical;
   }
 }
 
@@ -385,24 +496,44 @@ async function runDoltSql(
     });
     let output = "";
     let capped = false;
-    const timer = setTimeout(() => child.kill("SIGTERM"), request.timeoutMs);
+    let failed = false;
+    let timedOut = false;
+    let closing = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const terminate = (): void => {
+      if (closing) return;
+      closing = true;
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null) child.kill("SIGKILL");
+      }, PROCESS_TERM_GRACE_MS);
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      terminate();
+    }, request.timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => {
       if (capped) return;
       output += chunk.toString("utf8");
       if (Buffer.byteLength(output, "utf8") > DOLT_SQL_MAX_OUTPUT_BYTES) {
         capped = true;
-        child.kill("SIGTERM");
+        terminate();
       }
     });
-    child.once("error", () =>
-      resolve({ exitCode: undefined, output: "", timedOut: false }),
-    );
-    child.once("exit", (code) => {
+    child.once("error", () => {
+      failed = true;
+      terminate();
+    });
+    // `close`, unlike `exit`, waits for stdout to close. In particular, no
+    // timeout result can race a still-running child that may later write.
+    child.once("close", (code) => {
       clearTimeout(timer);
+      if (killTimer !== undefined) clearTimeout(killTimer);
       resolve({
-        exitCode: capped ? undefined : (code ?? undefined),
+        exitCode:
+          capped || timedOut || failed ? undefined : (code ?? undefined),
         output,
-        timedOut: capped,
+        timedOut: capped || timedOut,
       });
     });
   });
@@ -425,69 +556,156 @@ async function runDoltSqlTransaction(
       },
       stdio: ["pipe", "pipe", "ignore"],
     });
-    let finished = false;
     let output = "";
     let rowCount: number | undefined;
-    const finish = (result: DoltSqlTransactionExecution): void => {
-      if (finished) return;
-      finished = true;
-      clearTimeout(timer);
-      resolve(result);
+    let result: DoltSqlTransactionExecution | undefined;
+    let finalSent = false;
+    let postCommitClean = false;
+    let postCommitHead: string | undefined;
+    let rowCountPhaseObserved = false;
+    let closing = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const finishAfterClose = (value: DoltSqlTransactionExecution): void => {
+      if (result !== undefined) return;
+      result = value;
+    };
+    const terminate = (value: DoltSqlTransactionExecution): void => {
+      finishAfterClose(value);
+      if (closing) return;
+      closing = true;
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null) child.kill("SIGKILL");
+      }, PROCESS_TERM_GRACE_MS);
+    };
+    const observeTestPhase = (phase: DoltSqlTransactionTestPhase): void => {
+      const hook = doltSqlTransactionTestHook;
+      if (hook === undefined || result !== undefined) return;
+      try {
+        hook({
+          abort: () => terminate({ status: "unavailable" }),
+          pause: () => {
+            if (!closing) child.kill("SIGSTOP");
+          },
+          phase,
+        });
+      } catch {
+        terminate({ status: "unavailable" });
+      }
     };
     const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      finish({ status: "unavailable" });
+      terminate({ status: "unavailable" });
     }, DOLT_SQL_TIMEOUT_MS);
     const sendFinal = (commit: boolean): void => {
-      child.stdin.write(`${commit ? "COMMIT" : "ROLLBACK"};\n`);
+      if (finalSent || closing) return;
+      finalSent = true;
+      if (!commit) {
+        child.stdin.write("ROLLBACK;\n");
+        child.stdin.end();
+        return;
+      }
+      // Keep the commit and both evidence reads on this one process/session.
+      // A fresh connection can later reconcile an interrupted response, but it
+      // cannot turn an unknown child outcome into an applied result here.
+      child.stdin.write("COMMIT;\n");
+      observeTestPhase("after_commit_before_outcome");
+      if (closing) return;
+      child.stdin.write(
+        "SELECT DOLT_HASHOF('HEAD') AS committed_head; SELECT COUNT(*) AS working_set_rows FROM dolt_status;\n",
+      );
       child.stdin.end();
     };
+    const inspectLine = (line: string): void => {
+      if (line.trim().length === 0 || result !== undefined) return;
+      // The stdin program above has exactly one trailing result query. Dolt
+      // executes the guarded UPDATE before producing that query's JSON, so a
+      // test fault here is after the real write and before we parse/evaluate
+      // its affected-row readback or send a transaction decision.
+      if (!rowCountPhaseObserved && rowCount === undefined && !finalSent) {
+        rowCountPhaseObserved = true;
+        observeTestPhase("after_guarded_write_before_rowcount");
+        if (closing) return;
+      }
+      let rows: readonly Record<string, unknown>[] | undefined;
+      try {
+        rows = parseDoltRows(line);
+      } catch {
+        terminate({ status: "refused" });
+        return;
+      }
+      if (rows === undefined) {
+        terminate({ status: "refused" });
+        return;
+      }
+      if (rows.length === 1 && rows[0]?.committed_head !== undefined) {
+        const head = rows[0].committed_head;
+        if (typeof head !== "string" || !/^[0-9a-z]{20,64}$/u.test(head)) {
+          terminate({ status: "refused" });
+          return;
+        }
+        postCommitHead = head;
+        return;
+      }
+      if (rows.length === 1 && rows[0]?.working_set_rows !== undefined) {
+        const count = Number(rows[0].working_set_rows);
+        if (!Number.isSafeInteger(count) || count !== 0) {
+          terminate({ status: "refused" });
+          return;
+        }
+        postCommitClean = true;
+        if (postCommitHead === undefined) {
+          terminate({ status: "refused" });
+          return;
+        }
+        observeTestPhase("after_commit_marker_before_close");
+        return;
+      }
+      const value = rows[0]?.affected_rows;
+      if (value === undefined || rowCount !== undefined) return;
+      const parsed =
+        typeof value === "number" || typeof value === "string"
+          ? Number(value)
+          : NaN;
+      if (!Number.isSafeInteger(parsed) || parsed < 0) {
+        terminate({ status: "refused" });
+        return;
+      }
+      rowCount = parsed;
+      observeTestPhase("after_rowcount_before_commit");
+      if (closing) return;
+      sendFinal(parsed === input.expectedRows);
+    };
     child.stdout.on("data", (chunk: Buffer) => {
-      if (finished) return;
+      if (result !== undefined) return;
       output += chunk.toString("utf8");
       if (Buffer.byteLength(output, "utf8") > DOLT_SQL_MAX_OUTPUT_BYTES) {
-        child.kill("SIGTERM");
-        finish({ status: "unavailable" });
+        terminate({ status: "unavailable" });
         return;
       }
       const lines = output.split("\n");
       output = lines.pop() ?? "";
-      for (const line of lines) {
-        if (line.trim().length === 0) continue;
-        let rows: readonly Record<string, unknown>[] | undefined;
-        try {
-          rows = parseDoltRows(line);
-        } catch {
-          finish({ status: "refused" });
-          child.kill("SIGTERM");
-          return;
-        }
-        const value = rows?.[0]?.affected_rows;
-        if (value === undefined || rowCount !== undefined) continue;
-        const parsed =
-          typeof value === "number" || typeof value === "string"
-            ? Number(value)
-            : NaN;
-        if (!Number.isSafeInteger(parsed) || parsed < 0) {
-          finish({ status: "refused" });
-          child.kill("SIGTERM");
-          return;
-        }
-        rowCount = parsed;
-        sendFinal(parsed === input.expectedRows);
-      }
+      for (const line of lines) inspectLine(line);
     });
-    child.once("error", () => finish({ status: "unavailable" }));
-    child.once("exit", (code) => {
-      if (finished) return;
-      finish(
-        code === 0 && rowCount !== undefined
+    child.once("error", () => terminate({ status: "unavailable" }));
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      if (killTimer !== undefined) clearTimeout(killTimer);
+      if (result !== undefined) return resolve(result);
+      // A successful exit proves the exact decision was sent through the same
+      // connection. Applied writes additionally need a same-session Dolt head
+      // and clean working-set marker; no decision is never an apply result.
+      resolve(
+        code === 0 &&
+          finalSent &&
+          rowCount !== undefined &&
+          (rowCount !== input.expectedRows ||
+            (postCommitClean && postCommitHead !== undefined))
           ? { status: "ok", rows: rowCount }
           : { status: "unavailable" },
       );
     });
     child.stdin.write(
-      `SET @@SESSION.dolt_transaction_commit = 1; START TRANSACTION; ${input.statement}; SELECT ROW_COUNT() AS affected_rows;\n`,
+      `SET @@SESSION.dolt_transaction_commit = 1; START TRANSACTION; ${input.statement}; SET @sce_affected_rows := ROW_COUNT(); SELECT @sce_affected_rows AS affected_rows;\n`,
     );
   });
 }
@@ -511,6 +729,12 @@ export type PinnedBdSlotCommandResult =
   | Readonly<{ status: "completed" | "rejected" }>
   | Readonly<{ status: "unavailable" | "ambiguous" | "refused" }>;
 
+/** Narrow child-only runtime configuration; it is never included in results. */
+export type PinnedBdRuntimeEnvironment = Readonly<{
+  HOME?: string | undefined;
+  XDG_CONFIG_HOME?: string | undefined;
+}>;
+
 export type PinnedBdServerProcessInput = Readonly<{
   /** Called only at spawn time, so the process never retains a password. */
   credentialEnvironment?: () => Readonly<{
@@ -519,6 +743,8 @@ export type PinnedBdServerProcessInput = Readonly<{
   executable: string;
   /** Test seam; production uses the canonical executable process. */
   process?: PinnedBdProcess;
+  /** Optional isolated child HOME/config used by managed bd server mode. */
+  runtimeEnvironment?: () => PinnedBdRuntimeEnvironment;
   workspace: string;
 }>;
 
@@ -528,8 +754,10 @@ export class PinnedBdServerProcess {
     (() => Readonly<{ BEADS_DOLT_PASSWORD?: string | undefined }>) | undefined;
   readonly #executable: string;
   readonly #process: PinnedBdProcess;
+  readonly #runtimeEnvironment: (() => PinnedBdRuntimeEnvironment) | undefined;
   readonly #workspace: string;
-  #fingerprint: string | undefined;
+  #executablePoisoned = false;
+  #executableSnapshot: ExecutableSnapshot | undefined;
   #verifiedExecutable: string | undefined;
 
   constructor(input: PinnedBdServerProcessInput) {
@@ -538,6 +766,7 @@ export class PinnedBdServerProcess {
     this.#credentialEnvironment = input.credentialEnvironment;
     this.#executable = input.executable;
     this.#process = input.process ?? runPinnedBd;
+    this.#runtimeEnvironment = input.runtimeEnvironment;
     this.#workspace = input.workspace;
   }
 
@@ -563,6 +792,8 @@ export class PinnedBdServerProcess {
     const workspace = await this.#canonicalWorkspace();
     if (workspace === undefined) return { status: "refused" };
     const executable = verification.executable;
+    if ((await this.#canonicalExecutable()) !== executable)
+      return { status: "refused" };
     const result = await this.#exec(executable, [
       "-C",
       workspace,
@@ -603,6 +834,8 @@ export class PinnedBdServerProcess {
     if (this.#verifiedExecutable === executable)
       return { status: "ok", executable };
     const result = await this.#exec(executable, ["version"]);
+    if ((await this.#canonicalExecutable()) !== executable)
+      return { status: "refused" };
     if (
       result.timedOut ||
       result.exitCode === undefined ||
@@ -619,29 +852,21 @@ export class PinnedBdServerProcess {
   }
 
   async #canonicalExecutable(): Promise<string | undefined> {
-    // The injected process is only a deterministic test seam. A production
-    // process resolves and fingerprints the executable on every invocation.
-    if (this.#process !== runPinnedBd) return this.#executable;
-    try {
-      const canonical = await realpath(this.#executable);
-      const information = await stat(canonical);
-      if (!information.isFile() || (information.mode & 0o111) === 0)
-        return undefined;
-      const fingerprint = [
-        canonical,
-        information.dev,
-        information.ino,
-        information.size,
-        information.mtimeMs,
-      ].join(":");
-      if (fingerprint !== this.#fingerprint) {
-        this.#fingerprint = fingerprint;
-        this.#verifiedExecutable = undefined;
-      }
-      return canonical;
-    } catch {
+    if (this.#executablePoisoned) return undefined;
+    const snapshot = await executableSnapshot(this.#executable);
+    // Synthetic process tests retain their deliberately pathless fixture
+    // executable. Native production execution requires a pinned file.
+    if (snapshot === undefined)
+      return this.#process === runPinnedBd ? undefined : this.#executable;
+    if (
+      this.#executableSnapshot !== undefined &&
+      this.#executableSnapshot.fingerprint !== snapshot.fingerprint
+    ) {
+      this.#executablePoisoned = true;
       return undefined;
     }
+    this.#executableSnapshot ??= snapshot;
+    return snapshot.canonical;
   }
 
   async #canonicalWorkspace(): Promise<string | undefined> {
@@ -657,10 +882,24 @@ export class PinnedBdServerProcess {
   async #exec(
     executable: string,
     argv: readonly string[],
+    additionalPath: readonly string[] = [],
   ): Promise<PinnedBdProcessResult> {
     const source = this.#credentialEnvironment?.();
+    const runtime = this.#runtimeEnvironment?.();
     const password = source?.BEADS_DOLT_PASSWORD;
     if (password !== undefined && !safeText(password, 4_096))
+      return { exitCode: undefined, output: "", timedOut: false };
+    if (
+      runtime !== undefined &&
+      (Object.keys(runtime).some(
+        (key) => key !== "HOME" && key !== "XDG_CONFIG_HOME",
+      ) ||
+        (runtime.HOME !== undefined &&
+          (!isAbsolute(runtime.HOME) || !safeText(runtime.HOME, 4_096))) ||
+        (runtime.XDG_CONFIG_HOME !== undefined &&
+          (!isAbsolute(runtime.XDG_CONFIG_HOME) ||
+            !safeText(runtime.XDG_CONFIG_HOME, 4_096))))
+    )
       return { exitCode: undefined, output: "", timedOut: false };
     return this.#process({
       argv,
@@ -669,7 +908,13 @@ export class PinnedBdServerProcess {
         BD_NON_INTERACTIVE: "1",
         ...(password === undefined ? {} : { BEADS_DOLT_PASSWORD: password }),
         CI: "1",
-        PATH: `${dirname(executable)}:/usr/bin:/bin`,
+        ...(runtime?.HOME === undefined ? {} : { HOME: runtime.HOME }),
+        PATH: [dirname(executable), ...additionalPath, "/usr/bin", "/bin"].join(
+          ":",
+        ),
+        ...(runtime?.XDG_CONFIG_HOME === undefined
+          ? {}
+          : { XDG_CONFIG_HOME: runtime.XDG_CONFIG_HOME }),
       },
       timeoutMs: BD_PROCESS_TIMEOUT_MS,
     });
@@ -686,24 +931,42 @@ async function runPinnedBd(
     });
     let output = "";
     let capped = false;
-    const timer = setTimeout(() => child.kill("SIGTERM"), request.timeoutMs);
+    let failed = false;
+    let timedOut = false;
+    let closing = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const terminate = (): void => {
+      if (closing) return;
+      closing = true;
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => {
+        if (child.exitCode === null) child.kill("SIGKILL");
+      }, PROCESS_TERM_GRACE_MS);
+    };
+    const timer = setTimeout(() => {
+      timedOut = true;
+      terminate();
+    }, request.timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => {
       if (capped) return;
       output += chunk.toString("utf8");
       if (Buffer.byteLength(output, "utf8") > BD_PROCESS_MAX_OUTPUT_BYTES) {
         capped = true;
-        child.kill("SIGTERM");
+        terminate();
       }
     });
-    child.once("error", () =>
-      resolve({ exitCode: undefined, output: "", timedOut: false }),
-    );
-    child.once("exit", (code) => {
+    child.once("error", () => {
+      failed = true;
+      terminate();
+    });
+    child.once("close", (code) => {
       clearTimeout(timer);
+      if (killTimer !== undefined) clearTimeout(killTimer);
       resolve({
-        exitCode: capped ? undefined : (code ?? undefined),
+        exitCode:
+          capped || timedOut || failed ? undefined : (code ?? undefined),
         output,
-        timedOut: capped,
+        timedOut: capped || timedOut,
       });
     });
   });
@@ -809,10 +1072,272 @@ export interface BeadsServerDriver {
   ): Promise<ServerDriverResponse<ServerDiscovery>>;
 }
 
-/** Only managed-local setup may use this seam; external endpoints are never started. */
+/** Managed setup may start/probe an authority-owned server; it never stops it. */
 export interface ManagedServerProcess {
   start(): Promise<ServerDriverResponse<void>>;
-  stop(): Promise<void>;
+}
+
+export type PinnedBdManagedServerProcessInput = Readonly<{
+  /** Exact bd-managed shared-server data directory this lifecycle may own. */
+  dataDirectory: string;
+  /** Pinned Dolt 2.2.1 executable which bd launches for this lifecycle. */
+  doltExecutable: string;
+  executable: string;
+  /** Test seam; production resolves and pins the supplied executable. */
+  process?: PinnedBdProcess;
+  /** Child-only HOME/config for bd's managed shared-server state. */
+  runtimeEnvironment?: () => PinnedBdRuntimeEnvironment;
+  workspace: string;
+}>;
+
+/**
+ * The concrete managed-local lifecycle. This deliberately invokes bd's
+ * supported shared-server probe/start commands rather than spawning a Dolt
+ * substitute. It never stops a shared server; the fixture-only admin helper
+ * owns teardown while HOME/config stay outside the host user.
+ */
+export class PinnedBdManagedServerProcess implements ManagedServerProcess {
+  readonly #dataDirectory: string;
+  readonly #doltExecutable: string;
+  readonly #executable: string;
+  readonly #process: PinnedBdProcess;
+  readonly #runtimeEnvironment: (() => PinnedBdRuntimeEnvironment) | undefined;
+  readonly #workspace: string;
+  #doltPoisoned = false;
+  #doltSnapshot: ExecutableSnapshot | undefined;
+  #executablePoisoned = false;
+  #executableSnapshot: ExecutableSnapshot | undefined;
+  #verifiedDolt: string | undefined;
+  #verifiedExecutable: string | undefined;
+
+  constructor(input: PinnedBdManagedServerProcessInput) {
+    if (
+      !isAbsolute(input.dataDirectory) ||
+      !isAbsolute(input.doltExecutable) ||
+      !isAbsolute(input.executable) ||
+      !isAbsolute(input.workspace)
+    )
+      throw new Error("invalid pinned managed bd process configuration");
+    this.#dataDirectory = input.dataDirectory;
+    this.#doltExecutable = input.doltExecutable;
+    this.#executable = input.executable;
+    this.#process = input.process ?? runPinnedBd;
+    this.#runtimeEnvironment = input.runtimeEnvironment;
+    this.#workspace = input.workspace;
+  }
+
+  async start(): Promise<ServerDriverResponse<void>> {
+    const executable = await this.#verify();
+    if (executable === undefined) return { status: "refused" };
+    const dolt = await this.#verifyDolt();
+    if (dolt === undefined) return { status: "refused" };
+    const workspace = await this.#canonicalWorkspace();
+    if (workspace === undefined) return { status: "refused" };
+    if (
+      (await this.#canonicalExecutable()) !== executable ||
+      (await this.#canonicalDolt()) !== dolt
+    )
+      return { status: "refused" };
+    const before = await this.#status(executable, dolt, workspace);
+    if (before === undefined) return { status: "refused" };
+    // An existing, exact private server is adopted, never stopped by dispose.
+    if (before === "running") return { status: "ok", value: undefined };
+    if (
+      (await this.#canonicalExecutable()) !== executable ||
+      (await this.#canonicalDolt()) !== dolt
+    )
+      return { status: "refused" };
+    const result = await this.#exec(
+      executable,
+      ["-C", workspace, "dolt", "start"],
+      [dirname(dolt)],
+    );
+    if (result.timedOut || result.exitCode === undefined)
+      return { status: "unavailable" };
+    if (result.exitCode !== 0) return { status: "refused" };
+    if (
+      (await this.#canonicalExecutable()) !== executable ||
+      (await this.#canonicalDolt()) !== dolt
+    )
+      return { status: "refused" };
+    if ((await this.#status(executable, dolt, workspace)) !== "running")
+      return { status: "refused" };
+    return { status: "ok", value: undefined };
+  }
+
+  async #verify(): Promise<string | undefined> {
+    const executable = await this.#canonicalExecutable();
+    if (executable === undefined) return undefined;
+    if (this.#verifiedExecutable === executable) return executable;
+    const result = await this.#exec(executable, ["version"]);
+    if ((await this.#canonicalExecutable()) !== executable) return undefined;
+    if (
+      result.timedOut ||
+      result.exitCode !== 0 ||
+      Buffer.byteLength(result.output, "utf8") > BD_PROCESS_MAX_OUTPUT_BYTES ||
+      !/^bd version 1\.1\.0(?:\s|$)/u.test(result.output)
+    )
+      return undefined;
+    this.#verifiedExecutable = executable;
+    return executable;
+  }
+
+  async #canonicalExecutable(): Promise<string | undefined> {
+    if (this.#executablePoisoned) return undefined;
+    const snapshot = await executableSnapshot(this.#executable);
+    if (snapshot === undefined)
+      return this.#process === runPinnedBd ? undefined : this.#executable;
+    if (
+      this.#executableSnapshot !== undefined &&
+      this.#executableSnapshot.fingerprint !== snapshot.fingerprint
+    ) {
+      this.#executablePoisoned = true;
+      return undefined;
+    }
+    this.#executableSnapshot ??= snapshot;
+    return snapshot.canonical;
+  }
+
+  async #verifyDolt(): Promise<string | undefined> {
+    const dolt = await this.#canonicalDolt();
+    if (dolt === undefined) return undefined;
+    if (this.#verifiedDolt === dolt) return dolt;
+    const result = await this.#exec(dolt, ["version"]);
+    if ((await this.#canonicalDolt()) !== dolt) return undefined;
+    if (
+      result.timedOut ||
+      result.exitCode !== 0 ||
+      Buffer.byteLength(result.output, "utf8") > DOLT_SQL_MAX_OUTPUT_BYTES ||
+      !/^dolt version 2\.2\.1(?:\s|$)/u.test(result.output)
+    )
+      return undefined;
+    this.#verifiedDolt = dolt;
+    return dolt;
+  }
+
+  async #canonicalDolt(): Promise<string | undefined> {
+    if (this.#doltPoisoned) return undefined;
+    const snapshot = await executableSnapshot(this.#doltExecutable);
+    if (snapshot === undefined)
+      return this.#process === runPinnedBd ? undefined : this.#doltExecutable;
+    if (
+      this.#doltSnapshot !== undefined &&
+      this.#doltSnapshot.fingerprint !== snapshot.fingerprint
+    ) {
+      this.#doltPoisoned = true;
+      return undefined;
+    }
+    this.#doltSnapshot ??= snapshot;
+    return snapshot.canonical;
+  }
+
+  async #status(
+    executable: string,
+    dolt: string,
+    workspace: string,
+  ): Promise<"running" | "stopped" | undefined> {
+    // Status is an operational bd spawn too. Keep this local recheck beside
+    // the child launch so a caller cannot accidentally rely on an older
+    // start-level verification.
+    if (
+      (await this.#canonicalExecutable()) !== executable ||
+      (await this.#canonicalDolt()) !== dolt
+    )
+      return undefined;
+    const result = await this.#exec(
+      executable,
+      ["-C", workspace, "dolt", "status", "--json"],
+      [dirname(dolt)],
+    );
+    if (
+      result.timedOut ||
+      result.exitCode !== 0 ||
+      Buffer.byteLength(result.output, "utf8") > BD_PROCESS_MAX_OUTPUT_BYTES
+    )
+      return undefined;
+    try {
+      const parsed = JSON.parse(result.output) as unknown;
+      if (
+        parsed === null ||
+        typeof parsed !== "object" ||
+        Array.isArray(parsed) ||
+        Object.keys(parsed).sort().join(",") !==
+          "data_dir,pid,port,running,schema_version"
+      )
+        return undefined;
+      const value = parsed as Record<string, unknown>;
+      if (value.schema_version !== 1 || typeof value.running !== "boolean")
+        return undefined;
+      if (!value.running)
+        return value.data_dir === "" && value.pid === 0 && value.port === 0
+          ? "stopped"
+          : undefined;
+      if (
+        typeof value.data_dir !== "string" ||
+        !isAbsolute(value.data_dir) ||
+        typeof value.pid !== "number" ||
+        !Number.isSafeInteger(value.pid) ||
+        value.pid <= 0 ||
+        typeof value.port !== "number" ||
+        !Number.isSafeInteger(value.port) ||
+        value.port < 1 ||
+        value.port > 65_535
+      )
+        return undefined;
+      const [actual, expected] = await Promise.all([
+        realpath(value.data_dir),
+        realpath(this.#dataDirectory),
+      ]);
+      return actual === expected ? "running" : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async #canonicalWorkspace(): Promise<string | undefined> {
+    try {
+      const canonical = await realpath(this.#workspace);
+      return (await stat(canonical)).isDirectory() ? canonical : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  async #exec(
+    executable: string,
+    argv: readonly string[],
+    additionalPath: readonly string[] = [],
+  ): Promise<PinnedBdProcessResult> {
+    const runtime = this.#runtimeEnvironment?.();
+    if (
+      runtime !== undefined &&
+      (Object.keys(runtime).some(
+        (key) => key !== "HOME" && key !== "XDG_CONFIG_HOME",
+      ) ||
+        (runtime.HOME !== undefined &&
+          (!isAbsolute(runtime.HOME) || !safeText(runtime.HOME, 4_096))) ||
+        (runtime.XDG_CONFIG_HOME !== undefined &&
+          (!isAbsolute(runtime.XDG_CONFIG_HOME) ||
+            !safeText(runtime.XDG_CONFIG_HOME, 4_096))))
+    )
+      return { exitCode: undefined, output: "", timedOut: false };
+    return this.#process({
+      argv,
+      executable,
+      env: {
+        BD_NON_INTERACTIVE: "1",
+        CI: "1",
+        ...(runtime?.HOME === undefined ? {} : { HOME: runtime.HOME }),
+        PATH: [dirname(executable), ...additionalPath, "/usr/bin", "/bin"].join(
+          ":",
+        ),
+        ...(runtime?.XDG_CONFIG_HOME === undefined
+          ? {}
+          : { XDG_CONFIG_HOME: runtime.XDG_CONFIG_HOME }),
+      },
+      timeoutMs: BD_PROCESS_TIMEOUT_MS,
+    });
+  }
 }
 
 export type ServerPreflight =
@@ -1126,8 +1651,9 @@ export class BeadsServerAdapter implements RunStorePort {
   }
 
   async dispose(): Promise<void> {
-    if (this.#started && this.#process !== undefined)
-      await this.#process.stop();
+    // A managed bd shared server is authority-owned and may be shared across
+    // projects. Disposal only forgets this adapter's adoption; it never sends
+    // a server-wide stop operation.
     this.#started = false;
   }
 

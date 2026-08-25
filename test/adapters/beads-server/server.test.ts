@@ -1,18 +1,32 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, rm, symlink, unlink } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  mkdir,
+  mkdtemp,
+  open,
+  rm,
+  stat,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:net";
 import { dirname, isAbsolute, join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
 import test from "node:test";
 
 import {
+  __doltSqlTransportTransactionForTests,
+  __setDoltSqlTransactionTestHookForTests,
   BeadsServerAdapter,
   buildServerCasProgram,
   DoltBeadsServerDriver,
   executeServerSqlProgram,
   deriveServerIdentity,
   parseServerCasReadback,
+  PinnedBdManagedServerProcess,
   PinnedBdServerProcess,
   slotScopeReference,
   DoltSqlTransport,
@@ -20,6 +34,7 @@ import {
   type ServerAutoCommitPolicy,
   type ServerDriverResponse,
   type ServerIdentity,
+  type DoltSqlTransactionTestPhase,
 } from "../../../src/adapters/beads-server/index.js";
 import {
   deriveChangedRowsCommitment,
@@ -34,7 +49,12 @@ import {
   withBatchCheckpoint,
 } from "../../../src/fencing/index.js";
 import type { BeadsIdentity } from "../../../src/preflight/index.js";
-import { deriveIdempotencyKey, reduce } from "../../../src/protocol/reducer.js";
+import {
+  deriveIdempotencyKey,
+  deriveSessionFingerprint,
+  deriveSessionLineageRoot,
+  reduce,
+} from "../../../src/protocol/reducer.js";
 import {
   canonicalJson,
   type JsonValue,
@@ -119,8 +139,8 @@ function slot(
   return { ...withoutHash, readbackHash: deriveSlotReadbackHash(withoutHash) };
 }
 
-function batch(): MutationBatch {
-  const before = makeRootProjection(run());
+function batchForRun(source = run()): MutationBatch {
+  const before = makeRootProjection(source);
   const nextState = reduce(
     before.run,
     event(before.run, "reservation_intent", {
@@ -171,6 +191,37 @@ function batch(): MutationBatch {
   };
 }
 
+function batch(): MutationBatch {
+  return batchForRun();
+}
+
+function denseRun() {
+  const state = run();
+  const sessionIds = Array.from(
+    { length: 2_176 },
+    (_, index) => `dense-session-${index}`,
+  );
+  const bitmapBytes = Math.ceil(sessionIds.length / 8);
+  const raw = Buffer.alloc(bitmapBytes + sessionIds.length * 32);
+  for (const [index, sessionId] of sessionIds.entries()) {
+    raw[Math.floor(index / 8)]! |= 1 << (index % 8);
+    Buffer.from(deriveSessionFingerprint(sessionId), "hex").copy(
+      raw,
+      bitmapBytes + index * 32,
+    );
+  }
+  const sessionLineage = raw.toString("base64");
+  return {
+    ...state,
+    sessionLineage,
+    sessionLineageRoot: deriveSessionLineageRoot(
+      sessionLineage,
+      sessionIds.length,
+    ),
+    usedSessionCount: sessionIds.length,
+  };
+}
+
 function sqlLiteral(value: string | number): string {
   return typeof value === "number"
     ? String(value)
@@ -203,6 +254,28 @@ function renderSqlStatement(input: {
 
 const delay = (milliseconds: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+async function removeFixtureDirectory(directory: string): Promise<void> {
+  // bd's anonymous-event writer can close just after its server lifecycle
+  // command returns. Reap only this exact fixture root through a quiet window,
+  // so a late fixture-owned writer cannot recreate its isolated HOME after an
+  // otherwise successful recursive removal.
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    try {
+      await rm(directory, { force: true, recursive: true });
+      await delay(125);
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !Object.hasOwn(error, "code") ||
+        (error as NodeJS.ErrnoException).code !== "ENOTEMPTY"
+      )
+        throw error;
+      await delay(100);
+    }
+  }
+  await rm(directory, { force: true, recursive: true });
+}
 
 async function unusedLoopbackPort(): Promise<number> {
   const server = createServer();
@@ -257,6 +330,7 @@ async function runBd(
     cwd: string;
     executable: string;
     password?: string;
+    runtime?: Readonly<{ config: string; home: string }>;
   }>,
 ): Promise<string> {
   if (!isAbsolute(input.executable))
@@ -270,7 +344,11 @@ async function runBd(
           ? {}
           : { BEADS_DOLT_PASSWORD: input.password }),
         CI: "1",
+        ...(input.runtime === undefined ? {} : { HOME: input.runtime.home }),
         PATH: `${dirname(input.executable)}:/usr/bin:/bin`,
+        ...(input.runtime === undefined
+          ? {}
+          : { XDG_CONFIG_HOME: input.runtime.config }),
       },
       stdio: ["ignore", "pipe", "ignore"],
     });
@@ -279,11 +357,41 @@ async function runBd(
       output += chunk.toString("utf8");
     });
     child.once("error", reject);
-    child.once("exit", (code) =>
+    // `close`, not `exit`, waits for stdout and its fixture-side event writer
+    // to finish before teardown removes the isolated HOME/config root.
+    child.once("close", (code) =>
       code === 0
         ? resolve(output)
         : reject(new Error(`bd fixture command failed: ${args.join(" ")}`)),
     );
+  });
+}
+
+async function stopPrivateBdServer(
+  input: Readonly<{
+    executable: string;
+    runtime: Readonly<{ config: string; home: string }>;
+    workspace: string;
+  }>,
+): Promise<void> {
+  const status = JSON.parse(
+    await runBd(["-C", input.workspace, "dolt", "status", "--json"], {
+      cwd: input.workspace,
+      executable: input.executable,
+      runtime: input.runtime,
+    }),
+  ) as Record<string, unknown>;
+  if (status.running === false) return;
+  assert.equal(status.running, true);
+  assert.equal(typeof status.data_dir, "string");
+  assert.equal(
+    (status.data_dir as string).startsWith(input.runtime.home),
+    true,
+  );
+  await runBd(["-C", input.workspace, "dolt", "stop", "--force"], {
+    cwd: input.workspace,
+    executable: input.executable,
+    runtime: input.runtime,
   });
 }
 
@@ -331,15 +439,22 @@ type BdDoltServer = RealDoltServer &
     workspace: string;
   }>;
 
-type ManagedDoltServer = RealDoltServer &
-  Readonly<{
-    lifecycle: Readonly<{
-      start: () => Promise<ServerDriverResponse<void>>;
-      stop: () => Promise<void>;
-    }>;
-    starts: () => number;
-    stops: () => number;
-  }>;
+type ManagedBdServer = Readonly<{
+  bdExecutable: string;
+  context: Readonly<Record<string, unknown>>;
+  directory: string;
+  endpoint: string;
+  executable: string;
+  home: string;
+  lifecycle: PinnedBdManagedServerProcess;
+  runtime: Readonly<{ config: string; home: string }>;
+  stop: () => Promise<void>;
+  worker: DoltSqlTransport;
+  workerPassword: string;
+  workspace: string;
+  writer: DoltSqlTransport;
+  writerPassword: string;
+}>;
 
 async function startRealDoltServer(
   input: Readonly<{
@@ -348,7 +463,7 @@ async function startRealDoltServer(
 ): Promise<RealDoltServer> {
   const executable =
     process.env.DOLT_TEST_EXECUTABLE ?? "/opt/homebrew/bin/dolt";
-  const directory = await mkdtemp(join(process.cwd(), ".sce-real-dolt-"));
+  const directory = await mkdtemp("/private/tmp/sce-real-dolt-");
   const databaseDirectory = join(directory, "sce");
   const port = await unusedLoopbackPort();
   let server: ChildProcess | undefined;
@@ -442,155 +557,188 @@ async function startRealDoltServer(
   }
 }
 
-/**
- * Managed-local fixture boundary. It deliberately does not invoke bd
- * --shared-server, which would use the operator's global shared-server home.
- * Its lifecycle owns this disposable loopback sql-server process instead.
- */
-async function createManagedDoltServer(): Promise<ManagedDoltServer> {
+/** Real bd 1.1.0 managed shared-server fixture, isolated below `directory`. */
+async function createManagedBdServer(): Promise<ManagedBdServer> {
   const executable =
     process.env.DOLT_TEST_EXECUTABLE ?? "/opt/homebrew/bin/dolt";
-  const directory = await mkdtemp(join(process.cwd(), ".sce-managed-dolt-"));
-  const databaseDirectory = join(directory, "sce");
-  const port = await unusedLoopbackPort();
-  const endpoint = `127.0.0.1:${port}`;
-  const serverIdentity = identity("on", endpoint);
+  const bdExecutable = process.env.BD_TEST_EXECUTABLE ?? "/opt/homebrew/bin/bd";
+  // Keep this repository outside the checked-out worktree so bd's project
+  // discovery cannot reach or rewrite the controller's real `.beads` config.
+  const directory = await mkdtemp("/private/tmp/sce-managed-bd-");
+  const home = join(directory, "home");
+  const runtime = { config: join(directory, "config"), home };
+  const workspace = join(directory, "workspace");
   const writerPassword = randomBytes(18).toString("hex");
   const workerPassword = randomBytes(18).toString("hex");
-  let server: ChildProcess | undefined;
-  let provisioned = false;
-  let startCount = 0;
-  let stopCount = 0;
-  const root = new DoltSqlTransport({
-    executable,
-    identity: serverIdentity,
-    user: "root",
-  });
-  const writer = new DoltSqlTransport({
-    executable,
-    identity: serverIdentity,
-    password: writerPassword,
-    user: "writer",
-  });
-  const worker = new DoltSqlTransport({
-    executable,
-    identity: serverIdentity,
-    password: workerPassword,
-    user: "worker",
-  });
-  const stop = async (): Promise<void> => {
-    stopCount += 1;
-    if (server !== undefined) await stopDoltServer(server);
-  };
+  let lifecycle: PinnedBdManagedServerProcess | undefined;
   try {
-    await mkdir(databaseDirectory);
-    await runDolt(["init"], { cwd: databaseDirectory, executable });
-    const lifecycle = {
-      start: async (): Promise<ServerDriverResponse<void>> => {
-        if (server !== undefined && server.exitCode === null)
-          return { status: "ok", value: undefined };
-        startCount += 1;
-        server = spawn(
-          executable,
-          [
-            "sql-server",
-            "--data-dir",
-            directory,
-            "--host",
-            "127.0.0.1",
-            "--port",
-            String(port),
-            "--socket",
-            join(directory, "mysql.sock"),
-            "--allow-cleartext-passwords",
-            "--loglevel=error",
-          ],
-          {
-            cwd: directory,
-            env: { PATH: `${dirname(executable)}:/usr/bin:/bin` },
-            stdio: ["ignore", "ignore", "ignore"],
-          },
-        );
-        for (let attempt = 0; attempt < 100; attempt += 1) {
-          if ((await root.query("SELECT 1 AS ready")).status === "ok") break;
-          if (server.exitCode !== null) return { status: "unavailable" };
-          await delay(50);
-          if (attempt === 99) return { status: "unavailable" };
-        }
-        if (provisioned) return { status: "ok", value: undefined };
-        try {
-          await runDolt(
-            [
-              "--no-tls",
-              "--host",
-              "127.0.0.1",
-              "--port",
-              String(port),
-              "--use-db",
-              "sce",
-              "sql",
-            ],
-            {
-              cwd: directory,
-              executable,
-              stdin: [
-                `CREATE USER 'writer' IDENTIFIED BY '${writerPassword}'`,
-                "GRANT ALL ON sce.* TO 'writer'",
-                `CREATE USER 'worker' IDENTIFIED BY '${workerPassword}'`,
-                "GRANT SELECT ON sce.* TO 'worker'",
-              ].join(";\n"),
-            },
-          );
-          await runDolt(
-            [
-              "--no-tls",
-              "--host",
-              "127.0.0.1",
-              "--port",
-              String(port),
-              "--use-db",
-              "sce",
-              "--user",
-              "writer",
-              "sql",
-            ],
-            {
-              cwd: directory,
-              executable,
-              password: writerPassword,
-              stdin: [
-                "SET @@SESSION.dolt_transaction_commit = 1",
-                "CREATE TABLE issues (id VARCHAR(255) NOT NULL PRIMARY KEY, title VARCHAR(500) NOT NULL, design LONGTEXT NOT NULL, status VARCHAR(32) NOT NULL, metadata JSON, external_ref VARCHAR(255))",
-                "CREATE TABLE labels (issue_id VARCHAR(255) NOT NULL, label VARCHAR(255) NOT NULL)",
-              ].join(";\n"),
-            },
-          );
-          provisioned = true;
-          return { status: "ok", value: undefined };
-        } catch {
-          await stop();
-          return { status: "unavailable" };
-        }
-      },
-      stop,
-    };
+    await mkdir(home);
+    await mkdir(runtime.config);
+    await mkdir(workspace);
+    await initializeFixtureGitWorkspace(workspace);
+    await runBd(
+      [
+        "init",
+        "--non-interactive",
+        "--prefix",
+        "sce",
+        "--shared-server",
+        "--skip-agents",
+        "--skip-hooks",
+      ],
+      { cwd: workspace, executable: bdExecutable, runtime },
+    );
+    const context = JSON.parse(
+      await runBd(["-C", workspace, "context", "--json"], {
+        cwd: workspace,
+        executable: bdExecutable,
+        runtime,
+      }),
+    ) as Record<string, unknown>;
+    assert.equal(context.backend, "dolt");
+    assert.equal(context.database, "sce");
+    assert.equal(context.dolt_mode, "server");
+    assert.equal(context.server_host, "127.0.0.1");
+    assert.equal(typeof context.server_port, "number");
+    assert.equal(typeof context.beads_dir, "string");
+    assert.equal((context.beads_dir as string).startsWith(workspace), true);
+    assert.equal(
+      (
+        await stat(join(home, ".beads", "shared-server", "dolt-server.port"))
+      ).isFile(),
+      true,
+    );
+    const endpoint = `127.0.0.1:${String(context.server_port)}`;
+    const serverIdentity = identity("on", endpoint);
+    const root = new DoltSqlTransport({
+      executable,
+      identity: serverIdentity,
+      user: "root",
+    });
+    const writer = new DoltSqlTransport({
+      executable,
+      identity: serverIdentity,
+      password: writerPassword,
+      user: "writer",
+    });
+    const worker = new DoltSqlTransport({
+      executable,
+      identity: serverIdentity,
+      password: workerPassword,
+      user: "worker",
+    });
+    const rootSql = [
+      "--no-tls",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      String(context.server_port),
+      "--use-db",
+      "sce",
+      "sql",
+    ];
+    await runDolt(rootSql, {
+      cwd: directory,
+      executable,
+      stdin: [
+        `CREATE USER 'writer' IDENTIFIED BY '${writerPassword}'`,
+        "GRANT ALL ON sce.* TO 'writer'",
+        `CREATE USER 'worker' IDENTIFIED BY '${workerPassword}'`,
+        "GRANT SELECT ON sce.* TO 'worker'",
+      ].join(";\n"),
+    });
+    await runBd(
+      [
+        "-C",
+        workspace,
+        "--actor",
+        "fixture",
+        "--dolt-auto-commit",
+        "on",
+        "merge-slot",
+        "create",
+        "--json",
+      ],
+      { cwd: workspace, executable: bdExecutable, runtime },
+    );
+    const canonicalScope = canonicalJson(scope as JsonValue);
+    await runDolt(
+      [
+        "--no-tls",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(context.server_port),
+        "--use-db",
+        "sce",
+        "--user",
+        "writer",
+        "sql",
+        "-q",
+        `SET @@SESSION.dolt_transaction_commit = 1; UPDATE sce.issues SET external_ref = ${sqlLiteral(slotScopeReference(scope))}, design = ${sqlLiteral(canonicalScope)} WHERE id = 'sce-merge-slot' AND status = 'open' AND external_ref IS NULL AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$')) = '{}'`,
+      ],
+      { cwd: directory, executable, password: writerPassword },
+    );
+    for (const [id, title] of [
+      ["sce-managed-root", "Managed root"],
+      ["sce-managed-child", "Managed child"],
+    ] as const) {
+      await runBd(
+        [
+          "-C",
+          workspace,
+          "--actor",
+          "fixture",
+          "--dolt-auto-commit",
+          "on",
+          "create",
+          "--id",
+          id,
+          title,
+          "--json",
+        ],
+        { cwd: workspace, executable: bdExecutable, runtime },
+      );
+    }
+    lifecycle = new PinnedBdManagedServerProcess({
+      dataDirectory: join(home, ".beads", "shared-server", "dolt"),
+      doltExecutable: executable,
+      executable: bdExecutable,
+      runtimeEnvironment: () => ({
+        HOME: runtime.home,
+        XDG_CONFIG_HOME: runtime.config,
+      }),
+      workspace,
+    });
     return {
+      bdExecutable,
+      context,
       directory,
       endpoint,
       executable,
+      home,
       lifecycle,
-      root,
-      starts: () => startCount,
-      stop,
-      stops: () => stopCount,
+      runtime,
+      stop: () =>
+        stopPrivateBdServer({
+          executable: bdExecutable,
+          runtime,
+          workspace,
+        }),
       worker,
       workerPassword,
+      workspace,
       writer,
       writerPassword,
     };
   } catch (error) {
-    await stop();
-    await rm(directory, { force: true, recursive: true });
+    if (lifecycle !== undefined)
+      await stopPrivateBdServer({
+        executable: bdExecutable,
+        runtime,
+        workspace,
+      });
+    await removeFixtureDirectory(directory);
     throw error;
   }
 }
@@ -1064,13 +1212,16 @@ test("concrete Dolt transport allows plaintext only for loopback endpoints", asy
     identity: identity(),
     process: async () => ({
       exitCode: 0,
-      output: " ".repeat(65_537),
+      output: " ".repeat(1_048_577),
       timedOut: false,
     }),
     user: "writer",
   });
   assert.deepEqual(await oversized.query("SELECT 1"), {
     status: "unavailable",
+  });
+  assert.deepEqual(await transport.query(`SELECT ${"x".repeat(1_048_570)}`), {
+    status: "refused",
   });
   const loopbackExternal = new DoltSqlTransport({
     identity: externalIdentity(),
@@ -1175,7 +1326,7 @@ test("pinned bd slot process pins version, holder argv, bounded output, and secr
   });
   assert.deepEqual(await malformed.release(holder), { status: "ambiguous" });
 
-  const directory = await mkdtemp(join(process.cwd(), ".sce-pinned-bd-"));
+  const directory = await mkdtemp("/private/tmp/sce-pinned-bd-");
   const executable = join(directory, "bd");
   try {
     await symlink("/opt/homebrew/bin/bd", executable);
@@ -1191,6 +1342,325 @@ test("pinned bd slot process pins version, holder argv, bounded output, and secr
     });
   } finally {
     await rm(directory, { force: true, recursive: true });
+  }
+});
+
+test("pinned managed bd lifecycle adopts exact servers and starts only stopped identities", async () => {
+  const directory = await mkdtemp("/private/tmp/sce-managed-process-");
+  const workspace = join(directory, "workspace");
+  const dataDirectory = join(directory, "shared-server", "dolt");
+  let running = true;
+  let starts = 0;
+  try {
+    await mkdir(workspace);
+    await mkdir(join(directory, "shared-server"));
+    await mkdir(dataDirectory);
+    const process = new PinnedBdManagedServerProcess({
+      dataDirectory,
+      doltExecutable: "/opt/homebrew/bin/dolt",
+      executable: "/fixture/bd",
+      process: async (request) => {
+        if (request.argv[0] === "version")
+          return {
+            exitCode: 0,
+            output: request.executable.endsWith("dolt")
+              ? "dolt version 2.2.1\n"
+              : "bd version 1.1.0\n",
+            timedOut: false,
+          };
+        if (request.argv.includes("status"))
+          return {
+            exitCode: 0,
+            output: JSON.stringify(
+              running
+                ? {
+                    data_dir: dataDirectory,
+                    pid: 123,
+                    port: 3308,
+                    running: true,
+                    schema_version: 1,
+                  }
+                : {
+                    data_dir: "",
+                    pid: 0,
+                    port: 0,
+                    running: false,
+                    schema_version: 1,
+                  },
+            ),
+            timedOut: false,
+          };
+        if (request.argv.includes("start")) {
+          starts += 1;
+          running = true;
+        }
+        return { exitCode: 0, output: "", timedOut: false };
+      },
+      runtimeEnvironment: () => ({
+        HOME: directory,
+        XDG_CONFIG_HOME: directory,
+      }),
+      workspace,
+    });
+    assert.deepEqual(await process.start(), { status: "ok", value: undefined });
+    assert.equal(starts, 0);
+
+    running = false;
+    assert.deepEqual(await process.start(), { status: "ok", value: undefined });
+    assert.equal(starts, 1);
+    assert.deepEqual(await process.start(), { status: "ok", value: undefined });
+    assert.equal(starts, 1);
+
+    const ambiguous = new PinnedBdManagedServerProcess({
+      dataDirectory,
+      doltExecutable: "/opt/homebrew/bin/dolt",
+      executable: "/fixture/bd",
+      process: async (request) => ({
+        exitCode: 0,
+        output:
+          request.argv[0] === "version"
+            ? request.executable.endsWith("dolt")
+              ? "dolt version 2.2.1\n"
+              : "bd version 1.1.0\n"
+            : "{}",
+        timedOut: false,
+      }),
+      workspace,
+    });
+    assert.deepEqual(await ambiguous.start(), { status: "refused" });
+  } finally {
+    await removeFixtureDirectory(directory);
+  }
+});
+
+test("immutable executable pins poison self-replacing query, transaction, slot, and lifecycle children", async () => {
+  const directory = await mkdtemp("/private/tmp/sce-executable-pin-");
+  const doltLink = join(directory, "dolt");
+  const bdLink = join(directory, "bd");
+  const workspace = join(directory, "workspace");
+  const dataDirectory = join(directory, "shared-server", "dolt");
+  const writeTrap = async (name: string, version: string) => {
+    const marker = join(directory, `${name}.executed`);
+    const executable = join(directory, name);
+    await writeFile(
+      executable,
+      `#!/bin/sh\nprintf invoked > '${marker}'\nprintf '%s\\n' '${version}'\n`,
+    );
+    await chmod(executable, 0o700);
+    return { executable, marker };
+  };
+  const pointLink = async (link: string, target: string) => {
+    await unlink(link);
+    await symlink(target, link);
+  };
+  try {
+    await mkdir(workspace);
+    await mkdir(join(directory, "shared-server"));
+    await mkdir(dataDirectory);
+    const doltTrap = await writeTrap("dolt-replacement", "dolt version 2.2.1");
+    const bdTrap = await writeTrap("bd-replacement", "bd version 1.1.0");
+
+    await symlink("/opt/homebrew/bin/dolt", doltLink);
+    const queryCalls: readonly string[][] = [];
+    const queryTransport = new DoltSqlTransport({
+      executable: doltLink,
+      identity: identity(),
+      process: async (request) => {
+        (queryCalls as string[][]).push([...request.argv]);
+        if (request.argv[0] === "version") {
+          await pointLink(doltLink, doltTrap.executable);
+          return {
+            exitCode: 0,
+            output: "dolt version 2.2.1\n",
+            timedOut: false,
+          };
+        }
+        throw new Error("replacement reached Dolt query child");
+      },
+      user: "writer",
+    });
+    assert.deepEqual(await queryTransport.query("SELECT 1"), {
+      status: "refused",
+    });
+    assert.deepEqual(queryCalls, [["version"]]);
+    await assert.rejects(stat(doltTrap.marker));
+    assert.deepEqual(await queryTransport.query("SELECT 1"), {
+      status: "refused",
+    });
+    assert.deepEqual(queryCalls, [["version"]]);
+    await assert.rejects(stat(doltTrap.marker));
+
+    await symlink("/opt/homebrew/bin/bd", bdLink);
+    const slotCalls: readonly string[][] = [];
+    const slotProcess = new PinnedBdServerProcess({
+      executable: bdLink,
+      process: async (request) => {
+        (slotCalls as string[][]).push([...request.argv]);
+        if (request.argv[0] === "version") {
+          await pointLink(bdLink, bdTrap.executable);
+          return { exitCode: 0, output: "bd version 1.1.0\n", timedOut: false };
+        }
+        throw new Error("replacement reached bd slot child");
+      },
+      workspace,
+    });
+    assert.deepEqual(await slotProcess.check("observer"), {
+      status: "refused",
+    });
+    assert.deepEqual(slotCalls, [["version"]]);
+    await assert.rejects(stat(bdTrap.marker));
+    assert.deepEqual(await slotProcess.check("observer"), {
+      status: "refused",
+    });
+    assert.deepEqual(slotCalls, [["version"]]);
+    await assert.rejects(stat(bdTrap.marker));
+
+    // The digest is part of a pin rather than replacement-only detection: a
+    // same-inode file whose first sampled byte changes is also permanently
+    // refused before the fake slot child gets another invocation.
+    const sameInode = join(directory, "same-inode-bd");
+    await copyFile("/usr/bin/false", sameInode);
+    await chmod(sameInode, 0o700);
+    const sameInodeCalls: string[][] = [];
+    const sameInodeProcess = new PinnedBdServerProcess({
+      executable: sameInode,
+      process: async (request) => {
+        sameInodeCalls.push([...request.argv]);
+        return {
+          exitCode: 0,
+          output: request.argv[0] === "version" ? "bd version 1.1.0\n" : "{}",
+          timedOut: false,
+        };
+      },
+      workspace,
+    });
+    assert.deepEqual(await sameInodeProcess.check("observer"), {
+      status: "completed",
+    });
+    const beforeSameInode = await stat(sameInode);
+    const handle = await open(sameInode, "r+");
+    try {
+      await handle.write(Buffer.from([0]), 0, 1, 0);
+    } finally {
+      await handle.close();
+    }
+    assert.equal((await stat(sameInode)).ino, beforeSameInode.ino);
+    const callsBeforePoison = sameInodeCalls.length;
+    assert.deepEqual(await sameInodeProcess.check("observer"), {
+      status: "refused",
+    });
+    assert.equal(sameInodeCalls.length, callsBeforePoison);
+
+    await pointLink(bdLink, "/opt/homebrew/bin/bd");
+    await pointLink(doltLink, "/opt/homebrew/bin/dolt");
+    const managerBdCalls: string[][] = [];
+    const managerBd = new PinnedBdManagedServerProcess({
+      dataDirectory,
+      doltExecutable: doltLink,
+      executable: bdLink,
+      process: async (request) => {
+        managerBdCalls.push([...request.argv]);
+        if (request.argv[0] === "version") {
+          await pointLink(bdLink, bdTrap.executable);
+          return { exitCode: 0, output: "bd version 1.1.0\n", timedOut: false };
+        }
+        throw new Error("replacement reached managed bd child");
+      },
+      runtimeEnvironment: () => ({
+        HOME: directory,
+        XDG_CONFIG_HOME: directory,
+      }),
+      workspace,
+    });
+    assert.deepEqual(await managerBd.start(), { status: "refused" });
+    assert.deepEqual(managerBdCalls, [["version"]]);
+    await assert.rejects(stat(bdTrap.marker));
+    assert.deepEqual(await managerBd.start(), { status: "refused" });
+    assert.deepEqual(managerBdCalls, [["version"]]);
+
+    await pointLink(bdLink, "/opt/homebrew/bin/bd");
+    await pointLink(doltLink, "/opt/homebrew/bin/dolt");
+    const managerDoltCalls: string[][] = [];
+    const managerDolt = new PinnedBdManagedServerProcess({
+      dataDirectory,
+      doltExecutable: doltLink,
+      executable: bdLink,
+      process: async (request) => {
+        managerDoltCalls.push([...request.argv]);
+        if (request.argv[0] !== "version")
+          throw new Error("replacement reached managed status/start child");
+        if (managerDoltCalls.length === 2)
+          await pointLink(doltLink, doltTrap.executable);
+        return {
+          exitCode: 0,
+          output:
+            managerDoltCalls.length === 1
+              ? "bd version 1.1.0\n"
+              : "dolt version 2.2.1\n",
+          timedOut: false,
+        };
+      },
+      runtimeEnvironment: () => ({
+        HOME: directory,
+        XDG_CONFIG_HOME: directory,
+      }),
+      workspace,
+    });
+    assert.deepEqual(await managerDolt.start(), { status: "refused" });
+    assert.deepEqual(managerDoltCalls, [["version"], ["version"]]);
+    await assert.rejects(stat(doltTrap.marker));
+    assert.deepEqual(await managerDolt.start(), { status: "refused" });
+    assert.deepEqual(managerDoltCalls, [["version"], ["version"]]);
+  } finally {
+    await removeFixtureDirectory(directory);
+  }
+
+  const fixture = await startRealDoltServer();
+  const clientDirectory = await mkdtemp("/private/tmp/sce-transaction-pin-");
+  const clientExecutable = join(clientDirectory, "dolt");
+  try {
+    const trap = await (async () => {
+      const marker = join(clientDirectory, "transaction-replacement.executed");
+      const executable = join(clientDirectory, "transaction-replacement");
+      await writeFile(
+        executable,
+        `#!/bin/sh\nprintf invoked > '${marker}'\nprintf '%s\\n' 'dolt version 2.2.1'\n`,
+      );
+      await chmod(executable, 0o700);
+      return { executable, marker };
+    })();
+    await symlink(fixture.executable, clientExecutable);
+    const transport = new DoltSqlTransport({
+      executable: clientExecutable,
+      identity: identity("on", fixture.endpoint),
+      password: fixture.writerPassword,
+      user: "writer",
+    });
+    assert.deepEqual(await transport.query("SELECT 1 AS ready"), {
+      status: "ok",
+      rows: [{ ready: "1" }],
+    });
+    await pointLink(clientExecutable, trap.executable);
+    assert.deepEqual(
+      await transport[__doltSqlTransportTransactionForTests](
+        "UPDATE missing SET value = 1",
+        1,
+      ),
+      { status: "refused" },
+    );
+    await assert.rejects(stat(trap.marker));
+    assert.deepEqual(
+      await transport[__doltSqlTransportTransactionForTests](
+        "UPDATE missing SET value = 1",
+        1,
+      ),
+      { status: "refused" },
+    );
+    await assert.rejects(stat(trap.marker));
+  } finally {
+    await fixture.stop();
+    await removeFixtureDirectory(fixture.directory);
+    await removeFixtureDirectory(clientDirectory);
   }
 });
 
@@ -1484,7 +1954,7 @@ test("real bd external-server workspace drives the concrete driver, adapter, and
       `${fixture.context.server_host}:${fixture.context.server_port}`,
       serverIdentity.endpoint,
     );
-    const initialRoot = makeRootProjection(run());
+    const initialRoot = makeRootProjection(denseRun());
     const initialChild = makeChildProjection(initialRoot, "unit-1");
     assert.ok(initialChild);
     for (const [id, title, metadata] of [
@@ -1686,7 +2156,11 @@ test("real bd external-server workspace drives the concrete driver, adapter, and
       password: fixture.writerPassword,
       stdin: `SET @@SESSION.dolt_transaction_commit = 1; UPDATE issues SET metadata = JSON_SET(metadata, '$.outside_move', true) WHERE id = ${sqlLiteral(unrelatedId)}`,
     });
-    const value = batch();
+    const value = batchForRun(denseRun());
+    assert.equal(
+      Buffer.byteLength(JSON.stringify(value.next.root), "utf8") > 90_000,
+      true,
+    );
     const beforeCasHead = await fixture.writer.query(
       "SELECT DOLT_HASHOF('HEAD') AS head",
     );
@@ -1892,30 +2366,331 @@ test("real bd external-server workspace drives the concrete driver, adapter, and
     assert.deepEqual(await driver.probe(), { status: "unavailable" });
   } finally {
     await fixture.stop();
-    await rm(fixture.directory, { force: true, recursive: true });
+    await removeFixtureDirectory(fixture.directory);
   }
 });
 
-test("managed lifecycle owns a real local server and recovers without embedded fallback", async () => {
-  const fixture = await createManagedDoltServer();
+test("real Dolt transaction child faults remain ambiguous until authoritative discovery", async () => {
+  const fixture = await startBdDoltServer();
+  const serverIdentity = externalIdentity("on", fixture.endpoint);
+  let clearFaultHook: (() => void) | undefined;
+  try {
+    const driverFor = (rootId: string, childId: string) =>
+      new DoltBeadsServerDriver({
+        identity: serverIdentity,
+        rows: { childBeadIds: { "unit-1": childId }, rootBeadId: rootId },
+        slotProcess: new PinnedBdServerProcess({
+          credentialEnvironment: () => ({
+            BEADS_DOLT_PASSWORD: fixture.writerPassword,
+          }),
+          executable: fixture.bdExecutable,
+          workspace: fixture.workspace,
+        }),
+        worker: fixture.worker,
+        writer: fixture.writer,
+      });
+    const slotAdapter = new BeadsServerAdapter({
+      driver: driverFor("sce-fault-root-0", "sce-fault-child-0"),
+      identity: serverIdentity,
+    });
+    assert.deepEqual(await slotAdapter.preflight(), {
+      status: "ready",
+      identity: serverIdentity,
+    });
+    assert.equal(
+      (await slotAdapter.acquire({ holder, prefix: "sce", scope })).status,
+      "acquired",
+    );
+
+    const provision = async (index: number) => {
+      const rootId = `sce-fault-root-${index}`;
+      const childId = `sce-fault-child-${index}`;
+      for (const [id, title] of [
+        [rootId, `Fault root ${index}`],
+        [childId, `Fault child ${index}`],
+      ] as const) {
+        await runBd(
+          [
+            "-C",
+            fixture.workspace,
+            "--actor",
+            "fixture",
+            "--dolt-auto-commit",
+            "on",
+            "create",
+            title,
+            "--id",
+            id,
+            "--metadata",
+            JSON.stringify({ preserved: `fault-${index}` }),
+            "--json",
+          ],
+          {
+            cwd: fixture.workspace,
+            executable: fixture.bdExecutable,
+            password: fixture.writerPassword,
+          },
+        );
+      }
+      const driver = driverFor(rootId, childId);
+      const adapter = new BeadsServerAdapter({
+        driver,
+        identity: serverIdentity,
+      });
+      assert.deepEqual(await adapter.preflight(), {
+        status: "ready",
+        identity: serverIdentity,
+      });
+      const initialRoot = makeRootProjection(run());
+      const initialChild = makeChildProjection(initialRoot, "unit-1");
+      assert.ok(initialChild);
+      assert.deepEqual(
+        await driver.initializeEnvelope({
+          authority: "authorized_initialization",
+          envelope: initialRoot,
+          issueId: rootId,
+        }),
+        { status: "initialized" },
+      );
+      assert.deepEqual(
+        await driver.initializeEnvelope({
+          authority: "authorized_initialization",
+          envelope: initialChild,
+          issueId: childId,
+        }),
+        { status: "initialized" },
+      );
+      const read = async () => {
+        const metadata = await fixture.writer.query(
+          `SELECT id, JSON_UNQUOTE(JSON_EXTRACT(metadata, '$')) AS metadata FROM sce.issues WHERE id IN (${sqlLiteral(rootId)}, ${sqlLiteral(childId)}) ORDER BY id`,
+        );
+        assert.equal(metadata.status, "ok");
+        if (metadata.status !== "ok" || metadata.rows.length !== 2)
+          throw new Error("fault fixture metadata readback failed");
+        const entries: [string, unknown][] = [];
+        for (const row of metadata.rows) {
+          if (typeof row.id !== "string")
+            throw new Error("fault fixture issue identity readback failed");
+          entries.push([row.id, jsonObject(row.metadata).sce]);
+        }
+        const records = new Map<string, unknown>(entries);
+        const head = await fixture.writer.query(
+          "SELECT DOLT_HASHOF('HEAD') AS head",
+        );
+        assert.equal(head.status, "ok");
+        if (head.status !== "ok" || typeof head.rows[0]?.head !== "string")
+          throw new Error("fault fixture head readback failed");
+        assert.deepEqual(
+          await fixture.writer.query("SELECT * FROM dolt_status"),
+          { status: "ok", rows: [] },
+        );
+        return {
+          child: records.get(childId),
+          head: head.rows[0].head,
+          root: records.get(rootId),
+        };
+      };
+      return {
+        adapter,
+        initialChild,
+        initialRoot,
+        read,
+        value: batch(),
+      };
+    };
+
+    const exercise = async (
+      index: number,
+      phase: DoltSqlTransactionTestPhase,
+      noncooperative = false,
+    ) => {
+      const current = await provision(index);
+      const before = await current.read();
+      let matchingPhaseCalls = 0;
+      clearFaultHook = __setDoltSqlTransactionTestHookForTests((fault) => {
+        if (fault.phase !== phase) return;
+        matchingPhaseCalls += 1;
+        if (matchingPhaseCalls !== 1) return;
+        if (noncooperative) {
+          fault.pause();
+          setTimeout(fault.abort, 10);
+          return;
+        }
+        fault.abort();
+      });
+      const started = Date.now();
+      const result = await current.adapter.compareAndSet(current.value);
+      const elapsed = Date.now() - started;
+      clearFaultHook();
+      clearFaultHook = undefined;
+      assert.equal(
+        matchingPhaseCalls,
+        1,
+        `${phase} had exactly one real transaction-child attempt`,
+      );
+      assert.deepEqual(result, { status: "ambiguous" });
+      if (noncooperative)
+        assert.ok(
+          elapsed >= 200,
+          "the paused real child waited through TERM before KILL and close",
+        );
+      return { before, current, after: await current.read() };
+    };
+
+    const beforeRowcount = await exercise(
+      1,
+      "after_guarded_write_before_rowcount",
+    );
+    assert.deepEqual(
+      beforeRowcount.after.root,
+      beforeRowcount.current.initialRoot,
+    );
+    assert.deepEqual(
+      beforeRowcount.after.child,
+      beforeRowcount.current.initialChild,
+    );
+    assert.equal(beforeRowcount.after.head, beforeRowcount.before.head);
+    assert.deepEqual(
+      await beforeRowcount.current.adapter.discover(scope),
+      beforeRowcount.current.adapter.lastDiscovery,
+    );
+
+    const beforeCommit = await exercise(2, "after_rowcount_before_commit");
+    assert.deepEqual(beforeCommit.after.root, beforeCommit.current.initialRoot);
+    assert.deepEqual(
+      beforeCommit.after.child,
+      beforeCommit.current.initialChild,
+    );
+    assert.equal(beforeCommit.after.head, beforeCommit.before.head);
+
+    const noncooperative = await exercise(
+      3,
+      "after_rowcount_before_commit",
+      true,
+    );
+    assert.deepEqual(
+      noncooperative.after.root,
+      noncooperative.current.initialRoot,
+    );
+    assert.deepEqual(
+      noncooperative.after.child,
+      noncooperative.current.initialChild,
+    );
+    assert.equal(noncooperative.after.head, noncooperative.before.head);
+
+    const commitUnknown = await exercise(4, "after_commit_before_outcome");
+    const commitUnknownDiscovery =
+      await commitUnknown.current.adapter.discover(scope);
+    assert.ok(commitUnknownDiscovery);
+    const committedDuringUnknown =
+      canonicalJson(commitUnknown.after.root as JsonValue) ===
+      canonicalJson(commitUnknown.current.value.next.root as JsonValue);
+    if (committedDuringUnknown) {
+      assert.deepEqual(
+        commitUnknown.after.child,
+        commitUnknown.current.value.next.children[0],
+      );
+      assert.notEqual(commitUnknown.after.head, commitUnknown.before.head);
+      assert.deepEqual(
+        commitUnknownDiscovery.root,
+        commitUnknown.current.value.next.root,
+      );
+      // This is an explicit, post-discovery probe rather than an automatic
+      // retry. The exact already-applied batch must be stale and cannot move
+      // its rows or Dolt head a second time.
+      assert.deepEqual(
+        await commitUnknown.current.adapter.compareAndSet(
+          commitUnknown.current.value,
+        ),
+        { status: "stale" },
+      );
+      const afterUnknownStale = await commitUnknown.current.read();
+      assert.deepEqual(afterUnknownStale.root, commitUnknown.after.root);
+      assert.deepEqual(afterUnknownStale.child, commitUnknown.after.child);
+      assert.equal(afterUnknownStale.head, commitUnknown.after.head);
+    } else {
+      assert.deepEqual(
+        commitUnknown.after.root,
+        commitUnknown.current.initialRoot,
+      );
+      assert.deepEqual(
+        commitUnknown.after.child,
+        commitUnknown.current.initialChild,
+      );
+      assert.equal(commitUnknown.after.head, commitUnknown.before.head);
+      assert.deepEqual(
+        commitUnknownDiscovery.root,
+        commitUnknown.current.initialRoot,
+      );
+    }
+
+    const afterCommitMarker = await exercise(
+      5,
+      "after_commit_marker_before_close",
+    );
+    assert.deepEqual(
+      afterCommitMarker.after.root,
+      afterCommitMarker.current.value.next.root,
+    );
+    assert.deepEqual(
+      afterCommitMarker.after.child,
+      afterCommitMarker.current.value.next.children[0],
+    );
+    assert.notEqual(
+      afterCommitMarker.after.head,
+      afterCommitMarker.before.head,
+    );
+    const markerDiscovery =
+      await afterCommitMarker.current.adapter.discover(scope);
+    assert.ok(markerDiscovery);
+    assert.deepEqual(
+      markerDiscovery.root,
+      afterCommitMarker.current.value.next.root,
+    );
+    assert.deepEqual(
+      markerDiscovery.children,
+      afterCommitMarker.current.value.next.children,
+    );
+    // Likewise, an explicit reconciliation probe after the marker-confirmed
+    // commit must not produce a second transition or a second head movement.
+    assert.deepEqual(
+      await afterCommitMarker.current.adapter.compareAndSet(
+        afterCommitMarker.current.value,
+      ),
+      { status: "stale" },
+    );
+    const afterMarkerStale = await afterCommitMarker.current.read();
+    assert.deepEqual(afterMarkerStale.root, afterCommitMarker.after.root);
+    assert.deepEqual(afterMarkerStale.child, afterCommitMarker.after.child);
+    assert.equal(afterMarkerStale.head, afterCommitMarker.after.head);
+    assert.equal(
+      (await slotAdapter.release({ holder, prefix: "sce", scope })).status,
+      "released",
+    );
+  } finally {
+    clearFaultHook?.();
+    await fixture.stop();
+    await removeFixtureDirectory(fixture.directory);
+  }
+});
+
+test("managed bd shared-server lifecycle owns its isolated topology and recovers", async () => {
+  const fixture = await createManagedBdServer();
   const serverIdentity = identity("on", fixture.endpoint);
   const rootId = "sce-managed-root";
   const childId = "sce-managed-child";
-  const rawSqlArgs = [
-    "--no-tls",
-    "--host",
-    "127.0.0.1",
-    "--port",
-    fixture.endpoint.split(":")[1]!,
-    "--use-db",
-    "sce",
-    "--user",
-    "writer",
-    "sql",
-  ];
+  const slotProcess = new PinnedBdServerProcess({
+    executable: fixture.bdExecutable,
+    runtimeEnvironment: () => ({
+      HOME: fixture.runtime.home,
+      XDG_CONFIG_HOME: fixture.runtime.config,
+    }),
+    workspace: fixture.workspace,
+  });
   const driver = new DoltBeadsServerDriver({
     identity: serverIdentity,
     rows: { childBeadIds: { "unit-1": childId }, rootBeadId: rootId },
+    slotProcess,
     worker: fixture.worker,
     writer: fixture.writer,
   });
@@ -1928,24 +2703,44 @@ test("managed lifecycle owns a real local server and recovers without embedded f
     assert.equal(serverIdentity.topology, "managed_local_shared_server");
     assert.equal(serverIdentity.credentialProvenance, "managed_local_runtime");
     assert.equal(Object.hasOwn(serverIdentity, "storePath"), false);
+    assert.equal(fixture.home.startsWith(fixture.directory), true);
+    assert.equal(
+      (fixture.context.beads_dir as string).startsWith(fixture.directory),
+      true,
+    );
     assert.deepEqual(await adapter.preflight(), {
       status: "ready",
       identity: serverIdentity,
     });
-    assert.equal(fixture.starts(), 1);
     const initialRoot = makeRootProjection(run());
     const initialChild = makeChildProjection(initialRoot, "unit-1");
     assert.ok(initialChild);
-    await runDolt(rawSqlArgs, {
-      cwd: fixture.directory,
-      executable: fixture.executable,
-      password: fixture.writerPassword,
-      stdin: [
-        "SET @@SESSION.dolt_transaction_commit = 1",
-        `INSERT INTO issues (id, title, design, status, metadata, external_ref) VALUES (${sqlLiteral(rootId)}, 'Managed root', '', 'open', CAST('{"preserved":"managed"}' AS JSON), NULL), (${sqlLiteral(childId)}, 'Managed child', '', 'open', CAST('{"preserved":"child"}' AS JSON), NULL), ('sce-merge-slot', 'Merge Slot', ${sqlLiteral(canonicalJson(scope as JsonValue))}, 'in_progress', CAST(${sqlLiteral(JSON.stringify({ holder }))} AS JSON), ${sqlLiteral(slotScopeReference(scope))})`,
-        "INSERT INTO labels (issue_id, label) VALUES ('sce-merge-slot', 'gt:slot')",
-      ].join(";\n"),
-    });
+    assert.equal(
+      (await adapter.acquire({ holder, prefix: "sce", scope })).status,
+      "acquired",
+    );
+    const rawHeld = JSON.parse(
+      await runBd(
+        [
+          "-C",
+          fixture.workspace,
+          "--actor",
+          "independent",
+          "--dolt-auto-commit",
+          "on",
+          "merge-slot",
+          "check",
+          "--json",
+        ],
+        {
+          cwd: fixture.workspace,
+          executable: fixture.bdExecutable,
+          runtime: fixture.runtime,
+        },
+      ),
+    ) as Record<string, unknown>;
+    assert.equal(rawHeld.available, false);
+    assert.equal(rawHeld.holder, holder);
     assert.deepEqual(
       await driver.initializeEnvelope({
         authority: "authorized_initialization",
@@ -1979,6 +2774,20 @@ test("managed lifecycle owns a real local server and recovers without embedded f
       rows: [],
     });
     assert.deepEqual(await adapter.compareAndSet(value), { status: "stale" });
+    assert.equal(
+      (
+        await fixture.worker.query(
+          `SELECT id FROM issues WHERE id = ${sqlLiteral(rootId)}`,
+        )
+      ).status,
+      "ok",
+    );
+    assert.deepEqual(
+      await fixture.worker.query(
+        `UPDATE issues SET status = 'blocked' WHERE id = ${sqlLiteral(rootId)}`,
+      ),
+      { status: "refused" },
+    );
     assert.deepEqual(
       await new DoltSqlTransport({
         executable: fixture.executable,
@@ -1997,32 +2806,92 @@ test("managed lifecycle owns a real local server and recovers without embedded f
       }).query("SELECT 1"),
       { status: "unavailable" },
     );
+    assert.equal(
+      (await adapter.release({ holder, prefix: "sce", scope })).status,
+      "released",
+    );
+    const rawReleased = JSON.parse(
+      await runBd(
+        [
+          "-C",
+          fixture.workspace,
+          "--actor",
+          "independent",
+          "--dolt-auto-commit",
+          "on",
+          "merge-slot",
+          "check",
+          "--json",
+        ],
+        {
+          cwd: fixture.workspace,
+          executable: fixture.bdExecutable,
+          runtime: fixture.runtime,
+        },
+      ),
+    ) as Record<string, unknown>;
+    assert.equal(rawReleased.available, true);
+    assert.equal(rawReleased.holder, null);
+    // bd init started this private server. The adapter adopts that exact
+    // status/provenance but must not claim its stop on dispose.
     await adapter.dispose();
-    assert.equal(fixture.stops(), 1);
+    assert.equal((await fixture.writer.query("SELECT 1")).status, "ok");
+    // The fixture explicitly owns its init-created private process; stop it
+    // outside the adapter, then prove a fresh adapter owns its restart.
+    await stopPrivateBdServer({
+      executable: fixture.bdExecutable,
+      runtime: fixture.runtime,
+      workspace: fixture.workspace,
+    });
     assert.deepEqual(await fixture.writer.query("SELECT 1"), {
       status: "unavailable",
+    });
+    const recoveryLifecycle = new PinnedBdManagedServerProcess({
+      dataDirectory: join(fixture.home, ".beads", "shared-server", "dolt"),
+      doltExecutable: fixture.executable,
+      executable: fixture.bdExecutable,
+      runtimeEnvironment: () => ({
+        HOME: fixture.runtime.home,
+        XDG_CONFIG_HOME: fixture.runtime.config,
+      }),
+      workspace: fixture.workspace,
     });
     const recoveryDriver = new DoltBeadsServerDriver({
       identity: serverIdentity,
       rows: { childBeadIds: { "unit-1": childId }, rootBeadId: rootId },
+      slotProcess: new PinnedBdServerProcess({
+        executable: fixture.bdExecutable,
+        runtimeEnvironment: () => ({
+          HOME: fixture.runtime.home,
+          XDG_CONFIG_HOME: fixture.runtime.config,
+        }),
+        workspace: fixture.workspace,
+      }),
       worker: fixture.worker,
       writer: fixture.writer,
     });
     const recovery = new BeadsServerAdapter({
       driver: recoveryDriver,
       identity: serverIdentity,
-      process: fixture.lifecycle,
+      process: recoveryLifecycle,
     });
     assert.deepEqual(await recovery.preflight(), {
       status: "ready",
       identity: serverIdentity,
     });
-    assert.equal(fixture.starts(), 2);
     await recovery.dispose();
-    assert.equal(fixture.stops(), 2);
+    assert.equal((await fixture.writer.query("SELECT 1")).status, "ok");
+    await stopPrivateBdServer({
+      executable: fixture.bdExecutable,
+      runtime: fixture.runtime,
+      workspace: fixture.workspace,
+    });
+    assert.deepEqual(await fixture.writer.query("SELECT 1"), {
+      status: "unavailable",
+    });
   } finally {
     await fixture.stop();
-    await rm(fixture.directory, { force: true, recursive: true });
+    await removeFixtureDirectory(fixture.directory);
   }
 });
 
@@ -2283,7 +3152,6 @@ test("preflight refuses wrong database, missing server-enforced worker readonly,
         identity: externalIdentity(),
         process: {
           start: async () => ({ status: "ok", value: undefined }),
-          stop: async () => undefined,
         },
       }),
     /invalid server adapter topology/,
@@ -2298,7 +3166,6 @@ test("preflight refuses wrong database, missing server-enforced worker readonly,
         started += 1;
         return { status: "ok", value: undefined };
       },
-      stop: async () => undefined,
     },
   });
   assert.deepEqual(await managed.preflight(), {
