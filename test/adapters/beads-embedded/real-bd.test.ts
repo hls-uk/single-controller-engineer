@@ -240,33 +240,35 @@ test("pinned bd local embedded slot and Dolt working-set fixture", async () => {
     const processState = await embeddedProcess.execute({ kind: "state" });
     assert.equal(processState.kind, "state");
     assert.equal(processState.value.reachable, true);
+    const localPreflight = {
+      payload: {
+        beads: {
+          beadsDir: join(root, ".beads"),
+          contextSchemaVersion: 1 as const,
+          database: "sce",
+          mode: "embedded" as const,
+          prefix: "sce",
+          projectId: "store-1",
+          provenance: "embedded_config" as const,
+          storePath: join(root, ".beads", "embeddeddolt"),
+          toolVersion: "1.1.0" as const,
+        },
+        git: {
+          commonDir: join(root, ".git"),
+          identity: "repo-1",
+          objectFormat: "sha1" as const,
+          topLevel: root,
+        },
+        status: "ready" as const,
+      },
+      schema: "sce.preflight" as const,
+      version: 1 as const,
+    };
     const adapter = new EmbeddedBeadsAdapter({
       holder: "run-1/incarnation-1",
       mode: "local-only",
       prefix: "sce",
-      preflight: {
-        payload: {
-          beads: {
-            beadsDir: join(root, ".beads"),
-            contextSchemaVersion: 1,
-            database: "sce",
-            mode: "embedded",
-            prefix: "sce",
-            provenance: "embedded_config",
-            storePath: join(root, ".beads", "embeddeddolt"),
-            toolVersion: "1.1.0",
-          },
-          git: {
-            commonDir: join(root, ".git"),
-            identity: "repo-1",
-            objectFormat: "sha1",
-            topLevel: root,
-          },
-          status: "ready",
-        },
-        schema: "sce.preflight",
-        version: 1,
-      },
+      preflight: localPreflight,
       process: embeddedProcess,
       scope,
     });
@@ -283,6 +285,51 @@ test("pinned bd local embedded slot and Dolt working-set fixture", async () => {
       (await adapter.release({ transition: releaseIntent })).code,
       "applied",
     );
+    // bd 1.1.0 auto-commits the slot action. A replacement adapter replaying
+    // the persisted release result must prove that exact committed delta and
+    // publish applied without issuing another release/commit/push.
+    const beforeLostRelease = await embeddedProcess.execute({ kind: "state" });
+    assert.equal(beforeLostRelease.kind, "state");
+    const replayBase = new PinnedBdEmbeddedProcess({
+      bdExecutable: "/opt/homebrew/bin/bd",
+      cwd: root,
+      databaseDirectory: database,
+      doltExecutable: "/opt/homebrew/bin/dolt",
+      prefix: "sce",
+      projections: new DoltProjectionPersistence({
+        childIssueId: () => undefined,
+        databaseDirectory: database,
+        doltExecutable: "/opt/homebrew/bin/dolt",
+        rootIssueId: "sce-root",
+      }),
+      scope,
+    });
+    const replayPort = new RecordingProcess(replayBase);
+    const replayAdapter = new EmbeddedBeadsAdapter({
+      holder: "run-1/incarnation-1",
+      mode: "local-only",
+      prefix: "sce",
+      preflight: localPreflight,
+      process: replayPort,
+      scope,
+    });
+    assert.equal(
+      (await replayAdapter.release({ transition: releaseIntent })).code,
+      "applied",
+    );
+    assert.equal(
+      replayPort.requests.some(
+        (request) =>
+          request.kind === "commit" ||
+          request.kind === "push" ||
+          (request.kind === "slot" && request.action !== "check"),
+      ),
+      false,
+    );
+    const afterLostRelease = await replayBase.execute({ kind: "state" });
+    assert.equal(afterLostRelease.kind, "state");
+    assert.equal(afterLostRelease.value.workingSet, "clean");
+    assert.equal(afterLostRelease.value.head, beforeLostRelease.value.head);
   } finally {
     await rm(root, { force: true, recursive: true });
   }
@@ -432,6 +479,7 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
           database: "sce",
           mode: "embedded" as const,
           prefix: "sce",
+          projectId: "store-1",
           provenance: "embedded_config" as const,
           storePath: join(cwd, ".beads", "embeddeddolt"),
           syncRef: "refs/dolt/data",
@@ -531,30 +579,42 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
     );
     // A crash after successful push but before result persistence is an exact
     // remote-held resume, never a second acquire or push.
+    const afterPushAcquireBase = processFor(
+      first,
+      firstDatabase,
+      new DoltProjectionPersistence({
+        childIssueId: () => undefined,
+        databaseDirectory: firstDatabase,
+        doltExecutable: "/opt/homebrew/bin/dolt",
+        rootIssueId: "sce-root",
+      }),
+    );
+    const afterPushAcquirePort = new RecordingProcess(afterPushAcquireBase);
     const afterPushAcquire = new EmbeddedBeadsAdapter({
       holder: initial.controller.holder,
       mode: "git-sync",
       prefix: "sce",
       preflight: preflight(first),
-      process: processFor(
-        first,
-        firstDatabase,
-        new DoltProjectionPersistence({
-          childIssueId: () => undefined,
-          databaseDirectory: firstDatabase,
-          doltExecutable: "/opt/homebrew/bin/dolt",
-          rootIssueId: "sce-root",
-        }),
-      ),
+      process: afterPushAcquirePort,
       scope,
     });
     assert.equal(
       (
         await afterPushAcquire.acquire({
           knownHolder: initial.controller.holder,
+          transition: firstAcquireIntent,
         })
       ).code,
       "applied",
+    );
+    assert.equal(
+      afterPushAcquirePort.requests.some(
+        (request) =>
+          request.kind === "commit" ||
+          request.kind === "push" ||
+          (request.kind === "slot" && request.action !== "check"),
+      ),
+      false,
     );
     const acquiredState = await firstProcess.execute({ kind: "state" });
     const acquiredSlot = await firstProcess.execute({
@@ -783,6 +843,68 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
     assert.equal(releasedState.value.remoteHead, releasedState.value.head);
     assert.equal(releasedSlot.kind, "slot");
     assert.equal(releasedSlot.value.status, "available");
+    const releasedRemoteSlot = await restartedProcess.execute({
+      actor: initial.controller.holder,
+      kind: "slot",
+      action: "check",
+      source: "remote",
+    });
+    assert.equal(releasedRemoteSlot.kind, "slot");
+    assert.equal(releasedRemoteSlot.value.status, "available");
+    // Crash after a successful release push but before result persistence: a
+    // fresh adapter must bind the exact persisted release transition to its
+    // local audit delta and remote available row. It must not issue a second
+    // mutating slot command, commit, or push.
+    const replayReleaseBase = processFor(
+      first,
+      firstDatabase,
+      new DoltProjectionPersistence({
+        childIssueId: () => undefined,
+        databaseDirectory: firstDatabase,
+        doltExecutable: "/opt/homebrew/bin/dolt",
+        rootIssueId: "sce-root",
+      }),
+    );
+    const replayReleasePort = new RecordingProcess(replayReleaseBase);
+    const replayRelease = new EmbeddedBeadsAdapter({
+      holder: initial.controller.holder,
+      mode: "git-sync",
+      prefix: "sce",
+      preflight: preflight(first),
+      process: replayReleasePort,
+      scope,
+    });
+    assert.equal(
+      (await replayRelease.release({ transition: restartReleaseIntent })).code,
+      "applied",
+    );
+    assert.equal(
+      replayReleasePort.requests.some(
+        (request) =>
+          request.kind === "commit" ||
+          request.kind === "push" ||
+          (request.kind === "slot" && request.action !== "check"),
+      ),
+      false,
+    );
+    const afterReplayReleaseState = await replayReleaseBase.execute({
+      kind: "state",
+    });
+    const afterReplayReleaseRemote = await replayReleaseBase.execute({
+      actor: initial.controller.holder,
+      kind: "slot",
+      action: "check",
+      source: "remote",
+    });
+    assert.equal(afterReplayReleaseState.kind, "state");
+    assert.equal(afterReplayReleaseRemote.kind, "slot");
+    assert.equal(afterReplayReleaseState.value.workingSet, "clean");
+    assert.equal(afterReplayReleaseState.value.head, releasedState.value.head);
+    assert.equal(
+      afterReplayReleaseState.value.remoteHead,
+      releasedState.value.remoteHead,
+    );
+    assert.deepEqual(afterReplayReleaseRemote.value, releasedRemoteSlot.value);
     assert.equal(
       (await secondProcess.execute({ kind: "pull" })).value,
       "applied",

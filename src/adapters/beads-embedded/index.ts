@@ -1,6 +1,7 @@
 import { canonicalJson, type JsonValue } from "../../protocol/canonical.js";
 import {
   type FencingScope,
+  FencingScopeSchema,
   type MergeSlotObservation,
   type MutationBatch,
   type RunStorePort,
@@ -12,7 +13,11 @@ import {
   validateMergeSlotObservation,
   validateMutationBatch,
 } from "../../fencing/index.js";
-import type { PreflightEnvelope } from "../../preflight/index.js";
+import {
+  PreflightEnvelopeSchema,
+  isSchema,
+  type PreflightEnvelope,
+} from "../../preflight/index.js";
 
 import {
   EMBEDDED_ADAPTER_VERSION,
@@ -132,17 +137,29 @@ function checkedPreflight(
   identity: EmbeddedProcessIdentity,
   mode: EmbeddedMode,
   prefix: string,
+  scope: FencingScope,
 ): boolean {
-  if (preflight.payload.status !== "ready") return false;
+  // The adapter is a public trust boundary.  Its nominal TypeScript input can
+  // be forged by a caller, so accept only the complete, strict envelope and
+  // scope schemas before reading selected topology fields.
+  if (
+    !isSchema(PreflightEnvelopeSchema, preflight) ||
+    !isSchema(FencingScopeSchema, scope) ||
+    preflight.payload.status !== "ready"
+  )
+    return false;
   const beads = preflight.payload.beads;
   const expectedDirectory = `${identity.storePath}/${identity.database}`;
   if (
     beads.mode !== "embedded" ||
+    beads.provenance !== "embedded_config" ||
     beads.database !== identity.database ||
     beads.prefix !== prefix ||
+    beads.projectId !== scope.beadsStoreIdentity ||
     identity.prefix !== prefix ||
     beads.storePath !== identity.storePath ||
-    identity.databaseDirectory !== expectedDirectory
+    identity.databaseDirectory !== expectedDirectory ||
+    preflight.payload.git.identity !== scope.gitRepositoryIdentity
   )
     return false;
   if (mode === "local-only")
@@ -182,6 +199,7 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       options.process.identity,
       options.mode,
       options.prefix,
+      options.scope,
     );
   }
 
@@ -244,6 +262,20 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       return result("ambiguous");
     const check = await this.slot("check");
     if (check === undefined) return result("quarantined");
+    // A caller can lose the result after its exact journalled acquire was
+    // pushed.  Do not fall through the generic same-holder resume path: that
+    // path only proves a current lease, whereas lost-result recovery must also
+    // bind it to the persisted built-in slot/audit-event delta.
+    if (
+      authority.transition !== undefined &&
+      same(check, authority.transition.after)
+    )
+      return this.reconcileLostSlotTransition(
+        "acquire",
+        authority.transition,
+        before,
+        check,
+      );
     const decision = decideControllerSlot(
       this.prefix,
       this.scope,
@@ -341,6 +373,17 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     )
       return this.recoverSlotTransition("release", authority?.transition);
     const before = await this.slot("check");
+    // A pushed release can be observed by a fresh adapter after the caller
+    // died before persisting its result. Reconcile that durable result before
+    // rejecting the now-available row as a non-holder, and never issue a new
+    // release command on this path.
+    if (before !== undefined && same(before, authority.transition.after))
+      return this.reconcileLostSlotTransition(
+        "release",
+        authority.transition,
+        initial,
+        before,
+      );
     if (
       before === undefined ||
       before.status !== "acquired" ||
@@ -648,6 +691,66 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
         return result("ambiguous");
     }
     return this.durableSlotTransition(transition);
+  }
+
+  /**
+   * Reconciles a clean, already-durable slot transition after its caller lost
+   * the result.  Unlike the ordinary current-slot decision, this path must
+   * prove the exact persisted transition delta before it can publish applied.
+   */
+  private async reconcileLostSlotTransition(
+    kind: "acquire" | "release",
+    transition: SlotTransitionIntent,
+    state: EmbeddedState,
+    local: MergeSlotObservation,
+  ): Promise<EmbeddedResult> {
+    if (
+      !validateSlotTransitionIntent(
+        transition,
+        this.prefix,
+        this.scope,
+        this.mode,
+        this.holder,
+      ) ||
+      transition.kind !== kind ||
+      !state.reachable ||
+      state.workingSet !== "clean" ||
+      state.head === undefined ||
+      state.head === transition.before.head ||
+      !same(local, transition.after) ||
+      (this.mode === "git-sync" &&
+        (state.remoteHead === undefined || state.remoteHead !== state.head))
+    )
+      return result("ambiguous");
+    const prove = await this.call({
+      kind: "slot_transition",
+      intent: transition,
+    });
+    if (prove?.kind !== "slot_transition" || prove.value !== "observed")
+      return result("ambiguous");
+    if (this.mode === "local-only") {
+      const final = await this.state();
+      return final !== undefined &&
+        final.reachable &&
+        final.workingSet === "clean" &&
+        final.head === state.head
+        ? result("applied")
+        : result("ambiguous");
+    }
+    // The remote read performs its own bounded fetch. Re-read state after it,
+    // so an unrelated remote commit which preserves the available/held row
+    // cannot turn a lost-result reconciliation into an inferred success.
+    const remote = await this.slot("check", "remote");
+    const final = await this.state();
+    return remote !== undefined &&
+      same(remote, transition.after) &&
+      final !== undefined &&
+      final.reachable &&
+      final.workingSet === "clean" &&
+      final.head === state.head &&
+      final.remoteHead === state.head
+      ? result("applied")
+      : result("ambiguous");
   }
 
   /**

@@ -44,6 +44,7 @@ function preflight(sync: boolean): ReadyPreflight {
         database: "sce",
         mode: "embedded",
         prefix: "sce",
+        projectId: "store-1",
         provenance: "embedded_config",
         storePath: "/workspace/repo/.beads/dolt",
         ...(sync
@@ -53,7 +54,7 @@ function preflight(sync: boolean): ReadyPreflight {
       },
       git: {
         commonDir: "/workspace/repo/.git",
-        identity: "github.test/org/repo",
+        identity: "repo-1",
         objectFormat: "sha1",
         topLevel: "/workspace/repo",
       },
@@ -914,6 +915,65 @@ test("adapter binds preflight identity to the concrete process before any comman
   }
 });
 
+test("adapter refuses malformed preflight envelopes and scope identity mismatches before commands", async () => {
+  const local = preflight(false);
+  const malformed: readonly unknown[] = [
+    { ...local, schema: "sce.other" },
+    { ...local, version: 2 },
+    {
+      ...local,
+      payload: {
+        ...local.payload,
+        beads: { ...local.payload.beads, toolVersion: "1.1.1" },
+      },
+    },
+    {
+      ...local,
+      payload: {
+        ...local.payload,
+        beads: {
+          ...local.payload.beads,
+          provenance: "shared_server_flag",
+        },
+      },
+    },
+    { ...local, extra: true },
+  ];
+  for (const candidate of malformed) {
+    const port = new ScriptedPort([]);
+    const runtime = new EmbeddedBeadsAdapter({
+      holder,
+      mode: "local-only",
+      prefix: "sce",
+      preflight: candidate as PreflightEnvelope,
+      process: port,
+      scope,
+    });
+    assert.equal((await runtime.acquire()).code, "quarantined");
+    assert.equal(await runtime.workerBaseline(), undefined);
+    assert.deepEqual(port.requests, []);
+  }
+
+  for (const foreignScope of [
+    { ...scope, beadsStoreIdentity: "store-2" },
+    { ...scope, gitRepositoryIdentity: "repo-2" },
+    { ...scope, integrationBranch: "release", extra: true },
+  ]) {
+    const port = new ScriptedPort([]);
+    const runtime = new EmbeddedBeadsAdapter({
+      holder,
+      mode: "local-only",
+      prefix: "sce",
+      preflight: local,
+      process: port,
+      scope: foreignScope as FencingScope,
+    });
+    assert.equal((await runtime.acquire()).code, "quarantined");
+    assert.equal(await runtime.workerBaseline(), undefined);
+    assert.deepEqual(port.requests, []);
+  }
+});
+
 test("worker baseline requires the exact currently acquired controller slot", async () => {
   for (const observation of [
     slot("available"),
@@ -1218,6 +1278,210 @@ test("fresh adapter resumes only the persisted exact pre-push acquire intent", a
   assert.equal(
     recovered.requests.filter((request) => request.kind === "push").length,
     1,
+  );
+});
+
+test("lost-result slot replays prove the exact persisted transition without mutation", async () => {
+  const beforeHead = "a".repeat(40);
+  const afterHead = "b".repeat(40);
+  const forbidden = (port: ScriptedPort) =>
+    port.requests.some(
+      (request) =>
+        request.kind === "commit" ||
+        request.kind === "push" ||
+        (request.kind === "slot" && request.action !== "check"),
+    );
+
+  const releasePlanner = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: beforeHead,
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("acquired", holder) },
+  ]);
+  const releaseIntent = await adapter(
+    releasePlanner,
+    "local-only",
+  ).prepareReleaseTransition();
+  assert.ok("idempotencyKey" in releaseIntent);
+  const replayedRelease = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: afterHead,
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("available") },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: afterHead,
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
+  ]);
+  assert.equal(
+    (
+      await adapter(replayedRelease, "local-only").release({
+        transition: releaseIntent,
+      })
+    ).code,
+    "applied",
+  );
+  assert.equal(forbidden(replayedRelease), false);
+  assert.deepEqual(
+    replayedRelease.requests.map((request) => request.kind),
+    ["state", "slot", "slot_transition", "state"],
+  );
+
+  const rejectedProof = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: afterHead,
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("available") },
+    { kind: "slot_transition", value: "ambiguous" },
+  ]);
+  assert.equal(
+    (
+      await adapter(rejectedProof, "local-only").release({
+        transition: releaseIntent,
+      })
+    ).code,
+    "ambiguous",
+  );
+  assert.equal(forbidden(rejectedProof), false);
+
+  const syncReleasePlanner = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: beforeHead,
+        reachable: true,
+        remoteHead: beforeHead,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("acquired", holder) },
+    { kind: "slot", value: slot("acquired", holder) },
+  ]);
+  const syncReleaseIntent = await adapter(
+    syncReleasePlanner,
+    "git-sync",
+  ).prepareReleaseTransition();
+  assert.ok("idempotencyKey" in syncReleaseIntent);
+  // The remote row can remain exactly available while an unrelated remote
+  // commit lands during its fetch. The final fetched state must refuse that
+  // lost-result replay instead of inferring it is the planned release.
+  const remoteRace = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: afterHead,
+        reachable: true,
+        remoteHead: afterHead,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("available") },
+    { kind: "slot", value: slot("available") },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: afterHead,
+        reachable: true,
+        remoteHead: "c".repeat(40),
+        workingSet: "clean",
+      },
+    },
+  ]);
+  assert.equal(
+    (
+      await adapter(remoteRace, "git-sync").release({
+        transition: syncReleaseIntent,
+      })
+    ).code,
+    "ambiguous",
+  );
+  assert.equal(forbidden(remoteRace), false);
+
+  const acquirePlanner = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: beforeHead,
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("available") },
+  ]);
+  const acquireIntent = await adapter(
+    acquirePlanner,
+    "local-only",
+  ).prepareAcquireTransition();
+  assert.ok("idempotencyKey" in acquireIntent);
+  const replayedAcquire = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: afterHead,
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: afterHead,
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("acquired", holder) },
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: afterHead,
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
+  ]);
+  assert.equal(
+    (
+      await adapter(replayedAcquire, "local-only").acquire({
+        transition: acquireIntent,
+      })
+    ).code,
+    "applied",
+  );
+  assert.equal(forbidden(replayedAcquire), false);
+  assert.deepEqual(
+    replayedAcquire.requests.map((request) => request.kind),
+    ["state", "state", "slot", "slot_transition", "state"],
   );
 });
 

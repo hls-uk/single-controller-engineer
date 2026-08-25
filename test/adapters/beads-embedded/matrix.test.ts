@@ -121,6 +121,7 @@ function preflight(cwd: string) {
         database: "sce",
         mode: "embedded" as const,
         prefix: "sce",
+        projectId: "store-1",
         provenance: "embedded_config" as const,
         storePath: join(cwd, ".beads", "embeddeddolt"),
         toolVersion: "1.1.0" as const,
