@@ -1235,10 +1235,10 @@ for the exact marker; indexed GitHub search is only an optimization. An exact
 open match returns the canonical URL. Search-then-create is inherently racy, so
 this is best-effort client deduplication, not uniqueness. Concurrent duplicate
 creation is reconciled deterministically by the target workflow: the lowest
-issue number is canonical, later exact matches receive a `duplicate-feedback`
-label and a fixed comment linking the canonical issue, and none are
-automatically closed. Appending new evidence remains a separate authorized
-mutation. Fuzzy model-based deduplication is excluded.
+issue number is canonical, later exact matches receive the repository's
+existing `duplicate` label and a fixed comment linking the canonical issue,
+and none are automatically closed. Appending new evidence remains a separate
+authorized mutation. Fuzzy model-based deduplication is excluded.
 
 Consumers do not need label-management permission. A target-repository
 `issues.opened` workflow with only `contents: read` and `issues: write` runs
@@ -1246,11 +1246,11 @@ trusted, full-SHA-pinned default-branch code in one serialized triage
 concurrency group. It treats titles and bodies as hostile data, passes no issue
 field through shell or generated source, validates parsed fields against the
 schema, and recomputes the fingerprint rather than trusting the marker. Kind
-and component enums map to constant existing labels; issue values never become
-label names. “Marked duplicate” means only the constant label and fixed
-canonical-link comment above. Ambiguous reports are left open and unmodified
-apart from an optional constant `needs-triage` label; ordinary unmarked issues
-are untouched. The workflow's broad issue-write token is confined to this
+and component enums map only to constant labels whose existence was verified;
+issue values never become label names. “Marked duplicate” means only the
+existing `duplicate` label and fixed canonical-link comment above. Ambiguous
+reports and ordinary unmarked issues are left open and unmodified. The
+workflow's broad issue-write token is confined to this
 single event and code path. See GitHub's
 [script-injection guidance](https://docs.github.com/en/actions/concepts/security/script-injections).
 

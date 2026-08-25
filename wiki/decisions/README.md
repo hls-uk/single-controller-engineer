@@ -37,3 +37,4 @@ may recommend decisions, but the controller records the accepted disposition.
 | [DEC-20260825-003](2026-08-25-003-phase-2-recovery-boundary.md) | Accepted | Finish Phase 2 recovery with durable authority and beta-tier evidence | `sce-1kv.2.6` |
 | [DEC-20260825-004](2026-08-25-004-explicit-production-recovery-authority.md) | Accepted | Production recovery requires explicit exact authority | `sce-1kv.2.6` |
 | [DEC-20260825-005](2026-08-25-005-path-independent-vendored-bundle.md) | Accepted | Vendored bundles must be path-independent | `sce-1kv.2.6` |
+| [DEC-20260825-006](2026-08-25-006-existing-feedback-labels.md) | Accepted | Feedback automation uses only confirmed existing labels | `sce-1kv.4.1`, `sce-1kv.4.2` |
