@@ -1,0 +1,40 @@
+{
+  "schema": "sce.fast-tests",
+  "version": 1,
+  "roots": [
+    "test/cli/cli.test.ts",
+    "test/commands/recovery.test.ts",
+    "test/controller-config.test.ts",
+    "test/install",
+    "test/eval",
+    "test/feedback",
+    "test/package-manifest.test.ts",
+    "test/preflight",
+    "test/protocol/actions.test.ts",
+    "test/protocol/canonical.test.ts",
+    "test/protocol/reducer.test.ts",
+    "test/protocol/schemas.test.ts"
+  ],
+  "expectedFiles": [
+    "test/cli/cli.test.ts",
+    "test/commands/recovery.test.ts",
+    "test/controller-config.test.ts",
+    "test/eval/controller-config-example.test.ts",
+    "test/eval/issue-forms.test.ts",
+    "test/eval/release-manifest.test.ts",
+    "test/eval/skill-layout.test.ts",
+    "test/eval/workflow-policy.test.ts",
+    "test/feedback/feedback.test.ts",
+    "test/install/installer.test.ts",
+    "test/package-manifest.test.ts",
+    "test/preflight/preflight.test.ts",
+    "test/protocol/actions.test.ts",
+    "test/protocol/canonical.test.ts",
+    "test/protocol/reducer.test.ts",
+    "test/protocol/schemas.test.ts"
+  ],
+  "skipPatterns": [
+    "64 retained units complete 16 repairs in waves of at most three within the envelope"
+  ],
+  "budgetSeconds": 60
+}

@@ -1,0 +1,39 @@
+{
+  "schema": "sce.release-evidence",
+  "version": 1,
+  "deferred": [
+    "topology",
+    "crash",
+    "provider",
+    "live-agent",
+    "protocol-stress"
+  ],
+  "cloneLineageBoundary": {
+    "acceptedEdges": 64,
+    "refusedEdges": 65,
+    "meaning": "The production clone-lineage proof accepts exactly 64 pinned metadata edges and refuses 65."
+  },
+  "requiredTests": [
+    {
+      "file": "test/release/production-lineage.test.ts",
+      "name": "production clone-lineage proof accepts exactly 64 permitted metadata edges"
+    },
+    {
+      "file": "test/adapters/beads-embedded/matrix.test.ts",
+      "name": "clone pull lineage rejects cycles, multiple authorities, and 65 nested branches before pull"
+    }
+  ],
+  "commands": {
+    "fast": "npm run test:fast",
+    "integration": "npm run test:integration",
+    "package": "npm run test:package",
+    "release": "npm run test:release"
+  },
+  "manualOrProvisioned": {
+    "topology": "embedded, managed-server, and external-server real-tool fixtures",
+    "crash": "intent/result boundary and process-kill recovery matrix",
+    "provider": "Git/provider fake plus dedicated sandbox repository stale-base proof",
+    "live-agent": "fresh frontier controller and adversarial review; non-hermetic release evidence",
+    "protocol-stress": "64 retained units with the maximum repair history and envelope-boundary assertions"
+  }
+}

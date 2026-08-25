@@ -15,6 +15,7 @@
     "sce": "skills/single-controller-engineer/scripts/sce.mjs"
   },
   "files": [
+    "LICENSE",
     "README.md",
     "skills/single-controller-engineer",
     "skills/single-controller-feedback"
@@ -22,20 +23,28 @@
   "publishConfig": {
     "access": "public"
   },
+  "sceRelease": {
+    "feedbackTarget": {
+      "canonicalName": "hls-uk/single-controller-engineer",
+      "repositoryNodeId": "R_kgDOUCvUmw"
+    }
+  },
   "scripts": {
     "build": "node scripts/build.mjs",
-    "check": "npm run check:format && npm run typecheck && npm test && npm run build",
+    "check": "npm run check:format && npm run typecheck && npm test && npm run test:package && npm run build",
     "check:format": "prettier --check .",
     "format": "prettier --write .",
-    "test": "node --import tsx --test test/**/*.test.ts",
+    "test": "npm run test:fast",
+    "test:fast": "node scripts/test-tier.mjs fast",
+    "test:integration": "node scripts/test-tier.mjs integration",
+    "test:package": "node scripts/package-check.mjs",
+    "test:release": "node scripts/test-tier.mjs release && npm run test:package",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {
-    "@sinclair/typebox": "0.34.52",
-    "ajv": "8.20.0"
-  },
   "devDependencies": {
+    "@sinclair/typebox": "0.34.52",
     "@types/node": "22.20.1",
+    "ajv": "8.20.0",
     "esbuild": "0.28.2",
     "fast-check": "4.9.0",
     "prettier": "3.9.6",

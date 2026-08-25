@@ -1,0 +1,92 @@
+{
+  "schema": "sce.controller-config",
+  "version": 1,
+  "nonce": "example-run-nonce",
+  "git": {
+    "repository": {
+      "cwd": "/opt/sce/example",
+      "commonDir": "/opt/sce/example/.git",
+      "identity": "local:/opt/sce/example/.git",
+      "objectFormat": "sha1",
+      "remoteUrls": []
+    }
+  },
+  "scope": {
+    "beadsStoreIdentity": "example-store",
+    "gitRepositoryIdentity": "local:/opt/sce/example/.git",
+    "integrationBranch": "main"
+  },
+  "initialRun": {
+    "revision": 0,
+    "state": "active",
+    "storeIdentity": "example-store",
+    "repositoryIdentity": "local:/opt/sce/example/.git",
+    "integrationBranch": "main",
+    "authorityProfile": "integrate",
+    "completionBoundary": "remote-integration",
+    "integrationProfile": "remote-ff",
+    "gitObjectFormat": "sha1",
+    "controllerFencingToken": "example-fence",
+    "controller": {
+      "runId": "example-run",
+      "incarnationId": "example-incarnation",
+      "holder": "example-run/example-incarnation",
+      "requestedModel": "frontier",
+      "returnedModel": "frontier-example",
+      "promptHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "state": "acquired"
+    },
+    "units": {},
+    "reservations": {},
+    "activeModifyingUnitIds": [],
+    "wave": { "id": "example-wave", "unitIds": [] },
+    "qualificationQueue": [],
+    "integrationQueue": [],
+    "effectJournal": [],
+    "processedEventIds": [],
+    "processedIdempotencyKeys": [],
+    "usedSessionCount": 0,
+    "sessionLineage": "",
+    "sessionLineageRoot": "0000000000000000000000000000000000000000000000000000000000000000",
+    "closedUnitEvidence": "",
+    "closedUnitEvidenceCommitment": "0000000000000000000000000000000000000000000000000000000000000000",
+    "journalCheckpoint": {
+      "revision": 0,
+      "compactedEffects": 0,
+      "compactedEvents": 0,
+      "compactedIdempotencyKeys": 0,
+      "commitment": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "journalCommitment": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "topology": {
+    "kind": "embedded",
+    "mode": "local-only",
+    "bdExecutable": "/opt/sce/bin/bd",
+    "doltExecutable": "/opt/sce/bin/dolt",
+    "databaseDirectory": "/opt/sce/example/.beads/dolt",
+    "prefix": "sce",
+    "rootBeadId": "sce-root",
+    "childBeadIds": {},
+    "preflight": {
+      "schema": "sce.preflight",
+      "version": 1,
+      "payload": {
+        "status": "ready",
+        "git": {
+          "commonDir": "/opt/sce/example/.git",
+          "identity": "local:/opt/sce/example/.git",
+          "objectFormat": "sha1",
+          "topLevel": "/opt/sce/example"
+        },
+        "beads": {
+          "contextSchemaVersion": 1,
+          "mode": "embedded",
+          "prefix": "sce",
+          "provenance": "embedded_config",
+          "toolVersion": "1.1.0"
+        }
+      }
+    }
+  }
+}

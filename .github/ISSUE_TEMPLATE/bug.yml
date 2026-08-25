@@ -1,0 +1,25 @@
+name: Bug report
+description: Report a reproducible defect in the skill or packaged runtime.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Use no credentials, proprietary source, or raw logs.
+  - type: input
+    id: version
+    attributes: { label: Tool version, description: "For example: 0.1.0" }
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes: { label: Expected behavior }
+    validations: { required: true }
+  - type: textarea
+    id: observed
+    attributes: { label: Observed behavior and minimal reproduction }
+    validations: { required: true }
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options: [adapter, capability, protocol, runtime, topology]
+    validations: { required: true }

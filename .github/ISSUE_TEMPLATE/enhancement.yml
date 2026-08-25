@@ -1,0 +1,15 @@
+name: Enhancement request
+description: Request a generic skill or runtime capability.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes: { label: Problem or limitation }
+    validations: { required: true }
+  - type: textarea
+    id: proposal
+    attributes: { label: Desired generic capability }
+    validations: { required: true }
+  - type: textarea
+    id: workaround
+    attributes: { label: Current workaround }
