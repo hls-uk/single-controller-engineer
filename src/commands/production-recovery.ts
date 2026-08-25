@@ -16,6 +16,7 @@ import {
   integrateRemoteFastForward,
   publishCandidate,
   observeCandidate,
+  verifyCandidateWorktree,
   verifyRepository,
   type GitEffect,
   type GitRepository,
@@ -29,6 +30,7 @@ import {
 } from "../harness/index.js";
 import {
   deriveCandidateDiffHash,
+  rehydrateEffect,
   type ProtocolEffect,
 } from "../protocol/reducer.js";
 import type { FencingScope } from "../fencing/index.js";
@@ -266,6 +268,37 @@ async function candidateObserved(
   };
 }
 
+async function verificationRequest(
+  effect: Extract<ProtocolEffect, { kind: "verify" }>,
+  run: RepositoryRun,
+  git: ProductionRecoveryEffectAdapterOptions["git"],
+): Promise<
+  | Readonly<{ status: "ambiguous" }>
+  | Readonly<{ status: "tool_request"; toolRequest: unknown }>
+> {
+  const unit = run.units[effect.unitId];
+  if (
+    unit === undefined ||
+    unit.branchRef === undefined ||
+    unit.worktreePath !== effect.params.worktreePath ||
+    unit.candidateHead !== effect.params.candidate.headOid ||
+    unit.candidateTree !== effect.params.candidate.treeOid ||
+    unit.baseOid !== effect.params.candidate.baseOid
+  )
+    return ambiguous();
+  const binding = await verifyCandidateWorktree(git.runner, git.repository, {
+    branch: unit.branchRef,
+    head: effect.params.candidate.headOid,
+    path: effect.params.worktreePath,
+    tree: effect.params.candidate.treeOid,
+  });
+  const requested =
+    binding.state === "observed"
+      ? verificationToolRequest(effect, run)
+      : ambiguous();
+  return requested.status === "tool_request" ? requested : ambiguous();
+}
+
 function canPublish(
   effect: Extract<ProtocolEffect, { kind: "publish" }>,
 ): boolean {
@@ -345,7 +378,14 @@ export function createProductionRecoveryEffectAdapter(
     effect: ProtocolEffect,
     run: RepositoryRun,
   ): Promise<ReconcileResult> {
-    if (effect.kind === "verify") return verificationToolRequest(effect, run);
+    if (effect.kind === "verify") {
+      if (!gitMatchesRun(git.repository, run)) return ambiguous();
+      try {
+        return await verificationRequest(effect, run, git);
+      } catch {
+        return ambiguous();
+      }
+    }
     if (harness?.canReconcile?.(effect))
       return await harness.reconcile(effect, run);
     if (effect.kind === "candidate_collect") {
@@ -453,7 +493,14 @@ export function createProductionRecoveryEffectAdapter(
     effect: ProtocolEffect,
     run: RepositoryRun,
   ): Promise<ExecuteResult> {
-    if (effect.kind === "verify") return verificationToolRequest(effect, run);
+    if (effect.kind === "verify") {
+      if (!gitMatchesRun(git.repository, run)) return ambiguous();
+      try {
+        return await verificationRequest(effect, run, git);
+      } catch {
+        return ambiguous();
+      }
+    }
     if (harness?.canExecute?.(effect))
       return await harness.execute(effect, run);
     if (effect.kind === "candidate_collect") {
@@ -566,7 +613,33 @@ export function createProductionRecoveryEffectAdapter(
       effect.kind === "verify" || (harness?.canReconcile?.(effect) ?? false),
     acknowledge: async (acknowledgement, run) => {
       const verified = acknowledgeVerificationTool(acknowledgement, run);
-      if (verified !== undefined) return verified;
+      if (verified !== undefined) {
+        if (verified.status !== "observed") return verified;
+        const observation = verified.observation;
+        if (!("effectId" in observation)) return ambiguous();
+        const entry = run.effectJournal.find(
+          (candidate) => candidate.effectId === observation.effectId,
+        );
+        const effect =
+          entry === undefined ? undefined : rehydrateEffect(run, entry);
+        if (effect?.kind !== "verify" || !gitMatchesRun(git.repository, run))
+          return ambiguous();
+        try {
+          const binding = await verifyCandidateWorktree(
+            git.runner,
+            git.repository,
+            {
+              branch: run.units[effect.unitId]?.branchRef ?? "",
+              head: effect.params.candidate.headOid,
+              path: effect.params.worktreePath,
+              tree: effect.params.candidate.treeOid,
+            },
+          );
+          return binding.state === "observed" ? verified : ambiguous();
+        } catch {
+          return ambiguous();
+        }
+      }
       return harness?.acknowledge === undefined
         ? ambiguous()
         : await harness.acknowledge(acknowledgement, run);

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
@@ -148,20 +148,31 @@ function scopedHookPath(value: string): boolean {
 
 function allowedGitArgv(argv: readonly string[]): boolean {
   const [command, ...args] = argv;
+  if (
+    command === "-c" &&
+    args[0] === "core.quotePath=false" &&
+    args[1] === "diff"
+  )
+    return allowedGitArgv(["diff", ...args.slice(2)]);
   if (command === "rev-parse")
     return (
       (args.length === 1 &&
         ["--git-common-dir", "--show-object-format"].includes(args[0] ?? "")) ||
       (args.length === 2 &&
         args[0] === "--verify" &&
-        ["HEAD^{commit}", "HEAD^{tree}"].includes(args[1] ?? ""))
+        (args[1] === "HEAD^{commit}" ||
+          args[1] === "HEAD^{tree}" ||
+          /^(?:[0-9a-f]{40}|[0-9a-f]{64})\^\{tree\}$/u.test(args[1] ?? "")))
     );
   if (command === "config")
     return (
       args.length === 3 &&
       args[0] === "--null" &&
       args[1] === "--get-regexp" &&
-      args[2] === "^remote\\..*\\.url$"
+      [
+        "^remote\\..*\\.url$",
+        "^(core\\.(attributesFile|quotePath)|diff\\..*)$",
+      ].includes(args[2] ?? "")
     );
   if (command === "for-each-ref")
     return (
@@ -202,14 +213,23 @@ function allowedGitArgv(argv: readonly string[]): boolean {
         /^(?:[0-9a-f]{40}|[0-9a-f]{64})\.\.(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(
           args[3] ?? "",
         )) ||
-      (args.length === 6 &&
+      (args.length === 15 &&
         args[0] === "--no-ext-diff" &&
         args[1] === "--no-textconv" &&
         args[2] === "--no-renames" &&
         args[3] === "--no-color" &&
         args[4] === "--binary" &&
+        args[5] === "--full-index" &&
+        args[6] === "--src-prefix=a/" &&
+        args[7] === "--dst-prefix=b/" &&
+        args[8] === "--diff-algorithm=histogram" &&
+        args[9] === "--unified=3" &&
+        args[10] === "--inter-hunk-context=0" &&
+        args[11] === "--no-indent-heuristic" &&
+        args[12] === "--no-relative" &&
+        args[13] === "--submodule=short" &&
         /^(?:[0-9a-f]{40}|[0-9a-f]{64})\.\.(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(
-          args[5] ?? "",
+          args[14] ?? "",
         ))
     );
   if (command === "symbolic-ref")
@@ -526,6 +546,39 @@ async function verifyCleanWorktree(
     : effect("refused", "GIT_DIRTY");
 }
 
+/**
+ * The index is not candidate evidence. Repository-private attributes and any
+ * repository/worktree diff setting can shape committed output without showing
+ * in status, so collection refuses them rather than claiming a portable packet.
+ */
+async function candidateDiffEnvironment(
+  runner: GitRunner,
+  repository: GitRepository,
+  worktreePath: string,
+): Promise<GitEffect> {
+  if (
+    existsSync(
+      join(
+        canonicalExistingOrLexical(repository.commonDir),
+        "info",
+        "attributes",
+      ),
+    )
+  )
+    return effect("refused", "GIT_REFUSED");
+  const configured = await runAt(runner, worktreePath, [
+    "config",
+    "--null",
+    "--get-regexp",
+    "^(core\\.(attributesFile|quotePath)|diff\\..*)$",
+  ]);
+  if (configured.exitCode === 1 && configured.signal === null)
+    return effect("observed", "GIT_OK");
+  return commandOk(configured) && configured.stdout.length === 0
+    ? effect("observed", "GIT_OK")
+    : effect("refused", "GIT_REFUSED");
+}
+
 async function verifySinglePushRemote(
   runner: GitRunner,
   repository: GitRepository,
@@ -704,7 +757,8 @@ export async function observeCandidate(
   const verified = await verifyRepository(runner, repository);
   if (verified.state !== "observed") return verified;
   const wantedPath = canonicalWorktreePath(input.worktreePath);
-  if (wantedPath === undefined) return effect("refused", "GIT_BAD_INPUT");
+  if (wantedPath === undefined || wantedPath !== input.worktreePath)
+    return effect("refused", "GIT_FOREIGN_WORKTREE");
   const listed = await run(runner, repository, [
     "worktree",
     "list",
@@ -727,13 +781,25 @@ export async function observeCandidate(
     wantedPath,
   );
   if (ownership.state !== "observed") return ownership;
-  const [headResult, treeResult, statusResult, headRefResult] =
-    await Promise.all([
-      runAt(runner, wantedPath, ["rev-parse", "--verify", "HEAD^{commit}"]),
-      runAt(runner, wantedPath, ["rev-parse", "--verify", "HEAD^{tree}"]),
-      runAt(runner, wantedPath, ["status", "--porcelain=v1", "-z"]),
-      runAt(runner, wantedPath, ["symbolic-ref", "-q", "HEAD"]),
-    ]);
+  const diffEnvironment = await candidateDiffEnvironment(
+    runner,
+    repository,
+    wantedPath,
+  );
+  if (diffEnvironment.state !== "observed") return diffEnvironment;
+  const headResult = await runAt(runner, wantedPath, [
+    "rev-parse",
+    "--verify",
+    "HEAD^{commit}",
+  ]);
+  const head = oneLine(headResult.stdout);
+  if (head === undefined || !exactOid(repository.objectFormat, head))
+    return effect("refused", "GIT_REFUSED");
+  const [treeResult, statusResult, headRefResult] = await Promise.all([
+    runAt(runner, wantedPath, ["rev-parse", "--verify", `${head}^{tree}`]),
+    runAt(runner, wantedPath, ["status", "--porcelain=v1", "-z"]),
+    runAt(runner, wantedPath, ["symbolic-ref", "-q", "HEAD"]),
+  ]);
   for (const result of [headResult, treeResult, statusResult, headRefResult]) {
     const failure = terminalFailure(result);
     if (failure !== undefined) return failure;
@@ -745,7 +811,6 @@ export async function observeCandidate(
     !commandOk(headRefResult)
   )
     return effect("refused", "GIT_REFUSED");
-  const head = oneLine(headResult.stdout);
   const tree = oneLine(treeResult.stdout);
   if (
     head === undefined ||
@@ -766,6 +831,8 @@ export async function observeCandidate(
       head,
     ]),
     runAt(runner, wantedPath, [
+      "-c",
+      "core.quotePath=false",
       "diff",
       "--name-only",
       "-z",
@@ -773,12 +840,23 @@ export async function observeCandidate(
       `${input.base}..${head}`,
     ]),
     runAt(runner, wantedPath, [
+      "-c",
+      "core.quotePath=false",
       "diff",
       "--no-ext-diff",
       "--no-textconv",
       "--no-renames",
       "--no-color",
       "--binary",
+      "--full-index",
+      "--src-prefix=a/",
+      "--dst-prefix=b/",
+      "--diff-algorithm=histogram",
+      "--unified=3",
+      "--inter-hunk-context=0",
+      "--no-indent-heuristic",
+      "--no-relative",
+      "--submodule=short",
       `${input.base}..${head}`,
     ]),
   ]);
@@ -795,18 +873,27 @@ export async function observeCandidate(
   // The diff must describe the same clean branch/object pair committed below.
   // A worker may otherwise race these read-only calls without any Git mutation
   // by the recovery coordinator itself.
-  const [finalHead, finalTree, finalStatus, finalRef] = await Promise.all([
-    runAt(runner, wantedPath, ["rev-parse", "--verify", "HEAD^{commit}"]),
-    runAt(runner, wantedPath, ["rev-parse", "--verify", "HEAD^{tree}"]),
+  const finalHead = await runAt(runner, wantedPath, [
+    "rev-parse",
+    "--verify",
+    "HEAD^{commit}",
+  ]);
+  const finalHeadOid = oneLine(finalHead.stdout);
+  if (finalHeadOid === undefined || finalHeadOid !== head)
+    return effect("refused", "GIT_REFUSED");
+  const [finalTree, finalStatus, finalRef] = await Promise.all([
+    runAt(runner, wantedPath, [
+      "rev-parse",
+      "--verify",
+      `${finalHeadOid}^{tree}`,
+    ]),
     runAt(runner, wantedPath, ["status", "--porcelain=v1", "-z"]),
     runAt(runner, wantedPath, ["symbolic-ref", "-q", "HEAD"]),
   ]);
   if (
-    !commandOk(finalHead) ||
     !commandOk(finalTree) ||
     !commandOk(finalStatus) ||
     !commandOk(finalRef) ||
-    oneLine(finalHead.stdout) !== head ||
     oneLine(finalTree.stdout) !== tree ||
     finalStatus.stdout.length !== 0 ||
     oneLine(finalRef.stdout) !== `refs/heads/${input.branch}`
@@ -830,6 +917,71 @@ export async function observeCandidate(
     },
     state: "observed",
   };
+}
+
+/**
+ * Revalidates the filesystem-canonical worktree bound to a persisted manual
+ * verification effect. It never executes verification commands.
+ */
+export async function verifyCandidateWorktree(
+  runner: GitRunner,
+  repository: GitRepository,
+  input: Readonly<{
+    branch: string;
+    head: string;
+    path: string;
+    tree: string;
+  }>,
+): Promise<GitEffect> {
+  if (
+    !safeRef(input.branch) ||
+    !safeAbsolutePath(input.path) ||
+    !exactOid(repository.objectFormat, input.head) ||
+    !exactOid(repository.objectFormat, input.tree)
+  )
+    return effect("refused", "GIT_BAD_INPUT");
+  const path = canonicalWorktreePath(input.path);
+  if (path === undefined || path !== input.path)
+    return effect("refused", "GIT_FOREIGN_WORKTREE");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
+  const listed = await run(runner, repository, [
+    "worktree",
+    "list",
+    "--porcelain",
+  ]);
+  if (!commandOk(listed)) return effect("refused", "GIT_REFUSED");
+  const record = parseWorktreeList(
+    listed.stdout,
+    repository.objectFormat,
+  )?.find((candidate) => candidate.path === path);
+  if (
+    record?.branch !== `refs/heads/${input.branch}` ||
+    record.head !== input.head
+  )
+    return effect("refused", "GIT_FOREIGN_WORKTREE");
+  const ownership = await verifyWorktreeOwnership(runner, repository, path);
+  if (ownership.state !== "observed") return ownership;
+  const head = await runAt(runner, path, [
+    "rev-parse",
+    "--verify",
+    "HEAD^{commit}",
+  ]);
+  if (!commandOk(head) || oneLine(head.stdout) !== input.head)
+    return effect("refused", "GIT_REFUSED");
+  const [tree, status, ref] = await Promise.all([
+    runAt(runner, path, ["rev-parse", "--verify", `${input.head}^{tree}`]),
+    runAt(runner, path, ["status", "--porcelain=v1", "-z"]),
+    runAt(runner, path, ["symbolic-ref", "-q", "HEAD"]),
+  ]);
+  return commandOk(tree) &&
+    commandOk(status) &&
+    commandOk(ref) &&
+    oneLine(tree.stdout) === input.tree &&
+    status.stdout.length === 0 &&
+    oneLine(ref.stdout) === `refs/heads/${input.branch}`
+    ? effect("observed", "GIT_OK")
+    : effect("refused", "GIT_REFUSED");
 }
 
 /** Idempotently creates an exact branch or refuses a branch owned by another head. */
@@ -963,7 +1115,8 @@ export async function ensureWorktree(
   const records = parseWorktreeList(listed.stdout, repository.objectFormat);
   if (records === undefined) return effect("refused", "GIT_REFUSED");
   const wantedPath = canonicalWorktreePath(input.path);
-  if (wantedPath === undefined) return effect("refused", "GIT_BAD_INPUT");
+  if (wantedPath === undefined || wantedPath !== input.path)
+    return effect("refused", "GIT_FOREIGN_WORKTREE");
   const existing = records.find((record) => record.path === wantedPath);
   const wantedBranch = `refs/heads/${input.branch}`;
   if (existing !== undefined)
@@ -1018,8 +1171,9 @@ export async function discoverWorktree(
   if (failure !== undefined) return failure;
   const records = parseWorktreeList(listed.stdout, repository.objectFormat);
   const wantedPath = canonicalWorktreePath(input.path);
-  if (records === undefined || wantedPath === undefined)
-    return effect("refused", "GIT_REFUSED");
+  if (records === undefined) return effect("refused", "GIT_REFUSED");
+  if (wantedPath === undefined || wantedPath !== input.path)
+    return effect("refused", "GIT_FOREIGN_WORKTREE");
   const existing = records.find((record) => record.path === wantedPath);
   if (existing === undefined) return effect("refused", "GIT_ABSENT");
   return existing.head === input.head &&
@@ -1287,6 +1441,8 @@ export const nodeGitRunner: GitRunner = async ({ argv, cwd }) => {
       env: {
         GIT_CONFIG_GLOBAL: "/dev/null",
         GIT_CONFIG_NOSYSTEM: "1",
+        GIT_OPTIONAL_LOCKS: "0",
+        GIT_ATTR_NOSYSTEM: "1",
         HOME: "/nonexistent",
         LANG: "C",
         LC_ALL: "C",

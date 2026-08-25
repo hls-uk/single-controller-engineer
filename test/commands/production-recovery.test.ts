@@ -318,14 +318,13 @@ test("production candidate collection and manual verification bind exact durable
           };
         if (argv[0] === "merge-base")
           return { exitCode: 0, signal: null, stdout: "" };
-        if (argv[0] === "diff")
+        if (argv[0] === "diff" || (argv[0] === "-c" && argv[2] === "diff"))
           return {
             exitCode: 0,
             signal: null,
-            stdout:
-              argv[1] === "--name-only"
-                ? "src/file.ts\u0000"
-                : "diff --git a/src/file.ts b/src/file.ts\n",
+            stdout: argv.includes("--name-only")
+              ? "src/file.ts\u0000"
+              : "diff --git a/src/file.ts b/src/file.ts\n",
           };
         if (argv[0] === "rev-parse")
           return {
@@ -358,7 +357,7 @@ test("production candidate collection and manual verification bind exact durable
     },
     state,
   );
-  assert.equal(collected.status, "observed");
+  assert.equal(collected.status, "observed", calls.join("\n"));
   if (collected.status !== "observed") return;
   assert.equal(
     (collected.observation as { candidateDiffHash: string }).candidateDiffHash,
@@ -387,6 +386,7 @@ test("production candidate collection and manual verification bind exact durable
     params: {
       candidate: { baseOid: OID_A, headOid: OID_B, treeOid: OID_A },
       commands: ["npm test"],
+      worktreePath: "/task",
     },
     paramsHash: verify.paramsHash,
     schemaVersion: 1 as const,
@@ -490,13 +490,36 @@ test("production candidate collection and manual verification bind exact durable
     }),
     git: {
       repository,
-      runner: async ({ argv }) => {
+      runner: async ({ argv, cwd }) => {
         if (argv[0] === "config")
           return { exitCode: 1, signal: null, stdout: "" };
+        if (argv[0] === "worktree")
+          return {
+            exitCode: 0,
+            signal: null,
+            stdout: `worktree /task\nHEAD ${OID_B}\nbranch refs/heads/sce/unit-1\n\n`,
+          };
+        if (argv[0] === "status")
+          return { exitCode: 0, signal: null, stdout: "" };
+        if (argv[0] === "symbolic-ref")
+          return {
+            exitCode: 0,
+            signal: null,
+            stdout: "refs/heads/sce/unit-1\n",
+          };
         return {
           exitCode: 0,
           signal: null,
-          stdout: argv[1] === "--git-common-dir" ? ".git\n" : "sha1\n",
+          stdout:
+            argv[1] === "--git-common-dir"
+              ? cwd === "/task"
+                ? "/repo/.git\n"
+                : ".git\n"
+              : argv[1] === "--show-object-format"
+                ? "sha1\n"
+                : argv[2] === "HEAD^{commit}"
+                  ? `${OID_B}\n`
+                  : `${OID_A}\n`,
         };
       },
     },

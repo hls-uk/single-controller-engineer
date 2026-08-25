@@ -10706,7 +10706,8 @@ var RuntimeEffectSchema = Type.Union([
     unitId: identifier(),
     params: strictObject({
       candidate: CandidateBindingSchema,
-      commands: Type.Array(text(), { minItems: 1, maxItems: 32 })
+      commands: Type.Array(text(), { minItems: 1, maxItems: 32 }),
+      worktreePath: text()
     })
   }),
   strictObject({
@@ -12540,7 +12541,8 @@ function runtimeEffectParams(state, unitId, kind, slotTransition) {
           unit.verificationCommands,
           "verification commands",
           kind
-        )
+        ),
+        worktreePath: required(unit.worktreePath, "worktree path", kind)
       };
     case "review_dispatch":
       return {
@@ -14327,8 +14329,8 @@ function verificationToolRequest(effect2, run2) {
   if (effect2.kind !== "verify" || effect2.unitId === null)
     return { status: "ambiguous" };
   const unit = run2.units[effect2.unitId];
-  const worktreePath = canonicalAbsolutePath(unit?.worktreePath);
-  if (unit === void 0 || worktreePath === void 0)
+  const worktreePath = canonicalAbsolutePath(effect2.params.worktreePath);
+  if (unit === void 0 || unit.worktreePath !== effect2.params.worktreePath || worktreePath === void 0)
     return { status: "ambiguous" };
   const raw = {
     baseOid: effect2.params.candidate.baseOid,
@@ -14370,7 +14372,7 @@ function acknowledgeVerificationTool(raw, run2) {
     (candidate) => candidate.effectId === acknowledgement.effectId && candidate.kind === "verify" && (candidate.status === "intended" || candidate.status === "ambiguous")
   );
   const effect2 = entry === void 0 ? void 0 : rehydrateEffect(run2, entry);
-  if (effect2 === void 0 || effect2.kind !== "verify" || effect2.unitId === null || acknowledgement.baseOid !== effect2.params.candidate.baseOid || acknowledgement.headOid !== effect2.params.candidate.headOid || acknowledgement.treeOid !== effect2.params.candidate.treeOid || acknowledgement.worktreePath !== canonicalAbsolutePath(run2.units[effect2.unitId]?.worktreePath) || acknowledgement.commands.length !== effect2.params.commands.length || acknowledgement.commands.some(
+  if (effect2 === void 0 || effect2.kind !== "verify" || effect2.unitId === null || acknowledgement.baseOid !== effect2.params.candidate.baseOid || acknowledgement.headOid !== effect2.params.candidate.headOid || acknowledgement.treeOid !== effect2.params.candidate.treeOid || acknowledgement.worktreePath !== canonicalAbsolutePath(effect2.params.worktreePath) || acknowledgement.commands.length !== effect2.params.commands.length || acknowledgement.commands.some(
     (command, index) => command !== effect2.params.commands[index]
   ))
     return { status: "ambiguous" };
@@ -14386,7 +14388,8 @@ function acknowledgeVerificationTool(raw, run2) {
         domain: "sce.harness.verify-evidence/v1",
         effectId: effect2.effectId,
         evidenceDigest: acknowledgement.evidenceDigest,
-        paramsHash: effect2.paramsHash
+        paramsHash: effect2.paramsHash,
+        worktreePath: effect2.params.worktreePath
       })
     ),
     treeOid: effect2.params.candidate.treeOid,
@@ -15186,7 +15189,7 @@ function sortActions(actions) {
 
 // src/adapters/git/index.ts
 import { spawn } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
@@ -15767,10 +15770,15 @@ function scopedHookPath(value) {
 }
 function allowedGitArgv(argv) {
   const [command, ...args] = argv;
+  if (command === "-c" && args[0] === "core.quotePath=false" && args[1] === "diff")
+    return allowedGitArgv(["diff", ...args.slice(2)]);
   if (command === "rev-parse")
-    return args.length === 1 && ["--git-common-dir", "--show-object-format"].includes(args[0] ?? "") || args.length === 2 && args[0] === "--verify" && ["HEAD^{commit}", "HEAD^{tree}"].includes(args[1] ?? "");
+    return args.length === 1 && ["--git-common-dir", "--show-object-format"].includes(args[0] ?? "") || args.length === 2 && args[0] === "--verify" && (args[1] === "HEAD^{commit}" || args[1] === "HEAD^{tree}" || /^(?:[0-9a-f]{40}|[0-9a-f]{64})\^\{tree\}$/u.test(args[1] ?? ""));
   if (command === "config")
-    return args.length === 3 && args[0] === "--null" && args[1] === "--get-regexp" && args[2] === "^remote\\..*\\.url$";
+    return args.length === 3 && args[0] === "--null" && args[1] === "--get-regexp" && [
+      "^remote\\..*\\.url$",
+      "^(core\\.(attributesFile|quotePath)|diff\\..*)$"
+    ].includes(args[2] ?? "");
   if (command === "for-each-ref")
     return args.length === 2 && args[0] === "--format=%(objectname)" && args[1]?.startsWith("refs/heads/") === true && safeRef(args[1].slice(11));
   if (command === "branch")
@@ -15784,8 +15792,8 @@ function allowedGitArgv(argv) {
   if (command === "diff")
     return args.length === 4 && args[0] === "--name-only" && args[1] === "-z" && args[2] === "--no-renames" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})\.\.(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(
       args[3] ?? ""
-    ) || args.length === 6 && args[0] === "--no-ext-diff" && args[1] === "--no-textconv" && args[2] === "--no-renames" && args[3] === "--no-color" && args[4] === "--binary" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})\.\.(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(
-      args[5] ?? ""
+    ) || args.length === 15 && args[0] === "--no-ext-diff" && args[1] === "--no-textconv" && args[2] === "--no-renames" && args[3] === "--no-color" && args[4] === "--binary" && args[5] === "--full-index" && args[6] === "--src-prefix=a/" && args[7] === "--dst-prefix=b/" && args[8] === "--diff-algorithm=histogram" && args[9] === "--unified=3" && args[10] === "--inter-hunk-context=0" && args[11] === "--no-indent-heuristic" && args[12] === "--no-relative" && args[13] === "--submodule=short" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})\.\.(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(
+      args[14] ?? ""
     );
   if (command === "symbolic-ref")
     return args.length === 2 && args[0] === "-q" && args[1] === "HEAD";
@@ -15966,6 +15974,25 @@ async function verifyCleanWorktree(runner, repository, path2) {
   if (!commandOk(status)) return effect("refused", "GIT_FOREIGN_WORKTREE");
   return status.stdout.length === 0 ? effect("observed", "GIT_OK") : effect("refused", "GIT_DIRTY");
 }
+async function candidateDiffEnvironment(runner, repository, worktreePath) {
+  if (existsSync(
+    join(
+      canonicalExistingOrLexical(repository.commonDir),
+      "info",
+      "attributes"
+    )
+  ))
+    return effect("refused", "GIT_REFUSED");
+  const configured = await runAt(runner, worktreePath, [
+    "config",
+    "--null",
+    "--get-regexp",
+    "^(core\\.(attributesFile|quotePath)|diff\\..*)$"
+  ]);
+  if (configured.exitCode === 1 && configured.signal === null)
+    return effect("observed", "GIT_OK");
+  return commandOk(configured) && configured.stdout.length === 0 ? effect("observed", "GIT_OK") : effect("refused", "GIT_REFUSED");
+}
 async function verifySinglePushRemote(runner, repository, remote2) {
   const result2 = await run(runner, repository, [
     "remote",
@@ -16067,7 +16094,8 @@ async function observeCandidate(runner, repository, input) {
   const verified = await verifyRepository(runner, repository);
   if (verified.state !== "observed") return verified;
   const wantedPath = canonicalWorktreePath(input.worktreePath);
-  if (wantedPath === void 0) return effect("refused", "GIT_BAD_INPUT");
+  if (wantedPath === void 0 || wantedPath !== input.worktreePath)
+    return effect("refused", "GIT_FOREIGN_WORKTREE");
   const listed = await run(runner, repository, [
     "worktree",
     "list",
@@ -16086,9 +16114,22 @@ async function observeCandidate(runner, repository, input) {
     wantedPath
   );
   if (ownership.state !== "observed") return ownership;
-  const [headResult, treeResult, statusResult, headRefResult] = await Promise.all([
-    runAt(runner, wantedPath, ["rev-parse", "--verify", "HEAD^{commit}"]),
-    runAt(runner, wantedPath, ["rev-parse", "--verify", "HEAD^{tree}"]),
+  const diffEnvironment = await candidateDiffEnvironment(
+    runner,
+    repository,
+    wantedPath
+  );
+  if (diffEnvironment.state !== "observed") return diffEnvironment;
+  const headResult = await runAt(runner, wantedPath, [
+    "rev-parse",
+    "--verify",
+    "HEAD^{commit}"
+  ]);
+  const head3 = oneLine(headResult.stdout);
+  if (head3 === void 0 || !exactOid(repository.objectFormat, head3))
+    return effect("refused", "GIT_REFUSED");
+  const [treeResult, statusResult, headRefResult] = await Promise.all([
+    runAt(runner, wantedPath, ["rev-parse", "--verify", `${head3}^{tree}`]),
     runAt(runner, wantedPath, ["status", "--porcelain=v1", "-z"]),
     runAt(runner, wantedPath, ["symbolic-ref", "-q", "HEAD"])
   ]);
@@ -16098,7 +16139,6 @@ async function observeCandidate(runner, repository, input) {
   }
   if (!commandOk(headResult) || !commandOk(treeResult) || !commandOk(statusResult) || !commandOk(headRefResult))
     return effect("refused", "GIT_REFUSED");
-  const head3 = oneLine(headResult.stdout);
   const tree = oneLine(treeResult.stdout);
   if (head3 === void 0 || tree === void 0 || !exactOid(repository.objectFormat, head3) || !exactOid(repository.objectFormat, tree) || head3 !== worktree.head || oneLine(headRefResult.stdout) !== `refs/heads/${input.branch}`)
     return effect("refused", "GIT_REFUSED");
@@ -16112,6 +16152,8 @@ async function observeCandidate(runner, repository, input) {
       head3
     ]),
     runAt(runner, wantedPath, [
+      "-c",
+      "core.quotePath=false",
       "diff",
       "--name-only",
       "-z",
@@ -16119,12 +16161,23 @@ async function observeCandidate(runner, repository, input) {
       `${input.base}..${head3}`
     ]),
     runAt(runner, wantedPath, [
+      "-c",
+      "core.quotePath=false",
       "diff",
       "--no-ext-diff",
       "--no-textconv",
       "--no-renames",
       "--no-color",
       "--binary",
+      "--full-index",
+      "--src-prefix=a/",
+      "--dst-prefix=b/",
+      "--diff-algorithm=histogram",
+      "--unified=3",
+      "--inter-hunk-context=0",
+      "--no-indent-heuristic",
+      "--no-relative",
+      "--submodule=short",
       `${input.base}..${head3}`
     ])
   ]);
@@ -16133,13 +16186,24 @@ async function observeCandidate(runner, repository, input) {
   const changedPaths = nulPaths(pathsResult.stdout);
   if (changedPaths === void 0 || diffResult.stdout.includes("\0"))
     return effect("refused", "GIT_REFUSED");
-  const [finalHead, finalTree, finalStatus, finalRef] = await Promise.all([
-    runAt(runner, wantedPath, ["rev-parse", "--verify", "HEAD^{commit}"]),
-    runAt(runner, wantedPath, ["rev-parse", "--verify", "HEAD^{tree}"]),
+  const finalHead = await runAt(runner, wantedPath, [
+    "rev-parse",
+    "--verify",
+    "HEAD^{commit}"
+  ]);
+  const finalHeadOid = oneLine(finalHead.stdout);
+  if (finalHeadOid === void 0 || finalHeadOid !== head3)
+    return effect("refused", "GIT_REFUSED");
+  const [finalTree, finalStatus, finalRef] = await Promise.all([
+    runAt(runner, wantedPath, [
+      "rev-parse",
+      "--verify",
+      `${finalHeadOid}^{tree}`
+    ]),
     runAt(runner, wantedPath, ["status", "--porcelain=v1", "-z"]),
     runAt(runner, wantedPath, ["symbolic-ref", "-q", "HEAD"])
   ]);
-  if (!commandOk(finalHead) || !commandOk(finalTree) || !commandOk(finalStatus) || !commandOk(finalRef) || oneLine(finalHead.stdout) !== head3 || oneLine(finalTree.stdout) !== tree || finalStatus.stdout.length !== 0 || oneLine(finalRef.stdout) !== `refs/heads/${input.branch}`)
+  if (!commandOk(finalTree) || !commandOk(finalStatus) || !commandOk(finalRef) || oneLine(finalTree.stdout) !== tree || finalStatus.stdout.length !== 0 || oneLine(finalRef.stdout) !== `refs/heads/${input.branch}`)
     return effect("refused", "GIT_REFUSED");
   const canonicalChangedPaths = [...new Set(changedPaths)].sort();
   if (canonicalChangedPaths.some(
@@ -16157,6 +16221,42 @@ async function observeCandidate(runner, repository, input) {
     },
     state: "observed"
   };
+}
+async function verifyCandidateWorktree(runner, repository, input) {
+  if (!safeRef(input.branch) || !safeAbsolutePath(input.path) || !exactOid(repository.objectFormat, input.head) || !exactOid(repository.objectFormat, input.tree))
+    return effect("refused", "GIT_BAD_INPUT");
+  const path2 = canonicalWorktreePath(input.path);
+  if (path2 === void 0 || path2 !== input.path)
+    return effect("refused", "GIT_FOREIGN_WORKTREE");
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return verified;
+  const listed = await run(runner, repository, [
+    "worktree",
+    "list",
+    "--porcelain"
+  ]);
+  if (!commandOk(listed)) return effect("refused", "GIT_REFUSED");
+  const record2 = parseWorktreeList(
+    listed.stdout,
+    repository.objectFormat
+  )?.find((candidate) => candidate.path === path2);
+  if (record2?.branch !== `refs/heads/${input.branch}` || record2.head !== input.head)
+    return effect("refused", "GIT_FOREIGN_WORKTREE");
+  const ownership = await verifyWorktreeOwnership(runner, repository, path2);
+  if (ownership.state !== "observed") return ownership;
+  const head3 = await runAt(runner, path2, [
+    "rev-parse",
+    "--verify",
+    "HEAD^{commit}"
+  ]);
+  if (!commandOk(head3) || oneLine(head3.stdout) !== input.head)
+    return effect("refused", "GIT_REFUSED");
+  const [tree, status, ref] = await Promise.all([
+    runAt(runner, path2, ["rev-parse", "--verify", `${input.head}^{tree}`]),
+    runAt(runner, path2, ["status", "--porcelain=v1", "-z"]),
+    runAt(runner, path2, ["symbolic-ref", "-q", "HEAD"])
+  ]);
+  return commandOk(tree) && commandOk(status) && commandOk(ref) && oneLine(tree.stdout) === input.tree && status.stdout.length === 0 && oneLine(ref.stdout) === `refs/heads/${input.branch}` ? effect("observed", "GIT_OK") : effect("refused", "GIT_REFUSED");
 }
 async function ensureBranch(runner, repository, input) {
   if (!safeRef(input.branch) || !exactOid(repository.objectFormat, input.base))
@@ -16246,7 +16346,8 @@ async function ensureWorktree(runner, repository, input) {
   const records = parseWorktreeList(listed.stdout, repository.objectFormat);
   if (records === void 0) return effect("refused", "GIT_REFUSED");
   const wantedPath = canonicalWorktreePath(input.path);
-  if (wantedPath === void 0) return effect("refused", "GIT_BAD_INPUT");
+  if (wantedPath === void 0 || wantedPath !== input.path)
+    return effect("refused", "GIT_FOREIGN_WORKTREE");
   const existing = records.find((record2) => record2.path === wantedPath);
   const wantedBranch = `refs/heads/${input.branch}`;
   if (existing !== void 0)
@@ -16287,8 +16388,9 @@ async function discoverWorktree(runner, repository, input) {
   if (failure2 !== void 0) return failure2;
   const records = parseWorktreeList(listed.stdout, repository.objectFormat);
   const wantedPath = canonicalWorktreePath(input.path);
-  if (records === void 0 || wantedPath === void 0)
-    return effect("refused", "GIT_REFUSED");
+  if (records === void 0) return effect("refused", "GIT_REFUSED");
+  if (wantedPath === void 0 || wantedPath !== input.path)
+    return effect("refused", "GIT_FOREIGN_WORKTREE");
   const existing = records.find((record2) => record2.path === wantedPath);
   if (existing === void 0) return effect("refused", "GIT_ABSENT");
   return existing.head === input.head && existing.branch === `refs/heads/${input.branch}` ? verifyCleanWorktree(runner, repository, input.path) : effect("refused", "GIT_FOREIGN_WORKTREE");
@@ -16461,6 +16563,8 @@ var nodeGitRunner = async ({ argv, cwd }) => {
       env: {
         GIT_CONFIG_GLOBAL: "/dev/null",
         GIT_CONFIG_NOSYSTEM: "1",
+        GIT_OPTIONAL_LOCKS: "0",
+        GIT_ATTR_NOSYSTEM: "1",
         HOME: "/nonexistent",
         LANG: "C",
         LC_ALL: "C",
@@ -17886,6 +17990,19 @@ async function candidateObserved(effect2, run2, git) {
     status: "observed"
   };
 }
+async function verificationRequest(effect2, run2, git) {
+  const unit = run2.units[effect2.unitId];
+  if (unit === void 0 || unit.branchRef === void 0 || unit.worktreePath !== effect2.params.worktreePath || unit.candidateHead !== effect2.params.candidate.headOid || unit.candidateTree !== effect2.params.candidate.treeOid || unit.baseOid !== effect2.params.candidate.baseOid)
+    return ambiguous();
+  const binding = await verifyCandidateWorktree(git.runner, git.repository, {
+    branch: unit.branchRef,
+    head: effect2.params.candidate.headOid,
+    path: effect2.params.worktreePath,
+    tree: effect2.params.candidate.treeOid
+  });
+  const requested = binding.state === "observed" ? verificationToolRequest(effect2, run2) : ambiguous();
+  return requested.status === "tool_request" ? requested : ambiguous();
+}
 function canPublish(effect2) {
   return effect2.params.completionBoundary !== "pr-handoff" && effect2.params.authorityProfile !== "local-change-only";
 }
@@ -17914,7 +18031,14 @@ function createProductionRecoveryEffectAdapter(options) {
     options.harness.port
   );
   async function discover(effect2, run2) {
-    if (effect2.kind === "verify") return verificationToolRequest(effect2, run2);
+    if (effect2.kind === "verify") {
+      if (!gitMatchesRun(git.repository, run2)) return ambiguous();
+      try {
+        return await verificationRequest(effect2, run2, git);
+      } catch {
+        return ambiguous();
+      }
+    }
     if (harness?.canReconcile?.(effect2))
       return await harness.reconcile(effect2, run2);
     if (effect2.kind === "candidate_collect") {
@@ -18007,7 +18131,14 @@ function createProductionRecoveryEffectAdapter(options) {
     }
   }
   async function execute2(effect2, run2) {
-    if (effect2.kind === "verify") return verificationToolRequest(effect2, run2);
+    if (effect2.kind === "verify") {
+      if (!gitMatchesRun(git.repository, run2)) return ambiguous();
+      try {
+        return await verificationRequest(effect2, run2, git);
+      } catch {
+        return ambiguous();
+      }
+    }
     if (harness?.canExecute?.(effect2))
       return await harness.execute(effect2, run2);
     if (effect2.kind === "candidate_collect") {
@@ -18103,7 +18234,32 @@ function createProductionRecoveryEffectAdapter(options) {
     canReconcile: (effect2) => effect2.kind === "verify" || (harness?.canReconcile?.(effect2) ?? false),
     acknowledge: async (acknowledgement, run2) => {
       const verified = acknowledgeVerificationTool(acknowledgement, run2);
-      if (verified !== void 0) return verified;
+      if (verified !== void 0) {
+        if (verified.status !== "observed") return verified;
+        const observation = verified.observation;
+        if (!("effectId" in observation)) return ambiguous();
+        const entry = run2.effectJournal.find(
+          (candidate) => candidate.effectId === observation.effectId
+        );
+        const effect2 = entry === void 0 ? void 0 : rehydrateEffect(run2, entry);
+        if (effect2?.kind !== "verify" || !gitMatchesRun(git.repository, run2))
+          return ambiguous();
+        try {
+          const binding = await verifyCandidateWorktree(
+            git.runner,
+            git.repository,
+            {
+              branch: run2.units[effect2.unitId]?.branchRef ?? "",
+              head: effect2.params.candidate.headOid,
+              path: effect2.params.worktreePath,
+              tree: effect2.params.candidate.treeOid
+            }
+          );
+          return binding.state === "observed" ? verified : ambiguous();
+        } catch {
+          return ambiguous();
+        }
+      }
       return harness?.acknowledge === void 0 ? ambiguous() : await harness.acknowledge(acknowledgement, run2);
     },
     execute: execute2,
@@ -18466,8 +18622,7 @@ function createRecoveryCommandRunner(runner) {
     const event = payload !== void 0 && "event" in payload ? payload.event : void 0;
     const acknowledgement = payload !== void 0 && "harnessAcknowledgement" in payload ? payload.harnessAcknowledgement : void 0;
     const expected = commandEvent[request.command];
-    const acknowledgementCommand = request.command === "record-dispatch" || request.command === "collect-candidate" || request.command === "review-record" || request.command === "qualify" && isVerifiedAcknowledgement(acknowledgement);
-    if (acknowledgement !== void 0 && !acknowledgementCommand)
+    if (acknowledgement !== void 0 && !allowsAcknowledgement(request.command, acknowledgement))
       return invalidStateRequest();
     if (expected !== void 0 && acknowledgement === void 0 && (event === void 0 || !expected.includes(event.type)))
       return invalidStateRequest();
@@ -18492,12 +18647,20 @@ function createRecoveryCommandRunner(runner) {
     };
   };
 }
-function isVerifiedAcknowledgement(value) {
+function allowsAcknowledgement(command, value) {
   const parsed = validate(
     HarnessToolAcknowledgementSchema,
     value
   );
-  return parsed.ok && parsed.value?.kind === "verified";
+  if (!parsed.ok || parsed.value === void 0) return false;
+  const kind = parsed.value.kind;
+  const allowed = {
+    "collect-candidate": ["worker_collected"],
+    qualify: ["verified"],
+    "record-dispatch": ["launch", "launch_inspected", "cancelled"],
+    "review-record": ["review_collected"]
+  };
+  return allowed[command]?.includes(kind ?? "") ?? false;
 }
 function createProductionRecoveryCommandRunner(options) {
   return createRecoveryCommandRunner(createProductionRecoveryRunner(options));

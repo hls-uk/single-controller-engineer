@@ -440,13 +440,10 @@ export function createRecoveryCommandRunner(
         ? payload.harnessAcknowledgement
         : undefined;
     const expected = commandEvent[request.command];
-    const acknowledgementCommand =
-      request.command === "record-dispatch" ||
-      request.command === "collect-candidate" ||
-      request.command === "review-record" ||
-      (request.command === "qualify" &&
-        isVerifiedAcknowledgement(acknowledgement));
-    if (acknowledgement !== undefined && !acknowledgementCommand)
+    if (
+      acknowledgement !== undefined &&
+      !allowsAcknowledgement(request.command, acknowledgement)
+    )
       return invalidStateRequest();
     if (
       expected !== undefined &&
@@ -492,12 +489,20 @@ export function createRecoveryCommandRunner(
   };
 }
 
-function isVerifiedAcknowledgement(value: unknown): boolean {
+function allowsAcknowledgement(command: CommandName, value: unknown): boolean {
   const parsed = validate<HarnessToolAcknowledgement>(
     HarnessToolAcknowledgementSchema,
     value,
   );
-  return parsed.ok && parsed.value?.kind === "verified";
+  if (!parsed.ok || parsed.value === undefined) return false;
+  const kind = parsed.value.kind;
+  const allowed: Partial<Record<CommandName, readonly string[]>> = {
+    "collect-candidate": ["worker_collected"],
+    qualify: ["verified"],
+    "record-dispatch": ["launch", "launch_inspected", "cancelled"],
+    "review-record": ["review_collected"],
+  };
+  return allowed[command]?.includes(kind ?? "") ?? false;
 }
 
 /** Exact production composition used by hosts after their topology preflight. */

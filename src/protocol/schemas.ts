@@ -1237,6 +1237,7 @@ export const RuntimeEffectSchema = Type.Union([
     params: strictObject({
       candidate: CandidateBindingSchema,
       commands: Type.Array(text(), { minItems: 1, maxItems: 32 }),
+      worktreePath: text(),
     }),
   }),
   strictObject({

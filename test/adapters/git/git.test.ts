@@ -1,14 +1,24 @@
 import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import {
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 
 import {
   discoverIntegration,
   discoverRemoteIntegration,
+  discoverWorktree,
   ensureBranch,
   ensureWorktree,
   GitRepositorySchema,
@@ -19,6 +29,7 @@ import {
   nodeGitRunner,
   observeCandidate,
   publishCandidate,
+  verifyCandidateWorktree,
   verifyRepository,
   type GitRepository,
   type GitResult,
@@ -62,6 +73,7 @@ test("candidate observation binds the owned worktree and exact diff bytes", asyn
     ...identityResults(),
     ok(`worktree /task\nHEAD ${head}\nbranch refs/heads/sce/task\n\n`),
     ok("/repo/.git\n"),
+    failed(),
     ok(`${head}\n`),
     ok(`${tree}\n`),
     ok(),
@@ -94,6 +106,7 @@ test("candidate observation binds the owned worktree and exact diff bytes", asyn
     ...identityResults(),
     ok(`worktree /task\nHEAD ${head}\nbranch refs/heads/sce/task\n\n`),
     ok("/repo/.git\n"),
+    failed(),
     ok(`${head}\n`),
     ok(`${tree}\n`),
     ok(" M src/adapters/git/index.ts\u0000"),
@@ -132,6 +145,7 @@ test("candidate observation rejects a head or clean-state race after diff captur
     ...identityResults(),
     ok(`worktree /task\nHEAD ${head}\nbranch refs/heads/sce/task\n\n`),
     ok("/repo/.git\n"),
+    failed(),
     ok(`${head}\n`),
     ok(`${tree}\n`),
     ok(),
@@ -493,7 +507,9 @@ async function setupRepository(objectFormat?: "sha1" | "sha256"): Promise<{
   cwd: string;
   remote: string;
 }> {
-  const root = await mkdtemp(join(tmpdir(), "sce-git-adapter-"));
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "sce-git-adapter-")),
+  );
   const remote = join(root, "remote.git");
   const cwd = join(root, "repo");
   await git(
@@ -537,7 +553,7 @@ async function actualRepository(cwd: string): Promise<GitRepository> {
 }
 
 test("real no-remote repository supports the local-only fast-forward profile", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "sce-git-local-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "sce-git-local-")));
   const cwd = join(root, "repo");
   t.after(() => rm(root, { force: true, recursive: true }));
   await git(root, "init", cwd);
@@ -587,7 +603,9 @@ test("real no-remote repository supports the local-only fast-forward profile", a
 });
 
 test("real worktree candidate observation binds exact committed diff bytes", async (t) => {
-  const root = await mkdtemp(join(tmpdir(), "sce-git-candidate-"));
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "sce-git-candidate-")),
+  );
   const cwd = join(root, "repo");
   t.after(() => rm(root, { force: true, recursive: true }));
   await git(root, "init", cwd);
@@ -604,7 +622,52 @@ test("real worktree candidate observation binds exact committed diff bytes", asy
   await git(worktree, "commit", "-m", "candidate");
   const head = (await git(worktree, "rev-parse", "HEAD")).trim();
   const tree = (await git(worktree, "rev-parse", "HEAD^{tree}")).trim();
+  const indexRaw = (
+    await git(worktree, "rev-parse", "--git-path", "index")
+  ).trim();
+  const index = isAbsolute(indexRaw) ? indexRaw : resolve(worktree, indexRaw);
+  const indexBefore = await readFile(index);
+  const indexBeforeStat = await stat(index);
+  const candidateCalls: string[] = [];
   const observed = await observeCandidate(
+    async (request) => {
+      const result = await nodeGitRunner(request);
+      candidateCalls.push(
+        `${request.argv.join(" ")}=${result.exitCode}:${result.stdout}`,
+      );
+      return result;
+    },
+    await actualRepository(cwd),
+    {
+      allowedPaths: ["candidate.txt"],
+      base,
+      branch: "sce/candidate",
+      worktreePath: worktree,
+    },
+  );
+  assert.equal(
+    observed.state,
+    "observed",
+    `${observed.code}\n${candidateCalls.join("\n")}`,
+  );
+  assert.deepEqual(observed.snapshot?.changedPaths, ["candidate.txt"]);
+  assert.equal(observed.snapshot?.head, head);
+  assert.equal(observed.snapshot?.tree, tree);
+  assert.match(
+    observed.snapshot?.diff ?? "",
+    /^diff --git a\/candidate.txt b\/candidate.txt/mu,
+  );
+  const indexAfter = await readFile(index);
+  const indexAfterStat = await stat(index);
+  assert.deepEqual(indexAfter, indexBefore);
+  assert.equal(indexAfterStat.ino, indexBeforeStat.ino);
+  assert.equal(indexAfterStat.mtimeMs, indexBeforeStat.mtimeMs);
+  assert.equal(
+    createHash("sha256").update(indexAfter).digest("hex"),
+    createHash("sha256").update(indexBefore).digest("hex"),
+  );
+  await git(worktree, "config", "diff.noprefix", "true");
+  const configured = await observeCandidate(
     nodeGitRunner,
     await actualRepository(cwd),
     {
@@ -614,13 +677,59 @@ test("real worktree candidate observation binds exact committed diff bytes", asy
       worktreePath: worktree,
     },
   );
-  assert.equal(observed.state, "observed");
-  assert.deepEqual(observed.snapshot?.changedPaths, ["candidate.txt"]);
-  assert.equal(observed.snapshot?.head, head);
-  assert.equal(observed.snapshot?.tree, tree);
-  assert.match(
-    observed.snapshot?.diff ?? "",
-    /^diff --git a\/candidate.txt b\/candidate.txt/mu,
+  assert.equal(configured.state, "refused");
+  const alias = join(root, "candidate-alias");
+  await symlink(worktree, alias, "dir");
+  assert.equal(
+    (
+      await verifyCandidateWorktree(
+        nodeGitRunner,
+        await actualRepository(cwd),
+        { branch: "sce/candidate", head, path: worktree, tree },
+      )
+    ).state,
+    "observed",
+  );
+  assert.equal(
+    (
+      await discoverWorktree(nodeGitRunner, await actualRepository(cwd), {
+        branch: "sce/candidate",
+        head,
+        path: alias,
+      })
+    ).code,
+    "GIT_FOREIGN_WORKTREE",
+  );
+  assert.equal(
+    (
+      await ensureWorktree(nodeGitRunner, await actualRepository(cwd), {
+        branch: "sce/candidate",
+        head,
+        path: alias,
+      })
+    ).code,
+    "GIT_FOREIGN_WORKTREE",
+  );
+  assert.equal(
+    (
+      await verifyCandidateWorktree(
+        nodeGitRunner,
+        await actualRepository(cwd),
+        { branch: "sce/candidate", head, path: alias, tree },
+      )
+    ).code,
+    "GIT_FOREIGN_WORKTREE",
+  );
+  assert.equal(
+    (
+      await observeCandidate(nodeGitRunner, await actualRepository(cwd), {
+        allowedPaths: ["candidate.txt"],
+        base,
+        branch: "sce/candidate",
+        worktreePath: alias,
+      })
+    ).code,
+    "GIT_FOREIGN_WORKTREE",
   );
 });
 

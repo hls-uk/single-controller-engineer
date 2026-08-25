@@ -264,8 +264,12 @@ export function verificationToolRequest(
   if (effect.kind !== "verify" || effect.unitId === null)
     return { status: "ambiguous" };
   const unit = run.units[effect.unitId];
-  const worktreePath = canonicalAbsolutePath(unit?.worktreePath);
-  if (unit === undefined || worktreePath === undefined)
+  const worktreePath = canonicalAbsolutePath(effect.params.worktreePath);
+  if (
+    unit === undefined ||
+    unit.worktreePath !== effect.params.worktreePath ||
+    worktreePath === undefined
+  )
     return { status: "ambiguous" };
   const raw = {
     baseOid: effect.params.candidate.baseOid,
@@ -328,7 +332,7 @@ export function acknowledgeVerificationTool(
     acknowledgement.headOid !== effect.params.candidate.headOid ||
     acknowledgement.treeOid !== effect.params.candidate.treeOid ||
     acknowledgement.worktreePath !==
-      canonicalAbsolutePath(run.units[effect.unitId]?.worktreePath) ||
+      canonicalAbsolutePath(effect.params.worktreePath) ||
     acknowledgement.commands.length !== effect.params.commands.length ||
     acknowledgement.commands.some(
       (command, index) => command !== effect.params.commands[index],
@@ -348,6 +352,7 @@ export function acknowledgeVerificationTool(
         effectId: effect.effectId,
         evidenceDigest: acknowledgement.evidenceDigest,
         paramsHash: effect.paramsHash,
+        worktreePath: effect.params.worktreePath,
       }),
     ),
     treeOid: effect.params.candidate.treeOid,

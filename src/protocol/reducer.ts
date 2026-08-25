@@ -2374,6 +2374,7 @@ function runtimeEffectParams(
           "verification commands",
           kind,
         ),
+        worktreePath: required(unit.worktreePath, "worktree path", kind),
       };
     case "review_dispatch":
       return {

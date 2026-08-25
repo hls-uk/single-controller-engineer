@@ -242,7 +242,19 @@ test("manual harness acknowledgements cross the CLI as narrow host facts", async
     effectId: "effect-1",
     kind: "launch",
     schema: "sce.harness-tool-acknowledgement",
-    session: { sessionId: "worker-1" },
+    session: {
+      clientKey: "effect-1",
+      fresh: true,
+      harnessFamily: "codex",
+      harnessVersion: 1,
+      promptHash: HASH,
+      readOnly: false,
+      requestedModel: "workhorse",
+      returnedModel: "workhorse-1",
+      role: "worker",
+      sessionId: "worker-1",
+      worktreePath: "/tmp/unit-1",
+    },
     version: 1,
   };
   const execution = await runCli(
@@ -350,6 +362,16 @@ test("qualify accepts only a strict verified acknowledgement", async () => {
     { runner },
   );
   assert.equal(rejected.exitCode, 64);
+  const smuggled = await runCli(
+    [
+      "record-dispatch",
+      "--json",
+      "--request",
+      JSON.stringify({ harnessAcknowledgement: verified }),
+    ],
+    { runner },
+  );
+  assert.equal(smuggled.exitCode, 64);
   assert.equal(calls, 1);
 });
 
