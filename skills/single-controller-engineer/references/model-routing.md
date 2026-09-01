@@ -3,9 +3,14 @@
 Pin one versioned harness family and support map for the entire run. Current
 examples are Sol/frontier plus Terra/workhorse for Codex-family harnesses, and
 Fable/frontier plus Opus/workhorse for Claude-family harnesses; names are
-examples, not aliases to guess. Advertise a mapping only when the harness can
-return trusted controller/session identity and supports launch, lookup by
-client key, inspect, poll, collect, cancel, and returned-model identity.
+examples, not permanent pins or aliases to guess. Pin a lifecycle-complete
+mapping — launch, inspect, poll, collect, cancel, returned-model identity —
+and record its classification with it: without lookup by client key, dispatch
+recovery is at-most-once-manual; without trusted controller identity, tier
+enforcement is unavailable. Such a profile runs through the manual model-tool
+request/acknowledgement seam on human-bound observations, and any path that
+requires the missing operation fails explicitly. Advertise crash-safe dispatch
+or a proven tier only with both trust operations and live release evidence.
 
 The controller and fresh final reviewer require the configured frontier
 capability. Implementation, repair, and ordinary diagnosis use workhorse, with

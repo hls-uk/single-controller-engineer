@@ -48,7 +48,14 @@ code decides state.**
 - **Capability-based model routing.** Controller and reviewers require a
   frontier tier; implementers and diagnosis use a workhorse tier. Requested
   and returned model identities are recorded, and there is no silent
-  downgrade.
+  downgrade. Each harness family is admitted with an explicit trust
+  classification rather than an assumed one: the Codex-family example declares
+  every trust operation and classifies as crash-safe dispatch with proven tier
+  enforcement, while the Claude-family example
+  (`examples/controller-config.claude-embedded.json`) classifies as
+  at-most-once-manual dispatch recovery with tier enforcement unavailable — an
+  ambiguous launch blocks for a human-bound observation instead of
+  redispatching, and any path needing a proven tier fails explicitly.
 
 Delivery follows the **accelerated-beta** policy: prefer deterministic typed
 checks over inference, ship the smallest coherent vertical slice, and expose
@@ -96,6 +103,22 @@ the primary and feedback skills as one manifest-hashed pair, refusing an
 unrelated collision, partial pair, changed owned files, or cross-filesystem
 staging. npm has no `postinstall` side effect and does not download a CLI at
 runtime.
+
+Claude Code is a supported install host alongside Codex: both skills ship an
+`agents/claude.yaml` beside `agents/openai.yaml`, and
+`sce install-skill --host claude` installs the same manifest-hashed pair. The
+installer itself is host-agnostic — `--host` is a validated declaration of
+where the pair is going, not a separate code path.
+
+Being an install host is not a claim about dispatch. The Claude harness family
+is defined, classified, and deterministically tested — its example
+configuration is admitted by the strict parser and its capability matrix is
+covered by unit tests — but its live-agent release evaluation is still pending,
+so dispatch and telemetry support for that family is not advertised yet. The
+host and classification decisions are recorded in
+[DEC-20260901-008](https://github.com/hls-uk/single-controller-engineer/blob/main/wiki/decisions/2026-09-01-008-claude-code-harness-host.md)
+and
+[DEC-20260901-009](https://github.com/hls-uk/single-controller-engineer/blob/main/wiki/decisions/2026-09-01-009-classified-harness-support-profiles.md).
 
 Authority is profiled, never assumed. A run records one explicit profile —
 `local-change-only`, `push-branch`, `open-pr`, or `integrate` — and stops at
