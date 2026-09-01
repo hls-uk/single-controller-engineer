@@ -801,6 +801,90 @@ test("skill commands install an exact pair from deterministic packaged source", 
     await rm(root, { force: true, recursive: true });
   }
 });
+
+test("an undeclared install host installs the same pair and is omitted, not empty", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sce-cli-install-hostless-"));
+  const destination = join(root, "skills");
+  try {
+    const source = resolvePackagedSkillSource();
+    const dryRun = await runCli(
+      ["install-skill", "--destination", destination, "--dry-run"],
+      { skillSource: source },
+    );
+    assert.equal(dryRun.exitCode, 0, dryRun.stdout);
+    const previewed = JSON.parse(dryRun.stdout).result;
+    assert.equal(previewed.status, "dry-run");
+    assert.equal("host" in previewed, false);
+    assert.deepEqual(Object.keys(previewed.manifest.skills).sort(), [
+      "single-controller-engineer",
+      "single-controller-feedback",
+    ]);
+    assert.ok(previewed.manifest.files.length > 0);
+
+    const installed = await runCli(
+      ["install-skill", "--destination", destination],
+      { skillSource: source },
+    );
+    assert.equal(installed.exitCode, 0, installed.stdout);
+    const installedResult = JSON.parse(installed.stdout).result;
+    assert.equal(installedResult.status, "installed");
+    assert.equal("host" in installedResult, false);
+    assert.deepEqual(
+      installedResult.manifest,
+      JSON.parse(
+        await readFile(join(destination, ".sce-skill-install.json"), "utf8"),
+      ),
+    );
+    assert.deepEqual(installedResult.manifest, previewed.manifest);
+
+    const removed = await runCli(
+      ["uninstall-skill", "--destination", destination],
+      { skillSource: source },
+    );
+    assert.equal(removed.exitCode, 0, removed.stdout);
+    const removedResult = JSON.parse(removed.stdout).result;
+    assert.deepEqual(removedResult, { status: "uninstalled" });
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+test("a declared install host stays exactly codex or claude", async () => {
+  const destination = join(tmpdir(), "sce-cli-install-refused");
+  for (const command of ["install-skill", "uninstall-skill"] as const) {
+    for (const host of ["", "Claude", "claude-code", "any"]) {
+      const execution = await runCli([
+        command,
+        `--host=${host}`,
+        "--destination",
+        destination,
+      ]);
+      assert.equal(execution.exitCode, 64);
+      assert.deepEqual(JSON.parse(execution.stdout).error, {
+        code: "SCE_INVALID_OPTION_VALUE",
+        message: "--host must be codex or claude.",
+      });
+    }
+  }
+});
+
+test("installer help states the host declaration as optional", async () => {
+  const install = await runCli(["install-skill", "--help"]);
+  assert.equal(install.exitCode, 0);
+  assert.deepEqual(JSON.parse(install.stdout).result, {
+    command: "install-skill",
+    usage:
+      "sce install-skill [--host <codex|claude>] --destination <absolute path> [--dry-run]",
+  });
+  const uninstall = await runCli(["uninstall-skill", "-h"]);
+  assert.equal(uninstall.exitCode, 0);
+  assert.deepEqual(JSON.parse(uninstall.stdout).result, {
+    command: "uninstall-skill",
+    usage:
+      "sce uninstall-skill [--host <codex|claude>] --destination <absolute path>",
+  });
+});
+
 test("default runner deterministically inspects valid repository state", async () => {
   const state = run();
   const source = JSON.stringify({ run: state });

@@ -27382,7 +27382,7 @@ function parseInstallerCommand(command, argv) {
   }
   const host = optionValue(values, "--host");
   const destination = optionValue(values, "--destination");
-  if (host !== "codex" && host !== "claude")
+  if (host !== void 0 && host !== "codex" && host !== "claude")
     throw new CliError(
       "SCE_INVALID_OPTION_VALUE",
       "--host must be codex or claude."
@@ -27401,7 +27401,7 @@ function parseInstallerCommand(command, argv) {
     command,
     destination: parseDestination(destination),
     dryRun: values.has("--dry-run"),
-    host,
+    ...host === void 0 ? {} : { host },
     kind: "installer"
   };
 }
@@ -27698,6 +27698,7 @@ async function runCli(argv, dependencies = {}) {
 async function runInstaller(invocation, dependencies) {
   try {
     const source = dependencies.skillSource ?? resolvePackagedSkillSource();
+    const declaredHost = invocation.host === void 0 ? {} : { host: invocation.host };
     if (invocation.command === "install-skill") {
       const result2 = await installSkills({
         destination: invocation.destination,
@@ -27706,7 +27707,7 @@ async function runInstaller(invocation, dependencies) {
       });
       return success(
         {
-          host: invocation.host,
+          ...declaredHost,
           manifest: result2.manifest,
           status: result2.status
         },
@@ -27715,7 +27716,7 @@ async function runInstaller(invocation, dependencies) {
     }
     await uninstallSkills(invocation.destination);
     return success(
-      { host: invocation.host, status: "uninstalled" },
+      { ...declaredHost, status: "uninstalled" },
       invocation.command
     );
   } catch {
@@ -27795,7 +27796,7 @@ function helpResult(command, version) {
   return {
     ...command === "feedback" ? { actions: [...feedbackActions] } : {},
     command,
-    usage: command === "feedback" ? "sce feedback <prepare|preview|submit|flush> --request <json>" : command === "install-skill" ? "sce install-skill --host <codex|claude> --destination <absolute path> [--dry-run]" : command === "uninstall-skill" ? "sce uninstall-skill --host <codex|claude> --destination <absolute path>" : `sce ${command} [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]`
+    usage: command === "feedback" ? "sce feedback <prepare|preview|submit|flush> --request <json>" : command === "install-skill" ? "sce install-skill [--host <codex|claude>] --destination <absolute path> [--dry-run]" : command === "uninstall-skill" ? "sce uninstall-skill [--host <codex|claude>] --destination <absolute path>" : `sce ${command} [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]`
   };
 }
 function canonicalJson2(value) {

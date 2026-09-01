@@ -47,20 +47,20 @@ Pick the destination your host loads skills from:
 
 - Claude Code, project-scoped: `<your-repo>/.claude/skills`
 - Claude Code, personal: `~/.claude/skills`
+- Codex: the skill directory your Codex host loads from
 
 Preview the manifest, then install (the destination must be an absolute
 path):
 
 ```sh
-sce install-skill --host claude --destination /path/to/your-repo/.claude/skills --dry-run
-sce install-skill --host claude --destination /path/to/your-repo/.claude/skills
+sce install-skill --destination /path/to/your-repo/.claude/skills --dry-run
+sce install-skill --destination /path/to/your-repo/.claude/skills
 ```
 
-Codex hosts use `--host codex` with that host's skill directory. `--host` is
-a validated declaration of where the pair is going; the installed files are
-the same pair either way. Upgrading is the same command from a newer
-checkout; `sce uninstall-skill --host <host> --destination <path>` removes
-exactly the recorded manifest.
+The destination is what decides where the pair lands; the installed files are
+the same pair for either host. Upgrading is the same command from a newer
+checkout; `sce uninstall-skill --destination <path>` removes exactly the
+recorded manifest.
 
 ## 3. Initialize Beads in the target repository
 

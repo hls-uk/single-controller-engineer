@@ -108,10 +108,11 @@ staging. npm has no `postinstall` side effect and does not download a CLI at
 runtime.
 
 Claude Code is a supported install host alongside Codex: both skills ship an
-`agents/claude.yaml` beside `agents/openai.yaml`, and
-`sce install-skill --host claude` installs the same manifest-hashed pair. The
-installer itself is host-agnostic — `--host` is a validated declaration of
-where the pair is going, not a separate code path.
+`agents/claude.yaml` beside `agents/openai.yaml`, and one
+`sce install-skill --destination <absolute path>` installs the same
+manifest-hashed pair for either host. The installer itself is host-agnostic,
+so `--host` is optional — when declared it is validated as exactly `codex` or
+`claude` and recorded in the result, never a separate code path.
 
 Being an install host is not a claim about dispatch. The Claude harness family
 is defined, classified, and deterministically tested — its example
