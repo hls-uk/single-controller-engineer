@@ -1003,6 +1003,7 @@ test/
 skills/
 |-- single-controller-engineer/
 |   |-- SKILL.md
+|   |-- agents/claude.yaml
 |   |-- agents/openai.yaml
 |   |-- references/
 |   |   |-- controller-contract.md
@@ -1013,6 +1014,7 @@ skills/
 |   `-- scripts/sce.mjs
 `-- single-controller-feedback/
     |-- SKILL.md
+    |-- agents/claude.yaml
     |-- agents/openai.yaml
     `-- references/feedback-contract.md
 .github/
