@@ -27,6 +27,7 @@
     "test/eval/skill-layout.test.ts",
     "test/eval/workflow-policy.test.ts",
     "test/feedback/feedback.test.ts",
+    "test/harness/claude-family.test.ts",
     "test/harness/harness.test.ts",
     "test/install/installer.test.ts",
     "test/package-manifest.test.ts",
