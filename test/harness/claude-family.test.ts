@@ -13,6 +13,8 @@ import {
   type HarnessSupport,
   type HarnessToolRequest,
 } from "../../src/harness/index.js";
+import { canonicalJson, type JsonValue } from "../../src/protocol/canonical.js";
+import { sha256 } from "../../src/protocol/evidence.js";
 import { reduce, type ProtocolEffect } from "../../src/protocol/reducer.js";
 import { validate } from "../../src/protocol/schemas.js";
 import type {
@@ -30,6 +32,15 @@ const REFUSED_PROFILE = {
   ok: false,
   reason: "harness lacks a complete trusted lifecycle capability",
 } as const;
+/** Admission still requires every executable lifecycle operation. */
+const LIFECYCLE_OPERATIONS = [
+  "cancel",
+  "collect",
+  "inspect",
+  "launch",
+  "poll",
+  "returnedModelIdentity",
+] as const;
 
 /**
  * The declared claude-family profile: it can launch, inspect, poll, collect
@@ -71,7 +82,7 @@ const declared: HarnessSupport = {
   },
 };
 
-/** The same family and model routes under the only profile the code admits. */
+/** The same family and model routes with both trust operations present. */
 const trusted: HarnessSupport = {
   ...declared,
   capabilities: {
@@ -83,6 +94,25 @@ const trusted: HarnessSupport = {
     },
   },
 };
+
+/** A single-operation variation of the fully trusted claude matrix. */
+function withOperations(
+  overrides: Partial<HarnessSupport["capabilities"]["operations"]>,
+): HarnessSupport {
+  return {
+    ...trusted,
+    capabilities: {
+      ...trusted.capabilities,
+      operations: { ...trusted.capabilities.operations, ...overrides },
+    },
+  };
+}
+
+function classificationOf(support: HarnessSupport) {
+  const parsed = parseHarnessSupport(support);
+  assert.equal(parsed.ok, true);
+  return parsed.ok ? parsed.classification : undefined;
+}
 
 function reduceState(
   state: RepositoryRun,
@@ -233,7 +263,36 @@ async function dispatched(): Promise<{
   return { effect, state: reduceState(state, observed.observation) };
 }
 
-test("the claude support map is schema-valid yet refused as a trusted lifecycle profile", () => {
+/**
+ * The declared profile's only launch path: the model-tool seam, whose
+ * observation is bound by hand because no tier proof and no client-key
+ * lookup exist to bind it automatically.
+ */
+async function manuallyDispatched(): Promise<{
+  effect: ProtocolEffect;
+  state: RepositoryRun;
+}> {
+  const { effect, state } = dispatchIntent(declared);
+  const adapter = createHarnessRecoveryEffectAdapter(declared);
+  assert.equal((await adapter.execute(effect, state)).status, "tool_request");
+  const observed = await adapter.acknowledge?.(
+    {
+      effectId: effect.effectId,
+      kind: "launch_inspected",
+      lookupSessionId: SESSION_ID,
+      schema: "sce.harness-tool-acknowledgement",
+      session: session(effect),
+      version: HARNESS_VERSION,
+    },
+    state,
+  );
+  assert.equal(observed?.status, "observed");
+  if (observed?.status !== "observed")
+    throw new Error("claude manual launch refused");
+  return { effect, state: reduceState(state, observed.observation) };
+}
+
+test("the claude support map is admitted as a lifecycle and classified on its trust operations", () => {
   // The declared matrix satisfies every structural bound: the schema layer
   // does not encode capability policy, so it must accept it.
   assert.equal(validate(HarnessSupportSchema, declared).ok, true);
@@ -241,34 +300,48 @@ test("the claude support map is schema-valid yet refused as a trusted lifecycle 
     validate(HarnessCapabilitiesSchema, declared.capabilities).ok,
     true,
   );
-  // Policy refuses it, and no durable commitment exists for an unadmitted
-  // profile, so a run can never be configured onto this matrix.
-  assert.deepEqual(parseHarnessSupport(declared), REFUSED_PROFILE);
-  assert.deepEqual(harnessSupportCommitment(declared), REFUSED_PROFILE);
-  assert.equal(parseHarnessSupport(trusted).ok, true);
-  assert.equal(harnessSupportCommitment(trusted).ok, true);
-  // Each individually missing lifecycle operation is refused on its own.
-  for (const operation of [
-    "cancel",
-    "collect",
-    "controllerIdentity",
-    "inspect",
-    "launch",
-    "lookupByClientKey",
-    "poll",
-    "returnedModelIdentity",
-  ] as const) {
+  // Admission turns on the executable lifecycle alone. The two trust
+  // operations become a classification the admitted profile carries.
+  assert.deepEqual(classificationOf(declared), {
+    dispatchRecovery: "at-most-once-manual",
+    tierEnforcement: "unavailable",
+  });
+  assert.deepEqual(classificationOf(trusted), {
+    dispatchRecovery: "crash-safe",
+    tierEnforcement: "proven",
+  });
+  assert.deepEqual(
+    classificationOf(withOperations({ controllerIdentity: false })),
+    {
+      dispatchRecovery: "crash-safe",
+      tierEnforcement: "unavailable",
+    },
+  );
+  assert.deepEqual(
+    classificationOf(withOperations({ lookupByClientKey: false })),
+    { dispatchRecovery: "at-most-once-manual", tierEnforcement: "proven" },
+  );
+  // Classification does not enter the commitment: it stays the canonical
+  // digest of the whole declared matrix, so a run commits to what it declared.
+  for (const support of [declared, trusted]) {
+    const committed = harnessSupportCommitment(support);
+    assert.equal(committed.ok, true);
+    assert.equal(
+      committed.ok ? committed.value : "",
+      sha256(canonicalJson(support as unknown as JsonValue)),
+    );
+  }
+  // Each individually missing lifecycle operation is still refused outright,
+  // and an unadmitted profile still has no durable commitment at all.
+  for (const operation of LIFECYCLE_OPERATIONS) {
+    const incomplete = withOperations({ [operation]: false });
     assert.deepEqual(
-      parseHarnessSupport({
-        ...trusted,
-        capabilities: {
-          ...trusted.capabilities,
-          operations: {
-            ...trusted.capabilities.operations,
-            [operation]: false,
-          },
-        },
-      }),
+      parseHarnessSupport(incomplete),
+      REFUSED_PROFILE,
+      operation,
+    );
+    assert.deepEqual(
+      harnessSupportCommitment(incomplete),
       REFUSED_PROFILE,
       operation,
     );
@@ -370,14 +443,15 @@ test("the claude support map is schema-valid yet refused as a trusted lifecycle 
   );
 });
 
-test("the at-most-once claude profile never launches and never recovers by client key", async () => {
-  const { effect, state } = dispatchIntent(trusted);
+test("the at-most-once claude profile proves no controller tier and never recovers by client key", async () => {
+  const { effect, state } = dispatchIntent(declared);
   let launches = 0;
   let lookups = 0;
-  // This host would happily launch and would rediscover the launch by client
-  // key. The declared profile must still refuse: capability, not host
-  // willingness, decides whether a launch is recoverable.
+  // This host would happily launch, would rediscover the launch by client key,
+  // and attests exactly the controller identity the run records. The declared
+  // classification, not host willingness, decides which seams are open.
   const willing = port({
+    capabilities: async () => declared.capabilities,
     inspect: async () => session(effect),
     launch: async () => {
       launches += 1;
@@ -389,24 +463,26 @@ test("the at-most-once claude profile never launches and never recovers by clien
     },
   });
   const adapter = createHarnessRecoveryEffectAdapter(declared, willing);
-  assert.equal(adapter.canExecute?.(effect), false);
-  assert.equal(adapter.canReconcile?.(effect), false);
+  // The profile is admitted, so the adapter owns the effect on both seams.
+  assert.equal(adapter.canExecute?.(effect), true);
+  assert.equal(adapter.canReconcile?.(effect), true);
+  // Tier enforcement is unavailable, so every port seam fails explicitly
+  // rather than accept the controller's own account of the tier it runs at.
   assert.deepEqual(await adapter.execute(effect, state), {
-    status: "unavailable",
+    status: "ambiguous",
   });
   assert.deepEqual(await adapter.reconcile(effect, state), {
-    status: "unavailable",
+    status: "ambiguous",
   });
   assert.equal(launches, 0);
   assert.equal(lookups, 0);
-  // The manual model-tool seam is refused too: an unadmitted profile does not
-  // degrade into asking the controller to launch or reconcile by hand.
+  // Admission buys the manual model-tool launch seam and nothing more: its
+  // recovery form is withheld, so an ambiguous launch blocks for a
+  // human-bound observation instead of gaining a lookup it cannot perform.
   const manual = createHarnessRecoveryEffectAdapter(declared);
-  assert.deepEqual(await manual.execute(effect, state), {
-    status: "unavailable",
-  });
+  assert.equal((await manual.execute(effect, state)).status, "tool_request");
   assert.deepEqual(await manual.reconcile(effect, state), {
-    status: "unavailable",
+    status: "ambiguous",
   });
   assert.deepEqual(
     await manual.acknowledge?.(
@@ -419,43 +495,85 @@ test("the at-most-once claude profile never launches and never recovers by clien
       },
       state,
     ),
-    { status: "unavailable" },
+    { status: "ambiguous" },
   );
-  // Dropping lookup alone from an otherwise trusted matrix produces the same
-  // refusal, so lookup loss can never be silently downgraded in place.
-  const withoutLookup = createHarnessRecoveryEffectAdapter(
-    {
-      ...trusted,
-      capabilities: {
-        ...trusted.capabilities,
-        operations: {
-          ...trusted.capabilities.operations,
-          lookupByClientKey: false,
+  // Dropping the controller-identity proof alone from an otherwise trusted
+  // matrix refuses the same way: tier enforcement is never an admitted no-op.
+  const tierless = withOperations({ controllerIdentity: false });
+  const tierlessDispatch = dispatchIntent(tierless);
+  assert.deepEqual(
+    await createHarnessRecoveryEffectAdapter(
+      tierless,
+      port({
+        capabilities: async () => tierless.capabilities,
+        inspect: async () => session(tierlessDispatch.effect),
+        launch: async () => {
+          launches += 1;
+          return session(tierlessDispatch.effect);
         },
-      },
-    },
-    willing,
+      }),
+    ).execute(tierlessDispatch.effect, tierlessDispatch.state),
+    { status: "ambiguous" },
   );
-  assert.equal(withoutLookup.canReconcile?.(effect), false);
-  assert.deepEqual(await withoutLookup.reconcile(effect, state), {
-    status: "unavailable",
-  });
+  assert.equal(launches, 0);
+  // Dropping lookup alone keeps launching trusted and closes reconciliation in
+  // place, so lookup loss can never be silently downgraded into a recovery.
+  const lookupless = withOperations({ lookupByClientKey: false });
+  const looklessDispatch = dispatchIntent(lookupless);
+  const withoutLookup = createHarnessRecoveryEffectAdapter(
+    lookupless,
+    port({
+      capabilities: async () => lookupless.capabilities,
+      inspect: async () => session(looklessDispatch.effect),
+      launch: async () => session(looklessDispatch.effect),
+      lookupByClientKey: async () => {
+        lookups += 1;
+        return session(looklessDispatch.effect);
+      },
+    }),
+  );
+  assert.equal(
+    (
+      await withoutLookup.execute(
+        looklessDispatch.effect,
+        looklessDispatch.state,
+      )
+    ).status,
+    "observed",
+  );
+  assert.deepEqual(
+    await withoutLookup.reconcile(
+      looklessDispatch.effect,
+      looklessDispatch.state,
+    ),
+    { status: "ambiguous" },
+  );
+  assert.deepEqual(
+    await createHarnessRecoveryEffectAdapter(lookupless).reconcile(
+      looklessDispatch.effect,
+      looklessDispatch.state,
+    ),
+    { status: "ambiguous" },
+  );
   assert.equal(lookups, 0);
   // Under the trusted profile a lookup does happen, and a host that cannot
   // find the launch is manual ambiguity, never an invented recovery.
+  const trustedDispatch = dispatchIntent(trusted);
   const found = await createHarnessRecoveryEffectAdapter(
     trusted,
     port({
-      inspect: async () => session(effect),
+      inspect: async () => session(trustedDispatch.effect),
       lookupByClientKey: async (clientKey) =>
-        clientKey === effect.idempotencyKey ? session(effect) : undefined,
+        clientKey === trustedDispatch.effect.idempotencyKey
+          ? session(trustedDispatch.effect)
+          : undefined,
     }),
-  ).reconcile(effect, state);
+  ).reconcile(trustedDispatch.effect, trustedDispatch.state);
   assert.equal(found.status, "observed");
   assert.deepEqual(
     await createHarnessRecoveryEffectAdapter(trusted, port()).reconcile(
-      effect,
-      state,
+      trustedDispatch.effect,
+      trustedDispatch.state,
     ),
     { status: "ambiguous" },
   );
@@ -788,13 +906,41 @@ test("claude cancellation is bound to the durable worker session on both seams",
   const cancelled = reduceState(cancelling, observed.observation);
   assert.equal(cancelled.units["unit-1"]?.state, "cancelled");
   assert.deepEqual(cancelled.activeModifyingUnitIds, []);
-  // The declared at-most-once profile cannot cancel either: a blocked unit
-  // stays blocked for a human rather than being torn down on a guess.
+  // The declared at-most-once profile cannot cancel through a port: it cannot
+  // prove the controller tier, so a blocked unit stays blocked for a human
+  // rather than being torn down on an unproven controller identity.
+  const manualRun = await manuallyDispatched();
+  const declaredIntent = reduce(
+    manualRun.state,
+    event(manualRun.state, "cancel_intent"),
+  );
+  assert.equal(declaredIntent.ok, true);
+  if (!declaredIntent.ok) return;
+  const declaredCancel = declaredIntent.effects[0]!;
+  let cancels = 0;
   assert.deepEqual(
     await createHarnessRecoveryEffectAdapter(
       declared,
-      port({ cancel: async () => acknowledgement }),
-    ).execute(cancel, cancelling),
-    { status: "unavailable" },
+      port({
+        cancel: async () => {
+          cancels += 1;
+          return { ...acknowledgement, effectId: declaredCancel.effectId };
+        },
+        capabilities: async () => declared.capabilities,
+      }),
+    ).execute(declaredCancel, declaredIntent.nextState),
+    { status: "ambiguous" },
   );
+  assert.equal(cancels, 0);
+  // Its manual seam still names that exact durable session by hand.
+  const manualCancel = await createHarnessRecoveryEffectAdapter(
+    declared,
+  ).execute(declaredCancel, declaredIntent.nextState);
+  assert.equal(manualCancel.status, "tool_request");
+  if (manualCancel.status !== "tool_request") return;
+  const manualRequest = validate<HarnessToolRequest>(
+    HarnessToolRequestSchema,
+    manualCancel.toolRequest,
+  );
+  assert.equal(manualRequest.value?.operation, "cancel");
 });

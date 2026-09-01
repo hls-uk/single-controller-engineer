@@ -14228,6 +14228,12 @@ var HarnessSupportSchema = strictObject2({
   version: Type.Literal(HARNESS_VERSION),
   workhorse: ModelRouteSchema
 });
+function classifyHarnessSupport(support) {
+  return {
+    dispatchRecovery: support.capabilities.operations.lookupByClientKey ? "crash-safe" : "at-most-once-manual",
+    tierEnforcement: support.capabilities.operations.controllerIdentity ? "proven" : "unavailable"
+  };
+}
 var HarnessLaunchRequestSchema = strictObject2({
   clientKey: identifier2(),
   packet: HarnessPacketBindingSchema,
@@ -14455,7 +14461,7 @@ function parseHarnessSupport(input) {
   if (!parsed.ok || parsed.value === void 0)
     return { ok: false, reason: "invalid harness support matrix" };
   const support = parsed.value;
-  if (!support.capabilities.operations.launch || !support.capabilities.operations.inspect || !support.capabilities.operations.lookupByClientKey || !support.capabilities.operations.controllerIdentity || !support.capabilities.operations.poll || !support.capabilities.operations.collect || !support.capabilities.operations.cancel || !support.capabilities.operations.returnedModelIdentity)
+  if (!support.capabilities.operations.launch || !support.capabilities.operations.inspect || !support.capabilities.operations.poll || !support.capabilities.operations.collect || !support.capabilities.operations.cancel || !support.capabilities.operations.returnedModelIdentity)
     return {
       ok: false,
       reason: "harness lacks a complete trusted lifecycle capability"
@@ -14472,7 +14478,11 @@ function parseHarnessSupport(input) {
   ];
   if (intersects(workhorseIdentities, frontierTierIdentities))
     return { ok: false, reason: "model identities alias capability tiers" };
-  return { ok: true, value: support };
+  return {
+    classification: classifyHarnessSupport(support),
+    ok: true,
+    value: support
+  };
 }
 function harnessSupportCommitment(input) {
   const parsed = parseHarnessSupport(input);
@@ -14601,7 +14611,7 @@ async function reconcile(effect2, run2, support, port) {
   if (!await trustedController(run2, checked.value, port))
     return { status: "ambiguous" };
   if (effect2.kind === "dispatch" || effect2.kind === "repair" || effect2.kind === "review_dispatch") {
-    if (!checked.value.capabilities.operations.lookupByClientKey)
+    if (classifyHarnessSupport(checked.value).dispatchRecovery !== "crash-safe")
       return { status: "ambiguous" };
     try {
       const found = await port.lookupByClientKey(effect2.idempotencyKey);
@@ -14857,6 +14867,8 @@ function toolRequest(effect2, run2, support, recovery = false) {
   return { status: "tool_request", toolRequest: parsed.value };
 }
 function recoveryToolRequest(effect2, run2, support) {
+  if (["dispatch", "repair", "review_dispatch"].includes(effect2.kind) && classifyHarnessSupport(support).dispatchRecovery !== "crash-safe")
+    return { status: "ambiguous" };
   const result2 = toolRequest(effect2, run2, support, true);
   return result2.status === "tool_request" || result2.status === "unavailable" ? result2 : { status: "ambiguous" };
 }
@@ -14875,6 +14887,8 @@ async function supportMatches(support, port) {
   }
 }
 async function trustedController(run2, support, port) {
+  if (classifyHarnessSupport(support).tierEnforcement !== "proven")
+    return false;
   try {
     const parsed = validate(
       HarnessControllerIdentitySchema,

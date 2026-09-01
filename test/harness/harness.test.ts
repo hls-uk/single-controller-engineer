@@ -546,7 +546,7 @@ test("manual host packets are deterministic and only narrow acknowledgements adv
   });
   assert.equal(unsupported.canExecute?.(effect), false);
   assert.equal(unsupported.canReconcile?.(effect), false);
-  for (const missing of ["lookupByClientKey", "collect", "cancel"] as const) {
+  for (const missing of ["collect", "cancel"] as const) {
     const partial = {
       ...support,
       capabilities: {
@@ -559,6 +559,27 @@ test("manual host packets are deterministic and only narrow acknowledgements adv
     assert.equal(refused.canExecute?.(effect), false);
     assert.equal(refused.canReconcile?.(effect), false);
   }
+  // A missing trust operation is classified instead: the profile is admitted,
+  // the adapter owns its effects, and the seam that operation proves refuses.
+  const withoutLookup = {
+    ...support,
+    capabilities: {
+      ...support.capabilities,
+      operations: {
+        ...support.capabilities.operations,
+        lookupByClientKey: false,
+      },
+    },
+  };
+  const parsedWithoutLookup = parseHarnessSupport(withoutLookup);
+  assert.equal(parsedWithoutLookup.ok, true);
+  assert.deepEqual(
+    parsedWithoutLookup.ok ? parsedWithoutLookup.classification : undefined,
+    { dispatchRecovery: "at-most-once-manual", tierEnforcement: "proven" },
+  );
+  const classified = createHarnessRecoveryEffectAdapter(withoutLookup);
+  assert.equal(classified.canExecute?.(effect), true);
+  assert.equal(classified.canReconcile?.(effect), true);
 });
 
 test("launch intent refuses a packet whose persisted hash does not bind its bytes", () => {

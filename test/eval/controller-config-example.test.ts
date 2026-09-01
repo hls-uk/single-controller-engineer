@@ -163,46 +163,16 @@ test("the claude embedded example mirrors the codex example except its harness b
   }
 });
 
-test("the claude example is refused fail-closed only for its at-most-once capability profile", async () => {
+test("the claude example is accepted unchanged with its trust operations classified", async () => {
   const claude = localOnlyExample(await readExample(CLAUDE_EXAMPLE));
-  // `parseHarnessSupport` admits one profile: a complete trusted lifecycle.
-  // A harness that cannot look a launch up by client key and cannot prove the
-  // active controller tier is refused there, so the whole config is refused —
-  // the parser never returns a partially trusted runner.
-  assert.deepEqual(parseHarnessSupport(claude.harnessSupport), {
-    ok: false,
-    reason: "harness lacks a complete trusted lifecycle capability",
+  // `parseHarnessSupport` admits the complete executable lifecycle the example
+  // declares and classifies the two trust operations it does not have, so the
+  // config is accepted exactly as it ships — no capability bit is edited here.
+  const parsed = parseHarnessSupport(claude.harnessSupport);
+  assert.equal(parsed.ok, true);
+  assert.deepEqual(parsed.ok ? parsed.classification : undefined, {
+    dispatchRecovery: "at-most-once-manual",
+    tierEnforcement: "unavailable",
   });
-  assert.equal(await accepted(claude), undefined);
-  // Positive control: every other field of the example is already accepted by
-  // the same strict parser, so the refusal is caused by exactly those two
-  // capability bits and by nothing else in the mirrored config.
-  const trusted = {
-    ...claude,
-    harnessSupport: {
-      ...claude.harnessSupport,
-      capabilities: {
-        ...claude.harnessSupport.capabilities,
-        operations: {
-          ...claude.harnessSupport.capabilities.operations,
-          controllerIdentity: true,
-          lookupByClientKey: true,
-        },
-      },
-    },
-  };
-  assert.equal(parseHarnessSupport(trusted.harnessSupport).ok, true);
-  assert.equal(
-    typeof (await accepted({
-      ...trusted,
-      initialRun: {
-        ...trusted.initialRun,
-        harness: {
-          ...trusted.initialRun.harness,
-          supportCommitment: sha256(canonicalJson(trusted.harnessSupport)),
-        },
-      },
-    })),
-    "function",
-  );
+  assert.equal(typeof (await accepted(claude)), "function");
 });

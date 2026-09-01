@@ -94,6 +94,31 @@ export const HarnessSupportSchema = strictObject({
 });
 export type HarnessSupport = Static<typeof HarnessSupportSchema>;
 
+/**
+ * The two trust operations are classified rather than admitted away. Admission
+ * still requires the whole executable lifecycle; a missing trust operation
+ * names the exact seam that is closed, and every seam it names fails
+ * explicitly instead of degrading into an admitted no-op.
+ */
+export type HarnessTrustClassification = Readonly<{
+  dispatchRecovery: "at-most-once-manual" | "crash-safe";
+  tierEnforcement: "proven" | "unavailable";
+}>;
+
+/** Closed, deterministic function of the declared capability matrix. */
+export function classifyHarnessSupport(
+  support: HarnessSupport,
+): HarnessTrustClassification {
+  return {
+    dispatchRecovery: support.capabilities.operations.lookupByClientKey
+      ? "crash-safe"
+      : "at-most-once-manual",
+    tierEnforcement: support.capabilities.operations.controllerIdentity
+      ? "proven"
+      : "unavailable",
+  };
+}
+
 export const HarnessLaunchRequestSchema = strictObject({
   clientKey: identifier(),
   packet: HarnessPacketBindingSchema,
@@ -388,10 +413,12 @@ export type PacketResult =
   | Readonly<{ ok: false; reason: string }>;
 
 /** Public parsing is total: malformed host/config values only return a refusal. */
-export function parseHarnessSupport(
-  input: unknown,
-):
-  | Readonly<{ ok: true; value: HarnessSupport }>
+export function parseHarnessSupport(input: unknown):
+  | Readonly<{
+      classification: HarnessTrustClassification;
+      ok: true;
+      value: HarnessSupport;
+    }>
   | Readonly<{ ok: false; reason: string }> {
   let parsed: ReturnType<typeof validate<HarnessSupport>>;
   try {
@@ -405,8 +432,6 @@ export function parseHarnessSupport(
   if (
     !support.capabilities.operations.launch ||
     !support.capabilities.operations.inspect ||
-    !support.capabilities.operations.lookupByClientKey ||
-    !support.capabilities.operations.controllerIdentity ||
     !support.capabilities.operations.poll ||
     !support.capabilities.operations.collect ||
     !support.capabilities.operations.cancel ||
@@ -428,7 +453,11 @@ export function parseHarnessSupport(
   ];
   if (intersects(workhorseIdentities, frontierTierIdentities))
     return { ok: false, reason: "model identities alias capability tiers" };
-  return { ok: true, value: support };
+  return {
+    classification: classifyHarnessSupport(support),
+    ok: true,
+    value: support,
+  };
 }
 
 /** Stable commitment carried by the durable `harness_configured` transition. */
@@ -610,7 +639,7 @@ async function reconcile(
     effect.kind === "repair" ||
     effect.kind === "review_dispatch"
   ) {
-    if (!checked.value.capabilities.operations.lookupByClientKey)
+    if (classifyHarnessSupport(checked.value).dispatchRecovery !== "crash-safe")
       return { status: "ambiguous" };
     try {
       const found = await port.lookupByClientKey(effect.idempotencyKey);
@@ -971,6 +1000,14 @@ function recoveryToolRequest(
   | Readonly<{ status: "ambiguous" }>
   | Readonly<{ status: "tool_request"; toolRequest: unknown }>
   | Readonly<{ status: "unavailable" }> {
+  // Recovering a launch is a lookup by client key. A profile that cannot look
+  // one up is issued no request to do so: the launch stays ambiguous for a
+  // human-bound observation instead of gaining a silent recovery path.
+  if (
+    ["dispatch", "repair", "review_dispatch"].includes(effect.kind) &&
+    classifyHarnessSupport(support).dispatchRecovery !== "crash-safe"
+  )
+    return { status: "ambiguous" };
   const result = toolRequest(effect, run, support, true);
   return result.status === "tool_request" || result.status === "unavailable"
     ? result
@@ -1005,6 +1042,10 @@ async function trustedController(
   support: HarnessSupport,
   port: HarnessPort,
 ): Promise<boolean> {
+  // A profile whose tier enforcement is unavailable fails here rather than
+  // accepting the controller's own account of the tier it is running at.
+  if (classifyHarnessSupport(support).tierEnforcement !== "proven")
+    return false;
   try {
     const parsed = validate<HarnessControllerIdentity>(
       HarnessControllerIdentitySchema,
