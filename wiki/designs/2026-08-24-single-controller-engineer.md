@@ -1073,9 +1073,10 @@ metadata. CI rebuilds from a clean tree and fails if the vendored bundle
 differs. The skill never performs an implicit networked `npx` download during
 an engineering run.
 
-`sce install-skill --host <supported-host> --destination <path>` explicitly
+`sce install-skill [--host <supported-host>] --destination <path>` explicitly
 installs the primary and feedback skills as one versioned set; `--dry-run`
-shows the manifest first. Installation stages into the destination filesystem,
+shows the manifest first, and the optional host declaration never changes the
+installed pair. Installation stages into the destination filesystem,
 validates hashes and both skill versions, then atomically replaces only a
 previous installation recorded as this package. An unrelated name collision,
 cross-filesystem non-atomic destination, partial pair, or version mismatch

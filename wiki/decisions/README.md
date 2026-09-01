@@ -41,3 +41,4 @@ may recommend decisions, but the controller records the accepted disposition.
 | [DEC-20260825-007](2026-08-25-007-disabled-release-and-feedback-workflows.md) | Accepted | Release and feedback workflows ship disabled | `sce-1kv.4.2`, `sce-1kv.4.3`, `sce-1kv.5.6` |
 | [DEC-20260901-008](2026-09-01-008-claude-code-harness-host.md) | Accepted | Claude Code host ships with an honest at-most-once harness classification | `sce-k4c`, `sce-366` |
 | [DEC-20260901-009](2026-09-01-009-classified-harness-support-profiles.md) | Accepted | Harness support admission classifies trust operations instead of refusing them | `sce-366.1`, `sce-366.5` |
+| [DEC-20260901-010](2026-09-01-010-optional-install-host-declaration.md) | Accepted | The install host declaration is optional; installs always ship the full pair | `sce-366.2` |
