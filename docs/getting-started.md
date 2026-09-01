@@ -65,13 +65,16 @@ recorded manifest.
 ## 3. Initialize Beads in the target repository
 
 The controller keeps all task state in Beads, and the controller lock is the
-built-in `<prefix>-merge-slot` bead created at initialization.
+`<prefix>-merge-slot` bead. `bd init` does not create that slot; creating it
+is the explicit, authorized initialization step, and the skill never creates
+it lazily during a run.
 
 ```sh
 cd /path/to/your-repo
-bd init            # embedded Dolt store under .beads/ (default)
-bd prime           # workflow context; verify the store answers
-bd merge-slot check
+bd init                # embedded Dolt store under .beads/ (default)
+bd merge-slot create   # the controller lock; one per repository
+bd merge-slot check    # expect "available"
+bd prime               # workflow context; verify the store answers
 ```
 
 `bd init` defaults to an embedded Dolt engine with no external server. Teams
