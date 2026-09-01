@@ -32,6 +32,7 @@ try {
     "README.md",
     "package.json",
     "skills/single-controller-engineer/SKILL.md",
+    "skills/single-controller-engineer/agents/claude.yaml",
     "skills/single-controller-engineer/agents/openai.yaml",
     "skills/single-controller-engineer/references/accelerated-beta.md",
     "skills/single-controller-engineer/references/beads-embedded.md",
@@ -41,6 +42,7 @@ try {
     "skills/single-controller-engineer/references/protocol-state.md",
     "skills/single-controller-engineer/scripts/sce.mjs",
     "skills/single-controller-feedback/SKILL.md",
+    "skills/single-controller-feedback/agents/claude.yaml",
     "skills/single-controller-feedback/agents/openai.yaml",
     "skills/single-controller-feedback/references/feedback-contract.md",
   ].sort();
