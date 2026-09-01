@@ -1,0 +1,131 @@
+{
+  "schema": "sce.controller-config",
+  "version": 1,
+  "nonce": "example-run-nonce",
+  "git": {
+    "repository": {
+      "cwd": "/opt/sce/example",
+      "commonDir": "/opt/sce/example/.git",
+      "identity": "local:/opt/sce/example/.git",
+      "objectFormat": "sha1",
+      "remoteUrls": []
+    }
+  },
+  "scope": {
+    "beadsStoreIdentity": "example-store",
+    "gitRepositoryIdentity": "local:/opt/sce/example/.git",
+    "integrationBranch": "main"
+  },
+  "harnessSupport": {
+    "schema": "sce.harness-support",
+    "version": 1,
+    "capabilities": {
+      "schema": "sce.harness-capabilities",
+      "version": 1,
+      "adapterVersion": 1,
+      "family": "claude",
+      "harnessVersion": 1,
+      "operations": {
+        "cancel": true,
+        "collect": true,
+        "controllerIdentity": false,
+        "inspect": true,
+        "launch": true,
+        "lookupByClientKey": false,
+        "poll": true,
+        "returnedModelIdentity": true
+      }
+    },
+    "controller": {
+      "requestedModel": "claude-fable-5",
+      "acceptedReturnedModels": ["claude-fable-5"]
+    },
+    "frontier": {
+      "requestedModel": "claude-fable-5",
+      "acceptedReturnedModels": ["claude-fable-5"]
+    },
+    "workhorse": {
+      "requestedModel": "claude-opus-5",
+      "acceptedReturnedModels": ["claude-opus-5"]
+    }
+  },
+  "initialRun": {
+    "revision": 0,
+    "state": "active",
+    "storeIdentity": "example-store",
+    "repositoryIdentity": "local:/opt/sce/example/.git",
+    "integrationBranch": "main",
+    "authorityProfile": "local-change-only",
+    "completionBoundary": "local-integration",
+    "integrationProfile": "local-ff",
+    "gitObjectFormat": "sha1",
+    "controllerFencingToken": "example-fence",
+    "controller": {
+      "runId": "example-run",
+      "incarnationId": "example-incarnation",
+      "holder": "example-run/example-incarnation",
+      "requestedModel": "claude-fable-5",
+      "returnedModel": "claude-fable-5",
+      "promptHash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "state": "acquired"
+    },
+    "harness": {
+      "adapterVersion": 1,
+      "family": "claude",
+      "harnessVersion": 1,
+      "supportCommitment": "9a0864e637ebd7296cc1c5f492aaa130379a87ea547fd431f4f0330bb5a347e4"
+    },
+    "units": {},
+    "reservations": {},
+    "activeModifyingUnitIds": [],
+    "wave": { "id": "example-wave", "unitIds": [] },
+    "qualificationQueue": [],
+    "integrationQueue": [],
+    "effectJournal": [],
+    "processedEventIds": [],
+    "processedIdempotencyKeys": [],
+    "usedSessionCount": 0,
+    "sessionLineage": "",
+    "sessionLineageRoot": "0000000000000000000000000000000000000000000000000000000000000000",
+    "closedUnitEvidence": "",
+    "closedUnitEvidenceCommitment": "0000000000000000000000000000000000000000000000000000000000000000",
+    "journalCheckpoint": {
+      "revision": 0,
+      "compactedEffects": 0,
+      "compactedEvents": 0,
+      "compactedIdempotencyKeys": 0,
+      "commitment": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "journalCommitment": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "topology": {
+    "kind": "embedded",
+    "mode": "local-only",
+    "bdExecutable": "/opt/sce/bin/bd",
+    "doltExecutable": "/opt/sce/bin/dolt",
+    "databaseDirectory": "/opt/sce/example/.beads/dolt",
+    "prefix": "sce",
+    "rootBeadId": "sce-root",
+    "childBeadIds": {},
+    "preflight": {
+      "schema": "sce.preflight",
+      "version": 1,
+      "payload": {
+        "status": "ready",
+        "git": {
+          "commonDir": "/opt/sce/example/.git",
+          "identity": "local:/opt/sce/example/.git",
+          "objectFormat": "sha1",
+          "topLevel": "/opt/sce/example"
+        },
+        "beads": {
+          "contextSchemaVersion": 1,
+          "mode": "embedded",
+          "prefix": "sce",
+          "provenance": "embedded_config",
+          "toolVersion": "1.1.0"
+        }
+      }
+    }
+  }
+}
