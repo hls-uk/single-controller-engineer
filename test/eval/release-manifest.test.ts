@@ -43,7 +43,7 @@ test("fast test manifest is explicit, recursive-root based, and names its single
   };
   assert.equal(manifest.budgetSeconds, 60);
   assert.ok(manifest.roots.every((root) => root.startsWith("test/")));
-  assert.equal(manifest.expectedFiles.length, 18);
+  assert.equal(manifest.expectedFiles.length, 19);
   assert.deepEqual(manifest.skipPatterns, [
     "64 retained units complete 16 repairs in waves of at most three within the envelope",
   ]);
