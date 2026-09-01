@@ -98,6 +98,9 @@ deterministic fencing.
 
 ## Installation and authority
 
+For step-by-step setup in an existing repository, see
+[docs/getting-started.md](docs/getting-started.md).
+
 The CLI's `install-skill` integration is intentionally explicit: it installs
 the primary and feedback skills as one manifest-hashed pair, refusing an
 unrelated collision, partial pair, changed owned files, or cross-filesystem
