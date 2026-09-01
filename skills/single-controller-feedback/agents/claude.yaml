@@ -1,0 +1,5 @@
+interface:
+  display_name: Single-controller feedback
+  short_description: Prepare bounded upstream feedback
+policy:
+  allow_implicit_invocation: false

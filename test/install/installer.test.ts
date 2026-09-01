@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   mkdtemp,
   mkdir,
@@ -21,6 +22,14 @@ import {
   installSkills,
   uninstallSkills,
 } from "../../src/install/index.js";
+import type { SkillInstallManifest } from "../../src/install/index.js";
+
+/** Host descriptors the shipped pair carries beside every other skill file. */
+const hostAgents = ["claude.yaml", "openai.yaml"] as const;
+const claudeDescriptors = [
+  "single-controller-engineer/agents/claude.yaml",
+  "single-controller-feedback/agents/claude.yaml",
+] as const;
 
 async function fixture(root: string, version = "0.1.0") {
   for (const name of [
@@ -29,6 +38,7 @@ async function fixture(root: string, version = "0.1.0") {
   ]) {
     const skill = join(root, name);
     await mkdir(join(skill, "references"), { recursive: true });
+    await mkdir(join(skill, "agents"), { recursive: true });
     await writeFile(
       join(skill, "SKILL.md"),
       `---\nname: ${name}\ndescription: test\n---\n\n<!-- sce-skill-version: ${version} -->\n`,
@@ -37,7 +47,18 @@ async function fixture(root: string, version = "0.1.0") {
       join(skill, "references", "contract.md"),
       `${name}-${version}\n`,
     );
+    for (const host of hostAgents)
+      await writeFile(
+        join(skill, "agents", host),
+        `interface:\n  display_name: ${name}\n  short_description: ${version}\n`,
+      );
   }
+}
+
+async function digest(path: string): Promise<string> {
+  return createHash("sha256")
+    .update(await readFile(path))
+    .digest("hex");
 }
 
 async function inTemporaryDirectory(run: (root: string) => Promise<void>) {
@@ -56,16 +77,27 @@ test("installs a version-matched, manifest-verified skill pair and supports dry-
     await fixture(source);
     const dryRun = await installSkills({ destination, dryRun: true, source });
     assert.equal(dryRun.status, "dry-run");
+    for (const path of claudeDescriptors)
+      assert.ok(
+        dryRun.manifest.files.some((file) => file.path === path),
+        `dry-run manifest omits ${path}`,
+      );
     await assert.rejects(readFile(join(destination, INSTALL_MANIFEST)), {
       code: "ENOENT",
     });
     const result = await installSkills({ destination, source });
     assert.equal(result.status, "installed");
-    assert.equal(
-      JSON.parse(await readFile(join(destination, INSTALL_MANIFEST), "utf8"))
-        .skills["single-controller-engineer"],
-      "0.1.0",
-    );
+    const recorded = JSON.parse(
+      await readFile(join(destination, INSTALL_MANIFEST), "utf8"),
+    ) as SkillInstallManifest;
+    assert.equal(recorded.skills["single-controller-engineer"], "0.1.0");
+    assert.deepEqual(recorded, result.manifest);
+    for (const path of claudeDescriptors) {
+      const entry = recorded.files.find((file) => file.path === path);
+      assert.ok(entry, `installed manifest omits ${path}`);
+      assert.equal(entry.sha256, await digest(join(destination, path)));
+      assert.equal(entry.sha256, await digest(join(source, path)));
+    }
   });
 });
 
@@ -115,10 +147,16 @@ test("uninstall is manifest-driven and will not remove changed files", async () 
     const destination = join(root, "host");
     await fixture(source);
     await installSkills({ destination, source });
+    for (const path of claudeDescriptors)
+      assert.ok(await readFile(join(destination, path), "utf8"));
     await uninstallSkills(destination);
     await assert.rejects(readFile(join(destination, INSTALL_MANIFEST)), {
       code: "ENOENT",
     });
+    for (const path of claudeDescriptors)
+      await assert.rejects(readFile(join(destination, path)), {
+        code: "ENOENT",
+      });
   });
 });
 
