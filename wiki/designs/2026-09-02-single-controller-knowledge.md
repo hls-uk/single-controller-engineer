@@ -569,11 +569,11 @@ that leave the unit state machine untouched:
 
 A `materialise` intent binds the run, the source OID, the source path in that
 tree, the destination alias with its canonical root, marker file, and mount
-policy from the knowledge contract, the human driver and domain scope, and
-the **complete destination name**, so
-that every fact the adapter and the sidecar use enters the parameters hash.
-The name is computed inside the intent, not by the adapter: a stable slug, the short source OID, and a UTC timestamp taken from a
-validated clock observation event bound to the intent. The idempotency key is
+policy from the knowledge contract, the human driver and domain scope, and the
+**complete destination name**, so that every fact the adapter and the sidecar
+use enters the parameters hash. The name is computed inside the intent, not by
+the adapter: a stable slug, the short source OID, and a UTC timestamp taken from
+a validated clock observation event bound to the intent. The idempotency key is
 derived from those journaled facts. A crash after the act therefore resumes
 against the same name and compares bytes; it never mints a second name.
 
@@ -665,13 +665,13 @@ whose bytes the engine proves, not a change a model authored; this
 repository already lands unreviewed commits of its Beads export in the same
 way.
 
-The projection's inputs are validated schemas only: closure evidence, the
-unit's materialise observations, and the intent's own parameters, which carry
-the human driver, the domain scope, the alias table, the provenance contract,
-and the clock observation. Those values originate in the controller configuration but the
-projection reads them from the journaled intent, never from live
-configuration, so the same run store always projects the same bytes. Nothing
-is read from prose or the conversation.
+The projection's inputs are validated schemas only: closure evidence, the unit's
+materialise observations, and the intent's own parameters, which carry the human
+driver, the domain scope, the alias table, the provenance contract, and the
+clock observation. Those values originate in the controller configuration but
+the projection reads them from the journaled intent, never from live
+configuration, so the same run store always projects the same bytes. Nothing is
+read from prose or the conversation.
 
 A provenance record contains at least the fields DEC-002 requires: a globally
 unique identifier, project and domain scope, human driver, executor tool and
