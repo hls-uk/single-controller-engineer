@@ -1,0 +1,190 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hls.uk/schemas/sce/knowledge-manifest.schema.json",
+  "title": "Single-controller knowledge repository manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "projectId",
+    "accessDomainId",
+    "audience",
+    "mode",
+    "humanDriver",
+    "driveAliases",
+    "artifactHomes",
+    "frontmatterSchemaPath",
+    "boundaryPolicy",
+    "verification",
+    "provenance",
+    "materialisationTargets",
+    "minimumVersions"
+  ],
+  "properties": {
+    "schema": { "const": "sce.knowledge-manifest" },
+    "version": { "const": 1 },
+    "projectId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$" },
+    "accessDomainId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9.-]{1,126}$"
+    },
+    "audience": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$" },
+    "mode": { "enum": ["legacy", "pilot", "git-first"] },
+    "humanDriver": { "type": "string", "minLength": 1 },
+    "driveAliases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "alias",
+          "canonicalRoot",
+          "markerFile",
+          "mountPolicy",
+          "mountPathVariable"
+        ],
+        "properties": {
+          "alias": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
+          "canonicalRoot": { "type": "string", "minLength": 1 },
+          "markerFile": { "type": "string", "pattern": "^[^/]+$" },
+          "mountPolicy": { "enum": ["required", "optional"] },
+          "mountPathVariable": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]+$"
+          }
+        }
+      }
+    },
+    "artifactHomes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agentInstructions",
+        "knowledge",
+        "events",
+        "generated",
+        "driveIncoming",
+        "driveRendered",
+        "credentials",
+        "derivedIndexes"
+      ],
+      "properties": {
+        "agentInstructions": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "knowledge": { "type": "string", "minLength": 1 },
+        "events": { "type": "string", "minLength": 1 },
+        "generated": { "type": "string", "minLength": 1 },
+        "driveIncoming": { "type": "string", "minLength": 1 },
+        "driveRendered": { "type": "string", "minLength": 1 },
+        "credentials": { "const": "external" },
+        "derivedIndexes": { "const": "rebuildable" }
+      }
+    },
+    "frontmatterSchemaPath": { "type": "string", "minLength": 1 },
+    "boundaryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowedWriteRoots", "forbiddenPaths", "forbiddenMarkers"],
+      "properties": {
+        "allowedWriteRoots": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "forbiddenPaths": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "forbiddenMarkers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fast", "integration", "release"],
+      "properties": {
+        "fast": { "$ref": "#/$defs/commands" },
+        "integration": { "$ref": "#/$defs/commands" },
+        "release": { "$ref": "#/$defs/commands" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eventsDirectory",
+        "recordFormatVersion",
+        "rollupGeneratorCommand",
+        "reproducibilityCommand"
+      ],
+      "properties": {
+        "eventsDirectory": { "type": "string", "minLength": 1 },
+        "recordFormatVersion": { "const": 1 },
+        "rollupGeneratorCommand": { "$ref": "#/$defs/command" },
+        "reproducibilityCommand": { "$ref": "#/$defs/command" }
+      }
+    },
+    "materialisationTargets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "sourcePattern",
+          "destinationAlias",
+          "destinationSubpath",
+          "namingPolicy",
+          "sidecarRequired"
+        ],
+        "properties": {
+          "sourcePattern": { "type": "string", "minLength": 1 },
+          "destinationAlias": { "type": "string", "minLength": 1 },
+          "destinationSubpath": { "type": "string", "minLength": 1 },
+          "namingPolicy": {
+            "enum": [
+              "source-basename",
+              "iso-date-prefix",
+              "content-hash-suffix"
+            ]
+          },
+          "sidecarRequired": { "type": "boolean" }
+        }
+      }
+    },
+    "minimumVersions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "playbook", "profile"],
+      "properties": {
+        "root": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+        "playbook": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "profile": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" }
+      }
+    }
+  },
+  "$defs": {
+    "command": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "commands": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/command" }
+    }
+  }
+}

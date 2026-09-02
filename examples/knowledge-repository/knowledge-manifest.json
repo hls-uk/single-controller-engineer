@@ -1,0 +1,62 @@
+{
+  "schema": "sce.knowledge-manifest",
+  "version": 1,
+  "projectId": "example-knowledge",
+  "accessDomainId": "example.internal",
+  "audience": "example-internal",
+  "mode": "git-first",
+  "humanDriver": "AGENTS.md",
+  "driveAliases": [
+    {
+      "alias": "partner-drive",
+      "canonicalRoot": "Example Partnered Drive",
+      "markerFile": ".sce-drive-root",
+      "mountPolicy": "optional",
+      "mountPathVariable": "EXAMPLE_PARTNER_DRIVE_ROOT"
+    }
+  ],
+  "artifactHomes": {
+    "agentInstructions": ["AGENTS.md", "CLAUDE.md"],
+    "knowledge": "knowledge",
+    "events": "events",
+    "generated": "generated",
+    "driveIncoming": "partner-drive:incoming",
+    "driveRendered": "partner-drive:rendered",
+    "credentials": "external",
+    "derivedIndexes": "rebuildable"
+  },
+  "frontmatterSchemaPath": "schemas/page-frontmatter.schema.json",
+  "boundaryPolicy": {
+    "allowedWriteRoots": ["knowledge"],
+    "forbiddenPaths": [".beads", "events", "generated", "partnered-drive"],
+    "forbiddenMarkers": ["AUDIENCE: PRIVATE", "DO NOT SHARE OUTSIDE BOARD"]
+  },
+  "verification": {
+    "fast": [["node", "test-fast.mjs"]],
+    "integration": [["node", "checks/materialise-dry-run.mjs"]],
+    "release": [["node", "checks/live-drive-evaluation.mjs"]]
+  },
+  "provenance": {
+    "eventsDirectory": "events",
+    "recordFormatVersion": 1,
+    "rollupGeneratorCommand": ["node", "scripts/generate-rollup.mjs"],
+    "reproducibilityCommand": [
+      "node",
+      "../../skills/single-controller-knowledge/references/manifest/checks/check-generated.mjs"
+    ]
+  },
+  "materialisationTargets": [
+    {
+      "sourcePattern": "knowledge/current/*.md",
+      "destinationAlias": "partner-drive",
+      "destinationSubpath": "rendered/guidance",
+      "namingPolicy": "source-basename",
+      "sidecarRequired": true
+    }
+  ],
+  "minimumVersions": {
+    "root": "1.0.0",
+    "playbook": "1.0.0",
+    "profile": "0.1.0"
+  }
+}

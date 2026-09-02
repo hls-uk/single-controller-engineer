@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Example knowledge page frontmatter",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "status", "audience", "successor", "supersedes"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$" },
+    "title": { "type": "string", "minLength": 1 },
+    "status": { "enum": ["current", "superseded"] },
+    "audience": { "const": "example-internal" },
+    "successor": { "enum": [null, "access-guide"] },
+    "supersedes": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}
