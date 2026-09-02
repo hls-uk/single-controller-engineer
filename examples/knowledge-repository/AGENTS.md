@@ -34,7 +34,15 @@ the [knowledge timeline](generated/timeline.md).
 - The provenance step alone writes events and rebuilds generated views.
 - No check makes a network request or writes outside a disposable directory.
 
-Run `node test-fast.mjs` from this directory for the complete example gate.
-The integration and release command entries are declarations: they require
-the K6 disposable-materialisation fixture or separately authorized live Drive
-evidence and are not part of this example's fast gate.
+For candidate verification, the executor sets the exact journaled base and
+runs the complete gate from this directory:
+
+```bash
+SCE_CANDIDATE_BASE_OID=<full-base-oid> node test-fast.mjs
+```
+
+Use `SCE_KNOWLEDGE_BASELINE=1 node test-fast.mjs` only when validating an
+initial repository with no candidate. The integration and release command
+entries are declarations: they require the K6 disposable-materialisation
+fixture or separately authorized live Drive evidence and are not part of this
+example's fast gate.

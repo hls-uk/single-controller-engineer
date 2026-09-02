@@ -410,9 +410,15 @@ export function checkRelativeLinks({ manifest, options }) {
         );
       definitions.set(id, match[2] ?? match[3]);
     }
-    const expression = /!?\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/gu;
+    const expression =
+      /!?\[[^\]]*\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/gu;
     for (const match of source.matchAll(expression)) {
-      assertLinkTarget(file, match[1], options.root, headingsByPath);
+      assertLinkTarget(
+        file,
+        match[1] ?? match[2],
+        options.root,
+        headingsByPath,
+      );
     }
     const referenceExpression = /!?\[([^\]]+)\]\[([^\]]*)\]/gu;
     for (const match of source.matchAll(referenceExpression)) {
@@ -663,7 +669,7 @@ export function checkProvenance({ manifest, options }) {
       throw new Error(`${file.relative}: duplicate provenance id ${record.id}`);
     ids.add(record.id);
     records.push({ record, path: file.relative });
-    assertAncestor(options.root, record.landedOid, file.relative);
+    assertProvenanceGitBinding(options.root, record, file.relative);
   }
   for (const { record, path } of records) {
     for (const target of [...record.supersedes, ...record.tombstones]) {
@@ -730,17 +736,65 @@ function assertProvenanceSemantics(record, body, manifest, path) {
   assertUnique(crossReferences, `${path} provenance targets`);
 }
 
-function assertAncestor(root, oid, path) {
+function assertProvenanceGitBinding(root, record, path) {
+  assertCommit(root, record.baseOid, `${path}: baseOid`);
+  assertCommit(root, record.landedOid, `${path}: landedOid`);
+  assertGitAncestor(
+    root,
+    record.baseOid,
+    record.landedOid,
+    `${path}: baseOid is not an ancestor of landedOid`,
+  );
+  assertGitAncestor(
+    root,
+    record.landedOid,
+    "HEAD",
+    `${path}: landedOid is not an ancestor of HEAD`,
+  );
+  const landedTree = execFileSync(
+    "git",
+    ["rev-parse", "--verify", `${record.landedOid}^{tree}`],
+    {
+      cwd: root,
+      encoding: "utf8",
+      env: hermeticEnvironment(),
+      timeout: 10_000,
+    },
+  ).trim();
+  if (record.reviewTreeOid !== landedTree)
+    throw new Error(`${path}: reviewTreeOid does not match landed tree`);
+}
+
+function assertCommit(root, oid, label) {
   try {
-    execFileSync("git", ["merge-base", "--is-ancestor", oid, "HEAD"], {
+    const resolved = execFileSync(
+      "git",
+      ["rev-parse", "--verify", `${oid}^{commit}`],
+      {
+        cwd: root,
+        encoding: "utf8",
+        env: hermeticEnvironment(),
+        timeout: 10_000,
+      },
+    ).trim();
+    if (resolved !== oid) throw new Error("object identifier mismatch");
+  } catch {
+    throw new Error(`${label} is not an exact commit object`);
+  }
+}
+
+function assertGitAncestor(root, ancestor, descendant, message) {
+  const result = spawnSync(
+    "git",
+    ["merge-base", "--is-ancestor", ancestor, descendant],
+    {
       cwd: root,
       env: hermeticEnvironment(),
       stdio: "ignore",
       timeout: 10_000,
-    });
-  } catch {
-    throw new Error(`${path}: landedOid is not an ancestor of HEAD`);
-  }
+    },
+  );
+  if (result.status !== 0) throw new Error(message);
 }
 
 export function checkSupersession({ manifest, options }) {

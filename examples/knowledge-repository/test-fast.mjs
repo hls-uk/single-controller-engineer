@@ -158,6 +158,19 @@ function runSelfTests() {
       "unresolved link",
     );
 
+    const angleReferenceRoot = join(temporary, "angle-reference-repository");
+    copyRepositoryFixture(angleReferenceRoot);
+    writeFileSync(
+      join(angleReferenceRoot, "knowledge/current/broken-angle-reference.md"),
+      "# Broken angle reference\n\n[Missing page](<../missing page.md>)\n",
+      "utf8",
+    );
+    expectFailure(
+      "seeded broken angle-bracket link",
+      invoke("check-relative-links.mjs", ["--root", angleReferenceRoot]),
+      "unresolved link",
+    );
+
     const provenanceRoot = join(temporary, "provenance-repository");
     copyRepositoryFixture(provenanceRoot);
     writeFileSync(
@@ -169,6 +182,38 @@ function runSelfTests() {
       "seeded deficient provenance record",
       invoke("check-provenance.mjs", ["--root", provenanceRoot]),
       "missing required key",
+    );
+
+    const gitProvenanceRoot = join(temporary, "git-provenance-repository");
+    const provenanceFixture = createProvenanceFixture(gitProvenanceRoot);
+    expectSuccess(
+      "Git-bound provenance fixture",
+      invoke("check-provenance.mjs", ["--root", gitProvenanceRoot]),
+    );
+    writeFileSync(
+      provenanceFixture.path,
+      provenanceFixture.source.replace(
+        /^reviewTreeOid: .*$/mu,
+        `reviewTreeOid: ${"a".repeat(40)}`,
+      ),
+      "utf8",
+    );
+    expectFailure(
+      "seeded mismatched provenance review tree",
+      invoke("check-provenance.mjs", ["--root", gitProvenanceRoot]),
+      "reviewTreeOid does not match landed tree",
+    );
+    writeFileSync(
+      provenanceFixture.path,
+      provenanceFixture.source
+        .replace(/^baseOid: .*$/mu, `baseOid: ${"b".repeat(40)}`)
+        .replace(/^reviewBaseOid: .*$/mu, `reviewBaseOid: ${"b".repeat(40)}`),
+      "utf8",
+    );
+    expectFailure(
+      "seeded nonexistent provenance base",
+      invoke("check-provenance.mjs", ["--root", gitProvenanceRoot]),
+      "baseOid is not an exact commit object",
     );
 
     const driftRoot = join(temporary, "drift-repository");
@@ -208,6 +253,10 @@ function copyRepositoryFixture(destination) {
 function copyCandidateFixture(destination) {
   copyRepositoryFixture(destination);
   rmSync(join(destination, "events/example-event.md"), { force: true });
+  rebuildGenerated(destination);
+}
+
+function rebuildGenerated(destination) {
   const rebuilt = join(destination, ".generated-rebuild");
   execFileSync(
     process.execPath,
@@ -217,6 +266,30 @@ function copyCandidateFixture(destination) {
   rmSync(join(destination, "generated"), { force: true, recursive: true });
   cpSync(rebuilt, join(destination, "generated"), { recursive: true });
   rmSync(rebuilt, { force: true, recursive: true });
+}
+
+function createProvenanceFixture(destination) {
+  copyCandidateFixture(destination);
+  const landedOid = commitFixture(destination, "baseline");
+  const landedTreeOid = execFileSync(
+    "git",
+    ["rev-parse", `${landedOid}^{tree}`],
+    { cwd: destination, encoding: "utf8" },
+  ).trim();
+  const source = readFileSync(
+    join(sourceRoot, "events/example-event.md"),
+    "utf8",
+  )
+    .replace(/^baseOid: .*$/mu, `baseOid: ${landedOid}`)
+    .replace(/^landedOid: .*$/mu, `landedOid: ${landedOid}`)
+    .replace(/^reviewBaseOid: .*$/mu, `reviewBaseOid: ${landedOid}`)
+    .replace(/^reviewHeadOid: .*$/mu, `reviewHeadOid: ${landedOid}`)
+    .replace(/^reviewTreeOid: .*$/mu, `reviewTreeOid: ${landedTreeOid}`);
+  const path = join(destination, "events/example-event.md");
+  writeFileSync(path, source, "utf8");
+  rebuildGenerated(destination);
+  commitFixture(destination, "provenance");
+  return { path, source };
 }
 
 function invoke(check, args) {
@@ -314,8 +387,8 @@ function candidateChangedPaths(repository) {
 
 function exactOid(name) {
   const value = process.env[name];
-  if (!value || !/^[0-9a-f]{40}$/u.test(value))
-    fail(`${name} must be an exact 40-character lowercase commit OID`);
+  if (!value || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(value))
+    fail(`${name} must be an exact lowercase commit OID`);
   return value;
 }
 
