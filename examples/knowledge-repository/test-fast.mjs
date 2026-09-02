@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -57,6 +58,7 @@ try {
       "--manifest",
       unknownPath,
     ]),
+    "unknown key unexpected",
   );
 
   const nestedUnknownManifest = JSON.parse(
@@ -77,20 +79,51 @@ try {
       "--manifest",
       nestedUnknownPath,
     ]),
+    "unknown key unexpected",
   );
 
+  const boundaryRoot = join(temporary, "boundary-repository");
+  copyRepositoryFixture(boundaryRoot);
+  mkdirSync(join(boundaryRoot, "private"));
+  writeFileSync(
+    join(boundaryRoot, "private/seeded-violation.md"),
+    "# Must not pass the complete gate\n",
+    "utf8",
+  );
   expectFailure(
     "seeded boundary violation",
-    invoke("check-boundary.mjs", [
-      "--root",
-      root,
-      "--changed-path",
-      "private/seeded-violation.md",
-    ]),
+    invoke("check-boundary.mjs", ["--root", boundaryRoot]),
+    "no declared artifact home",
+  );
+
+  const referenceRoot = join(temporary, "reference-repository");
+  copyRepositoryFixture(referenceRoot);
+  writeFileSync(
+    join(referenceRoot, "knowledge/current/broken-reference.md"),
+    "# Broken reference\n\n[Missing page][missing]\n\n[missing]: ../missing.md\n",
+    "utf8",
+  );
+  expectFailure(
+    "seeded broken reference link",
+    invoke("check-relative-links.mjs", ["--root", referenceRoot]),
+    "unresolved link",
+  );
+
+  const provenanceRoot = join(temporary, "provenance-repository");
+  copyRepositoryFixture(provenanceRoot);
+  writeFileSync(
+    join(provenanceRoot, "events/deficient.md"),
+    "---\nschema: sce.knowledge-provenance\nversion: 1\nid: deficient\n---\n\n# Provenance record\n",
+    "utf8",
+  );
+  expectFailure(
+    "seeded deficient provenance record",
+    invoke("check-provenance.mjs", ["--root", provenanceRoot]),
+    "missing required key",
   );
 
   const driftRoot = join(temporary, "drift-repository");
-  cpSync(root, driftRoot, { recursive: true });
+  copyRepositoryFixture(driftRoot);
   writeFileSync(
     join(driftRoot, "generated/timeline.md"),
     "# Knowledge timeline\n\nSeeded drift.\n",
@@ -99,12 +132,30 @@ try {
   expectFailure(
     "seeded reproducibility drift",
     invoke("check-generated.mjs", ["--root", driftRoot]),
+    "generated output drift",
   );
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }
 
 process.stdout.write("knowledge example fast gate: pass\n");
+
+function copyRepositoryFixture(destination) {
+  mkdirSync(destination, { recursive: true });
+  for (const entry of [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "events",
+    "generated",
+    "knowledge",
+    "knowledge-manifest.json",
+    "schemas",
+    "scripts",
+    "test-fast.mjs",
+  ]) {
+    cpSync(join(root, entry), join(destination, entry), { recursive: true });
+  }
+}
 
 function invoke(check, args) {
   return spawnSync(process.execPath, [join(templateRoot, check), ...args], {
@@ -115,9 +166,13 @@ function invoke(check, args) {
   });
 }
 
-function expectFailure(name, result) {
+function expectFailure(name, result, expectedFragment) {
   if (result.error) fail(`${name}: ${result.error.message}`);
   if (result.status === 0) fail(`${name}: expected failure, received success`);
+  if (!result.stderr.includes(expectedFragment))
+    fail(
+      `${name}: expected ${JSON.stringify(expectedFragment)}, received ${result.stderr}`,
+    );
   process.stdout.write(`${name}: rejected as expected\n`);
 }
 

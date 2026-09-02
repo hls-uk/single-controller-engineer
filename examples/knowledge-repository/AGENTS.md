@@ -5,6 +5,9 @@ This access-domain repository runs in `git-first` mode for the
 execution ledger; the partnered Drive is a read-only source and a destination
 for journaled rendered copies.
 
+The example human driver is `Example Knowledge Lead`. `AGENTS.md` is the
+driver's instruction entrypoint, not the driver identity recorded in evidence.
+
 ## Artifact map
 
 | Artifact | Canonical home |

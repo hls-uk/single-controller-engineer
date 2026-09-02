@@ -1,0 +1,127 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hls.uk/schemas/sce/knowledge-provenance-record.schema.json",
+  "title": "Single-controller knowledge provenance record frontmatter",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "version",
+    "id",
+    "projectId",
+    "accessDomainId",
+    "audience",
+    "unitId",
+    "humanDriver",
+    "executorTool",
+    "executorSessionId",
+    "timestampUtc",
+    "baseOid",
+    "landedOid",
+    "ownedPaths",
+    "acceptanceIds",
+    "verificationCommands",
+    "verificationResults",
+    "verificationEvidenceHashes",
+    "reviewDecision",
+    "reviewBaseOid",
+    "reviewHeadOid",
+    "reviewTreeOid",
+    "reviewPromptHash",
+    "reviewResponseHash",
+    "materialisationDestinations",
+    "materialisationDigests",
+    "materialisationStatuses",
+    "supersedes",
+    "tombstones",
+    "summary"
+  ],
+  "properties": {
+    "schema": { "const": "sce.knowledge-provenance" },
+    "version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$" },
+    "projectId": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "accessDomainId": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "audience": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "unitId": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "humanDriver": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "executorTool": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "executorSessionId": {
+      "anyOf": [
+        { "type": "null" },
+        { "type": "string", "minLength": 1, "maxLength": 160 }
+      ]
+    },
+    "timestampUtc": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "baseOid": { "$ref": "#/$defs/oid" },
+    "landedOid": { "$ref": "#/$defs/oid" },
+    "ownedPaths": { "$ref": "#/$defs/nonEmptyStrings" },
+    "acceptanceIds": { "$ref": "#/$defs/nonEmptyStrings" },
+    "verificationCommands": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": { "type": "string", "minLength": 1, "maxLength": 1024 }
+    },
+    "verificationResults": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": { "enum": ["passed", "failed"] }
+    },
+    "verificationEvidenceHashes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 32,
+      "items": { "$ref": "#/$defs/hash" }
+    },
+    "reviewDecision": { "enum": ["approve", "request_changes"] },
+    "reviewBaseOid": { "$ref": "#/$defs/oid" },
+    "reviewHeadOid": { "$ref": "#/$defs/oid" },
+    "reviewTreeOid": { "$ref": "#/$defs/oid" },
+    "reviewPromptHash": { "$ref": "#/$defs/hash" },
+    "reviewResponseHash": { "$ref": "#/$defs/hash" },
+    "materialisationDestinations": { "$ref": "#/$defs/strings" },
+    "materialisationDigests": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "anyOf": [{ "type": "null" }, { "$ref": "#/$defs/hash" }]
+      }
+    },
+    "materialisationStatuses": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "enum": ["observed", "deferred"] }
+    },
+    "supersedes": { "$ref": "#/$defs/strings" },
+    "tombstones": { "$ref": "#/$defs/strings" },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 8192 }
+  },
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "oid": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "strings": {
+      "type": "array",
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 8192 }
+    },
+    "nonEmptyStrings": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 192 }
+    }
+  }
+}

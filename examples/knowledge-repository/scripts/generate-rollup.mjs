@@ -13,10 +13,10 @@ const output = outputPath(process.argv.slice(2));
 const eventsDirectory = join(root, "events");
 const records = existsSync(eventsDirectory)
   ? readdirSync(eventsDirectory)
-      .filter((entry) => entry.endsWith(".json"))
+      .filter((entry) => entry.endsWith(".md"))
       .sort()
       .map((entry) =>
-        JSON.parse(readFileSync(join(eventsDirectory, entry), "utf8")),
+        frontmatter(readFileSync(join(eventsDirectory, entry), "utf8")),
       )
   : [];
 
@@ -25,9 +25,8 @@ if (records.length === 0) {
   lines.push("No provenance events recorded.");
 } else {
   for (const record of records) {
-    lines.push(
-      `- \`${record.id}\`: unit \`${record.unitId}\` landed at \`${record.landedOid}\`.`,
-    );
+    lines.push(`- \`${record.id}\`: unit \`${record.unitId}\` landed at`);
+    lines.push(`  \`${record.landedOid}\`.`);
   }
 }
 
@@ -41,4 +40,19 @@ function outputPath(argv) {
     process.exit(2);
   }
   return join(resolve(argv[index + 1]), "timeline.md");
+}
+
+function frontmatter(source) {
+  const lines = source.split("\n");
+  const end = lines.indexOf("---", 1);
+  if (lines[0] !== "---" || end < 0)
+    throw new Error("invalid provenance frontmatter");
+  const record = {};
+  for (const line of lines.slice(1, end)) {
+    if (/^\s+/u.test(line)) continue;
+    const match = /^([A-Za-z][A-Za-z0-9_-]*):(?: (.*))?$/u.exec(line);
+    if (!match) throw new Error("invalid provenance frontmatter line");
+    record[match[1]] = match[2] ?? "";
+  }
+  return record;
 }

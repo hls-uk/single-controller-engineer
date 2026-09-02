@@ -27,6 +27,10 @@ export const manifestSchemaPath = resolve(
   checksDirectory,
   "../knowledge-manifest.schema.json",
 );
+export const provenanceRecordSchemaPath = resolve(
+  checksDirectory,
+  "../provenance-record.schema.json",
+);
 
 export function parseArgs(argv) {
   const options = { root: process.cwd(), changedPaths: [] };
@@ -69,6 +73,19 @@ export function validateManifest(options) {
 }
 
 export function assertSchema(schema, value, at = "$", rootSchema = schema) {
+  if (schema.anyOf) {
+    const accepted = schema.anyOf.some((candidate) => {
+      try {
+        assertSchema(candidate, value, at, rootSchema);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    if (!accepted)
+      throw new Error(`${at}: value does not match any allowed shape`);
+    return;
+  }
   if (schema.$ref) {
     if (!schema.$ref.startsWith("#/")) {
       throw new Error(`${at}: unsupported schema reference ${schema.$ref}`);
@@ -109,10 +126,23 @@ export function assertSchema(schema, value, at = "$", rootSchema = schema) {
     if (schema.pattern && !new RegExp(schema.pattern, "u").test(value)) {
       throw new Error(`${at}: string does not match ${schema.pattern}`);
     }
+    if (schema.maxLength !== undefined && value.length > schema.maxLength) {
+      throw new Error(`${at}: string is longer than ${schema.maxLength}`);
+    }
+  }
+  if (
+    typeof value === "number" &&
+    schema.maximum !== undefined &&
+    value > schema.maximum
+  ) {
+    throw new Error(`${at}: number exceeds ${schema.maximum}`);
   }
   if (Array.isArray(value)) {
     if (schema.minItems !== undefined && value.length < schema.minItems) {
       throw new Error(`${at}: array has fewer than ${schema.minItems} items`);
+    }
+    if (schema.maxItems !== undefined && value.length > schema.maxItems) {
+      throw new Error(`${at}: array has more than ${schema.maxItems} items`);
     }
     if (schema.uniqueItems) {
       const values = value.map((item) => JSON.stringify(item));
@@ -254,6 +284,7 @@ export function markdownFiles(root, manifest) {
     [
       ...manifest.artifactHomes.agentInstructions,
       manifest.artifactHomes.knowledge,
+      manifest.artifactHomes.events,
       manifest.artifactHomes.generated,
     ],
     (path) => path.endsWith(".md"),
@@ -282,7 +313,15 @@ export function parseFrontmatter(path) {
       throw new Error(`${path}:${index + 1}: unsupported frontmatter syntax`);
     if (Object.hasOwn(data, match[1]))
       throw new Error(`${path}: duplicate frontmatter key ${match[1]}`);
-    data[match[1]] = parseScalar(match[2] ?? "");
+    let value = match[2] ?? "";
+    if (value === "") {
+      const continuation = [];
+      while (index + 1 < end && /^\s+/u.test(lines[index + 1])) {
+        continuation.push(lines[++index].trim());
+      }
+      value = continuation.join(" ");
+    }
+    data[match[1]] = parseScalar(value);
   }
   return { data, body: lines.slice(end + 1).join("\n") };
 }
@@ -320,19 +359,22 @@ export function runCheck(name, check) {
 export function checkMarkdownFormat({ manifest, options }) {
   for (const file of markdownFiles(options.root, manifest)) {
     const source = readFileSync(file.path, "utf8");
-    if (source.includes("\r"))
-      throw new Error(`${file.relative}: must use LF newlines`);
-    if (!source.endsWith("\n") || source.endsWith("\n\n")) {
-      throw new Error(`${file.relative}: must have exactly one final newline`);
-    }
-    const lines = source.split("\n");
-    lines.forEach((line, index) => {
-      if (/[ \t]+$/u.test(line))
-        throw new Error(`${file.relative}:${index + 1}: trailing whitespace`);
-      if (line.includes("\t"))
-        throw new Error(`${file.relative}:${index + 1}: tab character`);
-    });
+    const formatted = formatMarkdown(source);
+    if (formatted !== source)
+      throw new Error(
+        `${file.relative}: bundled Markdown formatter reports changes`,
+      );
   }
+}
+
+function formatMarkdown(source) {
+  return `${source
+    .replaceAll("\r\n", "\n")
+    .replaceAll("\r", "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/u, "").replaceAll("\t", "  "))
+    .join("\n")
+    .replace(/\n*$/u, "")}\n`;
 }
 
 export function checkFrontmatter({ manifest, options }) {
@@ -357,33 +399,60 @@ export function checkRelativeLinks({ manifest, options }) {
   );
   for (const file of files) {
     const source = readFileSync(file.path, "utf8");
+    const definitions = new Map();
+    const definitionExpression =
+      /^ {0,3}\[([^\]]+)\]:\s*(?:<([^>]+)>|([^\s]+))/gmu;
+    for (const match of source.matchAll(definitionExpression)) {
+      const id = normalizeReferenceId(match[1]);
+      if (definitions.has(id))
+        throw new Error(
+          `${file.relative}: duplicate link reference ${match[1]}`,
+        );
+      definitions.set(id, match[2] ?? match[3]);
+    }
     const expression = /!?\[[^\]]*\]\(([^)\s]+)(?:\s+"[^"]*")?\)/gu;
     for (const match of source.matchAll(expression)) {
-      const rawTarget = match[1];
-      if (/^(?:[a-z]+:|\/)/iu.test(rawTarget)) continue;
-      const [encodedPath, encodedAnchor] = rawTarget.split("#", 2);
-      const linkPath = decodeURIComponent(encodedPath || basename(file.path));
-      const target = resolve(dirname(file.path), linkPath);
-      const prefix = `${options.root}${sep}`;
-      if (target !== options.root && !target.startsWith(prefix)) {
-        throw new Error(
-          `${file.relative}: link escapes repository: ${rawTarget}`,
-        );
-      }
-      const candidates = [target, join(target, "README.md")];
-      const existing = candidates.find(
-        (candidate) => existsSync(candidate) && statSync(candidate).isFile(),
-      );
-      if (!existing)
-        throw new Error(`${file.relative}: unresolved link ${rawTarget}`);
-      if (encodedAnchor) {
-        const headings =
-          headingsByPath.get(existing) ??
-          markdownHeadings(readFileSync(existing, "utf8"));
-        if (!headings.has(decodeURIComponent(encodedAnchor).toLowerCase())) {
-          throw new Error(`${file.relative}: unresolved anchor ${rawTarget}`);
-        }
-      }
+      assertLinkTarget(file, match[1], options.root, headingsByPath);
+    }
+    const referenceExpression = /!?\[([^\]]+)\]\[([^\]]*)\]/gu;
+    for (const match of source.matchAll(referenceExpression)) {
+      const id = normalizeReferenceId(match[2] || match[1]);
+      const target = definitions.get(id);
+      if (target === undefined)
+        throw new Error(`${file.relative}: undefined link reference ${id}`);
+      assertLinkTarget(file, target, options.root, headingsByPath);
+    }
+    for (const target of definitions.values()) {
+      assertLinkTarget(file, target, options.root, headingsByPath);
+    }
+  }
+}
+
+function normalizeReferenceId(value) {
+  return value.trim().replace(/\s+/gu, " ").toLowerCase();
+}
+
+function assertLinkTarget(file, rawTarget, root, headingsByPath) {
+  if (/^(?:[a-z]+:|\/)/iu.test(rawTarget)) return;
+  const [encodedPath, encodedAnchor] = rawTarget.split("#", 2);
+  const linkPath = decodeURIComponent(encodedPath || basename(file.path));
+  const target = resolve(dirname(file.path), linkPath);
+  const prefix = `${root}${sep}`;
+  if (target !== root && !target.startsWith(prefix)) {
+    throw new Error(`${file.relative}: link escapes repository: ${rawTarget}`);
+  }
+  const candidates = [target, join(target, "README.md")];
+  const existing = candidates.find(
+    (candidate) => existsSync(candidate) && statSync(candidate).isFile(),
+  );
+  if (!existing)
+    throw new Error(`${file.relative}: unresolved link ${rawTarget}`);
+  if (encodedAnchor) {
+    const headings =
+      headingsByPath.get(existing) ??
+      markdownHeadings(readFileSync(existing, "utf8"));
+    if (!headings.has(decodeURIComponent(encodedAnchor).toLowerCase())) {
+      throw new Error(`${file.relative}: unresolved anchor ${rawTarget}`);
     }
   }
 }
@@ -415,6 +484,19 @@ export function checkBoundary({ manifest, options }) {
       throw new Error(`changed path is outside allowed write roots: ${path}`);
     }
   }
+  const repositoryFiles = walkFiles(
+    options.root,
+    readdirSync(options.root).filter(
+      (entry) => ![".beads", ".git", "node_modules"].includes(entry),
+    ),
+  );
+  const declaredPaths = repositoryArtifactPaths(manifest, options);
+  for (const file of repositoryFiles) {
+    if (!matchesAny(file.relative, declaredPaths))
+      throw new Error(
+        `repository path has no declared artifact home: ${file.relative}`,
+      );
+  }
   const markerFiles = walkFiles(
     options.root,
     [...policy.allowedWriteRoots],
@@ -427,6 +509,48 @@ export function checkBoundary({ manifest, options }) {
         throw new Error(`${file.relative}: forbidden marker ${marker}`);
     }
   }
+}
+
+function repositoryArtifactPaths(manifest, options) {
+  const commandPaths = [
+    ...manifest.verification.fast,
+    ...manifest.verification.integration,
+    ...manifest.verification.release,
+    manifest.provenance.rollupGeneratorCommand,
+    manifest.provenance.reproducibilityCommand,
+  ]
+    .flatMap((command) => command)
+    .filter(
+      (argument) =>
+        !argument.startsWith("-") &&
+        !isAbsolute(argument) &&
+        argument.includes("/") &&
+        !argument.split("/").includes("..") &&
+        existsSync(resolve(options.root, argument)),
+    )
+    .map((path) => {
+      const parent = dirname(path);
+      return parent === "." ? path : parent;
+    });
+  const localTemplateRoot = relative(
+    options.root,
+    resolve(checksDirectory, ".."),
+  )
+    .split(sep)
+    .join("/");
+  return [
+    relative(options.root, options.manifest).split(sep).join("/"),
+    ...manifest.artifactHomes.agentInstructions,
+    manifest.artifactHomes.knowledge,
+    manifest.artifactHomes.events,
+    manifest.artifactHomes.generated,
+    manifest.frontmatterSchemaPath,
+    ...commandPaths,
+    ...(localTemplateRoot === "" || localTemplateRoot.startsWith("../")
+      ? []
+      : [localTemplateRoot]),
+    "test-fast.mjs",
+  ];
 }
 
 function matchesAny(path, roots) {
@@ -520,16 +644,21 @@ function treeDigest(root) {
 }
 
 export function checkProvenance({ manifest, options }) {
-  const files = walkFiles(
-    options.root,
-    [manifest.artifactHomes.events],
-    (path) => path.endsWith(".json"),
+  const eventFiles = walkFiles(options.root, [manifest.artifactHomes.events]);
+  const unexpected = eventFiles.find(
+    ({ relative: path }) =>
+      !path.endsWith(".md") && !path.endsWith("/.gitkeep"),
   );
+  if (unexpected)
+    throw new Error(`${unexpected.relative}: unexpected provenance file type`);
+  const files = eventFiles.filter(({ relative: path }) => path.endsWith(".md"));
+  const schema = readJson(provenanceRecordSchemaPath);
   const ids = new Set();
   const records = [];
   for (const file of files) {
-    const record = readJson(file.path);
-    assertProvenanceRecord(record, file.relative);
+    const { data: record, body } = parseFrontmatter(file.path);
+    assertSchema(schema, record, file.relative, schema);
+    assertProvenanceSemantics(record, body, manifest, file.relative);
     if (ids.has(record.id))
       throw new Error(`${file.relative}: duplicate provenance id ${record.id}`);
     ids.add(record.id);
@@ -546,50 +675,59 @@ export function checkProvenance({ manifest, options }) {
   }
 }
 
-function assertProvenanceRecord(record, path) {
-  const keys = [
-    "schema",
-    "version",
-    "id",
-    "unitId",
-    "landedOid",
-    "acceptanceIds",
-    "ownedPaths",
-    "supersedes",
-    "tombstones",
-  ];
-  if (!record || typeof record !== "object" || Array.isArray(record)) {
-    throw new Error(`${path}: provenance record must be an object`);
-  }
-  const actual = Object.keys(record).sort();
-  if (JSON.stringify(actual) !== JSON.stringify([...keys].sort())) {
-    throw new Error(`${path}: provenance record keys are not exact`);
-  }
-  if (record.schema !== "sce.knowledge-provenance" || record.version !== 1) {
-    throw new Error(`${path}: unsupported provenance envelope`);
-  }
-  for (const key of ["id", "unitId"]) {
-    if (typeof record[key] !== "string" || record[key].length === 0) {
-      throw new Error(`${path}: ${key} must be a non-empty string`);
-    }
-  }
-  if (!/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u.test(record.landedOid)) {
-    throw new Error(`${path}: landedOid must be a full Git object id`);
-  }
-  for (const key of [
-    "acceptanceIds",
-    "ownedPaths",
-    "supersedes",
-    "tombstones",
-  ]) {
+function assertProvenanceSemantics(record, body, manifest, path) {
+  if (basename(path, ".md") !== record.id)
+    throw new Error(`${path}: filename must equal provenance id`);
+  if (
+    record.projectId !== manifest.projectId ||
+    record.accessDomainId !== manifest.accessDomainId ||
+    record.audience !== manifest.audience ||
+    record.humanDriver !== manifest.humanDriver
+  )
+    throw new Error(
+      `${path}: provenance scope or driver differs from manifest`,
+    );
+  if (!body.startsWith("\n# Provenance record\n"))
+    throw new Error(`${path}: canonical Markdown body is missing`);
+  if (
+    record.reviewBaseOid !== record.baseOid ||
+    record.reviewHeadOid !== record.landedOid
+  )
+    throw new Error(`${path}: review binding differs from landed pair`);
+  if (
+    record.verificationCommands.length !== record.verificationResults.length ||
+    record.verificationCommands.length !==
+      record.verificationEvidenceHashes.length
+  )
+    throw new Error(`${path}: verification evidence arrays differ in length`);
+  if (
+    record.materialisationDestinations.length !==
+      record.materialisationDigests.length ||
+    record.materialisationDestinations.length !==
+      record.materialisationStatuses.length
+  )
+    throw new Error(
+      `${path}: materialisation evidence arrays differ in length`,
+    );
+  for (const ownedPath of record.ownedPaths)
+    assertRelativePath(ownedPath, `${path} owned path`);
+  const aliases = new Set(manifest.driveAliases.map(({ alias }) => alias));
+  for (const [
+    index,
+    destination,
+  ] of record.materialisationDestinations.entries()) {
+    const separator = destination.indexOf(":");
+    const alias = separator < 0 ? "" : destination.slice(0, separator);
+    if (!aliases.has(alias))
+      throw new Error(`${path}: unknown materialisation alias`);
     if (
-      !Array.isArray(record[key]) ||
-      record[key].some((value) => typeof value !== "string" || !value)
-    ) {
-      throw new Error(`${path}: ${key} must contain non-empty strings`);
-    }
-    assertUnique(record[key], `${path} ${key}`);
+      (record.materialisationStatuses[index] === "observed") !==
+      (record.materialisationDigests[index] !== null)
+    )
+      throw new Error(`${path}: materialisation status and digest disagree`);
   }
+  const crossReferences = [...record.supersedes, ...record.tombstones];
+  assertUnique(crossReferences, `${path} provenance targets`);
 }
 
 function assertAncestor(root, oid, path) {

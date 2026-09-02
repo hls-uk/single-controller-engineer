@@ -1,4 +1,4 @@
 # Claude entrypoint
 
-Follow [AGENTS.md](AGENTS.md). It is the human-driver and artifact-map source
-for this example access domain.
+Follow [AGENTS.md](AGENTS.md). It is the instruction entrypoint and artifact-map
+source for this example access domain.

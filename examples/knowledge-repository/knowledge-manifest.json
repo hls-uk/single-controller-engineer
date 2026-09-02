@@ -5,7 +5,7 @@
   "accessDomainId": "example.internal",
   "audience": "example-internal",
   "mode": "git-first",
-  "humanDriver": "AGENTS.md",
+  "humanDriver": "Example Knowledge Lead",
   "driveAliases": [
     {
       "alias": "partner-drive",
