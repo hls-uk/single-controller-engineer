@@ -31,43 +31,45 @@ repositories.
 1. Knowledge work is delivered by the existing engine under a **knowledge
    profile**, shipped as a third skill, `single-controller-knowledge`, in the
    same package and vendored runtime. The engine is not forked, not duplicated,
-   and not given a profile flag in the reducer.
-2. The engine gains three profile-neutral capabilities and the schema they
-   require, each by a bounded implementation unit: a journaled `materialise`
-   effect with a filesystem adapter for one-way Drive publication; a
-   deterministic projection from journaled evidence to committed provenance
-   records with a journaled provenance commit; and digest-bound reviewer
-   packets that close `sce-cfl`, which is promoted to P1. The schema is an
-   optional targets field on task metadata, gate state on the run aggregate
-   with voided dispositions, a clock observation event, and an optional
-   knowledge contract in the controller configuration (alias table with mount
-   policy, provenance contract, driver, scope, gate targets) recorded at
-   `wave_planned`; a run without it gates exactly as before. The provenance
-   commit is the one commit on the integration branch without a unit
-   identity or review; it is exempt from the parent's one-identity-per-unit
-   invariant because it is a pure projection of reviewed, landed evidence
-   whose bytes the engine proves, with this repository's unreviewed
-   Beads-export commits (for example `e82d29a`) as precedent.
-3. **Beads is first class for knowledge repositories.** Each access-domain
-   repository runs embedded Git-synchronized Beads with its own merge slot;
-   task cards are child Beads with the existing task metadata plus optional
-   validated materialisation targets; live claims are Beads claims and
-   reservations. This supersedes the adam-root "local sign-out sheet, Beads
-   not part of the pilot" scoping, whose stated costs (cross-machine claim
-   authority, a VPS or Tailscale dependency, a database service in the
-   driver's flow) embedded Git-synchronized Beads does not carry. Its real
-   cost is `bd`, Dolt, and Node on each machine, which the roots' `init` and
-   `doctor` scripts do not yet install or check. The adam-root record of that
-   supersession and the script extension are a follow-up under that
-   repository's authority.
-4. The fresh frontier review is retained for every knowledge candidate. A
-   risk-gated skip is a possible later decision on pilot latency evidence.
-5. The governing contract is
-   [Single-Controller Knowledge](../designs/2026-09-02-single-controller-knowledge.md).
-   The parent design and the accelerated-beta companion remain authoritative
-   where it is silent, and win where it conflicts.
-6. The package and `sce` bin keep their names through 0.x; SCE reads as the
-   discipline, with software and knowledge as materials.
+   and not given a profile flag in the reducer. 2. The engine gains three
+   profile-neutral capabilities and the schema they require, each by a bounded
+   implementation unit: a journaled `materialise` effect with a filesystem
+   adapter for one-way Drive publication; a deterministic projection from
+   journaled evidence to committed provenance records with a journaled
+   provenance commit; and digest-bound reviewer packets that close `sce-cfl`,
+   which is promoted to P1. The schema is an optional targets field on task
+   metadata, gate state on the run aggregate with voided dispositions, a clock
+   observation event, and an optional knowledge contract in the controller
+   configuration (alias table with mount policy, provenance contract, driver,
+   scope, gate targets) recorded at `wave_planned`; a run without it gates
+   exactly as before. The schema also adds optional `supersedes` and
+   `tombstones` fields on task metadata, extends closure evidence with the
+   task-metadata facts a record needs, and extends the existing `verify` effect
+   to admit a null unit for the wave's combined verification. The provenance
+   commit is the one commit on the integration branch without a unit identity or
+   review; it is exempt from the parent's one-identity-per-unit invariant
+   because it is a pure projection of reviewed, landed evidence whose bytes the
+   engine proves, with this repository's unreviewed commits of its Beads
+   interaction records (for example `e82d29a`) as precedent. 3. **Beads is first
+   class for knowledge repositories.** Each access-domain repository runs
+   embedded Git-synchronized Beads with its own merge slot; task cards are child
+   Beads with the existing task metadata plus optional validated materialisation
+   targets and supersession fields; live claims are Beads claims and
+   reservations. This supersedes the adam-root "local sign-out sheet, Beads not
+   part of the pilot" scoping, whose stated costs (cross-machine claim
+   authority, a VPS or Tailscale dependency, a database service in the driver's
+   flow) embedded Git-synchronized Beads does not carry. Its real cost is `bd`,
+   Dolt, and Node on each machine, which the roots' `init` and `doctor` scripts
+   do not yet install or check. The adam-root record of that supersession and
+   the script extension are a follow-up under that repository's authority. 4.
+   The fresh frontier review is retained for every knowledge candidate. A
+   risk-gated skip is a possible later decision on pilot latency evidence. 5.
+   The governing contract is [Single-Controller
+   Knowledge](../designs/2026-09-02-single-controller-knowledge.md). The parent
+   design and the accelerated-beta companion remain authoritative where it is
+   silent, and win where it conflicts. 6. The package and `sce` bin keep their
+   names through 0.x; SCE reads as the discipline, with software and knowledge
+   as materials.
 
 ## Rejected alternatives
 
