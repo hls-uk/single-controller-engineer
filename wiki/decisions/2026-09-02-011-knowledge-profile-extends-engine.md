@@ -42,7 +42,12 @@ repositories.
    with voided dispositions, a clock observation event, and an optional
    knowledge contract in the controller configuration (alias table with mount
    policy, provenance contract, driver, scope, gate targets) recorded at
-   `wave_planned`; a run without it gates exactly as before.
+   `wave_planned`; a run without it gates exactly as before. The provenance
+   commit is the one commit on the integration branch without a unit
+   identity or review; it is exempt from the parent's one-identity-per-unit
+   invariant because it is a pure projection of reviewed, landed evidence
+   whose bytes the engine proves, with this repository's unreviewed
+   Beads-export commits (for example `e82d29a`) as precedent.
 3. **Beads is first class for knowledge repositories.** Each access-domain
    repository runs embedded Git-synchronized Beads with its own merge slot;
    task cards are child Beads with the existing task metadata plus optional
@@ -89,9 +94,10 @@ repositories.
   roots' `init` and `doctor` scripts extended for the toolchain (`sce-9f5.3`).
 - A run remains per clone: cross-machine continuation is an orderly release
   and a new run; in version 1 in-flight units are finished or cancelled by
-  the machine that started them, so the migration plan's parity criterion
-  for unfinished work is met only that way, and the release evaluation
-  demonstrates handoff of completed and unstarted work.
+  the run that started them, on any machine and therefore between harness
+  families, so the migration plan's parity criterion for unfinished work is
+  met only that way, and the release evaluation demonstrates handoff of
+  completed and unstarted work.
 - The pilot brief's assurance to Hannah that no Beads or Dolt change was
   involved is reversed; the adam-root follow-up includes a re-brief and her
   re-acknowledgement (`sce-9f5.3`).

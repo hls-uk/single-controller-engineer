@@ -167,7 +167,8 @@ are missing from the engine and two decisions must be taken deliberately:
    what, from which base, with what evidence.
 5. Preserve Claude and Codex parity and satisfy the migration plan's
    first-class parity acceptance criteria for completed and unstarted work;
-   in-flight cross-machine handoff is deferred, as stated below.
+   in-flight handoff between runs, and therefore between harness families on
+   any machine, is deferred, as stated below.
 6. Keep the personal root skill as the human driver's only entry path; the
    driver never types `bd`, `git`, or `sce`.
 7. Keep engine changes bounded and profile-neutral: no reducer branch, effect,
@@ -248,10 +249,10 @@ enforced by the fast gate and by review, not by an agent remembering the rule.
 
 | Concern | Engine, unchanged | Engine, new and profile-neutral | Knowledge profile |
 |---|---|---|---|
-| Queue, claims, slot | Beads contract, merge slot, reservations, wave packing | Optional `materialisationTargets` on task metadata; gate state on the run aggregate | Task-card conventions and manifest fields |
+| Queue, claims, slot | Beads contract, merge slot, reservations, wave packing | Optional `materialisationTargets`, `supersedes`, and `tombstones` on task metadata; gate state on the run aggregate | Task-card conventions and manifest fields |
 | Isolation | Branch and worktree per unit from one verified base | | |
 | Candidate | Clean committed head, tree, scoped diff hash | | |
-| Verification | Commands, exit status, tree binding, cache keys | | Prose verification vocabulary and templates |
+| Verification | Commands, exit status, tree binding, cache keys | The existing `verify` effect emitted at aggregate level, bound to the provenance-commit OID or the integration head | Prose verification vocabulary and templates |
 | Review | Packet hash, schema-valid verdict, exact-pair binding | Digest-bound reviewer packet (`sce-cfl`) | Reviewer charge and severity table |
 | Integration | Local and remote fast-forward (the parent's merge-group profile is designed, not yet implemented) | | |
 | Materialisation | | `materialise` effect with clock-bound destination names, filesystem adapter | Destination policy, naming, sidecar fields |
@@ -311,8 +312,9 @@ it makes drift visible as a failed check rather than a stale page.
 
 ### Repository manifest
 
-Each domain repository carries one provider-neutral manifest, validated by a
-strict JSON schema shipped in the profile's references. It declares:
+Each domain repository carries one provider-neutral manifest,
+`knowledge-manifest.json` at the repository root, validated by a strict JSON
+schema shipped in the knowledge skill's references. It declares:
 
 - stable project and access-domain identifiers and the audience label;
 - migration mode: `legacy`, `pilot`, or `git-first`, per DEC-003;
@@ -361,18 +363,20 @@ design's topology rules, not a requirement of this profile.
 A task card is a child Bead beneath the domain's current root objective. It
 carries the validated task metadata the wave planner already requires:
 acceptance identifiers, dependencies, owned paths, conflict domains,
-reservations, mandatory verification, risk, and independence. One field is
-added to that schema for every profile: optional `materialisationTargets`,
+reservations, mandatory verification, risk, and independence. Two optional
+fields are added to that schema for every profile: `materialisationTargets`,
 each naming a destination alias, a source path pattern in the landed tree, a
-naming policy, and whether a sidecar is required. Targets are committed with
-the wave plan, so the wave gate's promise set is aggregate state the reducer
-owns, never a promise the controller remembers. The profile adds conventions
-in the design and notes fields for facts the engine does not execute:
+naming policy, and whether a sidecar is required; and `supersedes` and
+`tombstones`, lists of provenance record identifiers, so supersession is a
+validated fact the projection reads rather than a note. Both are committed
+with the wave plan, so the wave gate's promise set and every record's
+supersession links are aggregate state the reducer owns, never facts the
+controller remembers. The profile adds conventions in the design and notes
+fields for facts the engine does not execute:
 
 - the source list: Drive or Git paths an author may read, informational for
-  the packet and for review;
-- the audience label, which must equal the repository's domain;
-- the records it supersedes or tombstones, if any.
+  the packet and for review; and
+- the audience label, which must equal the repository's domain.
 
 Owned paths are Git paths. Declared write scopes may not overlap unless the
 units deliberately produce uniquely named alternatives, which is the existing
@@ -620,8 +624,9 @@ its own release evidence.
 ### 8. Record provenance
 
 New. At the wave gate the controller emits one `provenance_commit` intent. The
-runtime projects each closed unit's closure evidence, its unit-target
-materialise observations, and the named run inputs to a canonical Markdown
+runtime projects the closure evidence of each unit closed as landed, its
+unit-target materialise observations, and the named run inputs to a canonical
+Markdown
 record with a stable identifier, writes the records under the events
 directory, runs the repository's declared rollup generator, and produces one
 deterministic commit on the integration branch.
@@ -665,13 +670,15 @@ whose bytes the engine proves, not a change a model authored; this
 repository already lands unreviewed commits of its Beads export in the same
 way.
 
-The projection's inputs are validated schemas only: closure evidence, the unit's
-materialise observations, and the intent's own parameters, which carry the human
-driver, the domain scope, the alias table, the provenance contract, and the
-clock observation. Those values originate in the controller configuration but
-the projection reads them from the journaled intent, never from live
-configuration, so the same run store always projects the same bytes. Nothing is
-read from prose or the conversation.
+The projection's inputs are validated schemas only: closure evidence, which
+K3 extends to retain the task-metadata facts a record needs (owned paths,
+acceptance identifiers, supersessions) after the unit leaves the live map;
+the unit's materialise observations; and the intent's own parameters, which
+carry the human driver, the domain scope, the alias table, the provenance
+contract, and the clock observation. Those values originate in the
+controller configuration but the projection reads them from the journaled
+intent, never from live configuration, so the same run store always projects
+the same bytes. Nothing is read from prose or the conversation.
 
 A provenance record contains at least the fields DEC-002 requires: a globally
 unique identifier, project and domain scope, human driver, executor tool and
@@ -699,7 +706,11 @@ the provenance commit, then combined verification on its OID, then gate
 targets. Their events are `materialise_intent` and `materialise_observed`, and
 `provenance_commit_intent` and `provenance_commit_observed`, all following the
 existing intent-then-observation pattern with `ambiguous` as a first-class
-outcome.
+outcome. Combined verification on the provenance-commit OID is itself a gate
+entry: the existing `verify` effect emitted with no unit, bound to that OID
+and tree (or, for a handoff boundary, to the integration head), reusing
+`verification_observed` and `verification_failed`, so the gate-green
+predicate reads an observation and never a controller's memory.
 
 A gate entry can never wedge a run, because every way it can fail to be
 observed has a reducer-owned `voided` disposition with a validated reason:
@@ -714,21 +725,27 @@ observed has a reducer-owned `voided` disposition with a validated reason:
 - `optional_alias_unmounted`: the alias is declared optional and the adapter
   observed the marker file absent; this is an adapter observation recorded
   through `materialise_observed`, never an inference; and
-- `deferred_by_controller`: the entry's last effect is a positive `refused`
-  observation or a verification failure bound to the provenance-commit tree,
-  and the controller has recorded a follow-up Bead for the repair; the event
-  carries that Bead identifier, and the reducer admits it only from those two
-  observed states, never from `pending` or `ambiguous`.
+- `no_landed_units`: the wave closed no unit as landed, so there is nothing
+  to project; the reducer voids the provenance entry and the gate targets
+  from aggregate state alone; and
+- `deferred_by_controller`: the entry's last effect, or the wave's aggregate
+  verification on the provenance-commit OID, is a positive `refused`
+  observation or a `verification_failed` observation, and the controller has
+  recorded a follow-up Bead for the repair; the event carries that Bead
+  identifier, and the reducer admits it only from those observed states,
+  never from `pending` or `ambiguous`.
 
 A required alias whose marker is absent is observed as `refused` with nothing
 written; the entry stays pending and blocks the gate until the controller
 either mounts the Drive and journals a new intent, which is legal because the
 refusal positively proves that no act occurred, or defers the entry to a
 follow-up Bead. A deferred provenance commit carries its units forward: the
-next wave's provenance commit projects every closed unit whose record has not
-yet been committed, and its idempotency key binds that full set. A deferred
-unit or gate target is republished by a later intent when the controller
-declares it again.
+next wave's provenance commit projects every unit closed as landed whose
+record has not yet been committed, and its idempotency key binds that full
+set. Carry-forward is bounded by the closed-unit ledger limit; the reducer
+refuses a deferral that would exceed it and blocks for a human decision. A
+deferred unit or gate target is republished by a later intent when the
+controller declares it again.
 
 Legality rules for `next`: while any gate entry is pending, `wave_planned` and
 `controller_release_intent` are illegal, and the existing ambiguity-recovery
@@ -773,7 +790,7 @@ The migration plan's first-class parity criteria map to engine properties:
 | Create an isolated workspace without touching a Drive or another writer's index | Worktree per unit from one verified base; Drive never an owned path |
 | Claim a task and output scope through one launcher with one schema | Controller-owned Beads claim and reservations; task metadata schema |
 | Produce a proposal that passes the same deterministic checks | Candidate verification bound to the tree, identical for both families |
-| Hand work to the other agent using only Git revisions and durable records | Closed and unstarted units: landed commits, Beads over `refs/dolt/data`, committed provenance records; in-flight units stay with their machine, see below |
+| Hand work to the other agent using only Git revisions and durable records | Closed and unstarted units: landed commits, Beads over `refs/dolt/data`, committed provenance records; in-flight units stay with the run that started them, see below |
 | Recover after local runtime state is discarded | Intent-first journal, exact readbacks, no completion inferred from missing processes |
 | Continue if one provider is unavailable | Both harness families classified; a run pins one family, a new run may pin the other |
 
@@ -790,8 +807,9 @@ which preserves the branch and worktree as evidence and voids the unit's gate
 entries. It then releases reservations with positive readback, checkpoints
 and pushes Dolt, and releases the slot. The second machine starts a new run
 and plans from the queue the remote holds: closed units are done, unstarted
-units are planned afresh. In-flight work does not transfer between machines
-in version 1, because a new run cannot adopt an existing branch at a head
+units are planned afresh. In-flight work does not transfer between runs in
+version 1, on any machine and therefore between harness families, because a
+run pins one family and a new run cannot adopt an existing branch at a head
 other than its base; a journaled discover-and-adopt effect is a possible
 later engine unit, by decision record, if the pilot shows that in-flight
 handoff is needed. This is the runbook's "one active human batch driver per
@@ -823,13 +841,14 @@ the defect is.
   provenance commit without every unit materialisation observed or voided, no
   `wave_planned` or controller release while a gate entry is pending, voided
   dispositions for a unit closed without landing, a handoff boundary, an
-  optional unmounted alias, and a controller deferral admitted only from a
-  refused or verification-failed observation, a required-alias refusal that
-  keeps its entry pending, no gate target before combined verification on the
-  provenance-commit OID, no provenance entry for a run without a knowledge
-  contract, resume against the journaled destination name after a crash, no
-  approval on a digest mismatch, and no effect after a blocked or ambiguous
-  state;
+  optional unmounted alias, an empty landed set, and a controller deferral
+  admitted only from a refused or verification-failed observation, a
+  required-alias refusal that keeps its entry pending, no gate target before
+  the aggregate verification on the provenance-commit OID is observed, every
+  pending gate target deferrable after that verification fails, no
+  provenance entry for a run without a knowledge contract, resume against the
+  journaled destination name after a crash, no approval on a digest mismatch,
+  and no effect after a blocked or ambiguous state;
 - property tests extending the parent invariants to the new effects;
 - byte-identical provenance projection for identical evidence and refusal of
   evidence that fails validation;
@@ -862,9 +881,12 @@ the defect is.
 
 ### Knowledge repository gates
 
-The profile ships templates for the fast checks above and a schema for the
-manifest. Each domain repository declares its own commands in its manifest;
-the controller runs what is declared and never invents a check.
+The knowledge skill's references are the single home of the manifest schema
+and the fast-check templates. The root skill copies the templates into a
+domain repository when it initializes or upgrades it, and the manifest's
+minimum profile version records which templates it carries. Each domain
+repository declares its own commands in its manifest; the controller runs
+what is declared and never invents a check.
 
 ## Skill packaging
 
@@ -883,15 +905,18 @@ skills/
         |-- knowledge-severity.md      the severity table and reviewer charge
         |-- materialisation.md         effect, adapter, naming, sidecar
         |-- provenance.md              record fields, rollups, reproducibility
-        `-- repository-manifest.md     schema and verification templates
+        |-- repository-manifest.md     manifest contract and template use
+        `-- manifest/
+            |-- knowledge-manifest.schema.json
+            `-- checks/                fast-gate templates
 ```
 
 The knowledge skill's `SKILL.md` is the controller loop for a knowledge
 repository. It routes to its own references for profile content and to the
 primary skill's references, by relative path within the installed set, for the
-controller contract, protocol state, model routing, and the topology reference
-selected at preflight. Those contracts are shared on purpose; duplicating them
-would let the two materials drift.
+controller contract, protocol state, model routing, the accelerated-beta
+reference, and the topology reference selected at preflight. Those contracts
+are shared on purpose; duplicating them would let the two materials drift.
 
 The knowledge skill ships no `scripts/` directory. It invokes the shared
 runtime at `../single-controller-engineer/scripts/sce.mjs` relative to its own
@@ -958,11 +983,11 @@ exact; conflict domains decide wave packing.
 
 | Unit | Outcome | Owned paths | Conflict domain | Risk | Verification |
 |---|---|---|---|---|---|
-| K1 | Digest-bound reviewer packets: the reviewer variant carries the committed `candidateDiffHash`, byte count, bounded stat summary (file count, insertions, deletions), canonical reproduction command, and the unit's worktree path in place of diff bytes; the reducer accepts a packet only when its digest equals the committed hash; closes `sce-cfl` | `src/protocol/schemas.ts`, `src/protocol/reducer.ts`, `src/harness/index.ts`, `src/commands/index.ts`, `test/harness/*`, `test/protocol/*`, `test/fast.manifest.json`, `skills/single-controller-engineer/scripts/sce.mjs` | protocol-core | High | `npm run check`; affected harness integration |
-| K2 | `materialise` effect kind with clock-bound destination names, parameter and observation schemas, optional `materialisationTargets` on task metadata, the knowledge contract in the controller configuration recorded at `wave_planned`, gate state on the run aggregate with voided dispositions (including controller deferral) and legality rules, unit and gate emission points, filesystem adapter, CLI command | `src/protocol/schemas.ts`, `src/protocol/reducer.ts`, `src/protocol/guards.ts`, `src/protocol/actions.ts`, `src/adapters/materialise/**`, `src/commands/index.ts`, `src/cli.ts`, `src/controller-config.ts`, `test/controller-config.test.ts`, `test/protocol/*`, `test/integration/materialise/*`, `test/fast.manifest.json`, `skills/single-controller-engineer/scripts/sce.mjs` | protocol-core | High | `npm run check`; `npm run test:integration` for the materialise fixture |
-| K3 | Provenance record projection from journaled inputs, `provenance_commit` effect with deterministic author, dates, and key trailer, allowlisted Git operations for building the commit detached, discovering it by key, and landing it under either integration profile, rejected-push handling, deferred carry-forward, rollup generator invocation, reproducibility check before any ref moves | `src/protocol/evidence.ts`, `src/protocol/schemas.ts`, `src/protocol/reducer.ts`, `src/commands/index.ts`, `src/controller-config.ts`, `src/adapters/git/index.ts`, `test/controller-config.test.ts`, `test/adapters/git/git.test.ts`, `test/protocol/*`, `test/integration/provenance/*`, `test/fast.manifest.json`, `skills/single-controller-engineer/scripts/sce.mjs` | protocol-core | High | `npm run check`; projection determinism test; `npm run test:integration` for the provenance fixture; the release-tier adapter suite for the Git adapter change |
-| K4 | Knowledge repository example: manifest, schema, fast-gate templates, events and generated directories, instructions | `examples/knowledge-repository/**` | examples | Low | Example's own fast gate; `npm run check` |
-| K5 | Third skill package: `SKILL.md`, host descriptors, references; engineer `SKILL.md` manifest stop; installer triple; package allowlist; layout test with description disjointness; README and getting-started | `skills/single-controller-knowledge/**`, `skills/single-controller-engineer/SKILL.md`, `skills/single-controller-engineer/scripts/sce.mjs`, `src/install/index.ts`, `scripts/package-check.mjs`, `test/eval/skill-layout.test.ts`, `test/install/*`, `test/integration/installer-smoke.test.ts`, `README.md`, `docs/getting-started.md`, `package.json` | skills-packaging | Medium | `npm run check`; `npm run test:package`; `npm run test:integration` for the installer smoke |
+| K1 | Digest-bound reviewer packets: the reviewer variant carries the committed `candidateDiffHash`, byte count, bounded stat summary (file count, insertions, deletions), canonical reproduction command, and the unit's worktree path in place of diff bytes; the reducer accepts a packet only when its digest equals the committed hash; closes `sce-cfl` | `src/protocol/schemas.ts`, `src/protocol/reducer.ts`, `src/harness/index.ts`, `src/commands/index.ts`, `test/harness/*`, `test/protocol/*`, `test/cli/cli.test.ts`, `test/fast.manifest.json`, `skills/single-controller-engineer/scripts/sce.mjs` | protocol-core | High | `npm run check` (the harness suite is fast tier) |
+| K2 | `materialise` effect kind with clock-bound destination names, parameter and observation schemas, optional `materialisationTargets`, `supersedes`, and `tombstones` on task metadata, the knowledge contract in the controller configuration recorded at `wave_planned`, gate state on the run aggregate with voided dispositions (including empty landed set and controller deferral) and legality rules, unit and gate emission points, filesystem adapter, CLI command | `src/protocol/schemas.ts`, `src/protocol/reducer.ts`, `src/protocol/guards.ts`, `src/protocol/actions.ts`, `src/adapters/materialise/**`, `src/commands/index.ts`, `src/cli.ts`, `src/controller-config.ts`, `test/controller-config.test.ts`, `test/protocol/*`, `test/integration/materialise/*`, `test/fast.manifest.json`, `skills/single-controller-engineer/scripts/sce.mjs` | protocol-core | High | `npm run check`; `npm run test:integration` for the materialise fixture |
+| K3 | Provenance record projection from journaled inputs, closure evidence extended with owned paths, acceptance identifiers, and supersessions, `provenance_commit` effect with deterministic author, dates, and key trailer, allowlisted Git operations for building the commit detached, discovering it by key, and landing it under either integration profile, rejected-push handling, deferred carry-forward, rollup generator invocation, reproducibility check before any ref moves, and the aggregate-level `verify` gate entry bound to the provenance-commit OID | `src/protocol/evidence.ts`, `src/protocol/schemas.ts`, `src/protocol/reducer.ts`, `src/commands/index.ts`, `src/controller-config.ts`, `src/adapters/git/index.ts`, `test/controller-config.test.ts`, `test/adapters/git/git.test.ts`, `test/protocol/*`, `test/integration/provenance/*`, `test/fast.manifest.json`, `skills/single-controller-engineer/scripts/sce.mjs` | protocol-core | High | `npm run check`; projection determinism test; `npm run test:integration` for the provenance fixture; the release-tier adapter suite for the Git adapter change |
+| K4 | Manifest schema and fast-gate templates in the knowledge skill's manifest references, plus a knowledge repository example that uses them: manifest, events and generated directories, instructions | `skills/single-controller-knowledge/references/manifest/**`, `examples/knowledge-repository/**` | examples | Low | Example's own fast gate; `npm run check` |
+| K5 | Third skill package: `SKILL.md`, host descriptors, contract references; engineer `SKILL.md` manifest stop; feedback `SKILL.md` wording from pair to set; installer triple; package allowlist; layout test with description disjointness; README and getting-started | `skills/single-controller-knowledge/SKILL.md`, `skills/single-controller-knowledge/agents/**`, `skills/single-controller-knowledge/references/knowledge-contract.md`, `skills/single-controller-knowledge/references/knowledge-severity.md`, `skills/single-controller-knowledge/references/materialisation.md`, `skills/single-controller-knowledge/references/provenance.md`, `skills/single-controller-knowledge/references/repository-manifest.md`, `skills/single-controller-engineer/SKILL.md`, `skills/single-controller-feedback/SKILL.md`, `skills/single-controller-engineer/scripts/sce.mjs`, `src/install/index.ts`, `scripts/package-check.mjs`, `test/eval/skill-layout.test.ts`, `test/install/*`, `test/cli/cli.test.ts`, `test/integration/installer-smoke.test.ts`, `README.md`, `docs/getting-started.md`, `package.json` | skills-packaging | Medium | `npm run check`; `npm run test:package`; `npm run test:integration` for the installer smoke |
 | K6 | Knowledge repository two-clone fixture, release-tier materialise evidence on a real Drive for Desktop folder, and release-tier live evaluation of the management rehearsal scenario with handoff scoped to completed and unstarted work | `test/integration/knowledge/**`, `test/release/**`, `scripts/release-gates.mjs` | release-evidence | Medium | `npm run test:integration`; release tier before the next tag |
 | K7 | adam-root decision superseding the no-Beads pilot scoping; root `init` and `doctor` extended to install and verify `bd`, Dolt, and Node; root skill entry path | Sibling repository; separate authority | external | Low | That repository's checks |
 
@@ -989,10 +1014,11 @@ metadata:
   and the complete destination name; `K2-AC2` `materialisationTargets`
   validate on task metadata and software runs without them are unchanged;
   `K2-AC3` gate state blocks `wave_planned` and release while pending, voids
-  entries for a unit closed without landing, a handoff boundary, and an
-  optional unmounted alias, admits controller deferral only from a refused or
-  verification-failed observation with a follow-up Bead, and keeps a
-  required-alias refusal pending; `K2-AC4` the adapter fixture covers every
+  entries for a unit closed without landing, a handoff boundary, an optional
+  unmounted alias, and an empty landed set, admits controller deferral only
+  from a refused or verification-failed observation with a follow-up Bead,
+  including every pending gate target after the aggregate verification fails,
+  and keeps a required-alias refusal pending; `K2-AC4` the adapter fixture covers every
   listed failure mode including the sidecar-only crash state and leftover
   temporary replacement; `K2-AC5` resume after a crash reuses the journaled
   name; `K2-AC6` the knowledge contract validates alias, root, marker, mount
@@ -1007,9 +1033,13 @@ metadata:
   reproducibility check runs on the detached commit's tree and blocks before
   any local or remote ref moves, under both integration profiles, and a
   deferred provenance entry carries its units into the next wave's commit;
-  `K3-AC6` the record carries every DEC-002 field and no secret; `K3-AC7`
-  gates green with a reproducible bundle; `K3-AC8` a run without a knowledge
-  contract has no provenance entry and gates exactly as before.
+  `K3-AC6` the record carries every DEC-002 field and no secret, reading
+  owned paths, acceptance identifiers, and supersessions from extended
+  closure evidence; `K3-AC7` gates green with a reproducible bundle; `K3-AC8`
+  a run without a knowledge contract has no provenance entry and gates
+  exactly as before; `K3-AC9` the aggregate `verify` gate entry is bound to
+  the provenance-commit OID and its failure qualifies pending gate targets
+  for deferral.
 - K4: `K4-AC1` the manifest schema rejects unknown keys and validates the
   example; `K4-AC2` every template check runs hermetically under sixty
   seconds; `K4-AC3` a seeded boundary violation and a seeded reproducibility
@@ -1097,14 +1127,15 @@ installation manifests and documentation for no capability.
 
 ## Consequences
 
-The engine gains two effect kinds with their four events, a clock
-observation event, a `gate` field on the run aggregate with voided
-dispositions, an optional targets field on task metadata and gate targets
-recorded at `wave_planned`, alias, root, marker, and driver fields in the
-controller configuration, allowlisted Git operations for the provenance
-commit, one adapter, one projection, and a tighter reviewer packet, all
-profile-neutral and all journaled. Software runs gain digest-bound review
-packets and may adopt provenance records without further design.
+The engine gains two effect kinds with their four events, an aggregate-level use
+of the existing `verify` effect, a clock observation event, a `gate` field on
+the run aggregate with voided dispositions, optional targets and supersession
+fields on task metadata, a knowledge contract in the controller configuration
+recorded at `wave_planned`, closure evidence extended with the task-metadata
+facts a record needs, allowlisted Git operations for the provenance commit, one
+adapter, one projection, and a tighter reviewer packet, all profile-neutral and
+all journaled. Software runs gain digest-bound review packets and may adopt
+provenance records without further design.
 
 Knowledge repositories gain enforced isolation, atomic claims, serialized
 landing, fresh review, one-way Drive publication, and Git-committed
@@ -1124,13 +1155,14 @@ expect them. The driver never sees a branch.
 
 The design accepts one boundary honestly: a run belongs to one clone.
 Cross-machine continuation is an orderly release and a new run, and in-flight
-units are finished or cancelled by the machine that started them. The
-migration plan's parity criterion for unfinished work is therefore met only
-by the originating machine finishing or cancelling, and the release
-evaluation demonstrates handoff of completed and unstarted work. A proven
-controller lease remains the parent design's principal future extension and
-is not required by this profile; a discover-and-adopt effect for in-flight
-handoff is a possible later decision.
+units are finished or cancelled by the machine that started them. The migration
+plan's parity criterion for unfinished work is therefore met only by the
+originating run finishing or cancelling; a run pins one harness family, so
+in-flight work does not pass between agents either, and the release evaluation
+demonstrates handoff of completed and unstarted work. A proven controller lease
+remains the parent design's principal future extension and is not required by
+this profile; a discover-and-adopt effect for in-flight handoff is a possible
+later decision.
 
 The pilot brief assured Hannah that no Beads, Dolt, VPS, or Tailscale change
 was involved. Adopting embedded Beads reverses the Beads and Dolt half of
