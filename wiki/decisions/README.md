@@ -42,3 +42,4 @@ may recommend decisions, but the controller records the accepted disposition.
 | [DEC-20260901-008](2026-09-01-008-claude-code-harness-host.md) | Accepted | Claude Code host ships with an honest at-most-once harness classification | `sce-k4c`, `sce-366` |
 | [DEC-20260901-009](2026-09-01-009-classified-harness-support-profiles.md) | Accepted | Harness support admission classifies trust operations instead of refusing them | `sce-366.1`, `sce-366.5` |
 | [DEC-20260901-010](2026-09-01-010-optional-install-host-declaration.md) | Accepted | The install host declaration is optional; installs always ship the full pair | `sce-366.2` |
+| [DEC-20260902-011](2026-09-02-011-knowledge-profile-extends-engine.md) | Accepted | The knowledge profile extends the engine; Beads is first class for knowledge repositories | `sce-9f5`, `sce-9f5.1` |

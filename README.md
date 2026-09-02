@@ -141,5 +141,9 @@ tarball intentionally omits repository wiki history):
 - [Accelerated Beta Engineering](https://github.com/hls-uk/single-controller-engineer/blob/main/wiki/designs/2026-08-25-accelerated-beta-engineering.md)
   — normative delivery policy: cadence, test tiers, review frequency, and
   severity-based acceptance.
+- [Single-Controller Knowledge](https://github.com/hls-uk/single-controller-engineer/blob/main/wiki/designs/2026-09-02-single-controller-knowledge.md)
+  — the knowledge profile: Git-first knowledge repositories partnered with
+  Google Drive, Beads first class, one-way materialisation, and committed
+  provenance on the same engine.
 - [Controller decision records](https://github.com/hls-uk/single-controller-engineer/blob/main/wiki/decisions/README.md)
   — the Git-versioned log of substantive human controller decisions.
