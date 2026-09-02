@@ -301,43 +301,75 @@ const HarnessPacketInputCommon = {
   }),
   unitId: identifier(),
 };
+const candidateDiffStat = () =>
+  strictObject({
+    deletions: Type.Integer({ minimum: 0, maximum: 1_000_000 }),
+    fileCount: Type.Integer({ minimum: 1, maximum: 128 }),
+    insertions: Type.Integer({ minimum: 0, maximum: 1_000_000 }),
+  });
+const packetWorktreePath = () =>
+  Type.String({
+    minLength: 2,
+    maxLength: LIMITS.text,
+    maxUtf8Bytes: LIMITS.text,
+    pattern: "^/[^\\u0000]*$",
+  });
 /** Exact bounded input accepted by the public packet command. */
 export const HarnessPacketInputSchema = Type.Union([
   strictObject({ ...HarnessPacketInputCommon, role: Type.Literal("worker") }),
   strictObject({
     ...HarnessPacketInputCommon,
-    diff: text(),
+    candidateDiffByteCount: Type.Integer({ minimum: 1, maximum: 65_536 }),
+    candidateDiffHash: hash(),
+    candidateDiffStat: candidateDiffStat(),
     headOid: oid(),
     role: Type.Literal("reviewer"),
+    worktreePath: packetWorktreePath(),
   }),
 ]);
 export type HarnessPacketInput = Static<typeof HarnessPacketInputSchema>;
 const HarnessPacketCommon = {
   ...HarnessPacketInputCommon,
   schema: Type.Literal("sce.harness-packet"),
-  version: Type.Literal(1),
 };
 export const HarnessPacketSchema = Type.Union([
-  strictObject({ ...HarnessPacketCommon, role: Type.Literal("worker") }),
   strictObject({
     ...HarnessPacketCommon,
-    diff: text(),
+    role: Type.Literal("worker"),
+    version: Type.Literal(1),
+  }),
+  strictObject({
+    ...HarnessPacketCommon,
+    candidateDiffByteCount: Type.Integer({ minimum: 1, maximum: 65_536 }),
+    candidateDiffCommand: Type.Array(text(), {
+      minItems: 2,
+      maxItems: 32,
+    }),
+    candidateDiffHash: hash(),
+    candidateDiffStat: candidateDiffStat(),
     headOid: oid(),
     role: Type.Literal("reviewer"),
+    version: Type.Literal(2),
+    worktreePath: packetWorktreePath(),
   }),
 ]);
 export type HarnessPacket = Static<typeof HarnessPacketSchema>;
 /** Canonical payload/hash pair persisted with every advertised launch. */
-export const HarnessPacketBindingSchema = strictObject({
-  hash: hash(),
-  payload: Type.String({
-    minLength: 1,
-    maxLength: HARNESS_PACKET_BYTES,
-    maxUtf8Bytes: HARNESS_PACKET_BYTES,
-  }),
-  schema: Type.Literal("sce.harness-packet"),
-  version: Type.Literal(1),
-});
+const harnessPacketBinding = (version: 1 | 2) =>
+  strictObject({
+    hash: hash(),
+    payload: Type.String({
+      minLength: 1,
+      maxLength: HARNESS_PACKET_BYTES,
+      maxUtf8Bytes: HARNESS_PACKET_BYTES,
+    }),
+    schema: Type.Literal("sce.harness-packet"),
+    version: Type.Literal(version),
+  });
+export const HarnessPacketBindingSchema = Type.Union([
+  harnessPacketBinding(1),
+  harnessPacketBinding(2),
+]);
 export type HarnessPacketBinding = Static<typeof HarnessPacketBindingSchema>;
 /** Validated Beads task metadata supplied to the deterministic wave planner. */
 export const WaveTaskMetadataSchema = strictObject({

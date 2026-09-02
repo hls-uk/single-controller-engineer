@@ -6,6 +6,7 @@ import type {
 import {
   deriveIdempotencyKey,
   deriveCandidateDiffHash,
+  canonicalCandidateDiffCommand,
   deriveParamsHash,
   deriveRepairContextHash,
   deriveRepairJudgmentPromptHash,
@@ -30,21 +31,36 @@ function launchPacket(
     acceptance: ["acceptance-1"],
     baseOid: current?.baseOid ?? OID_A,
     ...(role === "reviewer"
-      ? { diff: CANDIDATE_DIFF, headOid: current?.candidateHead ?? OID_B }
+      ? {
+          candidateDiffByteCount: new TextEncoder().encode(CANDIDATE_DIFF)
+            .byteLength,
+          candidateDiffCommand: [
+            ...canonicalCandidateDiffCommand(
+              current?.baseOid ?? OID_A,
+              current?.candidateHead ?? OID_B,
+            ),
+          ],
+          candidateDiffHash:
+            current?.candidateDiffHash ??
+            deriveCandidateDiffHash(CANDIDATE_DIFF),
+          candidateDiffStat: { deletions: 0, fileCount: 1, insertions: 1 },
+          headOid: current?.candidateHead ?? OID_B,
+          worktreePath: current?.worktreePath ?? "/tmp/unit-1",
+        }
       : {}),
     mandatoryVerification: ["npm test"],
     ownedPaths: ["src"],
     role,
     schema: "sce.harness-packet" as const,
     unitId,
-    version: 1 as const,
+    version: role === "reviewer" ? (2 as const) : (1 as const),
   };
   const payload = canonicalJson(value);
   return {
-    hash: sha256(`sce.harness-packet/v1\n${payload}`),
+    hash: sha256(`sce.harness-packet/v${value.version}\n${payload}`),
     payload,
     schema: "sce.harness-packet" as const,
-    version: 1 as const,
+    version: value.version,
   };
 }
 

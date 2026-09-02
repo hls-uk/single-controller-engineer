@@ -33,6 +33,7 @@ import {
   validate,
 } from "../../src/protocol/schemas.js";
 import { canonicalJson } from "../../src/protocol/canonical.js";
+import { sha256 } from "../../src/protocol/evidence.js";
 import {
   HASH,
   OID_A,
@@ -136,7 +137,7 @@ function completeCandidate(): RepositoryRun {
   return state;
 }
 
-test("hydration binds persisted packets, verification, and reviewer diff bytes", () => {
+test("hydration binds persisted packets, verification, and reviewer diff metadata", () => {
   const legacy = run();
   const legacyUnit = { ...legacy.units["unit-1"]! };
   delete legacyUnit.taskMetadata;
@@ -209,6 +210,43 @@ test("hydration binds persisted packets, verification, and reviewer diff bytes",
   });
   const reviewIntent = step(qualified, "reviewer_dispatch_intent");
   assert.deepEqual(runInvariantErrors(reviewIntent), []);
+  const legacyReviewerValue = {
+    acceptance: ["acceptance-1"],
+    baseOid: OID_A,
+    diff: "diff",
+    headOid: OID_B,
+    mandatoryVerification: ["npm test"],
+    ownedPaths: ["src"],
+    role: "reviewer",
+    schema: "sce.harness-packet",
+    unitId: "unit-1",
+    version: 1,
+  };
+  const legacyReviewerPayload = canonicalJson(legacyReviewerValue);
+  const legacyReviewerPacket = {
+    hash: sha256(`sce.harness-packet/v1\n${legacyReviewerPayload}`),
+    payload: legacyReviewerPayload,
+    schema: "sce.harness-packet" as const,
+    version: 1 as const,
+  };
+  const hydratedLegacyReviewer = {
+    ...reviewIntent,
+    units: {
+      ...reviewIntent.units,
+      "unit-1": {
+        ...reviewIntent.units["unit-1"]!,
+        reviewerPacket: legacyReviewerPacket,
+      },
+    },
+  };
+  assert.equal(validate(RepositoryRunSchema, hydratedLegacyReviewer).ok, true);
+  assert.ok(
+    runInvariantErrors(hydratedLegacyReviewer).some((error) =>
+      error.includes(
+        "legacy reviewer packet version 1 embeds diff bytes; regenerate version 2",
+      ),
+    ),
+  );
   const substitutedDiff = {
     ...reviewIntent,
     units: {

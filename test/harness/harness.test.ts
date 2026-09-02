@@ -21,6 +21,8 @@ import {
   type MutationBatch,
 } from "../../src/fencing/index.js";
 import { legalActions } from "../../src/protocol/actions.js";
+import { canonicalJson } from "../../src/protocol/canonical.js";
+import { sha256 } from "../../src/protocol/evidence.js";
 import { createProductionRecoveryEffectAdapter } from "../../src/commands/production-recovery.js";
 import {
   deriveCandidateDiffHash,
@@ -260,6 +262,65 @@ test("strict support rejects workhorse/frontier identity aliasing and packets ar
   assert.deepEqual(createPacket(hostile), {
     ok: false,
     reason: "packet cannot be canonicalized",
+  });
+});
+
+test("reviewer packets bind realistic diff metadata without embedding diff bytes", () => {
+  const realisticDiff = `diff --git a/guidance.md b/guidance.md\n${"+bounded prose line\n".repeat(412)}`;
+  assert.ok(Buffer.byteLength(realisticDiff, "utf8") >= 7_866);
+  const input = {
+    acceptance: ["K1-AC1", "K1-AC3"],
+    baseOid: "a".repeat(40),
+    candidateDiffByteCount: Buffer.byteLength(realisticDiff, "utf8"),
+    candidateDiffHash: deriveCandidateDiffHash(realisticDiff),
+    candidateDiffStat: { deletions: 0, fileCount: 5, insertions: 82 },
+    headOid: "b".repeat(40),
+    mandatoryVerification: ["npm run check"],
+    ownedPaths: ["knowledge"],
+    role: "reviewer" as const,
+    unitId: "knowledge-unit",
+    worktreePath: "/tmp/knowledge-unit",
+  };
+  const packet = createPacket(input);
+  assert.equal(packet.ok, true);
+  if (!packet.ok) return;
+  assert.equal(packet.version, 2);
+  assert.ok(Buffer.byteLength(packet.payload, "utf8") < 8_192);
+  const payload = JSON.parse(packet.payload) as Record<string, unknown>;
+  assert.equal(Object.hasOwn(payload, "diff"), false);
+  assert.equal(payload.candidateDiffByteCount, input.candidateDiffByteCount);
+  assert.equal(payload.candidateDiffHash, input.candidateDiffHash);
+  assert.deepEqual(payload.candidateDiffCommand, [
+    "git",
+    "-c",
+    "core.quotePath=false",
+    "-c",
+    "core.attributesFile=/dev/null",
+    "diff",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-renames",
+    "--no-color",
+    "--binary",
+    "--full-index",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+    "--diff-algorithm=histogram",
+    "--unified=3",
+    "--inter-hunk-context=0",
+    "--no-indent-heuristic",
+    "--no-relative",
+    "--submodule=short",
+    `${input.baseOid}..${input.headOid}`,
+  ]);
+  assert.equal(packet.hash, sha256(`sce.harness-packet/v2\n${packet.payload}`));
+  assert.deepEqual(createPacket({ ...input, candidateDiffByteCount: 0 }), {
+    ok: false,
+    reason: "invalid harness packet",
+  });
+  assert.deepEqual(createPacket({ ...input, unexpected: true }), {
+    ok: false,
+    reason: "invalid harness packet",
   });
 });
 
@@ -738,12 +799,20 @@ test("committed wave metadata binds worker packets and verification commands", (
   const matchingReview = packetBinding({
     acceptance: ["required"],
     baseOid: "a".repeat(40),
-    diff: "diff --git a/src-expected b/src-expected",
+    candidateDiffByteCount: Buffer.byteLength(
+      "diff --git a/src-expected b/src-expected",
+      "utf8",
+    ),
+    candidateDiffHash: deriveCandidateDiffHash(
+      "diff --git a/src-expected b/src-expected",
+    ),
+    candidateDiffStat: { deletions: 0, fileCount: 1, insertions: 1 },
     headOid: "b".repeat(40),
     mandatoryVerification: ["npm-test"],
     ownedPaths: ["src-expected"],
     role: "reviewer",
     unitId: "unit-1",
+    worktreePath: "/tmp/unit-1",
   });
   const reviewEvent = event(
     qualified.nextState,
@@ -757,35 +826,132 @@ test("committed wave metadata binds worker packets and verification commands", (
     }).ok,
     true,
   );
-  const substitutedDiff = packetBinding({
+  const substitutedDigest = packetBinding({
     acceptance: ["required"],
     baseOid: "a".repeat(40),
-    diff: "diff --git a/src-expected b/src-expected\n+forged",
+    candidateDiffByteCount: Buffer.byteLength(
+      "diff --git a/src-expected b/src-expected\n+forged",
+      "utf8",
+    ),
+    candidateDiffHash: deriveCandidateDiffHash(
+      "diff --git a/src-expected b/src-expected\n+forged",
+    ),
+    candidateDiffStat: { deletions: 0, fileCount: 1, insertions: 2 },
     headOid: "b".repeat(40),
     mandatoryVerification: ["npm-test"],
     ownedPaths: ["src-expected"],
     role: "reviewer",
     unitId: "unit-1",
+    worktreePath: "/tmp/unit-1",
   });
   const diffRejected = reduce(qualified.nextState, {
     ...reviewEvent,
-    packet: substitutedDiff,
-    promptHash: substitutedDiff.hash,
+    packet: substitutedDigest,
+    promptHash: substitutedDigest.hash,
   });
   assert.equal(diffRejected.ok, false);
   assert.match(
     diffRejected.ok ? "" : diffRejected.reason,
     /exact candidate diff/,
   );
+  const matchingPayload = JSON.parse(matchingReview.payload) as Record<
+    string,
+    unknown
+  >;
+  const changedCommandPayload = canonicalJson({
+    ...matchingPayload,
+    candidateDiffCommand: ["git", "diff"],
+  });
+  const changedCommand = {
+    hash: sha256(`sce.harness-packet/v2\n${changedCommandPayload}`),
+    payload: changedCommandPayload,
+    schema: "sce.harness-packet" as const,
+    version: 2 as const,
+  };
+  const commandRejected = reduce(qualified.nextState, {
+    ...reviewEvent,
+    packet: changedCommand,
+    promptHash: changedCommand.hash,
+  });
+  assert.equal(commandRejected.ok, false);
+  assert.match(
+    commandRejected.ok ? "" : commandRejected.reason,
+    /exact candidate diff/,
+  );
+  const wrongWorktree = packetBinding({
+    acceptance: ["required"],
+    baseOid: "a".repeat(40),
+    candidateDiffByteCount: Buffer.byteLength(
+      "diff --git a/src-expected b/src-expected",
+      "utf8",
+    ),
+    candidateDiffHash: deriveCandidateDiffHash(
+      "diff --git a/src-expected b/src-expected",
+    ),
+    candidateDiffStat: { deletions: 0, fileCount: 1, insertions: 1 },
+    headOid: "b".repeat(40),
+    mandatoryVerification: ["npm-test"],
+    ownedPaths: ["src-expected"],
+    role: "reviewer",
+    unitId: "unit-1",
+    worktreePath: "/tmp/different-unit",
+  });
+  const worktreeRejected = reduce(qualified.nextState, {
+    ...reviewEvent,
+    packet: wrongWorktree,
+    promptHash: wrongWorktree.hash,
+  });
+  assert.equal(worktreeRejected.ok, false);
+  assert.match(
+    worktreeRejected.ok ? "" : worktreeRejected.reason,
+    /exact candidate diff/,
+  );
+  const legacyValue = {
+    acceptance: ["required"],
+    baseOid: "a".repeat(40),
+    diff: "diff --git a/src-expected b/src-expected",
+    headOid: "b".repeat(40),
+    mandatoryVerification: ["npm-test"],
+    ownedPaths: ["src-expected"],
+    role: "reviewer",
+    schema: "sce.harness-packet",
+    unitId: "unit-1",
+    version: 1,
+  };
+  const legacyPayload = canonicalJson(legacyValue);
+  const legacyPacket = {
+    hash: sha256(`sce.harness-packet/v1\n${legacyPayload}`),
+    payload: legacyPayload,
+    schema: "sce.harness-packet" as const,
+    version: 1 as const,
+  };
+  const legacyRejected = reduce(qualified.nextState, {
+    ...reviewEvent,
+    packet: legacyPacket,
+    promptHash: legacyPacket.hash,
+  });
+  assert.equal(legacyRejected.ok, false);
+  assert.match(
+    legacyRejected.ok ? "" : legacyRejected.reason,
+    /legacy reviewer packet version 1 embeds diff bytes; regenerate version 2/,
+  );
   const substitutedReview = packetBinding({
     acceptance: ["different"],
     baseOid: "a".repeat(40),
-    diff: "diff --git a/totally-different b/totally-different",
+    candidateDiffByteCount: Buffer.byteLength(
+      "diff --git a/totally-different b/totally-different",
+      "utf8",
+    ),
+    candidateDiffHash: deriveCandidateDiffHash(
+      "diff --git a/totally-different b/totally-different",
+    ),
+    candidateDiffStat: { deletions: 0, fileCount: 1, insertions: 1 },
     headOid: "b".repeat(40),
     mandatoryVerification: ["true"],
     ownedPaths: ["totally-different"],
     role: "reviewer",
     unitId: "unit-1",
+    worktreePath: "/tmp/unit-1",
   });
   assert.equal(
     reduce(qualified.nextState, {

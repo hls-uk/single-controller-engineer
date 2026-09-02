@@ -32,7 +32,10 @@ import {
   type FeedbackGitHubTransport,
 } from "../../src/feedback/index.js";
 import { legalActions } from "../../src/protocol/actions.js";
-import { reduce } from "../../src/protocol/reducer.js";
+import {
+  canonicalCandidateDiffCommand,
+  reduce,
+} from "../../src/protocol/reducer.js";
 import { createPacket } from "../../src/harness/index.js";
 
 import { HASH, event, run, transition, unit } from "../protocol/fixtures.js";
@@ -227,9 +230,12 @@ test("public harness-packet emits immutable worker and reviewer prompt bytes", a
   };
   const reviewer = {
     ...worker,
-    diff: "diff --git a/src/a b/src/a",
+    candidateDiffByteCount: 29,
+    candidateDiffHash: "d".repeat(64),
+    candidateDiffStat: { deletions: 0, fileCount: 1, insertions: 1 },
     headOid: "b".repeat(40),
     role: "reviewer" as const,
+    worktreePath: "/tmp/unit-1",
   };
   for (const input of [worker, reviewer]) {
     const expected = createPacket(input);
@@ -242,12 +248,22 @@ test("public harness-packet emits immutable worker and reviewer prompt bytes", a
       JSON.stringify(input),
     ]);
     assert.equal(execution.exitCode, 0);
-    assert.deepEqual(JSON.parse(execution.stdout).result, {
+    const actual = JSON.parse(execution.stdout).result;
+    assert.deepEqual(actual, {
       hash: expected.hash,
       payload: expected.payload,
       schema: expected.schema,
       version: expected.version,
     });
+    assert.equal(actual.version, input.role === "reviewer" ? 2 : 1);
+    if (input.role === "reviewer") {
+      const payload = JSON.parse(actual.payload);
+      assert.equal(Object.hasOwn(payload, "diff"), false);
+      assert.deepEqual(
+        payload.candidateDiffCommand,
+        canonicalCandidateDiffCommand(input.baseOid, input.headOid),
+      );
+    }
   }
   const invalid = await runCli([
     "harness-packet",

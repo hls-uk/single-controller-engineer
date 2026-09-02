@@ -10,7 +10,11 @@ import type {
 } from "../commands/recovery.js";
 import { canonicalJson, type JsonValue } from "../protocol/canonical.js";
 import { sha256 } from "../protocol/evidence.js";
-import { rehydrateEffect, type ProtocolEffect } from "../protocol/reducer.js";
+import {
+  canonicalCandidateDiffCommand,
+  rehydrateEffect,
+  type ProtocolEffect,
+} from "../protocol/reducer.js";
 import {
   ProtocolEventSchema,
   HARNESS_PACKET_BYTES,
@@ -20,6 +24,7 @@ import {
   ReviewerJudgmentSchema,
   WorkerResultSchema,
   validate,
+  type HarnessPacket,
   type ProtocolEvent,
   type HarnessPacketBinding,
   type HarnessPacketInput,
@@ -408,7 +413,7 @@ export type PacketResult =
       ok: true;
       payload: string;
       schema: "sce.harness-packet";
-      version: 1;
+      version: 1 | 2;
     }>
   | Readonly<{ ok: false; reason: string }>;
 
@@ -487,16 +492,29 @@ export function createPacket(input: unknown): PacketResult {
     const value = {
       acceptance: sortedStrings(packet.acceptance),
       baseOid: packet.baseOid,
-      ...(packet.role === "reviewer" ? { diff: packet.diff } : {}),
-      ...(packet.role === "reviewer" ? { headOid: packet.headOid } : {}),
+      ...(packet.role === "reviewer"
+        ? {
+            candidateDiffByteCount: packet.candidateDiffByteCount,
+            candidateDiffCommand: canonicalCandidateDiffCommand(
+              packet.baseOid,
+              packet.headOid,
+            ),
+            candidateDiffHash: packet.candidateDiffHash,
+            candidateDiffStat: packet.candidateDiffStat,
+            headOid: packet.headOid,
+          }
+        : {}),
       mandatoryVerification: sortedStrings(packet.mandatoryVerification),
       ownedPaths: sortedStrings(packet.ownedPaths),
       role: packet.role,
       schema: "sce.harness-packet" as const,
       unitId: packet.unitId,
-      version: HARNESS_VERSION,
+      version: packet.role === "reviewer" ? (2 as const) : HARNESS_VERSION,
+      ...(packet.role === "reviewer"
+        ? { worktreePath: packet.worktreePath }
+        : {}),
     };
-    const checked = validate(HarnessPacketSchema, value);
+    const checked = validate<HarnessPacket>(HarnessPacketSchema, value);
     if (!checked.ok || checked.value === undefined)
       return { ok: false, reason: "invalid harness packet" };
     const canonical = checked.value;
@@ -504,11 +522,11 @@ export function createPacket(input: unknown): PacketResult {
     if (new TextEncoder().encode(payload).byteLength > PACKET_BYTES)
       return { ok: false, reason: "packet exceeds bounded launch size" };
     return {
-      hash: sha256(`sce.harness-packet/v1\n${payload}`),
+      hash: sha256(`sce.harness-packet/v${canonical.version}\n${payload}`),
       ok: true,
       payload,
       schema: "sce.harness-packet",
-      version: HARNESS_VERSION,
+      version: canonical.version,
     };
   } catch {
     return { ok: false, reason: "packet cannot be canonicalized" };

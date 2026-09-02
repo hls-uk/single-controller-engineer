@@ -99,6 +99,36 @@ export function deriveCandidateDiffHash(diff: string): string {
   return sha256(`sce.protocol.candidate-diff/v1\n${diff}`);
 }
 
+/** Exact argv a reviewer runs in the frozen worktree to reproduce the diff. */
+export function canonicalCandidateDiffCommand(
+  baseOid: string,
+  headOid: string,
+): readonly string[] {
+  return [
+    "git",
+    "-c",
+    "core.quotePath=false",
+    "-c",
+    "core.attributesFile=/dev/null",
+    "diff",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-renames",
+    "--no-color",
+    "--binary",
+    "--full-index",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+    "--diff-algorithm=histogram",
+    "--unified=3",
+    "--inter-hunk-context=0",
+    "--no-indent-heuristic",
+    "--no-relative",
+    "--submodule=short",
+    `${baseOid}..${headOid}`,
+  ];
+}
+
 function committedTaskMetadataError(unit: Unit): string | undefined {
   if (unit.taskMetadata === undefined)
     return "lacks committed wave task metadata";
@@ -133,12 +163,23 @@ function launchPacketError(
 ): string | undefined {
   try {
     const decoded = JSON.parse(packet.payload) as unknown;
+    if (
+      packet.version === 1 &&
+      decoded !== null &&
+      !Array.isArray(decoded) &&
+      typeof decoded === "object" &&
+      (decoded as { readonly role?: unknown }).role === "reviewer" &&
+      Object.hasOwn(decoded, "diff")
+    )
+      return "legacy reviewer packet version 1 embeds diff bytes; regenerate version 2";
     const parsed = validate<HarnessPacket>(HarnessPacketSchema, decoded);
     if (!parsed.ok || parsed.value === undefined)
       return "launch packet has invalid schema";
     if (
       canonicalJson(parsed.value as JsonValue) !== packet.payload ||
-      sha256(`sce.harness-packet/v1\n${packet.payload}`) !== packet.hash
+      parsed.value.version !== packet.version ||
+      sha256(`sce.harness-packet/v${packet.version}\n${packet.payload}`) !==
+        packet.hash
     )
       return "launch packet payload/hash mismatch";
     const value = parsed.value;
@@ -170,7 +211,13 @@ function launchPacketError(
         unit.candidateHead === undefined ||
         unit.candidateTree === undefined ||
         unit.candidateDiffHash === undefined ||
-        deriveCandidateDiffHash(value.diff) !== unit.candidateDiffHash
+        unit.worktreePath === undefined ||
+        value.candidateDiffHash !== unit.candidateDiffHash ||
+        value.worktreePath !== unit.worktreePath ||
+        !sameStringArray(
+          value.candidateDiffCommand,
+          canonicalCandidateDiffCommand(unit.baseOid, unit.candidateHead),
+        )
       )
         return "review packet is not bound to the exact candidate diff";
     }

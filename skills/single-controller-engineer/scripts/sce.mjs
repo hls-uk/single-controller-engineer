@@ -9823,30 +9823,55 @@ var HarnessPacketInputCommon = {
   }),
   unitId: identifier()
 };
+var candidateDiffStat = () => strictObject({
+  deletions: Type.Integer({ minimum: 0, maximum: 1e6 }),
+  fileCount: Type.Integer({ minimum: 1, maximum: 128 }),
+  insertions: Type.Integer({ minimum: 0, maximum: 1e6 })
+});
+var packetWorktreePath = () => Type.String({
+  minLength: 2,
+  maxLength: LIMITS.text,
+  maxUtf8Bytes: LIMITS.text,
+  pattern: "^/[^\\u0000]*$"
+});
 var HarnessPacketInputSchema = Type.Union([
   strictObject({ ...HarnessPacketInputCommon, role: Type.Literal("worker") }),
   strictObject({
     ...HarnessPacketInputCommon,
-    diff: text(),
+    candidateDiffByteCount: Type.Integer({ minimum: 1, maximum: 65536 }),
+    candidateDiffHash: hash(),
+    candidateDiffStat: candidateDiffStat(),
     headOid: oid(),
-    role: Type.Literal("reviewer")
+    role: Type.Literal("reviewer"),
+    worktreePath: packetWorktreePath()
   })
 ]);
 var HarnessPacketCommon = {
   ...HarnessPacketInputCommon,
-  schema: Type.Literal("sce.harness-packet"),
-  version: Type.Literal(1)
+  schema: Type.Literal("sce.harness-packet")
 };
 var HarnessPacketSchema = Type.Union([
-  strictObject({ ...HarnessPacketCommon, role: Type.Literal("worker") }),
   strictObject({
     ...HarnessPacketCommon,
-    diff: text(),
+    role: Type.Literal("worker"),
+    version: Type.Literal(1)
+  }),
+  strictObject({
+    ...HarnessPacketCommon,
+    candidateDiffByteCount: Type.Integer({ minimum: 1, maximum: 65536 }),
+    candidateDiffCommand: Type.Array(text(), {
+      minItems: 2,
+      maxItems: 32
+    }),
+    candidateDiffHash: hash(),
+    candidateDiffStat: candidateDiffStat(),
     headOid: oid(),
-    role: Type.Literal("reviewer")
+    role: Type.Literal("reviewer"),
+    version: Type.Literal(2),
+    worktreePath: packetWorktreePath()
   })
 ]);
-var HarnessPacketBindingSchema = strictObject({
+var harnessPacketBinding = (version) => strictObject({
   hash: hash(),
   payload: Type.String({
     minLength: 1,
@@ -9854,8 +9879,12 @@ var HarnessPacketBindingSchema = strictObject({
     maxUtf8Bytes: HARNESS_PACKET_BYTES
   }),
   schema: Type.Literal("sce.harness-packet"),
-  version: Type.Literal(1)
+  version: Type.Literal(version)
 });
+var HarnessPacketBindingSchema = Type.Union([
+  harnessPacketBinding(1),
+  harnessPacketBinding(2)
+]);
 var WaveTaskMetadataSchema = strictObject({
   acceptanceIds: Type.Array(identifier(), {
     minItems: 1,
@@ -10903,6 +10932,31 @@ function deriveCandidateDiffHash(diff) {
   return sha256(`sce.protocol.candidate-diff/v1
 ${diff}`);
 }
+function canonicalCandidateDiffCommand(baseOid, headOid) {
+  return [
+    "git",
+    "-c",
+    "core.quotePath=false",
+    "-c",
+    "core.attributesFile=/dev/null",
+    "diff",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--no-renames",
+    "--no-color",
+    "--binary",
+    "--full-index",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+    "--diff-algorithm=histogram",
+    "--unified=3",
+    "--inter-hunk-context=0",
+    "--no-indent-heuristic",
+    "--no-relative",
+    "--submodule=short",
+    `${baseOid}..${headOid}`
+  ];
+}
 function committedTaskMetadataError(unit) {
   if (unit.taskMetadata === void 0)
     return "lacks committed wave task metadata";
@@ -10925,10 +10979,12 @@ function committedVerificationError(unit) {
 function launchPacketError(packet, unit, role) {
   try {
     const decoded = JSON.parse(packet.payload);
+    if (packet.version === 1 && decoded !== null && !Array.isArray(decoded) && typeof decoded === "object" && decoded.role === "reviewer" && Object.hasOwn(decoded, "diff"))
+      return "legacy reviewer packet version 1 embeds diff bytes; regenerate version 2";
     const parsed = validate(HarnessPacketSchema, decoded);
     if (!parsed.ok || parsed.value === void 0)
       return "launch packet has invalid schema";
-    if (canonicalJson(parsed.value) !== packet.payload || sha256(`sce.harness-packet/v1
+    if (canonicalJson(parsed.value) !== packet.payload || parsed.value.version !== packet.version || sha256(`sce.harness-packet/v${packet.version}
 ${packet.payload}`) !== packet.hash)
       return "launch packet payload/hash mismatch";
     const value = parsed.value;
@@ -10945,7 +11001,10 @@ ${packet.payload}`) !== packet.hash)
     ))
       return "launch packet does not bind committed wave task metadata";
     if (role === "reviewer") {
-      if (value.role !== "reviewer" || value.headOid !== unit.candidateHead || unit.candidateHead === void 0 || unit.candidateTree === void 0 || unit.candidateDiffHash === void 0 || deriveCandidateDiffHash(value.diff) !== unit.candidateDiffHash)
+      if (value.role !== "reviewer" || value.headOid !== unit.candidateHead || unit.candidateHead === void 0 || unit.candidateTree === void 0 || unit.candidateDiffHash === void 0 || unit.worktreePath === void 0 || value.candidateDiffHash !== unit.candidateDiffHash || value.worktreePath !== unit.worktreePath || !sameStringArray(
+        value.candidateDiffCommand,
+        canonicalCandidateDiffCommand(unit.baseOid, unit.candidateHead)
+      ))
         return "review packet is not bound to the exact candidate diff";
     }
     return void 0;
@@ -14505,14 +14564,23 @@ function createPacket(input) {
     const value = {
       acceptance: sortedStrings2(packet.acceptance),
       baseOid: packet.baseOid,
-      ...packet.role === "reviewer" ? { diff: packet.diff } : {},
-      ...packet.role === "reviewer" ? { headOid: packet.headOid } : {},
+      ...packet.role === "reviewer" ? {
+        candidateDiffByteCount: packet.candidateDiffByteCount,
+        candidateDiffCommand: canonicalCandidateDiffCommand(
+          packet.baseOid,
+          packet.headOid
+        ),
+        candidateDiffHash: packet.candidateDiffHash,
+        candidateDiffStat: packet.candidateDiffStat,
+        headOid: packet.headOid
+      } : {},
       mandatoryVerification: sortedStrings2(packet.mandatoryVerification),
       ownedPaths: sortedStrings2(packet.ownedPaths),
       role: packet.role,
       schema: "sce.harness-packet",
       unitId: packet.unitId,
-      version: HARNESS_VERSION
+      version: packet.role === "reviewer" ? 2 : HARNESS_VERSION,
+      ...packet.role === "reviewer" ? { worktreePath: packet.worktreePath } : {}
     };
     const checked = validate(HarnessPacketSchema, value);
     if (!checked.ok || checked.value === void 0)
@@ -14522,12 +14590,12 @@ function createPacket(input) {
     if (new TextEncoder().encode(payload).byteLength > PACKET_BYTES)
       return { ok: false, reason: "packet exceeds bounded launch size" };
     return {
-      hash: sha256(`sce.harness-packet/v1
+      hash: sha256(`sce.harness-packet/v${canonical2.version}
 ${payload}`),
       ok: true,
       payload,
       schema: "sce.harness-packet",
-      version: HARNESS_VERSION
+      version: canonical2.version
     };
   } catch {
     return { ok: false, reason: "packet cannot be canonicalized" };
