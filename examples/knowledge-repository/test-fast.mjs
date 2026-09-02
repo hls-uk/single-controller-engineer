@@ -109,6 +109,25 @@ function runSelfTests() {
       "no declared artifact home",
     );
 
+    for (const [name, markerPath] of [
+      ["seeded event audience marker", "events/example-event.md"],
+      ["seeded generated audience marker", "generated/timeline.md"],
+    ]) {
+      const markerRoot = join(temporary, name.replaceAll(" ", "-"));
+      copyRepositoryFixture(markerRoot);
+      const target = join(markerRoot, markerPath);
+      writeFileSync(
+        target,
+        `${readFileSync(target, "utf8")}\nAUDIENCE: PRIVATE\n`,
+        "utf8",
+      );
+      expectFailure(
+        name,
+        invoke("check-boundary.mjs", ["--root", markerRoot]),
+        "forbidden marker AUDIENCE: PRIVATE",
+      );
+    }
+
     const changedBoundaryRoot = join(temporary, "changed-boundary-repository");
     copyCandidateFixture(changedBoundaryRoot);
     const baseline = commitFixture(changedBoundaryRoot, "baseline");

@@ -592,7 +592,12 @@ export function checkBoundary({ manifest, options }) {
   }
   const markerFiles = walkFiles(
     options.root,
-    [...policy.allowedWriteRoots],
+    [
+      ...manifest.artifactHomes.agentInstructions,
+      manifest.artifactHomes.knowledge,
+      manifest.artifactHomes.events,
+      manifest.artifactHomes.generated,
+    ],
     (path) => !path.startsWith(".git/") && !path.startsWith(".beads/"),
   );
   for (const file of markerFiles) {
@@ -621,10 +626,7 @@ function repositoryArtifactPaths(manifest, options) {
         !argument.split("/").includes("..") &&
         existsSync(resolve(options.root, argument)),
     )
-    .map((path) => {
-      const parent = dirname(path);
-      return parent === "." ? path : parent;
-    });
+    .map((path) => path);
   const localTemplateRoot = relative(
     options.root,
     resolve(checksDirectory, ".."),
