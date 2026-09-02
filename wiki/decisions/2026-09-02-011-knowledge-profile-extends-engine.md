@@ -32,12 +32,15 @@ repositories.
    profile**, shipped as a third skill, `single-controller-knowledge`, in the
    same package and vendored runtime. The engine is not forked, not duplicated,
    and not given a profile flag in the reducer.
-2. The engine gains exactly three profile-neutral capabilities, each by a
-   bounded implementation unit: a journaled `materialise` effect with a
-   filesystem adapter for one-way Drive publication; a deterministic
-   projection from closure evidence to committed provenance records with a
-   journaled provenance commit; and digest-bound reviewer packets that close
-   `sce-cfl`, which is promoted to P1.
+2. The engine gains three profile-neutral capabilities and the schema they
+   require, each by a bounded implementation unit: a journaled `materialise`
+   effect with a filesystem adapter for one-way Drive publication; a
+   deterministic projection from journaled evidence to committed provenance
+   records with a journaled provenance commit; and digest-bound reviewer
+   packets that close `sce-cfl`, which is promoted to P1. The schema is an
+   optional targets field on task metadata, gate state on the run aggregate
+   with voided dispositions, a clock observation event, and alias, root,
+   marker, and driver fields in the controller configuration.
 3. **Beads is first class for knowledge repositories.** Each access-domain
    repository runs embedded Git-synchronized Beads with its own merge slot;
    task cards are child Beads with the existing task metadata plus optional
@@ -82,8 +85,9 @@ repositories.
 - The migration plan's Stage 5 optional coordination service is answered
   locally and early; its wording must be superseded in adam-root, and the
   roots' `init` and `doctor` scripts extended for the toolchain (`sce-9f5.3`).
-- A run remains per clone: cross-machine continuation is a release and a new
-  run, not a shared journal.
+- A run remains per clone: cross-machine continuation is an orderly release
+  and a new run; in version 1 in-flight units are finished or cancelled by
+  the machine that started them.
 
 ## Follow-up
 
