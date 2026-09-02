@@ -62,9 +62,9 @@ repositories.
    flow) embedded Git-synchronized Beads does not carry. Its real cost is `bd`,
    Dolt, and Node on each machine, which the roots' `init` and `doctor` scripts
    do not yet install or check. The adam-root record of that supersession must
-   amend DEC-002 sections 2 and 6 and DEC-003 section 3 and its consequences as
-   well as the migration plan, brief, and runbook; it and the script extension
-   are a follow-up under that repository's authority.
+   amend DEC-002 sections 2 and 6 and its consequences, DEC-003 section 3 and
+   its consequences, and the migration plan, brief, and runbook; it and the
+   script extension are a follow-up under that repository's authority.
 4. The fresh frontier review is retained for every knowledge candidate. A
    risk-gated skip is a possible later decision on pilot latency evidence.
 5. The governing contract is [Single-Controller
@@ -94,10 +94,10 @@ repositories.
   (`sce-9f5.2`) so the work is ready to implement.
 - The installer's skill pair becomes a triple; package allowlist, layout test,
   README, and getting-started guide follow in the packaging unit.
-- The migration plan's Stage 5 optional coordination service is answered
-  locally and early; its wording, DEC-002 sections 2 and 6, and DEC-003
-  section 3 must be amended in adam-root, and the roots' `init` and `doctor`
-  scripts extended for the toolchain (`sce-9f5.3`).
+- The migration plan's Stage 5 optional coordination service is answered locally
+  and early; its wording, DEC-002 sections 2 and 6 and its consequences, and
+  DEC-003 section 3 and its consequences must be amended in adam-root, and the
+  roots' `init` and `doctor` scripts extended for the toolchain (`sce-9f5.3`).
 - A run remains per clone: cross-machine continuation is an orderly release
   and a new run; in version 1 in-flight units are finished or cancelled by
   the run that started them, on any machine and therefore between harness

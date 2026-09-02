@@ -438,7 +438,8 @@ The adam-root decision that records this supersession is a follow-up under
 that repository's authority (`sce-9f5.3`). It must amend DEC-002 section 2
 (task definitions and outcomes as structured Git records, live claims as
 per-clone state that is not cross-machine authority) and section 6
-(cross-machine live coordination reserved for a separate decision), DEC-003
+(cross-machine live coordination reserved for a separate decision) and its
+consequence that a shared claim service waits for a measured problem, DEC-003
 section 3 (per-machine atomic claims) and its consequence that no
 cross-machine task service is added, and the migration plan, brief, and
 runbook. The merge slot is deliberately the cross-machine authority those
@@ -682,9 +683,13 @@ the wave's aggregate verification, which is a gate entry of its own;
 removed by the engine in version 1: like unit worktrees, it is preserved as
 evidence, and a journaled cleanup effect for preserved worktrees of both
 kinds is a later engine unit by decision record. On resume, an existing
-worktree at the journaled path is admitted only when its HEAD equals the
-journaled OID and its tree is clean; a dirty tree or a foreign HEAD is
-refused and preserved for a human decision; an absent worktree while the
+worktree at the journaled path is admitted in exactly two states: its HEAD
+equals the journaled OID and its tree is clean; or, while the provenance
+entry is pending, its HEAD is a commit whose parent is the journaled landed
+OID and whose trailer carries the key, its tree is clean, and the record
+paths in that commit are byte-identical to the projection, in which case the
+step resumes at the reproducibility check. A dirty tree or any other HEAD is
+refused and preserved for a human decision. An absent worktree while the
 verify entry is pending is recreated detached at the already observed
 provenance-commit OID through a journaled worktree creation at the same
 path, because that OID is discoverable by key. A rejected push mints a new
@@ -770,16 +775,17 @@ observed has a reducer-owned `voided` disposition with a validated reason:
 - `no_landed_units`: the wave closed no unit as landed, so there is nothing
   to project or verify; the reducer voids the provenance entry, the aggregate
   verify entry, and the gate targets from aggregate state alone; and
-- `deferred_by_controller`: the entry's last effect, or the wave's aggregate
-  verification on the provenance-commit OID, is a positive `refused`
-  observation or a `verification_failed` observation, and the controller has
-  recorded a follow-up Bead for the repair; the event carries that Bead
-  identifier, and the reducer admits it only from those observed states,
-  never from `pending` or `ambiguous`; and
-- `provenance_deferred`: recording `deferred_by_controller` on the provenance
+- `deferred_by_controller`: the entry's own last effect is a positive
+  `refused` observation or a `verification_failed` observation, and the
+  controller has recorded a follow-up Bead for the repair; the event carries
+  that Bead identifier, and the reducer admits it only from those observed
+  states, never from `pending` or `ambiguous`; and
+- `deferral_cascade`: recording `deferred_by_controller` on the provenance
   entry voids, in the same event, the wave's aggregate verify entry and every
-  pending gate target, which have no effect of their own to fail; those gate
-  targets are carried forward with the units.
+  pending gate target; recording it on the aggregate verify entry voids every
+  pending gate target. Dependents have no effect of their own to fail, so
+  one mechanism covers both cases, and the voided gate targets are carried
+  forward with the units.
 
 A required alias whose marker is absent is observed as `refused` with nothing
 written; the entry stays pending and blocks the gate until the controller
@@ -893,14 +899,16 @@ the defect is.
   optional unmounted alias, an empty landed set, and a controller deferral
   admitted only from a refused or verification-failed observation, a
   required-alias refusal that keeps its entry pending, no gate target before
-  the aggregate verification on the provenance-commit OID is observed, every
-  pending gate target deferrable after that verification fails, no
+  the aggregate verification on the provenance-commit OID is observed, a
+  deferral of the provenance entry or of the verify entry cascading to every
+  dependent pending entry in the same event, a preserved worktree whose HEAD
+  is the keyed commit on the landed OID resumed at the reproducibility check,
+  no
   provenance, verify, or gate-target entry for a run without a knowledge
   contract, the verify entry voided with the provenance entry when no unit
-  landed and under a handoff boundary, a provenance deferral voiding the
-  verify entry and every pending gate target in the same event, a pending
-  verify entry whose worktree is absent recreated at the observed
-  provenance-commit OID by a journaled act, resume against the
+  landed and under a handoff boundary, a pending verify entry whose worktree
+  is absent recreated at the observed provenance-commit OID by a journaled
+  act, resume against the
   journaled destination name after a crash, no approval on a digest mismatch,
   and no effect after a blocked or ambiguous state;
 - property tests extending the parent invariants to the new effects;
@@ -1039,12 +1047,12 @@ exact; conflict domains decide wave packing.
 | Unit | Outcome | Owned paths | Conflict domain | Risk | Verification |
 |---|---|---|---|---|---|
 | K1 | Digest-bound reviewer packets: the reviewer variant carries the committed `candidateDiffHash`, byte count, bounded stat summary (file count, insertions, deletions), canonical reproduction command, and the unit's worktree path in place of diff bytes; the reducer accepts a packet only when its digest equals the committed hash; closes `sce-cfl` | `src/protocol/schemas.ts`, `src/protocol/reducer.ts`, `src/harness/index.ts`, `src/commands/index.ts`, `test/harness/*`, `test/protocol/*`, `test/cli/cli.test.ts`, `test/fast.manifest.json`, `skills/single-controller-engineer/scripts/sce.mjs` | protocol-core | High | `npm run check` (the harness suite is fast tier) |
-| K2 | `materialise` effect kind with clock-bound destination names, parameter and observation schemas, optional `materialisationTargets`, `supersedes`, and `tombstones` on task metadata, the knowledge contract in the controller configuration recorded at `wave_planned`, gate state on the run aggregate with voided dispositions (including empty landed set and controller deferral) and legality rules, unit and gate emission points, filesystem adapter, CLI command | `src/protocol/schemas.ts`, `src/protocol/reducer.ts`, `src/protocol/guards.ts`, `src/protocol/actions.ts`, `src/adapters/materialise/**`, `src/commands/index.ts`, `src/cli.ts`, `src/controller-config.ts`, `test/controller-config.test.ts`, `test/protocol/*`, `test/integration/materialise/*`, `test/fast.manifest.json`, `skills/single-controller-engineer/scripts/sce.mjs` | protocol-core | High | `npm run check`; `npm run test:integration` for the materialise fixture |
-| K3 | Provenance record projection from journaled inputs, closure evidence extended with owned paths, acceptance identifiers, and supersessions, `provenance_commit` effect with deterministic author, dates, and key trailer, allowlisted Git operations for building the commit detached, discovering it by key, and landing it under either integration profile, rejected-push handling, deferred carry-forward, rollup generator invocation, one journaled detached worktree per provenance step, created at the landed OID before records are written and preserved as evidence like unit worktrees, serving record writing, generator run, commit build, reproducibility check, and the aggregate-level `verify` gate entry with its null-unit executor path, with recreation of an absent worktree at the observed provenance-commit OID on resume | `src/protocol/evidence.ts`, `src/protocol/schemas.ts`, `src/protocol/reducer.ts`, `src/harness/index.ts`, `src/commands/index.ts`, `src/controller-config.ts`, `src/adapters/git/index.ts`, `test/controller-config.test.ts`, `test/adapters/git/git.test.ts`, `test/harness/*`, `test/protocol/*`, `test/integration/provenance/*`, `test/fast.manifest.json`, `skills/single-controller-engineer/scripts/sce.mjs` | protocol-core | High | `npm run check`; projection determinism test; `npm run test:integration` for the provenance fixture; the release-tier adapter suite for the Git adapter change |
+| K2 | `materialise` effect kind with clock-bound destination names, parameter and observation schemas, optional `materialisationTargets`, `supersedes`, and `tombstones` on task metadata, the knowledge contract in the controller configuration recorded at `wave_planned`, gate state on the run aggregate with voided dispositions (including empty landed set and controller deferral) and legality rules, unit and gate emission points, recovery admission of the new kind, filesystem adapter, CLI command | `src/protocol/schemas.ts`, `src/protocol/reducer.ts`, `src/protocol/guards.ts`, `src/protocol/actions.ts`, `src/adapters/materialise/**`, `src/commands/index.ts`, `src/commands/recovery.ts`, `src/commands/production-recovery.ts`, `src/cli.ts`, `src/controller-config.ts`, `test/controller-config.test.ts`, `test/commands/recovery.test.ts`, `test/commands/production-recovery.test.ts`, `test/protocol/*`, `test/integration/materialise/*`, `test/fast.manifest.json`, `skills/single-controller-engineer/scripts/sce.mjs` | protocol-core | High | `npm run check`; `npm run test:integration` for the materialise fixture |
+| K3 | Provenance record projection from journaled inputs, closure evidence extended with owned paths, acceptance identifiers, and supersessions, `provenance_commit` effect with deterministic author, dates, and key trailer, allowlisted Git operations for building the commit detached, discovering it by key, and landing it under either integration profile, rejected-push handling, deferred carry-forward, rollup generator invocation, one journaled detached worktree per provenance step, created at the landed OID before records are written and preserved as evidence like unit worktrees, serving record writing, generator run, commit build, reproducibility check, and the aggregate-level `verify` gate entry with its null-unit executor path, with recreation of an absent worktree at the observed provenance-commit OID on resume, and recovery admission of the new kind | `src/protocol/evidence.ts`, `src/protocol/schemas.ts`, `src/protocol/reducer.ts`, `src/protocol/actions.ts`, `src/harness/index.ts`, `src/commands/index.ts`, `src/commands/recovery.ts`, `src/commands/production-recovery.ts`, `src/controller-config.ts`, `src/adapters/git/index.ts`, `test/controller-config.test.ts`, `test/commands/recovery.test.ts`, `test/commands/production-recovery.test.ts`, `test/adapters/git/git.test.ts`, `test/harness/*`, `test/protocol/*`, `test/integration/provenance/*`, `test/fast.manifest.json`, `skills/single-controller-engineer/scripts/sce.mjs` | protocol-core | High | `npm run check`; projection determinism test; `npm run test:integration` for the provenance fixture; the release-tier adapter suite for the Git adapter change |
 | K4 | Manifest schema and fast-gate templates in the knowledge skill's manifest references, plus a knowledge repository example that uses them: manifest, events and generated directories, instructions | `skills/single-controller-knowledge/references/manifest/**`, `examples/knowledge-repository/**` | examples | Low | Example's own fast gate; `npm run check` |
 | K5 | Third skill package: `SKILL.md`, host descriptors, contract references; engineer `SKILL.md` manifest stop; feedback `SKILL.md` wording from pair to set; installer triple; package allowlist; layout test with description disjointness; README and getting-started | `skills/single-controller-knowledge/SKILL.md`, `skills/single-controller-knowledge/agents/**`, `skills/single-controller-knowledge/references/knowledge-contract.md`, `skills/single-controller-knowledge/references/knowledge-severity.md`, `skills/single-controller-knowledge/references/materialisation.md`, `skills/single-controller-knowledge/references/provenance.md`, `skills/single-controller-knowledge/references/repository-manifest.md`, `skills/single-controller-engineer/SKILL.md`, `skills/single-controller-feedback/SKILL.md`, `skills/single-controller-engineer/scripts/sce.mjs`, `src/install/index.ts`, `scripts/package-check.mjs`, `test/eval/skill-layout.test.ts`, `test/install/*`, `test/cli/cli.test.ts`, `test/integration/installer-smoke.test.ts`, `README.md`, `docs/getting-started.md`, `AGENTS.md`, `CLAUDE.md`, `package.json` | skills-packaging | Medium | `npm run check`; `npm run test:package`; `npm run test:integration` for the installer smoke |
 | K6 | Knowledge repository two-clone fixture, release-tier materialise evidence on a real Drive for Desktop folder, and release-tier live evaluation of the management rehearsal scenario with handoff scoped to completed and unstarted work | `test/integration/knowledge/**`, `test/release/**`, `scripts/release-gates.mjs` | release-evidence | Medium | `npm run test:integration`; release tier before the next tag |
-| K7 | adam-root decision amending DEC-002 sections 2 and 6, DEC-003 section 3 and its consequences, the migration plan, the pilot brief, and the runbook, with Hannah's re-brief; root `init` and `doctor` extended to install and verify `bd`, Dolt, and Node; root skill entry path | Sibling repository; separate authority | external | Low | That repository's checks |
+| K7 | adam-root decision amending DEC-002 sections 2 and 6 and its consequences, DEC-003 section 3 and its consequences, the migration plan, the pilot brief, and the runbook, with Hannah's re-brief; root `init` and `doctor` extended to install and verify `bd`, Dolt, and Node; root skill entry path | Sibling repository; separate authority | external | Low | That repository's checks |
 
 Ordering: K1 and K4 are independent and may share a wave. K2 follows K1 in
 the same conflict domain. K3 follows K2. K5 follows K1 through K4 because its
@@ -1070,18 +1078,17 @@ metadata:
   task metadata and software runs without them are unchanged; `K2-AC3` gate
   state blocks `wave_planned` and release while pending, voids entries for a
   unit closed without landing, a handoff boundary, an optional unmounted alias,
-  and an empty landed set, admits controller deferral only from a refused or
-  verification-failed observation with a follow-up Bead, including every pending
-  gate target after the aggregate verification fails, voids the verify entry
-  with the provenance entry when no unit landed and under a handoff boundary,
-  cascades a provenance deferral to the verify entry and every pending gate
-  target in the same event, and keeps a required-alias refusal pending; `K2-AC4`
-  the adapter fixture covers every listed failure mode including the
-  sidecar-only crash state and leftover temporary replacement; `K2-AC5` resume
-  after a crash reuses the journaled name; `K2-AC6` the knowledge contract
-  validates alias, root, marker, mount policy, driver, scope, provenance
-  contract, and gate targets, and is recorded at `wave_planned`; `K2-AC7` gates
-  green with a reproducible bundle.
+  and an empty landed set, admits controller deferral only from the entry's own
+  refused or verification-failed observation with a follow-up Bead, voids the
+  verify entry with the provenance entry when no unit landed and under a handoff
+  boundary, cascades a deferral of the provenance entry or of the verify entry
+  to every dependent pending entry in the same event, and keeps a required-alias
+  refusal pending; `K2-AC4` the adapter fixture covers every listed failure mode
+  including the sidecar-only crash state and leftover temporary replacement;
+  `K2-AC5` resume after a crash reuses the journaled name; `K2-AC6` the
+  knowledge contract validates alias, root, marker, mount policy, driver, scope,
+  provenance contract, and gate targets, and is recorded at `wave_planned`;
+  `K2-AC7` gates green with a reproducible bundle.
 - K3: `K3-AC1` the projection is pure and byte-identical for identical input;
   `K3-AC2` the commit's author, email, dates, tree, and trailer are derived from
   journaled facts only and its OID is stable across attempts; `K3-AC3` discovery
@@ -1090,15 +1097,17 @@ metadata:
   runs in the journaled provenance worktree and blocks before any local or
   remote ref moves, under both integration profiles, the worktree is preserved
   as evidence, a resume admits an existing worktree only clean at the journaled
-  OID and recreates an absent one at the observed provenance-commit OID through
-  a journaled act, and a deferred provenance entry carries its units into the
-  next wave's commit; `K3-AC6` the record carries every DEC-002 field and no
-  secret, reading owned paths, acceptance identifiers, and supersessions from
-  extended closure evidence; `K3-AC7` gates green with a reproducible bundle;
-  `K3-AC8` a run without a knowledge contract has no provenance entry and gates
-  exactly as before; `K3-AC9` the aggregate `verify` gate entry is bound to the
-  provenance-commit OID, runs in the preserved provenance worktree, and its
-  failure qualifies pending gate targets for deferral.
+  OID or clean at the keyed commit on the landed OID (resuming at the
+  reproducibility check) and recreates an absent one at the observed
+  provenance-commit OID through a journaled act, and a deferred provenance entry
+  carries its units into the next wave's commit; `K3-AC6` the record carries
+  every DEC-002 field and no secret, reading owned paths, acceptance
+  identifiers, and supersessions from extended closure evidence; `K3-AC7` gates
+  green with a reproducible bundle; `K3-AC8` a run without a knowledge contract
+  has no provenance entry and gates exactly as before; `K3-AC9` the aggregate
+  `verify` gate entry is bound to the provenance-commit OID, runs in the
+  preserved provenance worktree, and its failure qualifies pending gate targets
+  for deferral.
 - K4: `K4-AC1` the manifest schema rejects unknown keys and validates the
   example; `K4-AC2` every template check runs hermetically under sixty seconds;
   `K4-AC3` a seeded boundary violation and a seeded reproducibility drift each
