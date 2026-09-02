@@ -171,6 +171,19 @@ function runSelfTests() {
       "unresolved link",
     );
 
+    const nestedLinkRoot = join(temporary, "nested-link-repository");
+    copyRepositoryFixture(nestedLinkRoot);
+    writeFileSync(
+      join(nestedLinkRoot, "knowledge/current/broken-nested-label.md"),
+      "# Broken nested label\n\n[See [the missing page]](../missing.md)\n",
+      "utf8",
+    );
+    expectFailure(
+      "seeded broken nested-label link",
+      invoke("check-relative-links.mjs", ["--root", nestedLinkRoot]),
+      "unresolved link",
+    );
+
     const provenanceRoot = join(temporary, "provenance-repository");
     copyRepositoryFixture(provenanceRoot);
     writeFileSync(
@@ -215,6 +228,47 @@ function runSelfTests() {
       invoke("check-provenance.mjs", ["--root", gitProvenanceRoot]),
       "baseOid is not an exact commit object",
     );
+    for (const [name, source, expected] of [
+      [
+        "seeded failed provenance verification",
+        provenanceFixture.source.replace(
+          /^verificationResults: .*$/mu,
+          'verificationResults: ["failed"]',
+        ),
+        "expected constant",
+      ],
+      [
+        "seeded unapproved provenance review",
+        provenanceFixture.source.replace(
+          /^reviewDecision: .*$/mu,
+          "reviewDecision: request_changes",
+        ),
+        "expected constant",
+      ],
+      [
+        "seeded forbidden provenance owned path",
+        provenanceFixture.source.replace(
+          /^ownedPaths: .*$/mu,
+          'ownedPaths: [".beads/private-state"]',
+        ),
+        "owned path is forbidden",
+      ],
+      [
+        "seeded escaping materialisation destination",
+        provenanceFixture.source.replace(
+          /^materialisationDestinations: .*$/mu,
+          'materialisationDestinations: ["partner-drive:../../outside/access-guide.md"]',
+        ),
+        "materialisation destination subpath must be a canonical relative path",
+      ],
+    ]) {
+      writeFileSync(provenanceFixture.path, source, "utf8");
+      expectFailure(
+        name,
+        invoke("check-provenance.mjs", ["--root", gitProvenanceRoot]),
+        expected,
+      );
+    }
 
     const driftRoot = join(temporary, "drift-repository");
     copyRepositoryFixture(driftRoot);

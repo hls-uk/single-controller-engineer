@@ -410,28 +410,115 @@ export function checkRelativeLinks({ manifest, options }) {
         );
       definitions.set(id, match[2] ?? match[3]);
     }
-    const expression =
-      /!?\[[^\]]*\]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)/gu;
-    for (const match of source.matchAll(expression)) {
-      assertLinkTarget(
-        file,
-        match[1] ?? match[2],
-        options.root,
-        headingsByPath,
-      );
-    }
-    const referenceExpression = /!?\[([^\]]+)\]\[([^\]]*)\]/gu;
-    for (const match of source.matchAll(referenceExpression)) {
-      const id = normalizeReferenceId(match[2] || match[1]);
-      const target = definitions.get(id);
+    for (const link of markdownLinks(source)) {
+      if (link.kind === "inline") {
+        assertLinkTarget(file, link.target, options.root, headingsByPath);
+        continue;
+      }
+      const target = definitions.get(link.id);
       if (target === undefined)
-        throw new Error(`${file.relative}: undefined link reference ${id}`);
+        throw new Error(
+          `${file.relative}: undefined link reference ${link.id}`,
+        );
       assertLinkTarget(file, target, options.root, headingsByPath);
     }
     for (const target of definitions.values()) {
       assertLinkTarget(file, target, options.root, headingsByPath);
     }
   }
+}
+
+function markdownLinks(source) {
+  const links = [];
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] !== "[" || isEscaped(source, index)) continue;
+    const labelEnd = closingBracket(source, index);
+    if (labelEnd < 0) continue;
+    const label = source.slice(index + 1, labelEnd);
+    const suffix = source[labelEnd + 1];
+    if (suffix === "(") {
+      const parsed = inlineDestination(source, labelEnd + 1);
+      if (parsed) {
+        links.push({ kind: "inline", target: parsed.target });
+        index = parsed.end;
+      } else {
+        index = labelEnd;
+      }
+      continue;
+    }
+    if (suffix === "[") {
+      const referenceEnd = closingBracket(source, labelEnd + 1);
+      if (referenceEnd >= 0) {
+        const reference = source.slice(labelEnd + 2, referenceEnd);
+        links.push({
+          id: normalizeReferenceId(reference || label),
+          kind: "reference",
+        });
+        index = referenceEnd;
+      }
+      continue;
+    }
+    index = labelEnd;
+  }
+  return links;
+}
+
+function closingBracket(source, start) {
+  let depth = 0;
+  for (let index = start; index < source.length; index += 1) {
+    if (isEscaped(source, index)) continue;
+    if (source[index] === "[") depth += 1;
+    if (source[index] === "]" && --depth === 0) return index;
+  }
+  return -1;
+}
+
+function inlineDestination(source, open) {
+  let cursor = open + 1;
+  while (/\s/u.test(source[cursor] ?? "")) cursor += 1;
+  let target;
+  if (source[cursor] === "<") {
+    const start = ++cursor;
+    while (
+      cursor < source.length &&
+      (source[cursor] !== ">" || isEscaped(source, cursor))
+    )
+      cursor += 1;
+    if (source[cursor] !== ">") return undefined;
+    target = source.slice(start, cursor);
+    cursor += 1;
+  } else {
+    const start = cursor;
+    let depth = 0;
+    while (cursor < source.length) {
+      if (isEscaped(source, cursor)) {
+        cursor += 2;
+        continue;
+      }
+      const character = source[cursor];
+      if (character === "(") depth += 1;
+      else if (character === ")") {
+        if (depth === 0) break;
+        depth -= 1;
+      } else if (/\s/u.test(character) && depth === 0) break;
+      cursor += 1;
+    }
+    target = source.slice(start, cursor);
+  }
+  while (cursor < source.length && source[cursor] !== ")") cursor += 1;
+  if (source[cursor] !== ")") return undefined;
+  return { end: cursor, target };
+}
+
+function isEscaped(source, index) {
+  let slashes = 0;
+  for (
+    let cursor = index - 1;
+    cursor >= 0 && source[cursor] === "\\";
+    cursor -= 1
+  )
+    slashes += 1;
+  return slashes % 2 === 1;
 }
 
 function normalizeReferenceId(value) {
@@ -706,6 +793,10 @@ function assertProvenanceSemantics(record, body, manifest, path) {
       record.verificationEvidenceHashes.length
   )
     throw new Error(`${path}: verification evidence arrays differ in length`);
+  if (record.verificationResults.some((result) => result !== "passed"))
+    throw new Error(`${path}: landed provenance verification must pass`);
+  if (record.reviewDecision !== "approve")
+    throw new Error(`${path}: landed provenance review must approve`);
   if (
     record.materialisationDestinations.length !==
       record.materialisationDigests.length ||
@@ -715,8 +806,15 @@ function assertProvenanceSemantics(record, body, manifest, path) {
     throw new Error(
       `${path}: materialisation evidence arrays differ in length`,
     );
-  for (const ownedPath of record.ownedPaths)
+  for (const ownedPath of record.ownedPaths) {
     assertRelativePath(ownedPath, `${path} owned path`);
+    if (matchesAny(ownedPath, manifest.boundaryPolicy.forbiddenPaths))
+      throw new Error(`${path}: owned path is forbidden: ${ownedPath}`);
+    if (!matchesAny(ownedPath, manifest.boundaryPolicy.allowedWriteRoots))
+      throw new Error(
+        `${path}: owned path is outside allowed roots: ${ownedPath}`,
+      );
+  }
   const aliases = new Set(manifest.driveAliases.map(({ alias }) => alias));
   for (const [
     index,
@@ -724,8 +822,24 @@ function assertProvenanceSemantics(record, body, manifest, path) {
   ] of record.materialisationDestinations.entries()) {
     const separator = destination.indexOf(":");
     const alias = separator < 0 ? "" : destination.slice(0, separator);
+    const destinationPath =
+      separator < 0 ? "" : destination.slice(separator + 1);
     if (!aliases.has(alias))
       throw new Error(`${path}: unknown materialisation alias`);
+    assertRelativePath(
+      destinationPath,
+      `${path} materialisation destination subpath`,
+    );
+    if (
+      !manifest.materialisationTargets.some(
+        (target) =>
+          target.destinationAlias === alias &&
+          matchesAny(destinationPath, [target.destinationSubpath]),
+      )
+    )
+      throw new Error(
+        `${path}: materialisation destination is outside declared targets`,
+      );
     if (
       (record.materialisationStatuses[index] === "observed") !==
       (record.materialisationDigests[index] !== null)
