@@ -1,4 +1,4 @@
-# DEC-20260902-011: The Knowledge Profile Extends the Engine, with Beads First Class
+# DEC-20260902-011: Knowledge Profile Extends the Engine; Beads First Class
 
 **Date:** 2026-09-02
 **Status:** Accepted
