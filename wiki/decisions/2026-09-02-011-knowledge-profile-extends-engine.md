@@ -15,8 +15,9 @@ deterministic landing lane, one canonical home per artifact class with Google
 Drive keeping Office, PDF, raw, and human-collaborative files, and one Git
 repository per access domain. Their migration plan asked for a
 provider-neutral launcher, per-clone atomic claims, immutable event files,
-generated rollups, and serial Drive publication, and it explicitly kept Beads
-out of the pilot in favour of a local sign-out sheet.
+generated rollups, and serial Drive publication, and, with the pilot brief
+and runbook, it explicitly kept Beads out of the pilot in favour of a
+per-clone local sign-out sheet.
 
 Fourteen days later this repository delivered the Single-Controller Engineer:
 a typed protocol engine whose reducer, schemas, fences, harness seam, and
@@ -39,12 +40,15 @@ repositories.
    `sce-cfl`, which is promoted to P1.
 3. **Beads is first class for knowledge repositories.** Each access-domain
    repository runs embedded Git-synchronized Beads with its own merge slot;
-   task cards are child Beads with the existing task metadata; live claims are
-   Beads claims and reservations. This supersedes the adam-root "local
-   sign-out sheet, Beads not part of the pilot" scoping, whose stated costs
-   (cross-machine claim authority, a VPS or Tailscale dependency, a database
-   service in the driver's flow) embedded Git-synchronized Beads does not
-   carry. The adam-root record of that supersession is a follow-up under that
+   task cards are child Beads with the existing task metadata plus optional
+   validated materialisation targets; live claims are Beads claims and
+   reservations. This supersedes the adam-root "local sign-out sheet, Beads
+   not part of the pilot" scoping, whose stated costs (cross-machine claim
+   authority, a VPS or Tailscale dependency, a database service in the
+   driver's flow) embedded Git-synchronized Beads does not carry. Its real
+   cost is `bd`, Dolt, and Node on each machine, which the roots' `init` and
+   `doctor` scripts do not yet install or check. The adam-root record of that
+   supersession and the script extension are a follow-up under that
    repository's authority.
 4. The fresh frontier review is retained for every knowledge candidate. A
    risk-gated skip is a possible later decision on pilot latency evidence.
@@ -76,8 +80,8 @@ repositories.
 - The installer's skill pair becomes a triple; package allowlist, layout test,
   README, and getting-started guide follow in the packaging unit.
 - The migration plan's Stage 5 optional coordination service is answered
-  locally and early; its wording must be superseded in adam-root
-  (`sce-9f5.3`).
+  locally and early; its wording must be superseded in adam-root, and the
+  roots' `init` and `doctor` scripts extended for the toolchain (`sce-9f5.3`).
 - A run remains per clone: cross-machine continuation is a release and a new
   run, not a shared journal.
 
