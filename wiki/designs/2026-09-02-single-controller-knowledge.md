@@ -280,8 +280,9 @@ an optional **knowledge contract** in the controller configuration, parsed by
 the same strict parser as the rest of that configuration. It declares the
 alias table (alias, canonical root, marker file, mount policy), the
 provenance contract (events directory, record format version, rollup
-generator command, reproducibility command), the human driver, the domain
-scope, and the gate targets. The controller derives it from the repository
+generator command, reproducibility command), the combined-verification
+commands, the human driver, the domain scope, and the gate targets. The
+controller derives it from the repository
 manifest when composing the configuration; the engine never reads the
 manifest. The `wave_planned` event carries the contract and the reducer
 records it in the run aggregate, so every later gate decision is a function
@@ -588,13 +589,14 @@ that leave the unit state machine untouched:
 
 A `materialise` intent binds the run, the source OID, the source path in that
 tree, the destination alias with its canonical root, marker file, and mount
-policy from the knowledge contract, the human driver and domain scope, and the
-**complete destination name**, so that every fact the adapter and the sidecar
-use enters the parameters hash. The name is computed inside the intent, not by
-the adapter: a stable slug, the short source OID, and a UTC timestamp taken from
-a validated clock observation event bound to the intent. The idempotency key is
-derived from those journaled facts. A crash after the act therefore resumes
-against the same name and compares bytes; it never mints a second name.
+policy from the knowledge contract, the human driver and domain scope, the
+run's pinned harness family as the executor tool, and the **complete destination
+name**, so that every fact the adapter and the sidecar use enters the parameters
+hash. The name is computed inside the intent, not by the adapter: a stable slug,
+the short source OID, and a UTC timestamp taken from a validated clock
+observation event bound to the intent. The idempotency key is derived from those
+journaled facts. A crash after the act therefore resumes against the same name
+and compares bytes; it never mints a second name.
 
 The version 1 adapter is a filesystem adapter against a Drive for Desktop
 folder:
@@ -689,12 +691,13 @@ entry is pending, its HEAD is a commit whose parent is the journaled landed
 OID and whose trailer carries the key, its tree is clean, and the record
 paths in that commit are byte-identical to the projection, in which case the
 step resumes at the reproducibility check. A dirty tree or any other HEAD is
-refused and preserved for a human decision. An absent worktree while the
-verify entry is pending is recreated detached at the already observed
-provenance-commit OID through a journaled worktree creation at the same
-path, because that OID is discoverable by key. A rejected push mints a new
-key and therefore a new path, and the earlier attempt's worktree is
-preserved like any other.
+refused and preserved for a human decision. When the worktree is absent while
+the aggregate verify entry is pending, that verify effect's executor recreates
+it detached at the already observed provenance-commit OID. The verify intent
+carries both that OID and the deterministic path, and the recreation is itself
+a journaled worktree act at the same path; the OID remains discoverable by key.
+A rejected push mints a new key and therefore a new path, and the earlier
+attempt's worktree is preserved like any other.
 
 Discovery on resume is by key: fetch the integration branch and look for a
 commit whose trailer carries the key; if present, verify the record paths at
@@ -755,8 +758,13 @@ bound to the provenance-commit OID and tree, and reusing
 `verification_observed` and `verification_failed`. Like
 the provenance entry and the gate targets, it exists only when the knowledge
 contract is present, so a run without one gates exactly as today. The
-gate-green predicate therefore reads observations and never a controller's
-memory.
+provenance entry is admitted only after every unit in the current wave has
+closed and every unit-target entry is observed or voided. The aggregate verify
+entry is admitted only after the provenance commit is observed and only when
+its commands equal the combined-verification commands recorded with the
+knowledge contract at `wave_planned`. A gate target is admitted only after
+aggregate verification is observed green. The gate-green predicate therefore
+reads observations and never a controller's memory.
 
 A gate entry can never wedge a run, because every way it can fail to be
 observed has a reducer-owned `voided` disposition with a validated reason:
@@ -772,9 +780,10 @@ observed has a reducer-owned `voided` disposition with a validated reason:
 - `optional_alias_unmounted`: the alias is declared optional and the adapter
   observed the marker file absent; this is an adapter observation recorded
   through `materialise_observed`, never an inference; and
-- `no_landed_units`: the wave closed no unit as landed, so there is nothing
-  to project or verify; the reducer voids the provenance entry, the aggregate
-  verify entry, and the gate targets from aggregate state alone; and
+- `no_landed_units`: the projection set is empty: this wave closed no unit as
+  landed and no earlier landed unit's record remains uncommitted, so there is
+  nothing to project or verify; the reducer voids the provenance entry, the
+  aggregate verify entry, and the gate targets from aggregate state alone; and
 - `deferred_by_controller`: the entry's own last effect is a positive
   `refused` observation or a `verification_failed` observation, and the
   controller has recorded a follow-up Bead for the repair; the event carries
@@ -893,11 +902,13 @@ the defect is.
   kinds, their parameter and observation envelopes, and the digest-bound
   reviewer packet, including unknown-key rejection and byte limits;
 - reducer traces proving no materialise effect before the unit is landed, no
-  provenance commit without every unit materialisation observed or voided, no
-  `wave_planned` or controller release while a gate entry is pending, voided
-  dispositions for a unit closed without landing, a handoff boundary, an
-  optional unmounted alias, an empty landed set, and a controller deferral
-  admitted only from a refused or verification-failed observation, a
+  provenance commit while a current-wave unit is open or without every unit
+  materialisation observed or voided, no `wave_planned` or controller release
+  while a gate entry is pending, an aggregate verify intent refused unless its
+  commands exactly equal the knowledge contract recorded at `wave_planned`,
+  voided dispositions for a unit closed without landing, a handoff boundary, an
+  optional unmounted alias, the defined empty projection set, and a controller
+  deferral admitted only from a refused or verification-failed observation, a
   required-alias refusal that keeps its entry pending, no gate target before
   the aggregate verification on the provenance-commit OID is observed, a
   deferral of the provenance entry or of the verify entry cascading to every
@@ -905,10 +916,11 @@ the defect is.
   is the keyed commit on the landed OID resumed at the reproducibility check,
   no
   provenance, verify, or gate-target entry for a run without a knowledge
-  contract, the verify entry voided with the provenance entry when no unit
-  landed and under a handoff boundary, a pending verify entry whose worktree
-  is absent recreated at the observed provenance-commit OID by a journaled
-  act, resume against the
+  contract, the verify entry voided with the provenance entry when the
+  projection set is empty and under a handoff boundary, a pending verify entry
+  whose absent worktree is recreated by the aggregate verify executor from the
+  path and observed provenance-commit OID carried by its journaled intent,
+  resume against the
   journaled destination name after a crash, no approval on a digest mismatch,
   and no effect after a blocked or ambiguous state;
 - property tests extending the parent invariants to the new effects;
@@ -1073,22 +1085,29 @@ metadata:
   explicitly; `K1-AC5` fast, typecheck, format, and package gates are green with
   a reproducible bundle.
 - K2: `K2-AC1` the effect kind, parameter, and observation schemas are strict
-  and the parameters carry alias, root, marker, mount policy, driver, scope, and
-  the complete destination name; `K2-AC2` `materialisationTargets` validate on
+  and the parameters carry alias, root, marker, mount policy, driver, scope,
+  pinned harness family, and the complete destination name; `K2-AC2`
+  `materialisationTargets` validate on
   task metadata and software runs without them are unchanged; `K2-AC3` gate
   state blocks `wave_planned` and release while pending, voids entries for a
   unit closed without landing, a handoff boundary, an optional unmounted alias,
-  and an empty landed set, admits controller deferral only from the entry's own
-  refused or verification-failed observation with a follow-up Bead, voids the
-  verify entry with the provenance entry when no unit landed and under a handoff
-  boundary, cascades a deferral of the provenance entry or of the verify entry
-  to every dependent pending entry in the same event, and keeps a required-alias
-  refusal pending; `K2-AC4` the adapter fixture covers every listed failure mode
-  including the sidecar-only crash state and leftover temporary replacement;
+  and an empty projection set (no current-wave landed unit and no earlier
+  landed unit with an uncommitted record), admits controller deferral only from
+  the entry's own refused or verification-failed observation with a follow-up
+  Bead, voids the verify entry with the provenance entry when the projection set
+  is empty and under a handoff boundary, cascades a deferral of the provenance
+  entry or of the verify entry to every dependent pending entry in the same
+  event, keeps a required-alias
+  refusal pending, and admits no provenance commit while a current-wave unit is
+  open or a unit-target entry is pending; `K2-AC4` the adapter fixture covers
+  every listed failure mode including the sidecar-only crash state and leftover
+  temporary replacement;
   `K2-AC5` resume after a crash reuses the journaled name; `K2-AC6` the
   knowledge contract validates alias, root, marker, mount policy, driver, scope,
-  provenance contract, and gate targets, and is recorded at `wave_planned`;
-  `K2-AC7` gates green with a reproducible bundle.
+  provenance contract, combined-verification commands, and gate targets, and is
+  recorded at `wave_planned`; the aggregate verify intent is admitted only when
+  its commands equal those recorded commands; `K2-AC7` gates green with a
+  reproducible bundle.
 - K3: `K3-AC1` the projection is pure and byte-identical for identical input;
   `K3-AC2` the commit's author, email, dates, tree, and trailer are derived from
   journaled facts only and its OID is stable across attempts; `K3-AC3` discovery
@@ -1098,9 +1117,10 @@ metadata:
   remote ref moves, under both integration profiles, the worktree is preserved
   as evidence, a resume admits an existing worktree only clean at the journaled
   OID or clean at the keyed commit on the landed OID (resuming at the
-  reproducibility check) and recreates an absent one at the observed
-  provenance-commit OID through a journaled act, and a deferred provenance entry
-  carries its units into the next wave's commit; `K3-AC6` the record carries
+  reproducibility check) and has the aggregate verify executor recreate an
+  absent one from the path and observed provenance-commit OID carried by its
+  journaled intent, and a deferred provenance entry carries its units into the
+  next wave's commit; `K3-AC6` the record carries
   every DEC-002 field and no secret, reading owned paths, acceptance
   identifiers, and supersessions from extended closure evidence; `K3-AC7` gates
   green with a reproducible bundle; `K3-AC8` a run without a knowledge contract
