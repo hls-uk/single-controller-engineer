@@ -266,7 +266,7 @@ function check(name: string, root: string, ...args: string[]) {
   });
 }
 
-test("two clones of one domain share one run store: a foreign holder is refused before any mutation and a duplicate process is held", async () => {
+test("two clones of one domain share one run store: a foreign holder is refused before any mutation and a duplicate process is held by the injected operation lock", async () => {
   const fixture = await twoCloneFixture();
   try {
     const state = {
@@ -390,14 +390,28 @@ test("boundary policy refuses a changed path outside the allowed roots and a for
       "knowledge/current/access-guide.md",
     );
     assert.equal(clean.status, 0, clean.stderr);
-    const outside = check(
+    const forbidden = check(
       "check-boundary.mjs",
       fixture.repository,
       "--changed-path",
       "events/forged.md",
     );
+    assert.notEqual(forbidden.status, 0);
+    assert.match(
+      forbidden.stderr,
+      /changed path is forbidden: events\/forged\.md/u,
+    );
+    const outside = check(
+      "check-boundary.mjs",
+      fixture.repository,
+      "--changed-path",
+      "docs/random.md",
+    );
     assert.notEqual(outside.status, 0);
-    assert.match(outside.stderr, /forbidden|outside allowed write roots/u);
+    assert.match(
+      outside.stderr,
+      /changed path is outside allowed write roots: docs\/random\.md/u,
+    );
     await writeFile(
       join(fixture.cloneB.repository, "knowledge", "current", "leak.md"),
       "---\ntitle: Leak\n---\n\n# Leak\n\nAUDIENCE: PRIVATE\n",
