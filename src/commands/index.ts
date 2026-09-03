@@ -42,6 +42,7 @@ export const commandNames = [
   "publish",
   "integrate",
   "gate-wave",
+  "claim-provenance-carry",
   "resume",
   "status",
   "release-controller",
@@ -163,6 +164,16 @@ const RecoveryEventPayloadSchema = strictObject({
 const RecoveryAcknowledgementPayloadSchema = strictObject({
   harnessAcknowledgement: JsonObjectSchema,
 });
+const ProvenanceCarryClaimOptionsSchema = strictObject({
+  json: Type.Boolean(),
+  request: strictObject({
+    predecessorRootBeadId: Type.String({
+      minLength: 1,
+      maxLength: 160,
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+    }),
+  }),
+});
 const RecoveryOptionsSchema = strictObject({
   ...RequestMetadataSchema,
   request: Type.Optional(
@@ -241,11 +252,18 @@ const UnavailableCommandSchema = strictObject({
   schema: Type.Literal("sce.command.request"),
   version: Type.Literal(1),
 });
+const ProvenanceCarryClaimCommandSchema = strictObject({
+  command: Type.Literal("claim-provenance-carry"),
+  options: ProvenanceCarryClaimOptionsSchema,
+  schema: Type.Literal("sce.command.request"),
+  version: Type.Literal(1),
+});
 
 export const CommandRequestSchema = Type.Union([
   StateCommandSchema,
   HarnessPacketCommandSchema,
   FeedbackCommandSchema,
+  ProvenanceCarryClaimCommandSchema,
   UnavailableCommandSchema,
 ]);
 export type CommandRequest = Static<typeof CommandRequestSchema>;
@@ -449,6 +467,15 @@ const commandEvent: Readonly<
   "review-record": ["review_collected"],
   publish: ["publish_intent"],
   integrate: ["integrate_intent"],
+  "gate-wave": [
+    "materialisation_resolve_intent",
+    "destination_probe_intent",
+    "gate_clock_observed",
+    "materialise_intent",
+    "provenance_commit_intent",
+    "gate_entry_deferred",
+    "verification_intent",
+  ],
   "release-controller": ["controller_release_intent"],
 };
 
@@ -480,6 +507,23 @@ export function createRecoveryCommandRunner(
       return await stateResult(request.command, outcome.run);
     }
     if (request.command === "feedback") return unavailable();
+    if (request.command === "claim-provenance-carry") {
+      const outcome = await runner({
+        provenanceCarryClaim: {
+          predecessorRootBeadId: request.options.request.predecessorRootBeadId,
+        },
+      });
+      if (!("revision" in outcome) || outcome.revision < 0)
+        return outcome.status === "unavailable"
+          ? unavailable()
+          : recoveryBlocked();
+      return {
+        result: { revision: outcome.revision, state: outcome.run.state },
+        schema: "sce.command.result",
+        status: "ok",
+        version: 1,
+      };
+    }
     const payload = request.options.request;
     const event =
       payload !== undefined && "event" in payload ? payload.event : undefined;

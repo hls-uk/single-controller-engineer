@@ -8,6 +8,7 @@ import {
   type RootProjection,
 } from "../../fencing/index.js";
 import type { DoltObservation } from "../../preflight/index.js";
+import type { ProvenanceCarryClaimRecord } from "../../protocol/schemas.js";
 
 /** Exact pinned bd 1.1.0 `issues` data-diff row envelope. */
 const PINNED_BD_ISSUE_BASE_KEYS = [
@@ -208,9 +209,33 @@ export type EmbeddedMode = "local-only" | "git-sync";
 export type CrashPoint =
   "before_commit" | "after_commit" | "before_push" | "after_push";
 
+export type CarryCheckpointIntent = Readonly<{
+  expectedAggregateCommitment: string;
+  exportDigest: string;
+  predecessorRootIssueId: string;
+  record: ProvenanceCarryClaimRecord;
+}>;
+
 export type EmbeddedRequest =
   | Readonly<{ kind: "state" }>
   | Readonly<{ kind: "load" }>
+  | Readonly<{
+      kind: "carry_read";
+      predecessorRootIssueId: string;
+    }>
+  | Readonly<{
+      kind: "carry_claim";
+      exportDigest: string;
+      expectedAggregateCommitment: string;
+      predecessorRootIssueId: string;
+      record: ProvenanceCarryClaimRecord;
+      slot: MergeSlotObservation;
+    }>
+  | Readonly<{
+      intent: CarryCheckpointIntent;
+      kind: "carry_discover";
+      point: CrashPoint;
+    }>
   | Readonly<{
       kind: "slot";
       action: "acquire" | "check" | "release";
@@ -323,6 +348,19 @@ export type CrashDiscovery = Readonly<{
 export type EmbeddedResponse =
   | Readonly<{ kind: "state"; value: EmbeddedState }>
   | Readonly<{ kind: "load"; value: EmbeddedLoad }>
+  | Readonly<{
+      kind: "carry_read";
+      value:
+        | Readonly<{ status: "not_found" | "unavailable" }>
+        | Readonly<{ status: "observed"; claims: unknown; root: unknown }>;
+    }>
+  | Readonly<{
+      kind: "carry_claim";
+      value:
+        | Readonly<{ status: "applied" | "stale" | "unavailable" }>
+        | Readonly<{ status: "observed"; claims: unknown; root: unknown }>;
+    }>
+  | Readonly<{ kind: "carry_discover"; value: CrashDiscovery }>
   | Readonly<{ kind: "slot"; value: MergeSlotObservation }>
   | Readonly<{
       kind: "slot_transition";

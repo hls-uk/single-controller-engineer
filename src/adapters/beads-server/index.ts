@@ -25,6 +25,7 @@ import {
   deriveScopeCommitment,
   deriveSlotReadbackHash,
   FencingScopeSchema,
+  FENCING_LIMITS,
   type ChildProjection,
   type FencingScope,
   type MergeSlotObservation,
@@ -48,11 +49,29 @@ import type {
 } from "../../commands/recovery.js";
 import { InitialControllerAcquireSchema } from "../../commands/recovery.js";
 import {
+  planProvenanceCarryFromProjection,
+  type ProvenanceCarryClaimPlan,
+  type ProvenanceCarryClaimRecoveryPort,
+  type ProvenanceCarryProjectionPlan,
+} from "../../commands/production-recovery.js";
+import {
+  ProvenanceCarryClaimRecordSchema,
+  RepositoryRunSchema,
+  RuntimeEffectSchema,
   ServerSlotTransitionIntentSchema,
   validate,
+  type ProtocolEvent,
+  type ProvenanceCarryClaimRecord,
+  type RepositoryRun,
   type ServerSlotTransitionIntent,
   type SlotTransitionIntent as ProtocolSlotTransitionIntent,
 } from "../../protocol/schemas.js";
+import {
+  deriveProvenanceCarryClaimKey,
+  deriveProvenanceCarryExportId,
+  provenanceCarrySnapshotCommitment,
+  type ProtocolEffect,
+} from "../../protocol/reducer.js";
 
 const MAX_ENDPOINT_BYTES = 320;
 const MAX_SCHEMA_BYTES = 160;
@@ -121,6 +140,10 @@ type DoltSqlReadExecution =
 type DoltSqlTransactionExecution =
   | Readonly<{ status: "ok"; rows: number; committedHead?: string }>
   | Readonly<{ status: "unavailable" | "refused" }>;
+type DoltSqlTransactionReadback = Readonly<{
+  expectedRows: readonly Readonly<Record<string, unknown>>[];
+  query: string;
+}>;
 type DoltSqlTransportRole = "worker" | "writer";
 type DoltSqlTransportBinding = Readonly<{
   credentialReference: string;
@@ -149,6 +172,7 @@ type DoltSqlTransportOperations = Readonly<{
   executeTransaction: (
     statement: string,
     expectedRows: number,
+    readback?: DoltSqlTransactionReadback,
   ) => Promise<DoltSqlTransactionExecution>;
   probeWorkerWrite: () => Promise<
     "allowed" | "denied" | "refused" | "unavailable"
@@ -190,11 +214,12 @@ function executeDoltSqlTransaction(
   transport: DoltSqlTransport,
   statement: string,
   expectedRows: number,
+  readback?: DoltSqlTransactionReadback,
 ): Promise<DoltSqlTransactionExecution> {
   return (
     doltSqlTransportOperations
       .get(transport)
-      ?.executeTransaction(statement, expectedRows) ??
+      ?.executeTransaction(statement, expectedRows, readback) ??
     Promise.resolve({ status: "refused" } as const)
   );
 }
@@ -440,8 +465,8 @@ export class DoltSqlTransport {
         }),
         executeRead: (query) => this.#executeRead(query),
         executeProgram: (query) => this.#executeProgram(query),
-        executeTransaction: (statement, expectedRows) =>
-          this.#executeTransaction(statement, expectedRows),
+        executeTransaction: (statement, expectedRows, readback) =>
+          this.#executeTransaction(statement, expectedRows, readback),
         probeWorkerWrite: () => this.#probeWorkerWrite(),
       }),
     );
@@ -504,11 +529,17 @@ export class DoltSqlTransport {
   async #executeTransaction(
     statement: string,
     expectedRows: number,
+    readback?: DoltSqlTransactionReadback,
   ): Promise<DoltSqlTransactionExecution> {
     if (
       !safeText(statement, DOLT_SQL_MAX_STATEMENT_BYTES) ||
       !Number.isSafeInteger(expectedRows) ||
       expectedRows < 1 ||
+      (readback !== undefined &&
+        (!closedReadSql(readback.query) ||
+          !safeText(readback.query, DOLT_SQL_MAX_STATEMENT_BYTES) ||
+          canonicalJson(readback.expectedRows as unknown as JsonValue).length >
+            DOLT_SQL_MAX_OUTPUT_BYTES)) ||
       this.#process !== runDoltSql
     )
       return { status: "refused" };
@@ -539,6 +570,7 @@ export class DoltSqlTransport {
       executable,
       expectedRows,
       password: this.#password,
+      ...(readback === undefined ? {} : { readback }),
       statement,
     });
   }
@@ -797,6 +829,7 @@ async function runDoltSqlTransaction(
     executable: string;
     expectedRows: number;
     password: string | undefined;
+    readback?: DoltSqlTransactionReadback;
     statement: string;
   }>,
 ): Promise<DoltSqlTransactionExecution> {
@@ -815,6 +848,8 @@ async function runDoltSqlTransaction(
     let postCommitClean = false;
     let postCommitHead: string | undefined;
     let rowCountPhaseObserved = false;
+    let readbackMatched = input.readback === undefined;
+    let readbackPending = false;
     let closing = false;
     let stdinClosed = false;
     let outputBytes = 0;
@@ -923,6 +958,12 @@ async function runDoltSqlTransaction(
         terminate({ status: "refused" });
         return;
       }
+      if (readbackPending) {
+        readbackPending = false;
+        readbackMatched = exact(rows, input.readback?.expectedRows);
+        sendFinal(readbackMatched);
+        return;
+      }
       if (rows.length === 1 && rows[0]?.committed_head !== undefined) {
         const head = rows[0].committed_head;
         if (typeof head !== "string" || !/^[0-9a-z]{20,64}$/u.test(head)) {
@@ -959,7 +1000,12 @@ async function runDoltSqlTransaction(
       rowCount = parsed;
       observeTestPhase("after_rowcount_before_commit");
       if (closing) return;
-      sendFinal(parsed === input.expectedRows);
+      if (parsed !== input.expectedRows || input.readback === undefined) {
+        sendFinal(parsed === input.expectedRows);
+        return;
+      }
+      readbackPending = true;
+      if (!writeStdin(`${input.readback.query};\n`)) return;
     };
     child.stdout.on("data", (chunk: Buffer) => {
       if (result !== undefined) return;
@@ -981,7 +1027,12 @@ async function runDoltSqlTransaction(
       // A successful exit proves the exact decision was sent through the same
       // connection. Applied writes additionally need a same-session Dolt head
       // and clean working-set marker; no decision is never an apply result.
-      if (code !== 0 || !finalSent || rowCount === undefined)
+      if (
+        code !== 0 ||
+        !finalSent ||
+        rowCount === undefined ||
+        (rowCount === input.expectedRows && !readbackMatched)
+      )
         return resolve({ status: "unavailable" });
       if (rowCount !== input.expectedRows)
         return resolve({ status: "ok", rows: rowCount });
@@ -1586,6 +1637,48 @@ export type ServerMutationDriverResponse =
       status: ServerDriverFailure;
     }>;
 
+type CarryEffect = Extract<ProtocolEffect, { kind: "provenance_carry_claim" }>;
+type CarryObservationResult = Extract<
+  ProtocolEvent,
+  { type: "provenance_carry_claim_observed" }
+>["result"];
+type CarryRefusalReason = Extract<
+  CarryObservationResult,
+  { status: "predecessor_refused" }
+>["reason"];
+type InspectedServerCarry =
+  | Readonly<{
+      claims: Readonly<Record<string, unknown>>;
+      plan: ProvenanceCarryProjectionPlan;
+      predecessor: RootProjection;
+      status: "planned";
+    }>
+  | Readonly<{ reason: CarryRefusalReason; status: "blocked" }>
+  | Readonly<{ status: "ambiguous" | "unavailable" }>;
+
+/** Raw canonical JSON is retained so the adapter can reject noncanonical rows. */
+export type ServerCarryReadback =
+  | Readonly<{
+      claimsPresent: boolean;
+      claimsText?: string;
+      currentRootBeadId: string;
+      rootText: string;
+      status: "observed";
+    }>
+  | Readonly<{ currentRootBeadId: string; status: "not_found" }>;
+
+export type ServerCarryClaimDriverResponse =
+  | Readonly<{
+      status: "ok";
+      value:
+        | Readonly<{ readback: ServerCarryReadback; status: "applied" }>
+        | Readonly<{ status: "stale" }>;
+    }>
+  | Readonly<{
+      phase: "before_transaction" | "commit_unknown";
+      status: ServerDriverFailure;
+    }>;
+
 /**
  * The driver must make these operations authoritative on the SQL server.
  * `mutate` is one transaction: slot holder, root revision/commitment, every
@@ -1637,6 +1730,25 @@ export interface BeadsServerDriver {
       mutation: ServerPreOwnershipMutation;
     }>,
   ): Promise<ServerMutationDriverResponse>;
+  /** Authoritative direct-root read; it never creates an issue or queue row. */
+  readProvenanceCarry?(
+    input: Readonly<{
+      identity: ServerIdentity;
+      predecessorRootBeadId: string;
+    }>,
+  ): Promise<ServerDriverResponse<ServerCarryReadback>>;
+  /** One acquired-slot transaction that mutates only the predecessor metadata. */
+  claimProvenanceCarry?(
+    input: Readonly<{
+      expectedRoot: RootProjection;
+      exportDigest: string;
+      holder: string;
+      identity: ServerIdentity;
+      predecessorRootBeadId: string;
+      record: ProvenanceCarryClaimRecord;
+      scope: FencingScope;
+    }>,
+  ): Promise<ServerCarryClaimDriverResponse>;
   /** Read-only reconciliation after a failed/unknown commit; never retries it. */
   discover(
     input: Readonly<{
@@ -1958,6 +2070,27 @@ function exact(left: unknown, right: unknown): boolean {
     );
   } catch {
     return false;
+  }
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function canonicalJsonText(
+  value: unknown,
+  maximumBytes: number,
+): JsonValue | undefined {
+  if (
+    typeof value !== "string" ||
+    Buffer.byteLength(value, "utf8") > maximumBytes
+  )
+    return undefined;
+  try {
+    const parsed = JSON.parse(value) as JsonValue;
+    return canonicalJson(parsed) === value ? parsed : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -2383,7 +2516,8 @@ export class BeadsServerAdapter
   implements
     RunStorePort,
     Partial<AuthoritativeRunStore>,
-    Partial<PreOwnershipRunStore>
+    Partial<PreOwnershipRunStore>,
+    ProvenanceCarryClaimRecoveryPort
 {
   readonly #driver: BeadsServerDriver;
   readonly #identity: ServerIdentity;
@@ -2770,6 +2904,126 @@ export class BeadsServerAdapter
       : { status: "planned", transition };
   }
 
+  async prepareProvenanceCarryClaim(
+    predecessorRootIssueId: string,
+    currentRun: RepositoryRun,
+  ): Promise<
+    | Readonly<{ status: "planned"; plan: ProvenanceCarryClaimPlan }>
+    | Readonly<{ status: "blocked" | "ambiguous" | "unavailable" }>
+  > {
+    const inspected = await this.#inspectCarryPredecessor(
+      predecessorRootIssueId,
+      currentRun,
+    );
+    return inspected.status === "planned"
+      ? { plan: inspected.plan.plan, status: "planned" }
+      : inspected.status === "blocked"
+        ? { status: "blocked" }
+        : { status: inspected.status };
+  }
+
+  async reconcileProvenanceCarryClaim(
+    effect: CarryEffect,
+    run: RepositoryRun,
+  ): Promise<
+    | Readonly<{ status: "observed"; result: CarryObservationResult }>
+    | Readonly<{ status: "absent" | "ambiguous" | "unavailable" }>
+  > {
+    const inspected = await this.#inspectCarryPredecessor(
+      effect.params.predecessorRootBeadId,
+      run,
+    );
+    if (inspected.status !== "planned")
+      return inspected.status === "blocked"
+        ? {
+            result: this.#predecessorRefusal(
+              effect.params.predecessorRootBeadId,
+              inspected.reason,
+            ),
+            status: "observed",
+          }
+        : { status: inspected.status };
+    if (!this.#carryPlanMatchesEffect(inspected.plan, effect, run))
+      return { status: "ambiguous" };
+    return this.#classifyCarryClaims(inspected.claims, inspected.plan, effect);
+  }
+
+  async executeProvenanceCarryClaim(
+    effect: CarryEffect,
+    run: RepositoryRun,
+  ): Promise<
+    | Readonly<{ status: "observed"; result: CarryObservationResult }>
+    | Readonly<{ status: "ambiguous" | "unavailable" }>
+  > {
+    const inspected = await this.#inspectCarryPredecessor(
+      effect.params.predecessorRootBeadId,
+      run,
+    );
+    if (inspected.status !== "planned")
+      return inspected.status === "blocked"
+        ? {
+            result: this.#predecessorRefusal(
+              effect.params.predecessorRootBeadId,
+              inspected.reason,
+            ),
+            status: "observed",
+          }
+        : { status: inspected.status };
+    if (!this.#carryPlanMatchesEffect(inspected.plan, effect, run))
+      return { status: "ambiguous" };
+    const existing = this.#classifyCarryClaims(
+      inspected.claims,
+      inspected.plan,
+      effect,
+    );
+    if (existing.status === "observed") return existing;
+    if (
+      this.#driver.claimProvenanceCarry === undefined ||
+      this.#recoveryScope === undefined ||
+      run.controller.state !== "acquired" ||
+      run.controller.holder === undefined ||
+      !exact(this.#recoveryScope, inspected.predecessor.scope)
+    )
+      return { status: "ambiguous" };
+    let response: ServerCarryClaimDriverResponse;
+    try {
+      response = await this.#driver.claimProvenanceCarry({
+        expectedRoot: inspected.predecessor,
+        exportDigest: effect.params.exportId.slice("sce:carry:".length),
+        holder: run.controller.holder,
+        identity: this.#identity,
+        predecessorRootBeadId: effect.params.predecessorRootBeadId,
+        record: this.#carryClaimRecord(effect),
+        scope: this.#recoveryScope,
+      });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (response.status !== "ok") {
+      this.#revoke();
+      return response.phase === "before_transaction" &&
+        response.status === "unavailable"
+        ? { status: "unavailable" }
+        : { status: "ambiguous" };
+    }
+    // A zero-row race is classified from an authoritative fresh read, just as
+    // an interrupted winner is. Neither branch blindly retries the mutation.
+    const reread = await this.#inspectCarryPredecessor(
+      effect.params.predecessorRootBeadId,
+      run,
+    );
+    if (reread.status !== "planned") return { status: "ambiguous" };
+    if (!this.#carryPlanMatchesEffect(reread.plan, effect, run))
+      return { status: "ambiguous" };
+    const readback = this.#classifyCarryClaims(
+      reread.claims,
+      reread.plan,
+      effect,
+    );
+    return readback.status === "absent" ? { status: "ambiguous" } : readback;
+  }
+
   /**
    * Read-only reconciliation of an already-persisted server transition.
    * Exact `before` is positive retry authority; exact `after` is completion.
@@ -3125,6 +3379,255 @@ export class BeadsServerAdapter
       return { status: "quarantined" };
     }
     return result;
+  }
+
+  async #inspectCarryPredecessor(
+    predecessorRootBeadId: string,
+    currentRun: RepositoryRun,
+  ): Promise<InspectedServerCarry> {
+    if (
+      !this.#ready ||
+      this.#recoveryScope === undefined ||
+      this.#driver.readProvenanceCarry === undefined ||
+      !validIdentifier(predecessorRootBeadId) ||
+      !isSchema(RepositoryRunSchema, currentRun)
+    )
+      return { status: "unavailable" };
+    let response: ServerDriverResponse<ServerCarryReadback>;
+    try {
+      response = await this.#driver.readProvenanceCarry({
+        identity: this.#identity,
+        predecessorRootBeadId,
+      });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (response.status !== "ok") {
+      this.#revoke();
+      return response.status === "unavailable"
+        ? { status: "unavailable" }
+        : { status: "ambiguous" };
+    }
+    const readback = response.value;
+    if (readback.status === "not_found")
+      return Object.keys(readback).sort().join(",") ===
+        "currentRootBeadId,status" &&
+        validIdentifier(readback.currentRootBeadId)
+        ? { reason: "not_found", status: "blocked" }
+        : { status: "ambiguous" };
+    const keys = Object.keys(readback).sort().join(",");
+    if (
+      keys !==
+        (readback.claimsPresent
+          ? "claimsPresent,claimsText,currentRootBeadId,rootText,status"
+          : "claimsPresent,currentRootBeadId,rootText,status") ||
+      !validIdentifier(readback.currentRootBeadId)
+    )
+      return { status: "ambiguous" };
+    const rootJson = canonicalJsonText(
+      readback.rootText,
+      FENCING_LIMITS.projectionBytes,
+    );
+    const root = validateRootProjection(rootJson);
+    if (!root.ok) return { reason: "projection_invalid", status: "blocked" };
+    if (
+      !exact(root.value.scope, this.#recoveryScope) ||
+      root.value.run.gitObjectFormat !== currentRun.gitObjectFormat
+    )
+      return { reason: "scope_mismatch", status: "blocked" };
+    let claims: Readonly<Record<string, unknown>> = {};
+    if (readback.claimsPresent) {
+      const claimsJson = canonicalJsonText(readback.claimsText, 8_192);
+      if (
+        claimsJson === undefined ||
+        claimsJson === null ||
+        typeof claimsJson !== "object" ||
+        Array.isArray(claimsJson)
+      )
+        return { reason: "projection_invalid", status: "blocked" };
+      claims = claimsJson as Readonly<Record<string, unknown>>;
+    }
+    if (!this.#validCarryClaimsBoundary(claims))
+      return { reason: "projection_invalid", status: "blocked" };
+    const planned = planProvenanceCarryFromProjection(
+      predecessorRootBeadId,
+      readback.currentRootBeadId,
+      currentRun,
+      root.value,
+    );
+    if (planned.status !== "planned")
+      return { reason: planned.reason, status: "blocked" };
+    return {
+      claims,
+      plan: planned.value,
+      predecessor: root.value,
+      status: "planned",
+    };
+  }
+
+  #validCarryClaimsBoundary(value: Readonly<Record<string, unknown>>): boolean {
+    const entries = Object.entries(value);
+    if (entries.length > 1) return false;
+    const entry = entries[0];
+    if (entry === undefined) return true;
+    const [digest, candidate] = entry;
+    const parsed = validate<ProvenanceCarryClaimRecord>(
+      ProvenanceCarryClaimRecordSchema,
+      candidate,
+    );
+    return (
+      /^[0-9a-f]{64}$/u.test(digest) &&
+      parsed.ok &&
+      parsed.value !== undefined &&
+      parsed.value.exportId === `sce:carry:${digest}` &&
+      Buffer.byteLength(canonicalJson(parsed.value as unknown as JsonValue)) <=
+        4_096
+    );
+  }
+
+  #carryPlanMatchesEffect(
+    value: ProvenanceCarryProjectionPlan,
+    effect: CarryEffect,
+    run: RepositoryRun,
+  ): boolean {
+    if (
+      !isSchema(RuntimeEffectSchema, effect) ||
+      effect.kind !== "provenance_carry_claim"
+    )
+      return false;
+    const plan = value.plan;
+    return (
+      plan.exportId === effect.params.exportId &&
+      plan.predecessorFinalRevision ===
+        effect.params.predecessorFinalRevision &&
+      plan.predecessorJournalCheckpointCommitment ===
+        effect.params.predecessorJournalCheckpointCommitment &&
+      plan.predecessorRootAggregateCommitment ===
+        effect.params.predecessorRootAggregateCommitment &&
+      plan.predecessorRunId === effect.params.predecessorRunId &&
+      plan.predecessorWaveId === effect.params.predecessorWaveId &&
+      plan.snapshotCommitment === effect.params.snapshotCommitment &&
+      effect.params.claimToken === effect.idempotencyKey &&
+      effect.params.currentRunId === run.controller.runId &&
+      effect.params.storeIdentity === run.storeIdentity &&
+      effect.params.repositoryIdentity === run.repositoryIdentity &&
+      effect.params.integrationBranch === run.integrationBranch
+    );
+  }
+
+  #carryClaimRecord(effect: CarryEffect): ProvenanceCarryClaimRecord {
+    return {
+      claimRevision: 1,
+      claimantRunId: effect.params.currentRunId,
+      claimToken: effect.params.claimToken,
+      exportId: effect.params.exportId,
+      predecessorRootBeadId: effect.params.predecessorRootBeadId,
+      predecessorRunId: effect.params.predecessorRunId,
+      predecessorWaveId: effect.params.predecessorWaveId,
+      schema: "sce.provenance-carry-claim",
+      snapshotCommitment: effect.params.snapshotCommitment,
+      version: 1,
+    };
+  }
+
+  #carryClaimRecordDigest(record: ProvenanceCarryClaimRecord): string {
+    return sha256(
+      canonicalJson({
+        claimRecord: record,
+        domain: "sce.provenance-carry-claim-record.v1",
+      }),
+    );
+  }
+
+  #predecessorRefusal(
+    predecessorRootBeadId: string,
+    reason: CarryRefusalReason,
+  ): Extract<CarryObservationResult, { status: "predecessor_refused" }> {
+    return {
+      evidenceDigest: sha256(
+        canonicalJson({
+          domain: "sce.provenance-carry-predecessor-refusal.v1",
+          predecessorRootBeadId,
+          reason,
+        }),
+      ),
+      predecessorRootBeadId,
+      reason,
+      status: "predecessor_refused",
+    };
+  }
+
+  #classifyCarryClaims(
+    claims: Readonly<Record<string, unknown>>,
+    planned: ProvenanceCarryProjectionPlan,
+    effect: CarryEffect,
+  ):
+    | Readonly<{ status: "absent" }>
+    | Readonly<{ status: "observed"; result: CarryObservationResult }> {
+    const entry = Object.entries(claims)[0];
+    if (entry === undefined) return { status: "absent" };
+    const [digest, candidate] = entry;
+    const parsed = validate<ProvenanceCarryClaimRecord>(
+      ProvenanceCarryClaimRecordSchema,
+      candidate,
+    );
+    if (
+      digest !== effect.params.exportId.slice("sce:carry:".length) ||
+      !parsed.ok ||
+      parsed.value === undefined ||
+      parsed.value.exportId !== effect.params.exportId
+    )
+      return {
+        result: this.#predecessorRefusal(
+          effect.params.predecessorRootBeadId,
+          "projection_invalid",
+        ),
+        status: "observed",
+      };
+    const claimRecordDigest = this.#carryClaimRecordDigest(parsed.value);
+    const candidateClaimToken = deriveProvenanceCarryClaimKey(
+      parsed.value.claimantRunId,
+      effect.params.exportId,
+      effect.params.predecessorRootBeadId,
+    );
+    if (
+      parsed.value.predecessorRootBeadId !==
+        effect.params.predecessorRootBeadId ||
+      parsed.value.predecessorRunId !== effect.params.predecessorRunId ||
+      parsed.value.predecessorWaveId !== effect.params.predecessorWaveId ||
+      parsed.value.snapshotCommitment !== effect.params.snapshotCommitment ||
+      parsed.value.claimToken !== candidateClaimToken
+    )
+      return {
+        result: this.#predecessorRefusal(
+          effect.params.predecessorRootBeadId,
+          "projection_invalid",
+        ),
+        status: "observed",
+      };
+    if (!exact(parsed.value, this.#carryClaimRecord(effect)))
+      return {
+        result: {
+          claimRecordDigest,
+          claimRevision: 1,
+          claimantRunId: parsed.value.claimantRunId,
+          exportId: parsed.value.exportId,
+          status: "already_claimed",
+        },
+        status: "observed",
+      };
+    return {
+      result: {
+        carry: {
+          ...planned.carry,
+          claimRecordDigest,
+          claimRevision: 1,
+        },
+        status: "imported",
+      },
+      status: "observed",
+    };
   }
 
   #durable(commit: ServerCommitReadback): boolean {
@@ -3815,6 +4318,129 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       : { status: "refused" };
   }
 
+  async readProvenanceCarry(
+    input: Readonly<{
+      identity: ServerIdentity;
+      predecessorRootBeadId: string;
+    }>,
+  ): Promise<ServerDriverResponse<ServerCarryReadback>> {
+    const parsed = this.#carryReadInput(input);
+    if (parsed === undefined || !this.#isReady(parsed.identity))
+      return this.#invalidate({ status: "refused" });
+    const binding = await this.#liveDiscoveryBinding();
+    if (binding.status !== "ok") return this.#invalidate(binding);
+    return this.#readCarryRoot(parsed.predecessorRootBeadId);
+  }
+
+  async claimProvenanceCarry(
+    input: Readonly<{
+      expectedRoot: RootProjection;
+      exportDigest: string;
+      holder: string;
+      identity: ServerIdentity;
+      predecessorRootBeadId: string;
+      record: ProvenanceCarryClaimRecord;
+      scope: FencingScope;
+    }>,
+  ): Promise<ServerCarryClaimDriverResponse> {
+    const parsed = this.#carryClaimInput(input);
+    if (parsed === undefined || !this.#isReady(parsed.identity)) {
+      this.disarm();
+      return { phase: "before_transaction", status: "refused" };
+    }
+    if (this.#slotProcess === undefined)
+      return { phase: "before_transaction", status: "refused" };
+    const binding = await this.#slotProcess.matchesIdentity(this.#identity);
+    if (binding.status !== "ok") {
+      this.disarm();
+      return { phase: "before_transaction", status: binding.status };
+    }
+    if (
+      this.#identity.autoCommitPolicy !== "on" ||
+      !this.#autoCommitObserved ||
+      !this.#doltTransactionCommitObserved
+    )
+      return { phase: "before_transaction", status: "refused" };
+    const singleton = { [parsed.exportDigest]: parsed.record };
+    const singletonText = canonicalJson(singleton as unknown as JsonValue);
+    const rootText = canonicalJson(parsed.expectedRoot as unknown as JsonValue);
+    const slotId = `${this.#identity.prefix}-merge-slot`;
+    const slotMetadata = canonicalJson({ holder: parsed.holder });
+    const issues = this.#issues();
+    const labels = this.#labels();
+    const statement =
+      `UPDATE ${issues} SET metadata = JSON_SET(metadata, '$.sce_carry_claims', ${sqlJson(singleton)}) ` +
+      `WHERE id = ${sqlLiteral(parsed.predecessorRootBeadId)} ` +
+      `AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce')) = ${sqlLiteral(rootText)} ` +
+      `AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.aggregateCommitment')) = ${sqlLiteral(parsed.expectedRoot.aggregateCommitment)} ` +
+      `AND (JSON_EXTRACT(metadata, '$.sce_carry_claims') IS NULL OR (` +
+      `JSON_TYPE(JSON_EXTRACT(metadata, '$.sce_carry_claims')) = 'OBJECT' ` +
+      `AND JSON_LENGTH(JSON_EXTRACT(metadata, '$.sce_carry_claims')) = 0 ` +
+      `AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce_carry_claims')) = '{}')) ` +
+      `AND (SELECT COUNT(*) FROM ${issues} slot WHERE slot.id = ${sqlLiteral(slotId)} ` +
+      `AND slot.title = 'Merge Slot' AND slot.status = 'in_progress' ` +
+      `AND slot.external_ref = ${sqlLiteral(slotScopeReference(parsed.scope))} ` +
+      `AND slot.design = ${sqlLiteral(canonicalJson(parsed.scope as JsonValue))} ` +
+      `AND JSON_UNQUOTE(JSON_EXTRACT(slot.metadata, '$')) = ${sqlLiteral(slotMetadata)}) = 1 ` +
+      `AND (SELECT COUNT(*) FROM ${labels} WHERE issue_id = ${sqlLiteral(slotId)}) = 1 ` +
+      `AND (SELECT COUNT(*) FROM ${labels} WHERE issue_id = ${sqlLiteral(slotId)} AND label = 'gt:slot') = 1`;
+    // This readback is part of the same transaction as the guarded UPDATE.
+    // `FOR UPDATE` retains locks on both the predecessor and merge-slot rows
+    // until the transaction process chooses COMMIT or ROLLBACK.
+    const readbackQuery =
+      `SELECT predecessor.id AS predecessor_id, ` +
+      `JSON_UNQUOTE(JSON_EXTRACT(predecessor.metadata, '$.sce')) AS root_text, ` +
+      `JSON_UNQUOTE(JSON_EXTRACT(predecessor.metadata, '$.sce_carry_claims')) AS claims_text, ` +
+      `JSON_TYPE(JSON_EXTRACT(predecessor.metadata, '$.sce_carry_claims')) AS claims_type, ` +
+      `slot.id AS slot_id, slot.status AS slot_status, ` +
+      `JSON_UNQUOTE(JSON_EXTRACT(slot.metadata, '$')) AS slot_metadata, ` +
+      `slot.external_ref AS slot_external_ref, slot.title AS slot_title, slot.design AS slot_design ` +
+      `FROM ${issues} predecessor JOIN ${issues} slot ON slot.id = ${sqlLiteral(slotId)} ` +
+      `JOIN ${labels} slot_label ON slot_label.issue_id = slot.id AND slot_label.label = 'gt:slot' ` +
+      `WHERE predecessor.id = ${sqlLiteral(parsed.predecessorRootBeadId)} ` +
+      `AND (SELECT COUNT(*) FROM ${labels} WHERE issue_id = slot.id) = 1 FOR UPDATE`;
+    const affected = await this.#mutateAffected(statement, 1, {
+      expectedRows: [
+        {
+          claims_text: singletonText,
+          claims_type: "OBJECT",
+          predecessor_id: parsed.predecessorRootBeadId,
+          root_text: rootText,
+          slot_design: canonicalJson(parsed.scope as JsonValue),
+          slot_external_ref: slotScopeReference(parsed.scope),
+          slot_id: slotId,
+          slot_metadata: slotMetadata,
+          slot_status: "in_progress",
+          slot_title: "Merge Slot",
+        },
+      ],
+      query: readbackQuery,
+    });
+    if (affected.status !== "ok") {
+      this.disarm();
+      return { phase: "commit_unknown", status: affected.status };
+    }
+    if (affected.rows === 0)
+      return { status: "ok", value: { status: "stale" } };
+    if (affected.rows !== 1 || affected.committedHead === undefined) {
+      this.disarm();
+      return { phase: "commit_unknown", status: "ambiguous" };
+    }
+    return {
+      status: "ok",
+      value: {
+        readback: {
+          claimsPresent: true,
+          claimsText: singletonText,
+          currentRootBeadId: this.#rows.rootBeadId,
+          rootText,
+          status: "observed",
+        },
+        status: "applied",
+      },
+    };
+  }
+
   async mutate(
     input: Readonly<{ batch: MutationBatch; identity: ServerIdentity }>,
   ): Promise<ServerMutationDriverResponse> {
@@ -4035,39 +4661,52 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     if (liveBinding.status !== "ok") return this.#invalidate(liveBinding);
     const slot = await this.#slotReadback(discovery.prefix, discovery.scope);
     if (slot.status !== "ok") return this.#invalidate(slot);
-    const metadata = await this.#metadata([
-      this.#rows.rootBeadId,
-      ...Object.values(this.#rows.childBeadIds),
-    ]);
-    if (metadata.status !== "ok")
-      return this.#invalidate({ status: metadata.status });
-    const configuredIds = [
-      this.#rows.rootBeadId,
-      ...Object.values(this.#rows.childBeadIds),
-    ];
-    const presence = configuredIds.map((id) =>
-      Object.prototype.hasOwnProperty.call(metadata.value.get(id) ?? {}, "sce"),
-    );
-    if (presence.every((present) => !present))
+    // The root projection is the authoritative membership index. Retired
+    // child rows deliberately remain as immutable audit history, so loading
+    // every configured child would resurrect closed units.
+    const rootMetadata = await this.#metadata([this.#rows.rootBeadId]);
+    if (rootMetadata.status !== "ok")
+      return this.#invalidate({ status: rootMetadata.status });
+    const rootRecord = rootMetadata.value.get(this.#rows.rootBeadId) ?? {};
+    if (!Object.prototype.hasOwnProperty.call(rootRecord, "sce"))
       return slot.value.observation.status === "available"
         ? {
             status: "ok",
             value: { status: "absent", slot: slot.value.observation },
           }
         : this.#invalidate({ status: "refused" });
-    if (presence.some((present) => !present))
-      return this.#invalidate({ status: "refused" });
-    const root = metadata.value.get(this.#rows.rootBeadId)?.sce;
+    const root = rootRecord.sce;
     const parsedRoot = validateRootProjection(root);
     if (!parsedRoot.ok) return this.#invalidate({ status: "refused" });
-    const children = Object.values(this.#rows.childBeadIds).map(
-      (id) => metadata.value.get(id)?.sce,
+    const authoritativeChildIds = parsedRoot.value.childRows.map(
+      (reference) => this.#rows.childBeadIds[reference.unitId],
     );
     if (
-      children.length !== parsedRoot.value.childRows.length ||
-      children.some((child) => !validateChildProjection(child).ok)
+      authoritativeChildIds.some((id) => id === undefined) ||
+      new Set(authoritativeChildIds).size !== authoritativeChildIds.length
     )
       return this.#invalidate({ status: "refused" });
+    const childMetadata =
+      authoritativeChildIds.length === 0
+        ? ({ status: "ok", value: new Map() } as const)
+        : await this.#metadata(authoritativeChildIds as readonly string[]);
+    if (childMetadata.status !== "ok")
+      return this.#invalidate({ status: childMetadata.status });
+    const children = authoritativeChildIds.map(
+      (id) => childMetadata.value.get(id!)?.sce,
+    );
+    for (const [index, child] of children.entries()) {
+      const parsedChild = validateChildProjection(child);
+      const reference = parsedRoot.value.childRows[index];
+      if (
+        !parsedChild.ok ||
+        reference === undefined ||
+        parsedChild.value.unitId !== reference.unitId ||
+        parsedChild.value.revision !== reference.revision ||
+        parsedChild.value.commitment !== reference.commitment
+      )
+        return this.#invalidate({ status: "refused" });
+    }
     return {
       status: "ok",
       value: {
@@ -4246,6 +4885,162 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
     } catch {
       return undefined;
     }
+  }
+
+  #carryReadInput(input: unknown):
+    | Readonly<{
+        identity: ServerIdentity;
+        predecessorRootBeadId: string;
+      }>
+    | undefined {
+    const value = safeRecord(input, ["identity", "predecessorRootBeadId"]);
+    const identity =
+      value === undefined
+        ? undefined
+        : normalizedServerIdentity(value.identity);
+    return value !== undefined &&
+      identity !== undefined &&
+      typeof value.predecessorRootBeadId === "string" &&
+      validIdentifier(value.predecessorRootBeadId) &&
+      value.predecessorRootBeadId !== this.#rows.rootBeadId
+      ? { identity, predecessorRootBeadId: value.predecessorRootBeadId }
+      : undefined;
+  }
+
+  #carryClaimInput(input: unknown):
+    | Readonly<{
+        expectedRoot: RootProjection;
+        exportDigest: string;
+        holder: string;
+        identity: ServerIdentity;
+        predecessorRootBeadId: string;
+        record: ProvenanceCarryClaimRecord;
+        scope: FencingScope;
+      }>
+    | undefined {
+    const value = safeRecord(input, [
+      "expectedRoot",
+      "exportDigest",
+      "holder",
+      "identity",
+      "predecessorRootBeadId",
+      "record",
+      "scope",
+    ]);
+    if (value === undefined) return undefined;
+    const identity = normalizedServerIdentity(value.identity);
+    const expectedRoot = validateRootProjection(value.expectedRoot);
+    const scope = normalizedScope(value.scope);
+    const record = validate<ProvenanceCarryClaimRecord>(
+      ProvenanceCarryClaimRecordSchema,
+      value.record,
+    );
+    const predecessorRun = expectedRoot.ok ? expectedRoot.value.run : undefined;
+    const predecessorAggregateCommitment = expectedRoot.ok
+      ? expectedRoot.value.aggregateCommitment
+      : undefined;
+    const snapshot = predecessorRun?.gate?.provenance?.projectionInputSnapshot;
+    const snapshotCommitment =
+      snapshot === undefined
+        ? undefined
+        : provenanceCarrySnapshotCommitment(snapshot);
+    const expectedExportId =
+      predecessorRun === undefined ||
+      predecessorRun.gate === undefined ||
+      predecessorAggregateCommitment === undefined ||
+      snapshotCommitment === undefined
+        ? undefined
+        : deriveProvenanceCarryExportId({
+            finalRevision: predecessorRun.revision,
+            integrationBranch: predecessorRun.integrationBranch,
+            predecessorRootAggregateCommitment: predecessorAggregateCommitment,
+            predecessorRunId: predecessorRun.controller.runId,
+            predecessorWaveId: predecessorRun.gate.waveId,
+            repositoryIdentity: predecessorRun.repositoryIdentity,
+            snapshotCommitment,
+            storeIdentity: predecessorRun.storeIdentity,
+          });
+    return identity !== undefined &&
+      expectedRoot.ok &&
+      scope !== undefined &&
+      record.ok &&
+      record.value !== undefined &&
+      typeof value.exportDigest === "string" &&
+      /^[0-9a-f]{64}$/u.test(value.exportDigest) &&
+      typeof value.holder === "string" &&
+      /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(
+        value.holder,
+      ) &&
+      typeof value.predecessorRootBeadId === "string" &&
+      validIdentifier(value.predecessorRootBeadId) &&
+      value.predecessorRootBeadId !== this.#rows.rootBeadId &&
+      record.value.exportId === `sce:carry:${value.exportDigest}` &&
+      record.value.exportId === expectedExportId &&
+      record.value.predecessorRootBeadId === value.predecessorRootBeadId &&
+      record.value.predecessorRunId === predecessorRun?.controller.runId &&
+      record.value.predecessorWaveId === predecessorRun?.gate?.waveId &&
+      record.value.snapshotCommitment === snapshotCommitment &&
+      value.holder.split("/")[0] === record.value.claimantRunId &&
+      exact(expectedRoot.value.scope, scope) &&
+      Buffer.byteLength(
+        canonicalJson(record.value as unknown as JsonValue),
+        "utf8",
+      ) <= 4_096
+      ? {
+          expectedRoot: expectedRoot.value,
+          exportDigest: value.exportDigest,
+          holder: value.holder,
+          identity,
+          predecessorRootBeadId: value.predecessorRootBeadId,
+          record: record.value,
+          scope,
+        }
+      : undefined;
+  }
+
+  async #readCarryRoot(
+    predecessorRootBeadId: string,
+  ): Promise<ServerDriverResponse<ServerCarryReadback>> {
+    const result = await executeDoltSqlRead(
+      this.#writer,
+      `SELECT id, JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce')) AS root_text, JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce_carry_claims')) AS claims_text, JSON_TYPE(JSON_EXTRACT(metadata, '$.sce_carry_claims')) AS claims_type FROM ${this.#issues()} WHERE id = ${sqlLiteral(predecessorRootBeadId)}`,
+    );
+    if (result.status !== "ok") return { status: result.status };
+    if (result.rows.length === 0)
+      return {
+        status: "ok",
+        value: {
+          currentRootBeadId: this.#rows.rootBeadId,
+          status: "not_found",
+        },
+      };
+    if (
+      result.rows.length !== 1 ||
+      result.rows[0]?.id !== predecessorRootBeadId
+    )
+      return { status: "refused" };
+    const row = result.rows[0];
+    const rootText =
+      typeof row.root_text === "string"
+        ? row.root_text
+        : canonicalJson((row.root_text ?? null) as JsonValue);
+    const claimsAbsent =
+      row.claims_type === null || row.claims_type === undefined;
+    const claimsText = claimsAbsent
+      ? undefined
+      : typeof row.claims_text === "string"
+        ? row.claims_text
+        : canonicalJson((row.claims_text ?? null) as JsonValue);
+    return {
+      status: "ok",
+      value: {
+        claimsPresent: !claimsAbsent,
+        ...(claimsText === undefined ? {} : { claimsText }),
+        currentRootBeadId: this.#rows.rootBeadId,
+        rootText,
+        status: "observed",
+      },
+    };
   }
 
   #mutationInput(
@@ -4448,6 +5243,7 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
   async #mutateAffected(
     statement: string,
     expectedRows: number,
+    readback?: DoltSqlTransactionReadback,
   ): Promise<
     | Readonly<{ status: "ok"; rows: number; committedHead?: string }>
     | Readonly<{ status: ServerDriverFailure }>
@@ -4456,6 +5252,7 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
       this.#writer,
       statement,
       expectedRows,
+      readback,
     );
     if (response.status !== "ok") return response;
     return {

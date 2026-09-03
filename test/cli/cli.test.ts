@@ -42,9 +42,14 @@ import { HASH, event, run, transition, unit } from "../protocol/fixtures.js";
 test("mutating and external commands report stable unavailability", async () => {
   for (const command of commandNames.filter(
     (item) =>
-      !["inspect", "status", "next", "harness-packet", "feedback"].includes(
-        item,
-      ),
+      ![
+        "inspect",
+        "status",
+        "next",
+        "harness-packet",
+        "feedback",
+        "claim-provenance-carry",
+      ].includes(item),
   )) {
     const argv = command === "feedback" ? [command, "prepare"] : [command];
     const execution = await runCli(argv);
@@ -1102,6 +1107,17 @@ test("conditional command envelopes reject accidental fields and semantic state"
     }),
     true,
   );
+  assert.equal(
+    validateCommandRequest({
+      ...header,
+      command: "claim-provenance-carry",
+      options: {
+        json: false,
+        request: { predecessorRootBeadId: "sce-predecessor" },
+      },
+    }),
+    true,
+  );
   for (const request of [
     {
       ...header,
@@ -1125,6 +1141,25 @@ test("conditional command envelopes reject accidental fields and semantic state"
       command: "publish",
       options: { json: false, accidental: true },
     },
+    {
+      ...header,
+      command: "claim-provenance-carry",
+      options: {
+        json: false,
+        request: { predecessorRootIssueId: "sce-predecessor" },
+      },
+    },
+    {
+      ...header,
+      command: "claim-provenance-carry",
+      options: {
+        json: false,
+        request: {
+          extra: true,
+          predecessorRootBeadId: "sce-predecessor",
+        },
+      },
+    },
   ]) {
     assert.equal(validateCommandRequest(request), false);
   }
@@ -1145,6 +1180,106 @@ test("conditional command envelopes reject accidental fields and semantic state"
       "SCE_INVALID_STATE_REQUEST",
     );
   }
+});
+
+test("gate-wave rejects caller-supplied adapter observations and carry events", async () => {
+  const observation = {
+    effectId: "effect-1",
+    eventId: "event-1",
+    expectedRevision: 0,
+    gateEntryId: "gate-1",
+    observationHash: HASH,
+    unitId: null,
+  } as const;
+  const forbidden = [
+    {
+      ...observation,
+      effectKind: "materialisation_resolve",
+      result: {
+        refusal: { code: "source_absent", detailHash: HASH },
+        status: "refused",
+      },
+      type: "materialisation_sources_observed",
+    },
+    {
+      ...observation,
+      effectKind: "destination_probe",
+      result: {
+        refusal: { code: "invalid_destination", detailHash: HASH },
+        status: "refused",
+      },
+      type: "destination_probe_observed",
+    },
+    {
+      ...observation,
+      effectKind: "materialise",
+      result: {
+        refusal: { code: "hard_links_unsupported", detailHash: HASH },
+        status: "refused",
+      },
+      type: "materialise_observed",
+    },
+    {
+      ...observation,
+      effectKind: "provenance_commit",
+      result: {
+        attemptedCommitOid: "a".repeat(40),
+        attemptedTreeOid: "b".repeat(40),
+        reasonDigest: HASH,
+        status: "reproducibility_failed",
+      },
+      type: "provenance_commit_observed",
+    },
+    {
+      ...observation,
+      baseOid: "a".repeat(40),
+      effectKind: "verify",
+      headOid: "b".repeat(40),
+      treeOid: "c".repeat(40),
+      type: "verification_observed",
+    },
+    {
+      ...observation,
+      baseOid: "a".repeat(40),
+      effectKind: "verify",
+      headOid: "b".repeat(40),
+      treeOid: "c".repeat(40),
+      type: "verification_failed",
+    },
+    {
+      claimToken: "carry-key",
+      eventId: "carry-event",
+      expectedRevision: 0,
+      exportId: `sce:carry:${HASH}`,
+      idempotencyKey: "carry-key",
+      predecessorFinalRevision: 1,
+      predecessorJournalCheckpointCommitment: HASH,
+      predecessorRootAggregateCommitment: HASH,
+      predecessorRootBeadId: "sce-predecessor",
+      predecessorRunId: "run-predecessor",
+      predecessorWaveId: "wave-predecessor",
+      snapshotCommitment: HASH,
+      type: "provenance_carry_claim_intent",
+    },
+  ];
+  let calls = 0;
+  const runner = createRecoveryCommandRunner(async () => {
+    calls += 1;
+    return { status: "unavailable" };
+  });
+  for (const event of forbidden) {
+    const execution = await runCli(
+      ["gate-wave", "--request", JSON.stringify({ event })],
+      { runner },
+    );
+    assert.equal(execution.exitCode, 64, event.type);
+    assert.equal(
+      JSON.parse(execution.stdout).error.code,
+      "SCE_INVALID_STATE_REQUEST",
+      event.type,
+    );
+  }
+  assert.equal(calls, 0);
 });
 test("invalid runner results are rejected without leaking fields", async () => {
   const execution = await runCli(

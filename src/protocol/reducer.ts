@@ -19,14 +19,34 @@ import {
   HarnessPacketSchema,
   type HarnessPacketBinding,
   type WaveTaskMetadata,
+  type MaterialisationTarget,
+  type MaterialisationSource,
+  type GateTargetState,
+  type GateResolution,
+  type GateTargetPromise,
+  type GateMaterialisation,
+  type WaveGate,
+  type ProvenanceInput,
+  type GateProvenance,
+  type GateAggregateVerify,
+  type GateDestinationProbe,
+  type KnowledgeContract,
+  type MaterialisationDestinationIdentity,
+  type MaterialisationSidecar,
   validate,
 } from "./schemas.js";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
+import { posix } from "node:path";
 import { canonicalJson, type JsonValue } from "./canonical.js";
 import { sha256 } from "./evidence.js";
 import { canEnterTerminalIntent } from "./guards.js";
 
 const utf8 = new TextEncoder();
+
+/** Locale-independent UTF-16 code-unit ordering used by protocol hashes. */
+export function compareProtocolText(left: string, right: string): number {
+  return left === right ? 0 : left < right ? -1 : 1;
+}
 
 export type ProtocolEffect = RuntimeEffect;
 export type Reduction =
@@ -227,6 +247,995 @@ function launchPacketError(
   }
 }
 
+export function deriveMaterialisationTargetId(
+  scope: "gate" | "unit",
+  originUnitId: string | null,
+  targetOrdinal: number,
+  target: MaterialisationTarget,
+): string {
+  return `sce:tgt:${sha256(
+    canonicalJson({
+      domain: "sce.materialisation-target.v1",
+      originUnitId,
+      scope,
+      target,
+      targetOrdinal,
+    }),
+  )}`;
+}
+
+export function deriveGateEntryId(
+  runId: string,
+  waveId: string,
+  stage: string,
+  identity: JsonValue,
+): string {
+  return `sce:gate:${sha256(
+    canonicalJson({
+      domain: "sce.gate-entry.v1",
+      identity,
+      runId,
+      stage,
+      waveId,
+    }),
+  )}`;
+}
+
+function targetDefinition(
+  scope: "gate" | "unit",
+  originUnitId: string | null,
+  targetOrdinal: number,
+  target: MaterialisationTarget,
+) {
+  return {
+    originUnitId,
+    scope,
+    target,
+    targetId: deriveMaterialisationTargetId(
+      scope,
+      originUnitId,
+      targetOrdinal,
+      target,
+    ),
+    targetOrdinal,
+  } as const;
+}
+
+export function deriveTargetDefinitionCommitment(
+  waveId: string,
+  originalUnitIds: readonly string[],
+  definitions: readonly GateTargetPromise["definition"][],
+): string {
+  return sha256(
+    canonicalJson({
+      domain: "sce.knowledge-target-definitions.v1",
+      originalUnitIds,
+      targetDefinitions: definitions,
+      waveId,
+    } as unknown as JsonValue),
+  );
+}
+
+function newGate(
+  state: RepositoryRun,
+  waveId: string,
+  selectedUnitIds: readonly string[],
+  metadata: readonly WaveTaskMetadata[],
+  contract: KnowledgeContract,
+  carriedProjectionInputSnapshot?: ProvenanceInput,
+  carriedSnapshotCommitment?: string,
+  carriedProvenanceBaseOid?: string,
+  lineageAncestorDigests: readonly string[] = [],
+): WaveGate {
+  const byId = new Map(metadata.map((task) => [task.unitId, task]));
+  const handoff =
+    state.completionBoundary === "branch-handoff" ||
+    state.completionBoundary === "pr-handoff";
+  const unitTargets = selectedUnitIds.flatMap((unitId) =>
+    (byId.get(unitId)?.materialisationTargets ?? []).map((target, ordinal) => ({
+      definition: targetDefinition("unit", unitId, ordinal, target),
+      status: "pending" as const,
+    })),
+  );
+  const gateTargets = contract.gateTargets.map((target, ordinal) => ({
+    definition: targetDefinition("gate", null, ordinal, target),
+    ...(handoff ? { disposition: "handoff_boundary" as const } : {}),
+    status: handoff ? ("voided" as const) : ("pending" as const),
+  }));
+  return {
+    aggregateVerifyPromise: {
+      ...(handoff ? { disposition: "handoff_boundary" as const } : {}),
+      status: handoff ? "voided" : "pending",
+    },
+    destinationProbes: [],
+    ...(carriedProvenanceBaseOid === undefined
+      ? {}
+      : { currentIntegrationOid: carriedProvenanceBaseOid }),
+    lineageAncestorDigests: [...lineageAncestorDigests],
+    lineageCommitment: provenanceCarryLineageCommitment(lineageAncestorDigests),
+    provenancePromise: {
+      ...(handoff ? { disposition: "handoff_boundary" as const } : {}),
+      status: handoff ? "voided" : "pending",
+    },
+    provenanceUnitAccounting:
+      handoff || carriedProjectionInputSnapshot === undefined
+        ? []
+        : carriedProjectionInputSnapshot.unitIds.map((unitId) => ({
+            closureEvidenceCommitment: unitClosureEvidenceCommitment(
+              required(
+                decodeClosedUnitEvidence(
+                  carriedProjectionInputSnapshot.closedUnitEvidence,
+                )?.[unitId],
+                `carried closure evidence ${unitId}`,
+                "provenance_commit",
+              ),
+            ),
+            status: "uncommitted" as const,
+            unitId,
+          })),
+    targetPromises: [...unitTargets, ...gateTargets],
+    targetDefinitionCommitment: deriveTargetDefinitionCommitment(
+      waveId,
+      selectedUnitIds,
+      [...unitTargets, ...gateTargets].map((promise) => promise.definition),
+    ),
+    targets: [],
+    originalUnitIds: [...selectedUnitIds],
+    waveId,
+    ...(carriedProjectionInputSnapshot === undefined
+      ? {}
+      : { carriedProjectionInputSnapshot }),
+    ...(carriedSnapshotCommitment === undefined
+      ? {}
+      : { carriedSnapshotCommitment }),
+    ...(carriedProvenanceBaseOid === undefined
+      ? {}
+      : { carriedProvenanceBaseOid }),
+  };
+}
+
+function targetAliasesAreValid(
+  metadata: readonly WaveTaskMetadata[],
+  contract: KnowledgeContract,
+  harness: HarnessConfiguration,
+): boolean {
+  const aliases = contract.aliases.map((item) => item.alias);
+  const known = new Set(aliases);
+  return (
+    knowledgeContractRuntimeValid(contract, harness) &&
+    [
+      ...metadata.flatMap((task) => task.materialisationTargets ?? []),
+      ...contract.gateTargets,
+    ].every((target) => known.has(target.destinationAlias))
+  );
+}
+
+function canonicalCommandArgument(value: string): boolean {
+  if (value.length === 0 || utf8.encode(value).byteLength > 1_024) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit === 0 || (unit >= 0xdc00 && unit <= 0xdfff)) return false;
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const low = value.charCodeAt(index + 1);
+      if (low < 0xdc00 || low > 0xdfff) return false;
+      index += 1;
+    }
+  }
+  return true;
+}
+
+function canonicalCommandVector(command: readonly string[]): boolean {
+  return (
+    command.length >= 1 &&
+    command.length <= 32 &&
+    command.every(canonicalCommandArgument) &&
+    utf8.encode(canonicalJson(command as unknown as JsonValue)).byteLength <=
+      8_192
+  );
+}
+
+export function knowledgeContractRuntimeValid(
+  contract: KnowledgeContract,
+  harness: HarnessConfiguration,
+): boolean {
+  const aliases = contract.aliases.map((item) => item.alias);
+  const roots = [
+    ...contract.aliases.map((item) => item.canonicalRoot),
+    contract.provenanceWorktreeRoot,
+  ];
+  const commands = contract.combinedVerificationCommands;
+  return (
+    new Set(aliases).size === aliases.length &&
+    roots.every((root) => root !== "/" && posix.normalize(root) === root) &&
+    roots.every((root, index) =>
+      roots
+        .slice(index + 1)
+        .every(
+          (other) =>
+            root !== other &&
+            !root.startsWith(`${other}/`) &&
+            !other.startsWith(`${root}/`),
+        ),
+    ) &&
+    commands.length >= 1 &&
+    commands.length <= 32 &&
+    commands.every(canonicalCommandVector) &&
+    canonicalCommandVector(contract.provenance.rollupGeneratorCommand) &&
+    canonicalCommandVector(contract.provenance.reproducibilityCommand) &&
+    utf8.encode(canonicalJson(commands as unknown as JsonValue)).byteLength <=
+      32_768 &&
+    maximumMaterialisationSidecarBytes(contract, harness) <=
+      LIMITS.materialisationSidecarBytes
+  );
+}
+
+/**
+ * A configured knowledge contract may be frozen into an existing run only at
+ * the untouched first-wave boundary. The pre-gate carry lifecycle is the sole
+ * exception: it may be journaled, imported, or durably refused before that
+ * first wave, but it cannot coexist with any unit or gate work.
+ */
+export function canFreezeKnowledgeContractAtFirstWave(
+  state: RepositoryRun,
+): boolean {
+  const carryLifecycle = [
+    state.provenanceCarryClaim,
+    state.pendingProvenanceCarry,
+    state.lastProvenanceCarryRefusal,
+  ].filter((value) => value !== undefined).length;
+  const carryEntries = state.effectJournal.filter(
+    (entry) => entry.kind === "provenance_carry_claim",
+  );
+  return (
+    state.knowledgeContract === undefined &&
+    state.controller.state === "acquired" &&
+    state.gate === undefined &&
+    state.wave.unitIds.length === 0 &&
+    state.closedUnitEvidence === "" &&
+    state.usedSessionCount === 0 &&
+    Object.values(state.units).every((unit) => unit.state === "planned") &&
+    Object.keys(state.reservations).length === 0 &&
+    state.activeModifyingUnitIds.length === 0 &&
+    state.qualificationOwnerUnitId === undefined &&
+    state.integrationOwnerUnitId === undefined &&
+    state.currentReviewerUnitId === undefined &&
+    state.qualificationQueue.length === 0 &&
+    state.integrationQueue.length === 0 &&
+    carryLifecycle <= 1 &&
+    (carryLifecycle !== 0 || carryEntries.length === 0) &&
+    state.effectJournal.every(
+      (entry) =>
+        entry.unitId === null &&
+        entry.gateEntryId === undefined &&
+        (entry.kind === "controller_acquire" ||
+          entry.kind === "controller_release" ||
+          entry.kind === "provenance_carry_claim"),
+    ) &&
+    runInvariantErrors(state).length === 0
+  );
+}
+
+/** Schema-derived RFC 8785 + LF upper bound before any target promise exists. */
+export function maximumMaterialisationSidecarBytes(
+  contract: KnowledgeContract,
+  harness: HarnessConfiguration,
+): number {
+  const value: MaterialisationSidecar = {
+    artifactName: "a".repeat(255),
+    blobOid: "a".repeat(64),
+    byteCount: LIMITS.materialisationBlobBytes,
+    destinationAlias: "a".repeat(63),
+    destinationSubpath: "a".repeat(LIMITS.materialisationPathBytes),
+    domainScope: contract.domainScope,
+    driver: contract.humanDriver,
+    executorTool: harness.family,
+    gateEntryId: "a".repeat(160),
+    originUnitId: "a".repeat(160),
+    runId: "a".repeat(160),
+    schema: "sce.materialisation-provenance",
+    sha256: "a".repeat(64),
+    sourceOid: "a".repeat(64),
+    sourcePath: "a".repeat(LIMITS.materialisationPathBytes),
+    targetId: "a".repeat(160),
+    timestamp: "9999-12-31T23:59:59Z",
+    version: 1,
+    waveId: "a".repeat(160),
+  };
+  return utf8.encode(`${canonicalJson(value as unknown as JsonValue)}\n`)
+    .byteLength;
+}
+
+export function deriveProvenanceWorktreePath(
+  root: string,
+  idempotencyKey: string,
+): string {
+  return posix.join(
+    root,
+    `sce-provenance-${sha256(
+      canonicalJson({
+        domain: "sce.provenance-worktree-path.v1",
+        idempotencyKey,
+      }),
+    )}`,
+  );
+}
+
+function resolutionFor(
+  runId: string,
+  waveId: string,
+  definition: GateTargetState["definition"],
+  sourceOid: string,
+) {
+  return {
+    gateEntryId: deriveGateEntryId(
+      runId,
+      waveId,
+      `${definition.scope}-resolve`,
+      {
+        sourceOid,
+        targetId: definition.targetId,
+      },
+    ),
+    sourceOid,
+    status: "pending" as const,
+    targetId: definition.targetId,
+  };
+}
+
+function attachUnitTargetSource(
+  state: RepositoryRun,
+  unitId: string,
+  sourceOid: string,
+): WaveGate | undefined {
+  const gate = state.gate;
+  if (gate === undefined) return undefined;
+  const matching = gate.targetPromises.filter(
+    (target) =>
+      target.status === "pending" && target.definition.originUnitId === unitId,
+  );
+  return {
+    ...gate,
+    targetPromises: gate.targetPromises.filter(
+      (target) => !matching.includes(target),
+    ),
+    targets: [
+      ...gate.targets,
+      ...matching.map((target) => ({
+        definition: target.definition,
+        materialisations: [],
+        resolution: resolutionFor(
+          state.controller.runId,
+          gate.waveId,
+          target.definition,
+          sourceOid,
+        ),
+        status: "pending" as const,
+      })),
+    ],
+  };
+}
+
+function attachGateTargetSource(
+  state: RepositoryRun,
+  gate: WaveGate,
+  sourceOid: string,
+): WaveGate {
+  const matching = gate.targetPromises.filter(
+    (target) =>
+      target.status === "pending" && target.definition.scope === "gate",
+  );
+  return {
+    ...gate,
+    targetPromises: gate.targetPromises.filter(
+      (target) => !matching.includes(target),
+    ),
+    targets: [
+      ...gate.targets,
+      ...matching.map((target) => ({
+        definition: target.definition,
+        materialisations: [],
+        resolution: resolutionFor(
+          state.controller.runId,
+          gate.waveId,
+          target.definition,
+          sourceOid,
+        ),
+        status: "pending" as const,
+      })),
+    ],
+  };
+}
+
+function voidUnitTargets(
+  gate: WaveGate | undefined,
+  unitId: string,
+  disposition: "handoff_boundary" | "unit_not_landed",
+): WaveGate | undefined {
+  if (gate === undefined) return undefined;
+  return {
+    ...gate,
+    targetPromises: gate.targetPromises.map((target) =>
+      target.definition.originUnitId === unitId
+        ? {
+            ...target,
+            disposition,
+            status: "voided" as const,
+          }
+        : target,
+    ),
+    targets: gate.targets.map((target) =>
+      target.definition.originUnitId === unitId
+        ? {
+            ...target,
+            disposition,
+            status: "voided" as const,
+            materialisations: target.materialisations.map((item) => ({
+              ...item,
+              disposition,
+              status: "voided" as const,
+            })),
+            ...(target.resolution === undefined
+              ? {}
+              : {
+                  resolution: {
+                    ...target.resolution,
+                    disposition,
+                    status: "voided" as const,
+                  },
+                }),
+          }
+        : target,
+    ),
+  };
+}
+
+function targetIsSettled(target: GateTargetState): boolean {
+  if (target.status === "voided")
+    return (
+      target.resolution?.status !== "pending" &&
+      target.materialisations.every((item) => item.status !== "pending")
+    );
+  return (
+    target.resolution?.status === "observed" &&
+    target.materialisations.length > 0 &&
+    target.materialisations.every((item) => item.status !== "pending")
+  );
+}
+
+function materialisationObservationMatches(
+  item: GateMaterialisation,
+  observation: NonNullable<GateMaterialisation["observation"]>,
+): boolean {
+  return (
+    observation.artifactByteCount === item.source.byteCount &&
+    observation.artifactSha256 === item.source.sha256 &&
+    observation.sidecarByteCount === item.sidecarByteCount &&
+    observation.sidecarSha256 === item.sidecarSha256
+  );
+}
+
+function provenanceBaseAdvancedDetailHash(
+  advancedBaseOid: string,
+  attemptedCommitOid: string,
+  attemptedTreeOid: string,
+): string {
+  return sha256(
+    canonicalJson({
+      advancedBaseOid,
+      attemptedCommitOid,
+      attemptedTreeOid,
+      domain: "sce.provenance-base-advanced.v1",
+    }),
+  );
+}
+
+function provenanceInput(
+  state: RepositoryRun,
+  gate: WaveGate,
+): ProvenanceInput {
+  const details = decodeClosedUnitEvidenceDetails(state.closedUnitEvidence);
+  const evidence = details?.evidence ?? {};
+  const carried = gate.carriedProjectionInputSnapshot;
+  const carriedEvidence =
+    carried === undefined
+      ? {}
+      : (decodeClosedUnitEvidence(carried.closedUnitEvidence) ?? {});
+  const mergedEvidence: Record<string, ClosureEvidence> = {
+    ...carriedEvidence,
+  };
+  for (const item of Object.values(evidence).filter(
+    (candidate) =>
+      candidate.outcome === "landed" &&
+      gate.provenanceUnitAccounting.some(
+        (item) =>
+          item.unitId === candidate.unitId && item.status === "uncommitted",
+      ),
+  )) {
+    const previous = mergedEvidence[item.unitId];
+    if (
+      previous !== undefined &&
+      canonicalJson(previous as unknown as JsonValue) !==
+        canonicalJson(item as unknown as JsonValue)
+    )
+      throw new Error(`contradictory carried evidence for ${item.unitId}`);
+    mergedEvidence[item.unitId] = item;
+  }
+  const targets = new Map<string, GateTargetState>();
+  for (const target of [
+    ...(carried?.targetEvidence ?? []),
+    ...gate.targets.filter((target) => target.definition.scope === "unit"),
+  ]) {
+    const previous = targets.get(target.definition.targetId);
+    if (
+      previous !== undefined &&
+      canonicalJson(previous as unknown as JsonValue) !==
+        canonicalJson(target as unknown as JsonValue)
+    )
+      throw new Error(
+        `contradictory carried target ${target.definition.targetId}`,
+      );
+    targets.set(target.definition.targetId, target);
+  }
+  const closedUnitEvidence = encodeClosedUnitEvidence(mergedEvidence);
+  const mergedDetails = decodeClosedUnitEvidenceDetails(closedUnitEvidence);
+  if (mergedDetails === undefined)
+    throw new Error("merged provenance closure evidence is invalid");
+  const destinationProbes = new Map<string, GateDestinationProbe>();
+  for (const probe of [
+    ...(carried?.destinationProbeEvidence ?? []),
+    ...gate.destinationProbes.filter((candidate) => candidate.stage === "unit"),
+  ]) {
+    const previous = destinationProbes.get(probe.gateEntryId);
+    if (
+      previous !== undefined &&
+      canonicalJson(previous as unknown as JsonValue) !==
+        canonicalJson(probe as unknown as JsonValue)
+    )
+      throw new Error(`contradictory carried probe ${probe.gateEntryId}`);
+    destinationProbes.set(probe.gateEntryId, probe);
+  }
+  return {
+    closedUnitEvidence,
+    closureEvidenceCommitment: mergedDetails.commitment,
+    destinationProbeEvidence: [...destinationProbes.values()].sort(
+      (left, right) => compareProtocolText(left.gateEntryId, right.gateEntryId),
+    ),
+    targetEvidence: [...targets.values()].sort(
+      (left, right) =>
+        compareProtocolText(
+          left.definition.originUnitId ?? "",
+          right.definition.originUnitId ?? "",
+        ) ||
+        left.definition.targetOrdinal - right.definition.targetOrdinal ||
+        compareProtocolText(
+          left.definition.targetId,
+          right.definition.targetId,
+        ),
+    ),
+    unitIds: [
+      ...new Set([...(carried?.unitIds ?? []), ...Object.keys(mergedEvidence)]),
+    ].sort(),
+  };
+}
+
+function projectionCollisionWitnesses(
+  input: ProvenanceInput,
+): ReadonlyMap<string, string> {
+  const probes = new Map(
+    input.destinationProbeEvidence
+      .filter(
+        (
+          probe,
+        ): probe is GateDestinationProbe & {
+          identity: MaterialisationDestinationIdentity;
+        } => probe.status === "observed" && probe.identity !== undefined,
+      )
+      .map((probe) => [probe.gateEntryId, probe.identity]),
+  );
+  const destinations = new Map<string, Map<string, string[]>>();
+  for (const item of input.targetEvidence.flatMap(
+    (target) => target.materialisations,
+  )) {
+    const identity = probes.get(item.destinationProbeGateEntryId);
+    if (
+      identity === undefined ||
+      item.artifactName === undefined ||
+      item.sidecarName === undefined
+    )
+      continue;
+    const key = `${identity.device}\u0000${identity.inode}`;
+    const names = destinations.get(key) ?? new Map<string, string[]>();
+    for (const name of [item.artifactName, item.sidecarName])
+      names.set(name, [...(names.get(name) ?? []), item.gateEntryId]);
+    destinations.set(key, names);
+  }
+  const witnesses = new Map<string, string>();
+  for (const names of destinations.values())
+    for (const ids of names.values())
+      for (const id of ids) {
+        const first = ids
+          .filter((candidate) => candidate !== id)
+          .sort(compareProtocolText)[0];
+        if (first === undefined) continue;
+        const prior = witnesses.get(id);
+        witnesses.set(
+          id,
+          prior === undefined || compareProtocolText(first, prior) < 0
+            ? first
+            : prior,
+        );
+      }
+  return witnesses;
+}
+
+export function projectionInputIsValid(input: ProvenanceInput): boolean {
+  const details = decodeClosedUnitEvidenceDetails(input.closedUnitEvidence);
+  if (
+    details === undefined ||
+    details.commitment !== input.closureEvidenceCommitment
+  )
+    return false;
+  const evidenceIds = Object.keys(details.evidence).sort(compareProtocolText);
+  if (
+    !sameStringArray(input.unitIds, evidenceIds) ||
+    input.unitIds.some((unitId, index) =>
+      index > 0
+        ? compareProtocolText(input.unitIds[index - 1]!, unitId) >= 0
+        : false,
+    )
+  )
+    return false;
+  const targetIds = new Set<string>();
+  const entryIds = new Set<string>();
+  const collisionWitnesses = projectionCollisionWitnesses(input);
+  for (const [index, target] of input.targetEvidence.entries()) {
+    const origin = target.definition.originUnitId;
+    if (
+      target.definition.scope !== "unit" ||
+      origin === null ||
+      !input.unitIds.includes(origin) ||
+      target.definition.targetId !==
+        deriveMaterialisationTargetId(
+          "unit",
+          origin,
+          target.definition.targetOrdinal,
+          target.definition.target,
+        ) ||
+      targetIds.has(target.definition.targetId) ||
+      (index > 0 &&
+        (compareProtocolText(
+          input.targetEvidence[index - 1]!.definition.originUnitId ?? "",
+          origin,
+        ) > 0 ||
+          (input.targetEvidence[index - 1]!.definition.originUnitId ===
+            origin &&
+            input.targetEvidence[index - 1]!.definition.targetOrdinal >=
+              target.definition.targetOrdinal))) ||
+      !targetIsSettled(target) ||
+      !targetRecordIsCoherent(target) ||
+      target.resolution === undefined ||
+      target.resolution.targetId !== target.definition.targetId ||
+      entryIds.has(target.resolution.gateEntryId) ||
+      !resolutionRecordIsCoherent(target.resolution) ||
+      (target.resolution.status === "observed" &&
+        (target.resolution.sources === undefined ||
+          target.resolution.sources.length !==
+            target.materialisations.length)) ||
+      (target.status === "observed" &&
+        (target.resolution.status !== "observed" ||
+          target.materialisations.some((item) => item.status !== "observed")))
+    )
+      return false;
+    targetIds.add(target.definition.targetId);
+    entryIds.add(target.resolution.gateEntryId);
+    for (const materialisation of target.materialisations) {
+      const expectedCollision = collisionWitnesses.get(
+        materialisation.gateEntryId,
+      );
+      if (
+        materialisation.targetId !== target.definition.targetId ||
+        materialisation.originUnitId !== origin ||
+        materialisation.sourceOid !== target.resolution.sourceOid ||
+        canonicalJson(materialisation.target as unknown as JsonValue) !==
+          canonicalJson(target.definition.target as unknown as JsonValue) ||
+        entryIds.has(materialisation.gateEntryId) ||
+        !materialisationRecordIsCoherent(materialisation) ||
+        (expectedCollision === undefined
+          ? materialisation.lastRefusal?.code === "output_name_collision"
+          : materialisation.lastRefusal?.code !== "output_name_collision" ||
+            materialisation.lastRefusal.conflictingGateEntryId !==
+              expectedCollision) ||
+        (materialisation.status === "observed"
+          ? materialisation.observation === undefined ||
+            !materialisationObservationMatches(
+              materialisation,
+              materialisation.observation,
+            ) ||
+            materialisation.artifactName === undefined ||
+            materialisation.sidecarName === undefined ||
+            materialisation.sidecarByteCount === undefined ||
+            materialisation.sidecarSha256 === undefined ||
+            materialisation.timestamp === undefined
+          : materialisation.observation !== undefined) ||
+        (target.resolution.status === "observed" &&
+          canonicalJson(
+            target.resolution.sources?.[
+              target.materialisations.indexOf(materialisation)
+            ] as unknown as JsonValue,
+          ) !== canonicalJson(materialisation.source as unknown as JsonValue))
+      )
+        return false;
+      entryIds.add(materialisation.gateEntryId);
+    }
+  }
+  const probeIds = new Set<string>();
+  for (const [index, probe] of input.destinationProbeEvidence.entries()) {
+    if (
+      probe.stage !== "unit" ||
+      probe.status === "pending" ||
+      !destinationProbeRecordIsCoherent(probe) ||
+      (probe.status === "observed"
+        ? probe.identity === undefined || probe.lastRefusal !== undefined
+        : probe.identity !== undefined) ||
+      probeIds.has(probe.gateEntryId) ||
+      (index > 0 &&
+        compareProtocolText(
+          input.destinationProbeEvidence[index - 1]!.gateEntryId,
+          probe.gateEntryId,
+        ) >= 0) ||
+      !input.targetEvidence.some(
+        (target) =>
+          target.definition.target.destinationAlias ===
+            probe.destinationAlias &&
+          target.definition.target.destinationSubpath ===
+            probe.destinationSubpath &&
+          target.materialisations.some(
+            (item) => item.destinationProbeGateEntryId === probe.gateEntryId,
+          ),
+      )
+    )
+      return false;
+    probeIds.add(probe.gateEntryId);
+  }
+  return input.targetEvidence.every((target) =>
+    target.materialisations.every((item) =>
+      probeIds.has(item.destinationProbeGateEntryId),
+    ),
+  );
+}
+
+function projectionInputSlice(
+  input: ProvenanceInput,
+  unitIds: readonly string[],
+): ProvenanceInput | undefined {
+  const details = decodeClosedUnitEvidenceDetails(input.closedUnitEvidence);
+  if (details === undefined) return undefined;
+  const selected = new Set(unitIds);
+  const evidence = Object.fromEntries(
+    Object.entries(details.evidence).filter(([unitId]) => selected.has(unitId)),
+  );
+  const closedUnitEvidence = encodeClosedUnitEvidence(evidence);
+  const slicedDetails = decodeClosedUnitEvidenceDetails(closedUnitEvidence);
+  if (slicedDetails === undefined) return undefined;
+  const targetEvidence = input.targetEvidence.filter((target) =>
+    selected.has(target.definition.originUnitId ?? ""),
+  );
+  const probeIds = new Set(
+    targetEvidence.flatMap((target) =>
+      target.materialisations.map((item) => item.destinationProbeGateEntryId),
+    ),
+  );
+  return {
+    closedUnitEvidence,
+    closureEvidenceCommitment: slicedDetails.commitment,
+    destinationProbeEvidence: input.destinationProbeEvidence.filter((probe) =>
+      probeIds.has(probe.gateEntryId),
+    ),
+    targetEvidence,
+    unitIds: [...unitIds],
+  };
+}
+
+function currentProjectionInput(
+  state: RepositoryRun,
+  gate: WaveGate,
+  unitIds: readonly string[],
+): ProvenanceInput | undefined {
+  const details = decodeClosedUnitEvidenceDetails(state.closedUnitEvidence);
+  if (details === undefined) return undefined;
+  const selected = new Set(unitIds);
+  const evidence = Object.fromEntries(
+    Object.entries(details.evidence).filter(([unitId]) => selected.has(unitId)),
+  );
+  if (Object.keys(evidence).length !== unitIds.length) return undefined;
+  const closedUnitEvidence = encodeClosedUnitEvidence(evidence);
+  const slicedDetails = decodeClosedUnitEvidenceDetails(closedUnitEvidence);
+  if (slicedDetails === undefined) return undefined;
+  const targetEvidence = gate.targets
+    .filter((target) => selected.has(target.definition.originUnitId ?? ""))
+    .sort(
+      (left, right) =>
+        compareProtocolText(
+          left.definition.originUnitId ?? "",
+          right.definition.originUnitId ?? "",
+        ) ||
+        left.definition.targetOrdinal - right.definition.targetOrdinal ||
+        compareProtocolText(
+          left.definition.targetId,
+          right.definition.targetId,
+        ),
+    );
+  const probeIds = new Set(
+    targetEvidence.flatMap((target) =>
+      target.materialisations.map((item) => item.destinationProbeGateEntryId),
+    ),
+  );
+  return {
+    closedUnitEvidence,
+    closureEvidenceCommitment: slicedDetails.commitment,
+    destinationProbeEvidence: gate.destinationProbes
+      .filter(
+        (probe) => probe.stage === "unit" && probeIds.has(probe.gateEntryId),
+      )
+      .sort((left, right) =>
+        compareProtocolText(left.gateEntryId, right.gateEntryId),
+      ),
+    targetEvidence,
+    unitIds: [...unitIds],
+  };
+}
+
+function projectionInputWithinBounds(input: ProvenanceInput): boolean {
+  try {
+    return (
+      input.unitIds.length <= 64 &&
+      input.targetEvidence.reduce(
+        (count, target) => count + target.materialisations.length,
+        0,
+      ) <= 128 &&
+      utf8.encode(canonicalJson(input as unknown as JsonValue)).byteLength <=
+        65_536
+    );
+  } catch {
+    return false;
+  }
+}
+
+function projectionInputFits(input: ProvenanceInput): boolean {
+  return projectionInputWithinBounds(input) && projectionInputIsValid(input);
+}
+
+function closureEvidenceOids(evidence: ClosureEvidence): readonly string[] {
+  const success = "verification" in evidence ? evidence : undefined;
+  const repair =
+    "repairContext" in evidence ? evidence.repairContext : undefined;
+  return [
+    evidence.baseOid,
+    evidence.candidate?.headOid,
+    evidence.candidate?.treeOid,
+    success?.verification.baseOid,
+    success?.verification.headOid,
+    success?.verification.treeOid,
+    success?.review.baseOid,
+    success?.review.headOid,
+    success?.review.treeOid,
+    repair?.baseOid,
+    repair?.headOid,
+    repair?.treeOid,
+    "landedOid" in evidence ? evidence.landedOid : undefined,
+    "publishedHeadOid" in evidence ? evidence.publishedHeadOid : undefined,
+    "pullRequest" in evidence ? evidence.pullRequest.baseOid : undefined,
+    "pullRequest" in evidence ? evidence.pullRequest.remoteHeadOid : undefined,
+  ].filter((value): value is string => value !== undefined);
+}
+
+function projectionInputOids(input: ProvenanceInput): readonly string[] {
+  const evidence = decodeClosedUnitEvidence(input.closedUnitEvidence);
+  return [
+    ...Object.values(evidence ?? {}).flatMap(closureEvidenceOids),
+    ...input.targetEvidence.flatMap((target) => [
+      target.resolution?.sourceOid,
+      ...(target.resolution?.sources ?? []).map((source) => source.blobOid),
+      ...target.materialisations.flatMap((item) => [
+        item.sourceOid,
+        item.source.blobOid,
+      ]),
+    ]),
+  ].filter((value): value is string => value !== undefined);
+}
+
+function createProvenanceEntry(state: RepositoryRun, gate: WaveGate): WaveGate {
+  if (gate.provenance !== undefined) return gate;
+  const input = provenanceInput(state, gate);
+  if (!projectionInputFits(input))
+    throw new Error("provenance projection input exceeds its durable bound");
+  const provenanceGateEntryId = deriveGateEntryId(
+    state.controller.runId,
+    gate.waveId,
+    "provenance",
+    input as unknown as JsonValue,
+  );
+  const provenance: GateProvenance = {
+    baseOid: required(
+      gate.currentIntegrationOid ?? gate.carriedProvenanceBaseOid,
+      "provenance integration base",
+      "provenance_commit",
+    ),
+    gateEntryId: provenanceGateEntryId,
+    projectionInputSnapshot: input,
+    status: "pending",
+  };
+  const {
+    carriedProjectionInputSnapshot: _carriedProjectionInputSnapshot,
+    provenancePromise: _provenancePromise,
+    ...withoutCarry
+  } = gate;
+  return {
+    ...withoutCarry,
+    provenance,
+  };
+}
+
+function maybeCreateProvenance(state: RepositoryRun): RepositoryRun {
+  const gate = state.gate;
+  if (
+    gate === undefined ||
+    gate.provenance !== undefined ||
+    !unitProjectionStageSettled(state, gate)
+  )
+    return state;
+  if (
+    gate.provenancePromise?.status === "voided" &&
+    gate.provenancePromise.disposition === "handoff_boundary"
+  )
+    return state;
+  const input = provenanceInput(state, gate);
+  if (input.unitIds.length === 0)
+    return {
+      ...state,
+      gate: {
+        ...gate,
+        aggregateVerifyPromise: {
+          disposition: "no_landed_units",
+          status: "voided",
+        },
+        provenancePromise: {
+          disposition: "no_landed_units",
+          status: "voided",
+        },
+        targetPromises: gate.targetPromises.map((target) =>
+          target.definition.scope === "gate"
+            ? {
+                ...target,
+                disposition: "no_landed_units" as const,
+                status: "voided" as const,
+              }
+            : target,
+        ),
+      },
+    };
+  return { ...state, gate: createProvenanceEntry(state, gate) };
+}
+
+function unitProjectionStageSettled(
+  state: RepositoryRun,
+  gate: WaveGate,
+): boolean {
+  return (
+    state.wave.unitIds.length === 0 &&
+    gate.targetPromises.every(
+      (target) =>
+        target.definition.scope !== "unit" || target.status !== "pending",
+    ) &&
+    gate.targets
+      .filter((target) => target.definition.scope === "unit")
+      .every(targetIsSettled) &&
+    gate.destinationProbes.every(
+      (probe) => probe.stage !== "unit" || probe.status !== "pending",
+    )
+  );
+}
+
 /**
  * Wave membership is durable aggregate state, while task metadata is an
  * exact controller input from Beads. The planner is conservative by design:
@@ -251,7 +1260,8 @@ function reduceWavePlan(
     state.integrationQueue.length !== 0 ||
     state.effectJournal.some(
       (entry) => entry.status === "intended" || entry.status === "ambiguous",
-    )
+    ) ||
+    !gateIsGreen(state.gate)
   )
     return reject("illegal_transition", "prior wave has not drained");
   if (Object.values(state.units).some((unit) => unit.state !== "planned"))
@@ -259,7 +1269,21 @@ function reduceWavePlan(
       "illegal_transition",
       "only planned units may form a new wave",
     );
-  const selected = selectWaveUnits(state, event.tasks);
+  const carryOnly = event.carryOnly === true;
+  if (
+    carryOnly !== (event.tasks.length === 0) ||
+    (carryOnly &&
+      (Object.keys(state.units).length !== 0 ||
+        state.pendingProvenanceCarry === undefined ||
+        event.knowledgeContract === undefined))
+  )
+    return reject(
+      "invalid_event",
+      "an empty wave requires one authoritative pending provenance carry",
+    );
+  const selected = carryOnly
+    ? ({ ok: true, value: [] } as const)
+    : selectWaveUnits(state, event.tasks);
   if (!selected.ok) return reject("invalid_event", selected.reason);
   const metadata = event.tasks.map(canonicalTaskMetadata);
   if (!metadataFitsEnvelope(metadata))
@@ -267,18 +1291,115 @@ function reduceWavePlan(
       "invalid_event",
       "wave task metadata exceeds durable envelope",
     );
+  if (
+    event.knowledgeContract === undefined &&
+    metadata.some((task) => (task.materialisationTargets?.length ?? 0) > 0)
+  )
+    return reject(
+      "invalid_event",
+      "materialisation targets require a recorded knowledge contract",
+    );
+  if (event.knowledgeContract !== undefined && state.harness === undefined)
+    return reject(
+      "invalid_event",
+      "knowledge waves require a recorded harness configuration",
+    );
+  if (
+    event.knowledgeContract !== undefined &&
+    !targetAliasesAreValid(metadata, event.knowledgeContract, state.harness!)
+  )
+    return reject(
+      "invalid_event",
+      "knowledge targets must reference a unique declared destination alias",
+    );
   const byUnitId = new Map(metadata.map((task) => [task.unitId, task]));
+  const carriedProjectionInputSnapshot =
+    state.gate?.provenance?.status === "voided" &&
+    state.gate.provenance.disposition === "deferred_by_controller"
+      ? state.gate.provenance.projectionInputSnapshot
+      : state.pendingProvenanceCarry?.projectionInputSnapshot;
+  const carriedProvenanceBaseOid =
+    state.gate?.provenance?.status === "voided" &&
+    state.gate.provenance.disposition === "deferred_by_controller"
+      ? (state.gate.provenance.advancedBaseOid ??
+        state.gate.provenance.baseOid ??
+        state.gate.currentIntegrationOid)
+      : state.pendingProvenanceCarry?.integrationOid;
+  const carriedSnapshotCommitment =
+    state.gate?.provenance?.status === "voided" &&
+    state.gate.provenance.disposition === "deferred_by_controller"
+      ? provenanceCarrySnapshotCommitment(
+          state.gate.provenance.projectionInputSnapshot,
+        )
+      : state.pendingProvenanceCarry?.snapshotCommitment;
+  const lineageAncestorDigests =
+    state.gate?.provenance?.status === "voided" &&
+    state.gate.provenance.disposition === "deferred_by_controller"
+      ? state.gate.lineageAncestorDigests
+      : (state.pendingProvenanceCarry?.lineageAncestorDigests ?? []);
+  if (
+    carriedProjectionInputSnapshot !== undefined &&
+    event.knowledgeContract === undefined
+  )
+    return reject(
+      "invalid_event",
+      "deferred provenance cannot be dropped by a software-only wave",
+    );
+  if (
+    carriedProjectionInputSnapshot !== undefined &&
+    !projectionInputFits(carriedProjectionInputSnapshot)
+  )
+    return reject("invalid_event", "carried provenance exceeds its bound");
+  if (
+    (carriedProjectionInputSnapshot === undefined) !==
+      (carriedSnapshotCommitment === undefined) ||
+    (carriedProjectionInputSnapshot !== undefined &&
+      (carriedSnapshotCommitment !==
+        provenanceCarrySnapshotCommitment(carriedProjectionInputSnapshot) ||
+        carriedProjectionInputSnapshot.unitIds.length === 0 ||
+        carriedProjectionInputSnapshot.unitIds.some((unitId) =>
+          selected.value.includes(unitId),
+        )))
+  )
+    return reject(
+      "invalid_event",
+      "carried provenance identity contradicts the selected wave",
+    );
+  const gate =
+    event.knowledgeContract === undefined
+      ? undefined
+      : newGate(
+          state,
+          event.waveId,
+          selected.value,
+          metadata,
+          event.knowledgeContract,
+          carriedProjectionInputSnapshot,
+          carriedSnapshotCommitment,
+          carriedProvenanceBaseOid,
+          lineageAncestorDigests,
+        );
+  const { pendingProvenanceCarry: _pendingCarry, ...stateWithoutPendingCarry } =
+    state;
+  const planned: RepositoryRun = {
+    ...stateWithoutPendingCarry,
+    units: Object.fromEntries(
+      Object.entries(state.units).map(([unitId, unit]) => [
+        unitId,
+        { ...unit, taskMetadata: byUnitId.get(unitId)! },
+      ]),
+    ),
+    wave: { id: event.waveId, unitIds: [...selected.value] },
+  };
+  if (event.knowledgeContract === undefined) {
+    delete planned.gate;
+    delete planned.knowledgeContract;
+  } else {
+    planned.gate = gate!;
+    planned.knowledgeContract = event.knowledgeContract;
+  }
   return commit(
-    {
-      ...state,
-      units: Object.fromEntries(
-        Object.entries(state.units).map(([unitId, unit]) => [
-          unitId,
-          { ...unit, taskMetadata: byUnitId.get(unitId)! },
-        ]),
-      ),
-      wave: { id: event.waveId, unitIds: [...selected.value] },
-    },
+    carryOnly ? maybeCreateProvenance(planned) : planned,
     event,
     [],
   );
@@ -293,6 +1414,12 @@ function canonicalTaskMetadata(task: WaveTaskMetadata): WaveTaskMetadata {
     mandatoryVerification: sortedStrings(task.mandatoryVerification),
     ownedPaths: sortedStrings(task.ownedPaths),
     reservations: sortedStrings(task.reservations),
+    ...(task.supersedes === undefined
+      ? {}
+      : { supersedes: sortedStrings(task.supersedes) }),
+    ...(task.tombstones === undefined
+      ? {}
+      : { tombstones: sortedStrings(task.tombstones) }),
   };
 }
 
@@ -321,7 +1448,7 @@ function sameStringArray(
 }
 
 function sortedStrings(values: readonly string[]): string[] {
-  return [...values].sort((left, right) => left.localeCompare(right));
+  return [...values].sort(compareProtocolText);
 }
 
 function selectWaveUnits(
@@ -340,11 +1467,14 @@ function selectWaveUnits(
       reason: "wave metadata must cover every remaining unit exactly once",
     };
   const byId = new Map(metadata.map((task) => [task.unitId, task]));
+  const closedEvidence = decodeClosedUnitEvidence(state.closedUnitEvidence);
+  const dependencyIsSatisfied = (dependency: string): boolean =>
+    byId.has(dependency) || closedEvidence?.[dependency]?.outcome === "landed";
   if (
     metadata.some(
       (task) =>
         task.dependencies.some(
-          (dependency) => byId.get(dependency) === undefined,
+          (dependency) => !dependencyIsSatisfied(dependency),
         ) ||
         task.dependencies.includes(task.unitId) ||
         task.ownedPaths.some((path) => !validOwnedPath(path)),
@@ -364,6 +1494,7 @@ function selectWaveUnits(
     const task = byId.get(id)!;
     let current = 0;
     for (const dependency of task.dependencies) {
+      if (!byId.has(dependency)) continue;
       const found = visit(dependency);
       if (found === undefined) {
         visiting.delete(id);
@@ -378,13 +1509,15 @@ function selectWaveUnits(
   if (metadata.some((task) => visit(task.unitId) === undefined))
     return { ok: false, reason: "wave dependency graph contains a cycle" };
   const ordered = metadata
-    .filter((task) => task.dependencies.length === 0)
+    .filter((task) =>
+      task.dependencies.every((dependency) => !byId.has(dependency)),
+    )
     .sort(
       (left, right) =>
         depth.get(left.unitId)! - depth.get(right.unitId)! ||
         riskOrder(left.risk) - riskOrder(right.risk) ||
         left.priority - right.priority ||
-        left.unitId.localeCompare(right.unitId),
+        compareProtocolText(left.unitId, right.unitId),
     );
   const first = ordered[0];
   if (first === undefined)
@@ -446,6 +1579,3289 @@ function taskConflict(
   );
 }
 
+type GateEvent = Extract<ProtocolEvent, { unitId: null }>;
+
+function isGateEvent(event: ProtocolEvent): event is GateEvent {
+  return (
+    "unitId" in event &&
+    event.unitId === null &&
+    event.type !== "effect_ambiguous"
+  );
+}
+
+function gateTargetsForStage(
+  gate: WaveGate,
+  stage: "gate" | "unit",
+): readonly GateTargetState[] {
+  return gate.targets.filter((target) => target.definition.scope === stage);
+}
+
+function gateMaterialisations(
+  gate: WaveGate,
+  stage?: "gate" | "unit",
+): readonly GateMaterialisation[] {
+  const targets =
+    stage === undefined ? gate.targets : gateTargetsForStage(gate, stage);
+  return targets.flatMap((target) => target.materialisations);
+}
+
+function updateGateTarget(
+  gate: WaveGate,
+  targetId: string,
+  update: (target: GateTargetState) => GateTargetState,
+): WaveGate {
+  const map = (target: GateTargetState) =>
+    target.definition.targetId === targetId ? update(target) : target;
+  return {
+    ...gate,
+    targets: gate.targets.map(map),
+  };
+}
+
+function updateGateMaterialisation(
+  gate: WaveGate,
+  gateEntryId: string,
+  update: (item: GateMaterialisation) => GateMaterialisation,
+): WaveGate {
+  const map = (target: GateTargetState): GateTargetState => ({
+    ...target,
+    materialisations: target.materialisations.map((item) =>
+      item.gateEntryId === gateEntryId ? update(item) : item,
+    ),
+  });
+  return {
+    ...gate,
+    targets: gate.targets.map(map),
+  };
+}
+
+function settleTargetPromise(gate: WaveGate, targetId: string): WaveGate {
+  return updateGateTarget(gate, targetId, (target) => {
+    if (
+      target.status !== "pending" ||
+      target.resolution?.status !== "observed" ||
+      target.materialisations.length === 0 ||
+      target.materialisations.some((item) => item.status === "pending")
+    )
+      return target;
+    const deferred = target.materialisations.find(
+      (item) => item.status === "voided",
+    );
+    return deferred === undefined
+      ? { ...target, status: "observed" }
+      : {
+          ...target,
+          disposition: "deferral_cascade",
+          followUpBeadId: required(
+            deferred.followUpBeadId,
+            "materialisation deferral follow-up",
+            "materialise",
+          ),
+          status: "voided",
+        };
+  });
+}
+
+function findResolution(gate: WaveGate, gateEntryId: string) {
+  for (const target of gate.targets)
+    if (target.resolution?.gateEntryId === gateEntryId)
+      return { target, resolution: target.resolution };
+  return undefined;
+}
+
+function findMaterialisation(gate: WaveGate, gateEntryId: string) {
+  for (const target of gate.targets) {
+    const materialisation = target.materialisations.find(
+      (item) => item.gateEntryId === gateEntryId,
+    );
+    if (materialisation !== undefined) return { target, materialisation };
+  }
+  return undefined;
+}
+
+function findDestinationProbe(gate: WaveGate, gateEntryId: string) {
+  return gate.destinationProbes.find(
+    (probe) => probe.gateEntryId === gateEntryId,
+  );
+}
+
+function destinationProbeGateEntryId(
+  state: RepositoryRun,
+  gate: WaveGate,
+  stage: "gate" | "unit",
+  destinationAlias: string,
+  destinationSubpath: string,
+): string {
+  const destination = required(
+    state.knowledgeContract?.aliases.find(
+      (candidate) => candidate.alias === destinationAlias,
+    ),
+    "destination alias",
+    "destination_probe",
+  );
+  return deriveGateEntryId(
+    state.controller.runId,
+    gate.waveId,
+    `${stage}-destination-probe`,
+    { destination, destinationSubpath },
+  );
+}
+
+function updateDestinationProbe(
+  gate: WaveGate,
+  gateEntryId: string,
+  update: (probe: GateDestinationProbe) => GateDestinationProbe,
+): WaveGate {
+  return {
+    ...gate,
+    destinationProbes: gate.destinationProbes.map((probe) =>
+      probe.gateEntryId === gateEntryId ? update(probe) : probe,
+    ),
+  };
+}
+
+function ensureDestinationProbes(
+  state: RepositoryRun,
+  gate: WaveGate,
+  stage: "gate" | "unit",
+): WaveGate {
+  if (!stageResolutionsSettled(gate, stage)) return gate;
+  const destinations = new Map<string, GateDestinationProbe>();
+  for (const target of gateTargetsForStage(gate, stage)) {
+    if (target.status === "voided" || target.materialisations.length === 0)
+      continue;
+    const destinationAlias = target.definition.target.destinationAlias;
+    const destinationSubpath = target.definition.target.destinationSubpath;
+    const key = `${destinationAlias}\u0000${destinationSubpath}`;
+    destinations.set(key, {
+      destinationAlias,
+      destinationSubpath,
+      gateEntryId: destinationProbeGateEntryId(
+        state,
+        gate,
+        stage,
+        destinationAlias,
+        destinationSubpath,
+      ),
+      stage,
+      status: "pending",
+    });
+  }
+  for (const probe of gate.destinationProbes.filter(
+    (candidate) => candidate.stage === stage,
+  ))
+    destinations.set(
+      `${probe.destinationAlias}\u0000${probe.destinationSubpath}`,
+      probe,
+    );
+  return {
+    ...gate,
+    destinationProbes: [
+      ...gate.destinationProbes.filter((probe) => probe.stage !== stage),
+      ...[...destinations.values()].sort(
+        (left, right) =>
+          compareProtocolText(left.stage, right.stage) ||
+          compareProtocolText(left.gateEntryId, right.gateEntryId),
+      ),
+    ],
+  };
+}
+
+function probeForMaterialisation(
+  gate: WaveGate,
+  stage: "gate" | "unit",
+  item: GateMaterialisation,
+): GateDestinationProbe | undefined {
+  return gate.destinationProbes.find(
+    (probe) =>
+      probe.stage === stage &&
+      probe.destinationAlias === item.target.destinationAlias &&
+      probe.destinationSubpath === item.target.destinationSubpath,
+  );
+}
+
+function projectionSnapshot(gate: WaveGate): ProvenanceInput | undefined {
+  return (
+    gate.provenance?.projectionInputSnapshot ??
+    gate.carriedProjectionInputSnapshot
+  );
+}
+
+function unitDestinationProbeEvidence(
+  gate: WaveGate,
+): readonly GateDestinationProbe[] {
+  const probes = new Map<string, GateDestinationProbe>();
+  for (const probe of [
+    ...(projectionSnapshot(gate)?.destinationProbeEvidence ?? []),
+    ...gate.destinationProbes.filter((candidate) => candidate.stage === "unit"),
+  ])
+    probes.set(probe.gateEntryId, probe);
+  return [...probes.values()];
+}
+
+function priorDestinationIdentities(
+  gate: WaveGate,
+  destinationAlias: string,
+  destinationSubpath: string,
+): readonly MaterialisationDestinationIdentity[] {
+  const identities = new Map<string, MaterialisationDestinationIdentity>();
+  for (const probe of unitDestinationProbeEvidence(gate)) {
+    if (
+      probe.destinationAlias !== destinationAlias ||
+      probe.destinationSubpath !== destinationSubpath ||
+      probe.status !== "observed" ||
+      probe.identity === undefined
+    )
+      continue;
+    const key = `${probe.identity.canonicalPath}\u0000${probe.identity.device}\u0000${probe.identity.inode}`;
+    identities.set(key, probe.identity);
+  }
+  return [...identities.values()];
+}
+
+function destinationIdentityForMaterialisation(
+  gate: WaveGate,
+  stage: "gate" | "unit",
+  item: GateMaterialisation,
+): MaterialisationDestinationIdentity | undefined {
+  if (stage === "gate")
+    return probeForMaterialisation(gate, stage, item)?.identity;
+  return unitDestinationProbeEvidence(gate).find(
+    (probe) =>
+      probe.destinationAlias === item.target.destinationAlias &&
+      probe.destinationSubpath === item.target.destinationSubpath &&
+      probe.status === "observed",
+  )?.identity;
+}
+
+function observedUnitMaterialisations(
+  gate: WaveGate,
+): readonly GateMaterialisation[] {
+  const entries = new Map<string, GateMaterialisation>();
+  for (const item of [
+    ...(projectionSnapshot(gate)?.targetEvidence.flatMap(
+      (target) => target.materialisations,
+    ) ?? []),
+    ...gateMaterialisations(gate, "unit"),
+  ])
+    if (item.status === "observed") entries.set(item.gateEntryId, item);
+  return [...entries.values()];
+}
+
+function sameDestinationIdentity(
+  left: MaterialisationDestinationIdentity,
+  right: MaterialisationDestinationIdentity,
+): boolean {
+  return (
+    left.canonicalPath === right.canonicalPath &&
+    left.device === right.device &&
+    left.inode === right.inode
+  );
+}
+
+export function matchesMaterialisationPattern(
+  pattern: string,
+  path: string,
+): boolean {
+  const patterns = pattern.split("/");
+  const parts = path.split("/");
+  if (patterns.length !== parts.length) return false;
+  return patterns.every((segment, index) => {
+    let expression = "^";
+    for (const character of segment) {
+      if (character === "*") expression += "[A-Za-z0-9._-]*";
+      else if (character === "?") expression += "[A-Za-z0-9._-]";
+      else expression += character.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    }
+    return new RegExp(`${expression}$`, "u").test(parts[index] ?? "");
+  });
+}
+
+function materialisationName(
+  source: MaterialisationSource,
+  policy: MaterialisationTarget["namingPolicy"],
+  timestamp: string,
+): string {
+  const basename = source.path.split("/").at(-1)!;
+  const dot = basename.lastIndexOf(".");
+  const suffix = dot > 0 ? basename.slice(dot + 1) : "";
+  const retainExtension = /^[A-Za-z0-9]{1,10}$/u.test(suffix);
+  const rawStem = retainExtension ? basename.slice(0, dot) : basename;
+  const stem = rawStem
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/gu, "-")
+    .replace(/^-+|-+$/gu, "")
+    .slice(0, 80)
+    .replace(/-+$/u, "");
+  const extension = retainExtension ? `.${suffix.toLowerCase()}` : "";
+  const compactClock = timestamp.replace(/[-:]/gu, "");
+  const oid12 = source.blobOid.slice(0, 12);
+  if (policy === "iso-date-prefix")
+    return `${timestamp.slice(0, 10)}--${stem}--${oid12}--${compactClock}${extension}`;
+  if (policy === "content-hash-suffix")
+    return `${stem}--${source.sha256.slice(0, 12)}--${oid12}--${compactClock}${extension}`;
+  return `${stem}--${oid12}--${compactClock}${extension}`;
+}
+
+function validUtcSecond(value: string): boolean {
+  const instant = new Date(value);
+  return (
+    !Number.isNaN(instant.valueOf()) &&
+    instant.toISOString().replace(".000Z", "Z") === value
+  );
+}
+
+function sidecarFor(
+  state: RepositoryRun,
+  gate: WaveGate,
+  item: GateMaterialisation,
+  artifactName: string,
+  timestamp: string,
+): { readonly bytes: string; readonly value: MaterialisationSidecar } {
+  const contract = required(
+    state.knowledgeContract,
+    "knowledge contract",
+    "materialise",
+  );
+  const value: MaterialisationSidecar = {
+    artifactName,
+    blobOid: item.source.blobOid,
+    byteCount: item.source.byteCount,
+    destinationAlias: item.target.destinationAlias,
+    destinationSubpath: item.target.destinationSubpath,
+    domainScope: contract.domainScope,
+    driver: contract.humanDriver,
+    executorTool: required(state.harness, "harness", "materialise").family,
+    gateEntryId: item.gateEntryId,
+    originUnitId: item.originUnitId,
+    runId: state.controller.runId,
+    schema: "sce.materialisation-provenance",
+    sha256: item.source.sha256,
+    sourceOid: item.sourceOid,
+    sourcePath: item.source.path,
+    targetId: item.targetId,
+    timestamp,
+    version: 1,
+    waveId: gate.waveId,
+  };
+  return { bytes: `${canonicalJson(value as unknown as JsonValue)}\n`, value };
+}
+
+function sourceTotals(gate: WaveGate): { bytes: number; items: number } {
+  const settledUnitTargets = gate.provenance?.projectionInputSnapshot
+    .targetEvidence ?? [
+    ...(gate.carriedProjectionInputSnapshot?.targetEvidence ?? []),
+    ...gate.targets.filter((target) => target.definition.scope === "unit"),
+  ];
+  const sources = [
+    ...settledUnitTargets,
+    ...gate.targets.filter((target) => target.definition.scope === "gate"),
+  ].flatMap((target) => target.resolution?.sources ?? []);
+  return {
+    bytes: sources.reduce((total, source) => total + source.byteCount, 0),
+    items: sources.length,
+  };
+}
+
+function canonicalByteLength(value: JsonValue): number {
+  return utf8.encode(canonicalJson(value)).byteLength;
+}
+
+const MAX_GATE_EVENT_ID_BYTES = 160;
+const GATE_IDEMPOTENCY_KEY_BYTES = 68; // `sce:` + sha256
+
+function canonicalAsciiArrayBytes(lengths: readonly number[]): number {
+  return (
+    2 +
+    lengths.reduce((total, length) => total + length + 2, 0) +
+    Math.max(0, lengths.length - 1)
+  );
+}
+
+/**
+ * Exact maximum of the FIFO history under unbounded gate retries. Existing
+ * longer keys remain until eviction; new aggregate event IDs may use the full
+ * identifier bound while their reducer-derived keys are always 68 bytes.
+ */
+function maximumFifoHistoryGrowth(
+  current: readonly string[],
+  appendedItemBytes: number,
+): number {
+  const currentLengths = current.map((item) => utf8.encode(item).byteLength);
+  const currentBytes = canonicalAsciiArrayBytes(currentLengths);
+  let maximumBytes = currentBytes;
+  for (let appended = 1; appended <= LIMITS.eventHistory; appended += 1) {
+    const future = [
+      ...currentLengths,
+      ...Array.from({ length: appended }, () => appendedItemBytes),
+    ].slice(-LIMITS.eventHistory);
+    maximumBytes = Math.max(maximumBytes, canonicalAsciiArrayBytes(future));
+  }
+  return maximumBytes - currentBytes;
+}
+
+function maximumAggregateCounterGrowth(state: RepositoryRun): number {
+  const current = {
+    journalCheckpoint: {
+      compactedEffects: state.journalCheckpoint.compactedEffects,
+      compactedEvents: state.journalCheckpoint.compactedEvents,
+      compactedIdempotencyKeys:
+        state.journalCheckpoint.compactedIdempotencyKeys,
+      revision: state.journalCheckpoint.revision,
+    },
+    revision: state.revision,
+  };
+  const maximum = {
+    journalCheckpoint: {
+      compactedEffects: Number.MAX_SAFE_INTEGER,
+      compactedEvents: Number.MAX_SAFE_INTEGER,
+      compactedIdempotencyKeys: Number.MAX_SAFE_INTEGER,
+      revision: Number.MAX_SAFE_INTEGER,
+    },
+    revision: Number.MAX_SAFE_INTEGER,
+  };
+  return (
+    canonicalByteLength(maximum as unknown as JsonValue) -
+    canonicalByteLength(current as unknown as JsonValue)
+  );
+}
+
+function maximumAggregateHistoryGrowth(state: RepositoryRun): number {
+  return (
+    maximumFifoHistoryGrowth(state.processedEventIds, MAX_GATE_EVENT_ID_BYTES) +
+    maximumFifoHistoryGrowth(
+      state.processedIdempotencyKeys,
+      GATE_IDEMPOTENCY_KEY_BYTES,
+    ) +
+    maximumAggregateCounterGrowth(state)
+  );
+}
+
+export type MaterialisationExpansionBinding = Readonly<{
+  capacities: NonNullable<GateResolution["capacities"]>;
+  destinationProbeGateEntryId: string;
+  domainScope: string;
+  driver: string;
+  executorTool: string;
+  originUnitId: string | null;
+  resolutionGateEntryId: string;
+  runId: string;
+  sourceOid: string;
+  stage: "gate" | "unit";
+  target: MaterialisationTarget;
+  targetId: string;
+  targetOrdinal: number;
+  waveId: string;
+}>;
+
+function materialisationGateEntryIdForSource(
+  source: MaterialisationSource,
+  binding: MaterialisationExpansionBinding,
+): string {
+  return deriveGateEntryId(
+    binding.runId,
+    binding.waveId,
+    `${binding.stage}-materialise`,
+    {
+      blobOid: source.blobOid,
+      destinationProbeGateEntryId: binding.destinationProbeGateEntryId,
+      path: source.path,
+      sourceOid: binding.sourceOid,
+      targetId: binding.targetId,
+    },
+  );
+}
+
+function maximumSidecarByteCountForSource(
+  source: MaterialisationSource,
+  binding: MaterialisationExpansionBinding,
+  artifactName: string,
+): number {
+  const sidecar: MaterialisationSidecar = {
+    artifactName,
+    blobOid: source.blobOid,
+    byteCount: source.byteCount,
+    destinationAlias: binding.target.destinationAlias,
+    destinationSubpath: binding.target.destinationSubpath,
+    domainScope: binding.domainScope,
+    driver: binding.driver,
+    executorTool: binding.executorTool,
+    gateEntryId: materialisationGateEntryIdForSource(source, binding),
+    originUnitId: binding.originUnitId,
+    runId: binding.runId,
+    schema: "sce.materialisation-provenance",
+    sha256: source.sha256,
+    sourceOid: binding.sourceOid,
+    sourcePath: source.path,
+    targetId: binding.targetId,
+    timestamp: "9999-12-31T23:59:59Z",
+    version: 1,
+    waveId: binding.waveId,
+  };
+  return utf8.encode(`${canonicalJson(sidecar as unknown as JsonValue)}\n`)
+    .byteLength;
+}
+
+function reachableMaterialisationVariants(
+  source: MaterialisationSource,
+  binding: MaterialisationExpansionBinding,
+): Readonly<{
+  cascade: JsonValue;
+  collision: JsonValue;
+  deferred: JsonValue;
+  intended: JsonValue;
+  materialDeferred: JsonValue;
+  materialRefusal: JsonValue;
+  observed: JsonValue;
+  pending: JsonValue;
+}> {
+  const base = {
+    destinationProbeGateEntryId: binding.destinationProbeGateEntryId,
+    gateEntryId: materialisationGateEntryIdForSource(source, binding),
+    originUnitId: binding.originUnitId,
+    source,
+    sourceOid: binding.sourceOid,
+    target: binding.target,
+    targetId: binding.targetId,
+  };
+  const artifactName = materialisationName(
+    source,
+    binding.target.namingPolicy,
+    "9999-12-31T23:59:59Z",
+  );
+  const sidecarByteCount = maximumSidecarByteCountForSource(
+    source,
+    binding,
+    artifactName,
+  );
+  const named = {
+    ...base,
+    artifactName,
+    sidecarByteCount,
+    sidecarName: `${artifactName}.sce-provenance.json`,
+    sidecarSha256: "a".repeat(64),
+    timestamp: "9999-12-31T23:59:59Z",
+  };
+  return {
+    pending: { ...base, status: "pending" },
+    intended: {
+      ...base,
+      currentEffectId: `${"a".repeat(160)}:materialise`,
+      status: "pending",
+    },
+    collision: {
+      ...named,
+      lastRefusal: {
+        code: "output_name_collision",
+        conflictingGateEntryId: `sce:gate:${"a".repeat(64)}`,
+      },
+      status: "pending",
+    },
+    materialRefusal: {
+      ...named,
+      lastRefusal: {
+        code: "hard_links_unsupported",
+        detailHash: "a".repeat(64),
+      },
+      status: "pending",
+    },
+    observed: {
+      ...named,
+      observation: {
+        artifactByteCount: source.byteCount,
+        artifactSha256: "a".repeat(64),
+        artifactStatus: "already_present",
+        sidecarByteCount,
+        sidecarSha256: "a".repeat(64),
+        sidecarStatus: "already_present",
+      },
+      status: "observed",
+    },
+    deferred: {
+      ...named,
+      disposition: "deferred_by_controller",
+      followUpBeadId: "a".repeat(160),
+      lastRefusal: {
+        code: "output_name_collision",
+        conflictingGateEntryId: `sce:gate:${"a".repeat(64)}`,
+      },
+      status: "voided",
+    },
+    materialDeferred: {
+      ...named,
+      disposition: "deferred_by_controller",
+      followUpBeadId: "a".repeat(160),
+      lastRefusal: {
+        code: "hard_links_unsupported",
+        detailHash: "a".repeat(64),
+      },
+      status: "voided",
+    },
+    cascade: {
+      ...base,
+      disposition: "deferral_cascade",
+      followUpBeadId: "a".repeat(160),
+      status: "voided",
+    },
+  } as unknown as ReturnType<typeof reachableMaterialisationVariants>;
+}
+
+/**
+ * Exact reachable target-container delta for the resolved tuple. The source
+ * list is retained once by the resolution and once per expanded output; the
+ * latter uses the largest legal future state for that exact source/target.
+ */
+function reachableTargetVariants(
+  sources: readonly MaterialisationSource[],
+  binding: MaterialisationExpansionBinding,
+): Readonly<{ baseline: JsonValue; variants: readonly JsonValue[] }> {
+  const materialisationVariants = sources.map((source) =>
+    reachableMaterialisationVariants(source, binding),
+  );
+  const definition = {
+    originUnitId: binding.originUnitId,
+    scope: binding.stage,
+    target: binding.target,
+    targetId: binding.targetId,
+    targetOrdinal: binding.targetOrdinal,
+  };
+  const baseline = {
+    definition,
+    materialisations: [],
+    resolution: {
+      gateEntryId: binding.resolutionGateEntryId,
+      sourceOid: binding.sourceOid,
+      status: "pending",
+      targetId: binding.targetId,
+    },
+    status: "pending",
+  };
+  const resolution = {
+    capacities: binding.capacities,
+    gateEntryId: binding.resolutionGateEntryId,
+    sourceOid: binding.sourceOid,
+    sources,
+    status: "observed",
+    targetId: binding.targetId,
+  };
+  const largestSettledMaterialisations = materialisationVariants.map((item) =>
+    [item.deferred, item.materialDeferred, item.observed].reduce(
+      (largest, candidate) =>
+        canonicalByteLength(candidate) > canonicalByteLength(largest)
+          ? candidate
+          : largest,
+    ),
+  );
+  const independentlyDeferredTargets = materialisationVariants.map(
+    (item, deferredIndex) => ({
+      definition,
+      disposition: "deferral_cascade",
+      followUpBeadId: "a".repeat(160),
+      materialisations: largestSettledMaterialisations.map((settled, index) =>
+        index === deferredIndex
+          ? canonicalByteLength(item.materialDeferred) >
+            canonicalByteLength(item.deferred)
+            ? item.materialDeferred
+            : item.deferred
+          : settled,
+      ),
+      resolution,
+      status: "voided",
+    }),
+  );
+  const variants: readonly JsonValue[] = [
+    {
+      definition,
+      materialisations: [],
+      resolution: {
+        ...baseline.resolution,
+        capacities: binding.capacities,
+        currentEffectId: `${"a".repeat(160)}:materialisation_resolve`,
+      },
+      status: "pending",
+    },
+    {
+      definition,
+      materialisations: [],
+      resolution: {
+        ...baseline.resolution,
+        capacities: binding.capacities,
+        lastRefusal: {
+          code: "evidence_budget_exceeded",
+          detailHash: "a".repeat(64),
+        },
+      },
+      status: "pending",
+    },
+    {
+      definition,
+      materialisations: materialisationVariants.map((item) => item.collision),
+      resolution,
+      status: "pending",
+    },
+    {
+      definition,
+      materialisations: materialisationVariants.map(
+        (item) => item.materialRefusal,
+      ),
+      resolution,
+      status: "pending",
+    },
+    {
+      definition,
+      materialisations: materialisationVariants.map((item) => item.observed),
+      resolution,
+      status: "observed",
+    },
+    ...independentlyDeferredTargets,
+    {
+      definition,
+      disposition: "deferral_cascade",
+      followUpBeadId: "a".repeat(160),
+      materialisations: materialisationVariants.map((item) => item.cascade),
+      resolution,
+      status: "voided",
+    },
+    ...materialisationVariants.map((_, intendedIndex) => ({
+      definition,
+      materialisations: materialisationVariants.map((item, index) =>
+        index === intendedIndex ? item.intended : item.pending,
+      ),
+      resolution,
+      status: "pending",
+    })),
+  ] as unknown as readonly JsonValue[];
+  return { baseline: baseline as unknown as JsonValue, variants };
+}
+
+function maximumReachableTargetBytes(
+  sources: readonly MaterialisationSource[],
+  binding: MaterialisationExpansionBinding,
+): number {
+  const { variants } = reachableTargetVariants(sources, binding);
+  return Math.max(...variants.map(canonicalByteLength));
+}
+
+function maximumReachableTargetFromCurrent(
+  target: GateTargetState,
+  binding: MaterialisationExpansionBinding,
+): GateTargetState {
+  const resolution = target.resolution;
+  if (
+    target.status !== "pending" ||
+    resolution?.status !== "observed" ||
+    resolution.sources === undefined ||
+    target.materialisations.length === 0
+  )
+    return target;
+  const successorChoices = target.materialisations.map((current, index) => {
+    if (current.status !== "pending")
+      return { deferred: current, observed: current, terminal: true };
+    const variants = reachableMaterialisationVariants(
+      resolution.sources![index]!,
+      binding,
+    );
+    const collisionCanRecur =
+      current.timestamp === undefined ||
+      current.lastRefusal?.code === "output_name_collision";
+    const deferredCandidates = collisionCanRecur
+      ? [variants.deferred, variants.materialDeferred]
+      : [variants.materialDeferred];
+    const deferred = deferredCandidates.reduce((largest, candidate) =>
+      canonicalByteLength(candidate) > canonicalByteLength(largest)
+        ? candidate
+        : largest,
+    ) as unknown as GateMaterialisation;
+    return {
+      deferred,
+      observed: variants.observed as unknown as GateMaterialisation,
+      terminal: false,
+    };
+  });
+  const pendingIndices = successorChoices.flatMap((choice, index) =>
+    choice.terminal ? [] : [index],
+  );
+  const candidates: GateTargetState[] = [];
+  const finalize = (
+    materialisations: readonly GateMaterialisation[],
+  ): GateTargetState => {
+    const firstVoided = materialisations.find(
+      (item) => item.status === "voided",
+    );
+    return firstVoided === undefined
+      ? {
+          definition: target.definition,
+          materialisations: [...materialisations],
+          resolution,
+          status: "observed",
+        }
+      : {
+          definition: target.definition,
+          disposition: "deferral_cascade",
+          followUpBeadId: required(
+            firstVoided.followUpBeadId,
+            "materialisation deferral follow-up",
+            "materialise",
+          ),
+          materialisations: [...materialisations],
+          resolution,
+          status: "voided",
+        };
+  };
+  candidates.push(finalize(successorChoices.map((choice) => choice.observed)));
+  for (const deferredIndex of pendingIndices)
+    candidates.push(
+      finalize(
+        successorChoices.map((choice, index) =>
+          index === deferredIndex
+            ? choice.deferred
+            : canonicalByteLength(choice.deferred as unknown as JsonValue) >
+                canonicalByteLength(choice.observed as unknown as JsonValue)
+              ? choice.deferred
+              : choice.observed,
+        ),
+      ),
+    );
+  return candidates.reduce((largest, candidate) =>
+    canonicalByteLength(candidate as unknown as JsonValue) >
+    canonicalByteLength(largest as unknown as JsonValue)
+      ? candidate
+      : largest,
+  );
+}
+
+export function materialisationExpansionCost(
+  sources: readonly MaterialisationSource[],
+  binding: MaterialisationExpansionBinding,
+): number {
+  const { baseline, variants } = reachableTargetVariants(sources, binding);
+  const baselineBytes = canonicalByteLength(baseline as unknown as JsonValue);
+  return Math.max(
+    ...variants.map(
+      (target) =>
+        canonicalByteLength(target as unknown as JsonValue) - baselineBytes,
+    ),
+  );
+}
+
+/** Unit evidence is retained live and again in the frozen provenance input. */
+export function materialisationAggregateExpansionCost(
+  sources: readonly MaterialisationSource[],
+  binding: MaterialisationExpansionBinding,
+): number {
+  const expansion = materialisationExpansionCost(sources, binding);
+  return binding.stage === "unit" ? 2 * expansion : expansion;
+}
+
+/** Gate targets form only after provenance and never enter its frozen input. */
+export function materialisationProjectionExpansionCost(
+  sources: readonly MaterialisationSource[],
+  binding: MaterialisationExpansionBinding,
+): number {
+  return binding.stage === "unit"
+    ? materialisationExpansionCost(sources, binding)
+    : 0;
+}
+
+function maximumReachableDestinationProbeValue(
+  destinationAlias: string,
+  destinationSubpath: string,
+  gateEntryId = `sce:gate:${"a".repeat(64)}`,
+  stage: "gate" | "unit" = "unit",
+): JsonValue {
+  const base = {
+    destinationAlias,
+    destinationSubpath,
+    gateEntryId,
+    stage,
+  };
+  const refusal = {
+    code: "invalid_destination",
+    detailHash: "a".repeat(64),
+  };
+  const reachable: readonly JsonValue[] = [
+    { ...base, status: "pending" },
+    {
+      ...base,
+      currentEffectId: `${"a".repeat(160)}:destination_probe`,
+      status: "pending",
+    },
+    { ...base, lastRefusal: refusal, status: "pending" },
+    {
+      ...base,
+      identity: {
+        canonicalPath: `/${"a".repeat(4_095)}`,
+        device: "9".repeat(20),
+        inode: "9".repeat(20),
+      },
+      status: "observed",
+    },
+    {
+      ...base,
+      disposition: "deferred_by_controller",
+      followUpBeadId: "a".repeat(160),
+      lastRefusal: refusal,
+      status: "voided",
+    },
+    {
+      ...base,
+      disposition: "deferral_cascade",
+      followUpBeadId: "a".repeat(160),
+      status: "voided",
+    },
+  ] as unknown as readonly JsonValue[];
+  return reachable.reduce((largest, candidate) =>
+    canonicalByteLength(candidate) > canonicalByteLength(largest)
+      ? candidate
+      : largest,
+  );
+}
+
+function maximumReachableDestinationProbeBytes(
+  destinationAlias: string,
+  destinationSubpath: string,
+): number {
+  return canonicalByteLength(
+    maximumReachableDestinationProbeValue(destinationAlias, destinationSubpath),
+  );
+}
+
+function maximumFutureDestinationProbes(
+  state: RepositoryRun,
+  gate: WaveGate,
+  stage: "gate" | "unit",
+): readonly GateDestinationProbe[] {
+  const probes = new Map<string, GateDestinationProbe>();
+  for (const probe of gate.destinationProbes) {
+    const key = `${probe.stage}\u0000${probe.destinationAlias}\u0000${probe.destinationSubpath}`;
+    probes.set(
+      key,
+      probe.stage === stage && probe.status === "pending"
+        ? (maximumReachableDestinationProbeValue(
+            probe.destinationAlias,
+            probe.destinationSubpath,
+            probe.gateEntryId,
+            probe.stage,
+          ) as unknown as GateDestinationProbe)
+        : probe,
+    );
+  }
+  for (const target of [...gate.targetPromises, ...gate.targets]) {
+    if (target.status === "voided" || target.definition.scope !== stage)
+      continue;
+    const { scope, target: definition } = target.definition;
+    const key = `${scope}\u0000${definition.destinationAlias}\u0000${definition.destinationSubpath}`;
+    if (probes.has(key)) continue;
+    const gateEntryId = destinationProbeGateEntryId(
+      state,
+      gate,
+      scope,
+      definition.destinationAlias,
+      definition.destinationSubpath,
+    );
+    probes.set(
+      key,
+      maximumReachableDestinationProbeValue(
+        definition.destinationAlias,
+        definition.destinationSubpath,
+        gateEntryId,
+        scope,
+      ) as unknown as GateDestinationProbe,
+    );
+  }
+  return [...probes.values()].sort(
+    (left, right) =>
+      compareProtocolText(left.stage, right.stage) ||
+      compareProtocolText(left.gateEntryId, right.gateEntryId),
+  );
+}
+
+function maximumUnitProbeProjectionGrowth(
+  state: RepositoryRun,
+  gate: WaveGate,
+): number {
+  const current = provenanceInput(state, gate);
+  const future = provenanceInput(state, {
+    ...gate,
+    destinationProbes: [...maximumFutureDestinationProbes(state, gate, "unit")],
+  });
+  return Math.max(
+    0,
+    canonicalByteLength(future as unknown as JsonValue) -
+      canonicalByteLength(current as unknown as JsonValue),
+  );
+}
+
+type GateCompletionEffectKind = Extract<
+  EffectKind,
+  "materialisation_resolve" | "materialise" | "provenance_commit" | "verify"
+>;
+
+function maximumGateJournalEntry(
+  kind: GateCompletionEffectKind,
+): EffectJournalEntry {
+  return {
+    effectId: `${"a".repeat(160)}:${kind}`,
+    gateEntryId: `sce:gate:${"a".repeat(64)}`,
+    idempotencyKey: `sce:${"a".repeat(64)}`,
+    intentCommitment: "a".repeat(64),
+    intentRevision: Number.MAX_SAFE_INTEGER,
+    kind,
+    observationHash: "a".repeat(64),
+    paramsHash: "a".repeat(64),
+    schemaVersion: SCHEMA_VERSION,
+    status: "observed",
+    unitId: null,
+  };
+}
+
+type GateCompletionScenario = Readonly<{
+  gate: WaveGate;
+  journalKind: GateCompletionEffectKind;
+}>;
+
+function maximumFixedGateVariants(
+  state: RepositoryRun,
+  gate: WaveGate,
+  stage: "gate" | "unit",
+): readonly GateCompletionScenario[] {
+  const futureGate: WaveGate = {
+    ...gate,
+    destinationProbes: [...maximumFutureDestinationProbes(state, gate, stage)],
+  };
+  if (stage === "gate")
+    return [{ gate: futureGate, journalKind: "materialise" }];
+  const projectionInputSnapshot = provenanceInput(state, futureGate);
+  const provenanceGateEntryId = deriveGateEntryId(
+    state.controller.runId,
+    gate.waveId,
+    "provenance",
+    projectionInputSnapshot as unknown as JsonValue,
+  );
+  const baseOid = required(
+    gate.currentIntegrationOid ?? gate.carriedProvenanceBaseOid,
+    "provenance integration base",
+    "provenance_commit",
+  );
+  const oid = "a".repeat(state.gitObjectFormat === "sha1" ? 40 : 64);
+  const attemptIdempotencyKey = `sce:${"a".repeat(64)}`;
+  const provenanceBase = {
+    baseOid,
+    gateEntryId: provenanceGateEntryId,
+    projectionInputSnapshot,
+  };
+  const provenanceAttempt = {
+    ...provenanceBase,
+    attemptIdempotencyKey,
+    timestamp: "9999-12-31T23:59:59Z",
+    worktreePath: deriveProvenanceWorktreePath(
+      required(
+        state.knowledgeContract,
+        "knowledge contract",
+        "provenance_commit",
+      ).provenanceWorktreeRoot,
+      attemptIdempotencyKey,
+    ),
+  };
+  const attemptedResult = {
+    ...provenanceAttempt,
+    attemptedCommitOid: oid,
+    attemptedTreeOid: oid,
+  };
+  const committedProvenance = {
+    ...provenanceAttempt,
+    commitOid: oid,
+    status: "observed" as const,
+    treeOid: oid,
+  };
+  const {
+    carriedProjectionInputSnapshot: _carriedProjectionInputSnapshot,
+    provenance: _existingProvenance,
+    provenancePromise: _provenancePromise,
+    ...withoutProvenance
+  } = futureGate;
+  const withProvenance = (provenance: GateProvenance): WaveGate => ({
+    ...withoutProvenance,
+    provenance,
+  });
+  const provenanceVariants: GateProvenance[] = [
+    { ...provenanceBase, status: "pending" },
+    {
+      ...provenanceBase,
+      status: "pending",
+      timestamp: "9999-12-31T23:59:59Z",
+    },
+    {
+      ...provenanceAttempt,
+      currentEffectId: `${"a".repeat(160)}:provenance_commit`,
+      status: "pending",
+    },
+    {
+      ...attemptedResult,
+      lastRefusal: {
+        code: "provenance_reproducibility_failed",
+        detailHash: "a".repeat(64),
+      },
+      status: "pending",
+    },
+    {
+      ...attemptedResult,
+      advancedBaseOid: oid,
+      lastRefusal: {
+        code: "provenance_base_advanced",
+        detailHash: "a".repeat(64),
+      },
+      status: "pending",
+    },
+    {
+      ...provenanceAttempt,
+      expectedBaseOid: baseOid,
+      lastRefusal: {
+        code: "provenance_worktree_refused",
+        detailHash: "a".repeat(64),
+      },
+      observedHeadOid: oid,
+      status: "pending",
+      worktreeCondition: "unexpected_head",
+    },
+    {
+      ...attemptedResult,
+      lastRefusal: {
+        code: "provenance_integration_refused",
+        detailHash: "a".repeat(64),
+      },
+      status: "pending",
+    },
+    {
+      ...attemptedResult,
+      disposition: "deferred_by_controller",
+      followUpBeadId: "a".repeat(160),
+      lastRefusal: {
+        code: "provenance_reproducibility_failed",
+        detailHash: "a".repeat(64),
+      },
+      status: "voided",
+    },
+  ];
+  const committedAccounting = gate.provenanceUnitAccounting.map((entry) => ({
+    ...entry,
+    provenanceCommitOid: oid,
+    status: "committed" as const,
+  }));
+  const committedGate = withProvenance(committedProvenance);
+  const {
+    aggregateVerify: _existingAggregateVerify,
+    aggregateVerifyPromise: _aggregateVerifyPromise,
+    ...withoutAggregateVerify
+  } = committedGate;
+  const aggregateBase = {
+    gateEntryId: deriveGateEntryId(
+      state.controller.runId,
+      gate.waveId,
+      "aggregate-verify",
+      { provenanceGateEntryId },
+    ),
+    provenanceGateEntryId,
+    status: "pending" as const,
+  };
+  const aggregateVariants: GateAggregateVerify[] = [
+    aggregateBase,
+    {
+      ...aggregateBase,
+      currentEffectId: `${"a".repeat(160)}:verify`,
+    },
+    {
+      ...aggregateBase,
+      lastRefusal: {
+        code: "verification_failed",
+        detailHash: "a".repeat(64),
+      },
+    },
+    { ...aggregateBase, status: "observed" },
+    {
+      ...aggregateBase,
+      disposition: "deferred_by_controller",
+      followUpBeadId: "a".repeat(160),
+      lastRefusal: {
+        code: "verification_failed",
+        detailHash: "a".repeat(64),
+      },
+      status: "voided",
+    },
+  ];
+  const aggregateGates = aggregateVariants.map((aggregateVerify) => {
+    let candidate: WaveGate = {
+      ...withoutAggregateVerify,
+      aggregateVerify,
+      provenanceUnitAccounting: committedAccounting,
+    };
+    if (aggregateVerify.status === "observed")
+      return attachGateTargetSource(state, candidate, oid);
+    if (aggregateVerify.status === "voided") {
+      const followUpBeadId = required(
+        aggregateVerify.followUpBeadId,
+        "aggregate verification deferral follow-up",
+        "verify",
+      );
+      candidate = {
+        ...candidate,
+        targetPromises: candidate.targetPromises.map((target) =>
+          target.definition.scope === "gate"
+            ? {
+                ...target,
+                disposition: "deferral_cascade" as const,
+                followUpBeadId,
+                status: "voided" as const,
+              }
+            : target,
+        ),
+        targets: candidate.targets.map((target) =>
+          target.definition.scope === "gate"
+            ? {
+                ...target,
+                disposition: "deferral_cascade" as const,
+                followUpBeadId,
+                materialisations: target.materialisations.map((item) => ({
+                  ...item,
+                  disposition: "deferral_cascade" as const,
+                  followUpBeadId,
+                  status: "voided" as const,
+                })),
+                ...(target.resolution === undefined
+                  ? {}
+                  : {
+                      resolution: {
+                        ...target.resolution,
+                        disposition: "deferral_cascade" as const,
+                        followUpBeadId,
+                        status: "voided" as const,
+                      },
+                    }),
+                status: "voided" as const,
+              }
+            : target,
+        ),
+      };
+    }
+    return candidate;
+  });
+  const provenanceGates = provenanceVariants.map((provenance) => {
+    const candidate = withProvenance(provenance);
+    if (provenance.status !== "voided") return candidate;
+    const followUpBeadId = required(
+      provenance.followUpBeadId,
+      "provenance deferral follow-up",
+      "provenance_commit",
+    );
+    return {
+      ...candidate,
+      aggregateVerifyPromise: {
+        disposition: "deferral_cascade" as const,
+        followUpBeadId,
+        status: "voided" as const,
+      },
+      targetPromises: candidate.targetPromises.map((target) =>
+        target.definition.scope === "gate"
+          ? {
+              ...target,
+              disposition: "deferral_cascade" as const,
+              followUpBeadId,
+              status: "voided" as const,
+            }
+          : target,
+      ),
+    };
+  });
+  return [
+    { gate: futureGate, journalKind: "materialise" },
+    ...provenanceGates.map(
+      (provenanceGate, index) =>
+        ({
+          gate: provenanceGate,
+          journalKind: index < 2 ? "materialise" : "provenance_commit",
+        }) satisfies GateCompletionScenario,
+    ),
+    ...aggregateGates.map(
+      (aggregateGate, index) =>
+        ({
+          gate: aggregateGate,
+          journalKind: index === 0 ? "provenance_commit" : "verify",
+        }) satisfies GateCompletionScenario,
+    ),
+  ];
+}
+
+/**
+ * Exact fixed completion reserve: strict maximum future gate/provenance/
+ * verify/journal wrappers, one strict probe wrapper per still-uncreated
+ * logical destination, and the current immutable projection bytes.
+ */
+export function materialisationFixedCompletionReserve(
+  state: RepositoryRun,
+  gate: WaveGate,
+  stage: "gate" | "unit",
+): number {
+  const currentGateBytes = canonicalByteLength(gate as unknown as JsonValue);
+  const currentJournalBytes = canonicalByteLength(
+    state.effectJournal as unknown as JsonValue,
+  );
+  const phaseGrowth = Math.max(
+    0,
+    ...maximumFixedGateVariants(state, gate, stage).map((scenario) =>
+      Math.max(
+        0,
+        canonicalByteLength(scenario.gate as unknown as JsonValue) -
+          currentGateBytes +
+          (canonicalByteLength([
+            ...state.effectJournal,
+            maximumGateJournalEntry(scenario.journalKind),
+          ] as unknown as JsonValue) -
+            currentJournalBytes),
+      ),
+    ),
+  );
+  return phaseGrowth + maximumAggregateHistoryGrowth(state);
+}
+
+function resolutionCapacities(
+  state: RepositoryRun,
+  gate: WaveGate,
+  stage: "gate" | "unit",
+): NonNullable<NonNullable<GateTargetState["resolution"]>["capacities"]> {
+  const compacted = compactJournal(state);
+  const totals = sourceTotals(gate);
+  const projectionBytes = canonicalByteLength(
+    provenanceInput(state, gate) as unknown as JsonValue,
+  );
+  const futureUnitProbeBytes =
+    stage === "unit" ? maximumUnitProbeProjectionGrowth(state, gate) : 0;
+  const envelopeBytes = canonicalByteLength({
+    payload: compacted as unknown as JsonValue,
+    schema: "sce.repository-run",
+    version: SCHEMA_VERSION,
+  });
+  const fixedCompletionBytes = materialisationFixedCompletionReserve(
+    compacted,
+    gate,
+    stage,
+  );
+  return {
+    remainingAggregateEnvelopeByteCapacity: Math.max(
+      0,
+      LIMITS.envelopeBytes - envelopeBytes - fixedCompletionBytes,
+    ),
+    remainingItemCapacity: Math.max(
+      0,
+      LIMITS.materialisationOutputs - totals.items,
+    ),
+    remainingProjectionSnapshotByteCapacity: Math.max(
+      0,
+      stage === "unit" ? 65_536 - projectionBytes - futureUnitProbeBytes : 0,
+    ),
+    remainingSourceByteCapacity: Math.max(
+      0,
+      LIMITS.materialisationWaveBytes - totals.bytes,
+    ),
+  };
+}
+
+function repositoryEnvelopeBytes(state: RepositoryRun): number {
+  return canonicalByteLength({
+    payload: state as unknown as JsonValue,
+    schema: "sce.repository-run",
+    version: SCHEMA_VERSION,
+  });
+}
+
+function maximumEnvelopeWithGateJournal(
+  state: RepositoryRun,
+  gate: WaveGate,
+  kind: GateCompletionEffectKind,
+): number {
+  const candidate: RepositoryRun = {
+    ...state,
+    effectJournal: [...state.effectJournal, maximumGateJournalEntry(kind)],
+    gate,
+  };
+  return (
+    repositoryEnvelopeBytes(candidate) + maximumAggregateHistoryGrowth(state)
+  );
+}
+
+function resolutionIntentCompletionFits(
+  state: RepositoryRun,
+  gate: WaveGate,
+  target: GateTargetState,
+  capacities: NonNullable<GateResolution["capacities"]>,
+): boolean {
+  try {
+    const compacted = compactJournal(state);
+    if (compacted.effectJournal.length >= LIMITS.effectJournal) return false;
+    const effectId = `${"a".repeat(160)}:materialisation_resolve`;
+    const intendedGate = withResolutionEffect(
+      gate,
+      target.resolution!.gateEntryId,
+      effectId,
+      capacities,
+    );
+    const refusal = {
+      code: "evidence_budget_exceeded" as const,
+      detailHash: "a".repeat(64),
+    };
+    const refusedGate = updateGateTarget(
+      intendedGate,
+      target.definition.targetId,
+      (current) => {
+        const {
+          currentEffectId: _currentEffectId,
+          ...resolutionWithoutEffect
+        } = current.resolution!;
+        return {
+          ...current,
+          resolution: {
+            ...resolutionWithoutEffect,
+            lastRefusal: refusal,
+          },
+        };
+      },
+    );
+    const followUpBeadId = "a".repeat(160);
+    const deferredGate = updateGateTarget(
+      refusedGate,
+      target.definition.targetId,
+      (current) => ({
+        ...current,
+        disposition: "deferral_cascade",
+        followUpBeadId,
+        resolution: {
+          ...current.resolution!,
+          disposition: "deferred_by_controller",
+          followUpBeadId,
+          status: "voided",
+        },
+        status: "voided",
+      }),
+    );
+    const stage = target.definition.scope;
+    const deferredState = { ...compacted, gate: deferredGate };
+    const immediateMaximum = Math.max(
+      maximumEnvelopeWithGateJournal(
+        compacted,
+        intendedGate,
+        "materialisation_resolve",
+      ),
+      maximumEnvelopeWithGateJournal(
+        compacted,
+        refusedGate,
+        "materialisation_resolve",
+      ),
+      maximumEnvelopeWithGateJournal(
+        compacted,
+        deferredGate,
+        "materialisation_resolve",
+      ),
+    );
+    const completedMaximum =
+      repositoryEnvelopeBytes(deferredState) +
+      materialisationFixedCompletionReserve(deferredState, deferredGate, stage);
+    const projectionMaximum =
+      stage === "unit"
+        ? canonicalByteLength(
+            provenanceInput(compacted, {
+              ...deferredGate,
+              destinationProbes: [
+                ...maximumFutureDestinationProbes(
+                  compacted,
+                  deferredGate,
+                  "unit",
+                ),
+              ],
+            }) as unknown as JsonValue,
+          )
+        : 0;
+    return (
+      Math.max(immediateMaximum, completedMaximum) <= LIMITS.envelopeBytes &&
+      projectionMaximum <= 65_536
+    );
+  } catch {
+    return false;
+  }
+}
+
+function stageResolutionsSettled(
+  gate: WaveGate,
+  stage: "gate" | "unit",
+): boolean {
+  return gateTargetsForStage(gate, stage).every(
+    (target) =>
+      target.status === "voided" || target.resolution?.status === "observed",
+  );
+}
+
+function stageNamesReady(gate: WaveGate, stage: "gate" | "unit"): boolean {
+  return (
+    stageResolutionsSettled(gate, stage) &&
+    gate.destinationProbes
+      .filter((probe) => probe.stage === stage)
+      .every((probe) => probe.status !== "pending") &&
+    gateTargetsForStage(gate, stage)
+      .filter(
+        (target) =>
+          target.status !== "voided" && target.materialisations.length > 0,
+      )
+      .every((target) =>
+        target.materialisations.every(
+          (item) =>
+            probeForMaterialisation(gate, stage, item)?.status === "observed",
+        ),
+      ) &&
+    gateMaterialisations(gate, stage).every(
+      (item) =>
+        item.status !== "pending" ||
+        item.disposition !== undefined ||
+        (item.timestamp !== undefined &&
+          item.artifactName !== undefined &&
+          item.sidecarName !== undefined &&
+          item.sidecarByteCount !== undefined &&
+          item.sidecarSha256 !== undefined),
+    )
+  );
+}
+
+function stageMaterialisationsSettled(
+  gate: WaveGate,
+  stage: "gate" | "unit",
+): boolean {
+  return (
+    stageNamesReady(gate, stage) &&
+    gateMaterialisations(gate, stage).every((item) => item.status !== "pending")
+  );
+}
+
+function recordNameCollisions(
+  gate: WaveGate,
+  stage: "gate" | "unit",
+): WaveGate {
+  if (!stageNamesReady(gate, stage)) return gate;
+  const conflicts = nameCollisionWitnesses(gate, stage);
+  if (conflicts.size === 0) return gate;
+  let next = gate;
+  for (const [id, conflictingGateEntryId] of conflicts)
+    next = updateGateMaterialisation(next, id, (item) => ({
+      ...item,
+      lastRefusal: {
+        code: "output_name_collision",
+        conflictingGateEntryId,
+      },
+    }));
+  return next;
+}
+
+function nameCollisionWitnesses(
+  gate: WaveGate,
+  stage: "gate" | "unit",
+  includeVoided = false,
+): ReadonlyMap<string, string> {
+  const destinations = new Map<
+    string,
+    Map<string, { gateEntryId: string; pending: boolean }[]>
+  >();
+  const candidates = [
+    ...gateMaterialisations(gate, stage).map((item) => ({
+      item,
+      pending:
+        item.status === "pending" ||
+        (includeVoided &&
+          item.status === "voided" &&
+          item.lastRefusal?.code === "output_name_collision"),
+    })),
+    ...(stage === "gate"
+      ? observedUnitMaterialisations(gate)
+      : (
+          gate.carriedProjectionInputSnapshot?.targetEvidence.flatMap(
+            (target) => target.materialisations,
+          ) ?? []
+        ).filter((item) => item.status === "observed")
+    ).map((item) => ({ item, pending: false })),
+  ];
+  for (const { item, pending } of candidates) {
+    if (
+      (!pending && item.status !== "observed") ||
+      item.artifactName === undefined ||
+      item.sidecarName === undefined
+    )
+      continue;
+    const itemStage = pending ? stage : "unit";
+    const identity = destinationIdentityForMaterialisation(
+      gate,
+      itemStage,
+      item,
+    );
+    if (identity === undefined) continue;
+    const key = `${identity.device}\u0000${identity.inode}`;
+    const names =
+      destinations.get(key) ??
+      new Map<string, { gateEntryId: string; pending: boolean }[]>();
+    for (const name of [item.artifactName, item.sidecarName])
+      names.set(name, [
+        ...(names.get(name) ?? []),
+        { gateEntryId: item.gateEntryId, pending },
+      ]);
+    destinations.set(key, names);
+  }
+  const conflicts = new Map<string, string>();
+  for (const names of destinations.values())
+    for (const entries of names.values()) {
+      if (entries.length < 2) continue;
+      for (const entry of entries.filter((item) => item.pending)) {
+        const first = entries
+          .map((item) => item.gateEntryId)
+          .filter((id) => id !== entry.gateEntryId)
+          .sort(compareProtocolText)[0];
+        if (first !== undefined) {
+          const prior = conflicts.get(entry.gateEntryId);
+          conflicts.set(
+            entry.gateEntryId,
+            prior === undefined || compareProtocolText(first, prior) < 0
+              ? first
+              : prior,
+          );
+        }
+      }
+    }
+  return conflicts;
+}
+
+function observedFinalNamesAreUnique(gate: WaveGate): boolean {
+  const destinations = new Map<string, Set<string>>();
+  const targets = new Map<string, GateTargetState>();
+  for (const target of [
+    ...(projectionSnapshot(gate)?.targetEvidence ?? []),
+    ...gate.targets,
+  ])
+    targets.set(target.definition.targetId, target);
+  for (const target of targets.values()) {
+    for (const item of target.materialisations) {
+      if (
+        item.status !== "observed" ||
+        item.artifactName === undefined ||
+        item.sidecarName === undefined
+      )
+        continue;
+      const identity = destinationIdentityForMaterialisation(
+        gate,
+        target.definition.scope,
+        item,
+      );
+      if (identity === undefined) return false;
+      const key = `${identity.device}\u0000${identity.inode}`;
+      const names = destinations.get(key) ?? new Set<string>();
+      for (const name of [item.artifactName, item.sidecarName]) {
+        if (names.has(name)) return false;
+        names.add(name);
+      }
+      destinations.set(key, names);
+    }
+  }
+  return true;
+}
+
+function gateTargetDefinitionsAreBound(gate: WaveGate): boolean {
+  const definitions = [
+    ...gate.targetPromises.map((promise) => promise.definition),
+    ...gate.targets.map((target) => target.definition),
+  ];
+  if (
+    new Set(definitions.map((definition) => definition.targetId)).size !==
+      definitions.length ||
+    definitions.some(
+      (definition) =>
+        definition.targetId !==
+        deriveMaterialisationTargetId(
+          definition.scope,
+          definition.originUnitId,
+          definition.targetOrdinal,
+          definition.target,
+        ),
+    )
+  )
+    return false;
+  const ordered: GateTargetPromise["definition"][] = [];
+  for (const unitId of gate.originalUnitIds) {
+    const unitDefinitions = definitions
+      .filter(
+        (definition) =>
+          definition.scope === "unit" && definition.originUnitId === unitId,
+      )
+      .sort((left, right) => left.targetOrdinal - right.targetOrdinal);
+    if (
+      unitDefinitions.some(
+        (definition, ordinal) => definition.targetOrdinal !== ordinal,
+      )
+    )
+      return false;
+    ordered.push(...unitDefinitions);
+  }
+  const gateDefinitions = definitions
+    .filter(
+      (definition) =>
+        definition.scope === "gate" && definition.originUnitId === null,
+    )
+    .sort((left, right) => left.targetOrdinal - right.targetOrdinal);
+  if (
+    gateDefinitions.some(
+      (definition, ordinal) => definition.targetOrdinal !== ordinal,
+    ) ||
+    ordered.length + gateDefinitions.length !== definitions.length
+  )
+    return false;
+  ordered.push(...gateDefinitions);
+  return (
+    gate.targetDefinitionCommitment ===
+    deriveTargetDefinitionCommitment(gate.waveId, gate.originalUnitIds, ordered)
+  );
+}
+
+function resetStageNames(gate: WaveGate, stage: "gate" | "unit"): WaveGate {
+  let next = gate;
+  for (const item of gateMaterialisations(gate, stage)) {
+    if (item.status !== "pending") continue;
+    next = updateGateMaterialisation(next, item.gateEntryId, (current) => {
+      const {
+        artifactName: _artifactName,
+        lastRefusal: _lastRefusal,
+        sidecarByteCount: _sidecarByteCount,
+        sidecarName: _sidecarName,
+        sidecarSha256: _sidecarSha256,
+        timestamp: _timestamp,
+        ...unnamed
+      } = current;
+      return unnamed;
+    });
+  }
+  return next;
+}
+
+function sortedPendingMaterialisation(
+  gate: WaveGate,
+  stage: "gate" | "unit",
+): GateMaterialisation | undefined {
+  return [...gateMaterialisations(gate, stage)]
+    .filter(
+      (item) =>
+        item.status === "pending" &&
+        item.lastRefusal?.code !== "output_name_collision",
+    )
+    .sort((left, right) =>
+      compareProtocolText(left.gateEntryId, right.gateEntryId),
+    )[0];
+}
+
+function hasUnresolvedGateEffect(state: RepositoryRun): boolean {
+  return state.effectJournal.some(
+    (entry) =>
+      entry.gateEntryId !== undefined &&
+      (entry.status === "intended" || entry.status === "ambiguous"),
+  );
+}
+
+function appendGateIntent(
+  state: RepositoryRun,
+  event: IntentEvent & { readonly gateEntryId: string },
+  kind: Extract<
+    EffectKind,
+    | "materialisation_resolve"
+    | "destination_probe"
+    | "materialise"
+    | "provenance_commit"
+    | "verify"
+  >,
+): Step {
+  const compacted = compactJournal(state);
+  const effectId = `${event.eventId}:${kind}`;
+  const params = runtimeEffectParams(
+    compacted,
+    null,
+    kind,
+    undefined,
+    event.gateEntryId,
+  ) as RuntimeEffect["params"];
+  const paramsHash = deriveParamsHash(kind, params);
+  const effect = {
+    effectId,
+    gateEntryId: event.gateEntryId,
+    idempotencyKey: event.idempotencyKey,
+    kind,
+    params,
+    paramsHash,
+    schemaVersion: SCHEMA_VERSION,
+    unitId: null,
+  } as ProtocolEffect;
+  const entry: EffectJournalEntry = {
+    effectId,
+    gateEntryId: event.gateEntryId,
+    idempotencyKey: event.idempotencyKey,
+    intentCommitment: "0".repeat(64),
+    intentRevision: state.revision,
+    kind,
+    paramsHash,
+    schemaVersion: SCHEMA_VERSION,
+    status: "intended",
+    unitId: null,
+  };
+  entry.intentCommitment = deriveIntentCommitment(entry);
+  const valid = validate<RuntimeEffect>(RuntimeEffectSchema, effect);
+  if (!valid.ok)
+    throw new Error(
+      `aggregate effect construction failed: ${valid.errors.join("; ")}`,
+    );
+  return {
+    effects: [effect],
+    state: { ...compacted, effectJournal: [...compacted.effectJournal, entry] },
+  };
+}
+
+function withResolutionEffect(
+  gate: WaveGate,
+  gateEntryId: string,
+  effectId: string,
+  capacities: NonNullable<
+    NonNullable<GateTargetState["resolution"]>["capacities"]
+  >,
+): WaveGate {
+  const found = findResolution(gate, gateEntryId);
+  if (found === undefined) return gate;
+  const { lastRefusal: _lastRefusal, ...resolution } = found.resolution;
+  return updateGateTarget(gate, found.target.definition.targetId, (target) => ({
+    ...target,
+    resolution: { ...resolution, capacities, currentEffectId: effectId },
+  }));
+}
+
+function withMaterialisationEffect(
+  gate: WaveGate,
+  gateEntryId: string,
+  effectId: string,
+): WaveGate {
+  return updateGateMaterialisation(gate, gateEntryId, (item) => {
+    const { lastRefusal: _lastRefusal, ...pending } = item;
+    return { ...pending, currentEffectId: effectId };
+  });
+}
+
+function withDestinationProbeEffect(
+  gate: WaveGate,
+  gateEntryId: string,
+  effectId: string,
+): WaveGate {
+  return updateDestinationProbe(gate, gateEntryId, (probe) => {
+    const { lastRefusal: _lastRefusal, ...pending } = probe;
+    return { ...pending, currentEffectId: effectId };
+  });
+}
+
+function matchingGateIntent(
+  state: RepositoryRun,
+  event: ObservedEvent & { readonly gateEntryId: string },
+  kind: EffectKind,
+): boolean {
+  return state.effectJournal.some(
+    (entry) =>
+      entry.effectId === event.effectId &&
+      entry.gateEntryId === event.gateEntryId &&
+      entry.unitId === null &&
+      entry.kind === kind &&
+      event.effectKind === kind &&
+      entry.status === "intended",
+  );
+}
+
+function hasLatestObservedGateAttempt(
+  state: RepositoryRun,
+  gateEntryId: string,
+  kind: EffectKind,
+): boolean {
+  const latest = state.effectJournal
+    .filter(
+      (entry) =>
+        entry.unitId === null &&
+        entry.gateEntryId === gateEntryId &&
+        entry.kind === kind,
+    )
+    .sort((left, right) => right.intentRevision - left.intentRevision)[0];
+  return latest?.status === "observed";
+}
+
+function resolutionCapacitiesBindLatestAttempt(
+  state: RepositoryRun,
+  gate: WaveGate,
+  target: GateTargetState,
+): boolean {
+  const resolution = target.resolution;
+  if (resolution?.capacities === undefined) return false;
+  const latest = state.effectJournal
+    .filter(
+      (entry) =>
+        entry.unitId === null &&
+        entry.gateEntryId === resolution.gateEntryId &&
+        entry.kind === "materialisation_resolve",
+    )
+    .sort((left, right) => right.intentRevision - left.intentRevision)[0];
+  if (latest === undefined) return false;
+  const params = {
+    destinationProbeGateEntryId: destinationProbeGateEntryId(
+      state,
+      gate,
+      target.definition.scope,
+      target.definition.target.destinationAlias,
+      target.definition.target.destinationSubpath,
+    ),
+    domainScope: state.knowledgeContract!.domainScope,
+    driver: state.knowledgeContract!.humanDriver,
+    executorTool: state.harness!.family,
+    gateEntryId: resolution.gateEntryId,
+    ...resolution.capacities,
+    originUnitId: target.definition.originUnitId,
+    repositoryIdentity: state.repositoryIdentity,
+    runId: state.controller.runId,
+    sourceOid: resolution.sourceOid,
+    sourcePattern: target.definition.target.sourcePattern,
+    stage: target.definition.scope,
+    target: target.definition.target,
+    targetId: target.definition.targetId,
+    targetOrdinal: target.definition.targetOrdinal,
+    waveId: gate.waveId,
+  };
+  return (
+    latest.paramsHash === deriveParamsHash("materialisation_resolve", params)
+  );
+}
+
+function materialisationExpansionBinding(
+  state: RepositoryRun,
+  gate: WaveGate,
+  target: GateTargetState,
+): MaterialisationExpansionBinding {
+  const resolution = required(
+    target.resolution,
+    "target resolution",
+    "materialisation_resolve",
+  );
+  return {
+    capacities: required(
+      resolution.capacities,
+      "resolution capacities",
+      "materialisation_resolve",
+    ),
+    destinationProbeGateEntryId: destinationProbeGateEntryId(
+      state,
+      gate,
+      target.definition.scope,
+      target.definition.target.destinationAlias,
+      target.definition.target.destinationSubpath,
+    ),
+    domainScope: required(
+      state.knowledgeContract,
+      "knowledge contract",
+      "materialisation_resolve",
+    ).domainScope,
+    driver: required(
+      state.knowledgeContract,
+      "knowledge contract",
+      "materialisation_resolve",
+    ).humanDriver,
+    executorTool: required(state.harness, "harness", "materialisation_resolve")
+      .family,
+    originUnitId: target.definition.originUnitId,
+    resolutionGateEntryId: resolution.gateEntryId,
+    runId: state.controller.runId,
+    sourceOid: resolution.sourceOid,
+    stage: target.definition.scope,
+    target: target.definition.target,
+    targetId: target.definition.targetId,
+    targetOrdinal: target.definition.targetOrdinal,
+    waveId: gate.waveId,
+  };
+}
+
+function resolutionSourcesAreValid(
+  state: RepositoryRun,
+  gate: WaveGate,
+  target: GateTargetState,
+  sources: readonly MaterialisationSource[],
+): boolean {
+  const totals = sourceTotals(gate);
+  const capacities = target.resolution?.capacities;
+  const paths = sources.map((source) => source.path);
+  const byteCount = sources.reduce(
+    (total, source) => total + source.byteCount,
+    0,
+  );
+  const expansionBinding = materialisationExpansionBinding(state, gate, target);
+  const projectionEvidenceBytes = materialisationProjectionExpansionCost(
+    sources,
+    expansionBinding,
+  );
+  const aggregateEvidenceBytes = materialisationAggregateExpansionCost(
+    sources,
+    expansionBinding,
+  );
+  return (
+    capacities !== undefined &&
+    sources.length <= LIMITS.materialisationMatches &&
+    sources.length <= capacities.remainingItemCapacity &&
+    byteCount <= capacities.remainingSourceByteCapacity &&
+    projectionEvidenceBytes <=
+      capacities.remainingProjectionSnapshotByteCapacity &&
+    aggregateEvidenceBytes <=
+      capacities.remainingAggregateEnvelopeByteCapacity &&
+    totals.items + sources.length <= LIMITS.materialisationOutputs &&
+    totals.bytes + byteCount <= LIMITS.materialisationWaveBytes &&
+    new Set(paths).size === paths.length &&
+    paths.every(
+      (path, index) =>
+        index === 0 || compareProtocolText(paths[index - 1]!, path) < 0,
+    ) &&
+    paths.every((path) =>
+      matchesMaterialisationPattern(
+        target.definition.target.sourcePattern,
+        path,
+      ),
+    )
+  );
+}
+
+function resolutionSourcesFitRecordedCapacities(
+  state: RepositoryRun,
+  gate: WaveGate,
+  target: GateTargetState,
+): boolean {
+  const resolution = target.resolution;
+  const sources = resolution?.sources;
+  const capacities = resolution?.capacities;
+  if (sources === undefined || capacities === undefined) return false;
+  const paths = sources.map((source) => source.path);
+  const bytes = sources.reduce((total, source) => total + source.byteCount, 0);
+  const expansionBinding = materialisationExpansionBinding(state, gate, target);
+  const projectionExpansion = materialisationProjectionExpansionCost(
+    sources,
+    expansionBinding,
+  );
+  const aggregateExpansion = materialisationAggregateExpansionCost(
+    sources,
+    expansionBinding,
+  );
+  return (
+    sources.length <= LIMITS.materialisationMatches &&
+    sources.length <= capacities.remainingItemCapacity &&
+    bytes <= capacities.remainingSourceByteCapacity &&
+    projectionExpansion <= capacities.remainingProjectionSnapshotByteCapacity &&
+    aggregateExpansion <= capacities.remainingAggregateEnvelopeByteCapacity &&
+    new Set(paths).size === paths.length &&
+    paths.every(
+      (path, index) =>
+        index === 0 || compareProtocolText(paths[index - 1]!, path) < 0,
+    ) &&
+    paths.every((path) =>
+      matchesMaterialisationPattern(
+        target.definition.target.sourcePattern,
+        path,
+      ),
+    )
+  );
+}
+
+function materialisationsForSources(
+  state: RepositoryRun,
+  gate: WaveGate,
+  target: GateTargetState,
+  sourceOid: string,
+  sources: readonly MaterialisationSource[],
+): GateMaterialisation[] {
+  const destinationProbeId = destinationProbeGateEntryId(
+    state,
+    gate,
+    target.definition.scope,
+    target.definition.target.destinationAlias,
+    target.definition.target.destinationSubpath,
+  );
+  return sources.map((source) => ({
+    destinationProbeGateEntryId: destinationProbeId,
+    gateEntryId: deriveGateEntryId(
+      state.controller.runId,
+      gate.waveId,
+      `${target.definition.scope}-materialise`,
+      {
+        blobOid: source.blobOid,
+        path: source.path,
+        destinationProbeGateEntryId: destinationProbeId,
+        sourceOid,
+        targetId: target.definition.targetId,
+      },
+    ),
+    originUnitId: target.definition.originUnitId,
+    source,
+    sourceOid,
+    status: "pending" as const,
+    target: target.definition.target,
+    targetId: target.definition.targetId,
+  }));
+}
+
+function deferGateEntry(
+  state: RepositoryRun,
+  gateEntryId: string,
+  followUpBeadId: string,
+): RepositoryRun | undefined {
+  const gate = state.gate;
+  if (gate === undefined) return undefined;
+  const resolution = findResolution(gate, gateEntryId);
+  if (
+    resolution !== undefined &&
+    resolution.resolution.status === "pending" &&
+    resolution.resolution.lastRefusal !== undefined
+  ) {
+    const nextGate = ensureDestinationProbes(
+      state,
+      updateGateTarget(
+        gate,
+        resolution.target.definition.targetId,
+        (target) => ({
+          ...target,
+          disposition: "deferral_cascade",
+          followUpBeadId,
+          materialisations: target.materialisations.map((item) => ({
+            ...item,
+            disposition: "deferral_cascade" as const,
+            followUpBeadId,
+            status: "voided" as const,
+          })),
+          resolution: {
+            ...resolution.resolution,
+            disposition: "deferred_by_controller",
+            followUpBeadId,
+            status: "voided",
+          },
+          status: "voided",
+        }),
+      ),
+      resolution.target.definition.scope,
+    );
+    return maybeCreateProvenance({ ...state, gate: nextGate });
+  }
+  const probe = findDestinationProbe(gate, gateEntryId);
+  if (
+    probe !== undefined &&
+    probe.status === "pending" &&
+    probe.lastRefusal !== undefined
+  ) {
+    let nextGate = updateDestinationProbe(gate, gateEntryId, (item) => ({
+      ...item,
+      disposition: "deferred_by_controller",
+      followUpBeadId,
+      status: "voided",
+    }));
+    nextGate = {
+      ...nextGate,
+      targets: nextGate.targets.map((target) =>
+        target.definition.scope === probe.stage &&
+        target.definition.target.destinationAlias === probe.destinationAlias &&
+        target.definition.target.destinationSubpath === probe.destinationSubpath
+          ? {
+              ...target,
+              disposition: "deferral_cascade" as const,
+              followUpBeadId,
+              materialisations: target.materialisations.map((item) => ({
+                ...item,
+                disposition: "deferral_cascade" as const,
+                followUpBeadId,
+                status: "voided" as const,
+              })),
+              status: "voided" as const,
+            }
+          : target,
+      ),
+    };
+    return maybeCreateProvenance({ ...state, gate: nextGate });
+  }
+  const materialisation = findMaterialisation(gate, gateEntryId);
+  if (
+    materialisation !== undefined &&
+    materialisation.materialisation.status === "pending" &&
+    materialisation.materialisation.lastRefusal !== undefined
+  )
+    return maybeCreateProvenance({
+      ...state,
+      gate: settleTargetPromise(
+        updateGateTarget(
+          gate,
+          materialisation.target.definition.targetId,
+          (target) => ({
+            ...target,
+            materialisations: target.materialisations.map((item) =>
+              item.gateEntryId === gateEntryId
+                ? {
+                    ...item,
+                    disposition: "deferred_by_controller" as const,
+                    followUpBeadId,
+                    status: "voided" as const,
+                  }
+                : item,
+            ),
+          }),
+        ),
+        materialisation.target.definition.targetId,
+      ),
+    });
+  if (
+    gate.provenance?.gateEntryId === gateEntryId &&
+    gate.provenance.status === "pending" &&
+    gate.provenance.lastRefusal !== undefined
+  )
+    return {
+      ...state,
+      gate: {
+        ...gate,
+        aggregateVerifyPromise: {
+          disposition: "deferral_cascade",
+          followUpBeadId,
+          status: "voided",
+        },
+        ...(gate.aggregateVerify === undefined
+          ? {}
+          : {
+              aggregateVerify: {
+                ...gate.aggregateVerify,
+                disposition: "deferral_cascade",
+                followUpBeadId,
+                status: "voided",
+              },
+            }),
+        targetPromises: gate.targetPromises.map((target) =>
+          target.definition.scope === "gate"
+            ? {
+                ...target,
+                disposition: "deferral_cascade" as const,
+                followUpBeadId,
+                status: "voided" as const,
+              }
+            : target,
+        ),
+        provenance: {
+          ...gate.provenance,
+          disposition: "deferred_by_controller",
+          followUpBeadId,
+          status: "voided",
+        },
+      },
+    };
+  if (
+    gate.aggregateVerify?.gateEntryId === gateEntryId &&
+    gate.aggregateVerify.status === "pending" &&
+    gate.aggregateVerify.lastRefusal !== undefined
+  )
+    return {
+      ...state,
+      gate: {
+        ...gate,
+        aggregateVerify: {
+          ...gate.aggregateVerify,
+          disposition: "deferred_by_controller",
+          followUpBeadId,
+          status: "voided",
+        },
+        targetPromises: gate.targetPromises.map((target) =>
+          target.definition.scope === "gate"
+            ? {
+                ...target,
+                disposition: "deferral_cascade" as const,
+                followUpBeadId,
+                status: "voided" as const,
+              }
+            : target,
+        ),
+        targets: gate.targets.map((target) =>
+          target.definition.scope === "gate"
+            ? {
+                ...target,
+                disposition: "deferral_cascade" as const,
+                followUpBeadId,
+                materialisations: target.materialisations.map((item) => ({
+                  ...item,
+                  disposition: "deferral_cascade" as const,
+                  followUpBeadId,
+                  status: "voided" as const,
+                })),
+                ...(target.resolution === undefined
+                  ? {}
+                  : {
+                      resolution: {
+                        ...target.resolution,
+                        disposition: "deferral_cascade" as const,
+                        followUpBeadId,
+                        status: "voided" as const,
+                      },
+                    }),
+                status: "voided" as const,
+              }
+            : target,
+        ),
+      },
+    };
+  return undefined;
+}
+
+function reduceGate(state: RepositoryRun, event: GateEvent): Reduction {
+  const gate = state.gate;
+  const contract = state.knowledgeContract;
+  if (gate === undefined || contract === undefined)
+    return reject("illegal_transition", "knowledge gate is not configured");
+  if (event.type === "gate_entry_deferred") {
+    const deferred = deferGateEntry(
+      state,
+      event.gateEntryId,
+      event.followUpBeadId,
+    );
+    return deferred === undefined
+      ? reject("illegal_transition", "gate entry has no deferrable refusal")
+      : commit(deferred, event, []);
+  }
+  if (event.type === "gate_clock_observed") {
+    if (!validUtcSecond(event.timestamp) || hasUnresolvedGateEffect(state))
+      return reject(
+        "invalid_event",
+        "clock must be an exact unused UTC second",
+      );
+    const materialisation = findMaterialisation(gate, event.gateEntryId);
+    if (materialisation !== undefined) {
+      const stage = materialisation.target.definition.scope;
+      const collisionRetry =
+        materialisation.materialisation.lastRefusal?.code ===
+        "output_name_collision";
+      const ordered = gateMaterialisations(gate, stage)
+        .filter((item) => item.status === "pending")
+        .sort((left, right) =>
+          compareProtocolText(left.gateEntryId, right.gateEntryId),
+        );
+      const nextClock =
+        ordered.find((item) => item.timestamp === undefined) ??
+        ordered.find(
+          (item) => item.lastRefusal?.code === "output_name_collision",
+        );
+      if (
+        nextClock?.gateEntryId !== event.gateEntryId ||
+        !stageResolutionsSettled(gate, stage) ||
+        gate.destinationProbes.some(
+          (probe) => probe.stage === stage && probe.status === "pending",
+        ) ||
+        (() => {
+          const probe = findDestinationProbe(
+            gate,
+            materialisation.materialisation.destinationProbeGateEntryId,
+          );
+          return probe?.status !== "observed" || probe.identity === undefined;
+        })() ||
+        materialisation.materialisation.status !== "pending" ||
+        (!collisionRetry &&
+          (materialisation.materialisation.timestamp !== undefined ||
+            materialisation.materialisation.lastRefusal !== undefined))
+      )
+        return reject("illegal_transition", "materialisation clock is not due");
+      const clockGate = collisionRetry ? resetStageNames(gate, stage) : gate;
+      const clockItem = required(
+        findMaterialisation(clockGate, event.gateEntryId),
+        "clock materialisation",
+        "materialise",
+      ).materialisation;
+      const artifactName = materialisationName(
+        clockItem.source,
+        clockItem.target.namingPolicy,
+        event.timestamp,
+      );
+      const sidecar = sidecarFor(
+        state,
+        clockGate,
+        clockItem,
+        artifactName,
+        event.timestamp,
+      );
+      if (
+        utf8.encode(sidecar.bytes).byteLength >
+        LIMITS.materialisationSidecarBytes
+      )
+        return reject(
+          "invalid_event",
+          "canonical sidecar exceeds its byte bound",
+        );
+      const named = updateGateMaterialisation(
+        clockGate,
+        event.gateEntryId,
+        (item) => ({
+          ...item,
+          artifactName,
+          sidecarByteCount: utf8.encode(sidecar.bytes).byteLength,
+          sidecarName: `${artifactName}.sce-provenance.json`,
+          sidecarSha256: sha256(sidecar.bytes),
+          timestamp: event.timestamp,
+        }),
+      );
+      return commit(
+        { ...state, gate: recordNameCollisions(named, stage) },
+        event,
+        [],
+      );
+    }
+    if (
+      gate.provenance?.gateEntryId !== event.gateEntryId ||
+      gate.provenance.status !== "pending" ||
+      gate.provenance.timestamp !== undefined ||
+      !stageMaterialisationsSettled(gate, "unit")
+    )
+      return reject("illegal_transition", "provenance clock is not due");
+    return commit(
+      {
+        ...state,
+        gate: {
+          ...gate,
+          provenance: { ...gate.provenance, timestamp: event.timestamp },
+        },
+      },
+      event,
+      [],
+    );
+  }
+  if (event.type === "materialisation_resolve_intent") {
+    if (hasUnresolvedGateEffect(state))
+      return reject(
+        "illegal_transition",
+        "gate already has an unresolved effect",
+      );
+    const found = findResolution(gate, event.gateEntryId);
+    if (found === undefined || found.resolution.status !== "pending")
+      return reject("illegal_transition", "source resolution is not pending");
+    const stage = found.target.definition.scope;
+    if (
+      (stage === "unit" && state.wave.unitIds.length !== 0) ||
+      (stage === "gate" && gate.aggregateVerify?.status !== "observed")
+    )
+      return reject(
+        "illegal_transition",
+        "source resolution stage is not ready",
+      );
+    const pending = gateTargetsForStage(gate, stage)
+      .map((target) => target.resolution)
+      .filter(
+        (item): item is NonNullable<typeof item> =>
+          item !== undefined && item.status === "pending",
+      )
+      .sort((left, right) =>
+        compareProtocolText(left.gateEntryId, right.gateEntryId),
+      )[0];
+    if (pending?.gateEntryId !== event.gateEntryId)
+      return reject("illegal_transition", "source resolutions are ordered");
+    const effectId = `${event.eventId}:materialisation_resolve`;
+    const capacities = resolutionCapacities(state, gate, stage);
+    if (!resolutionIntentCompletionFits(state, gate, found.target, capacities))
+      return reject(
+        "illegal_transition",
+        "source resolution evidence cannot fit the durable envelope",
+      );
+    const prepared = {
+      ...state,
+      gate: withResolutionEffect(gate, event.gateEntryId, effectId, capacities),
+    };
+    const step = appendGateIntent(prepared, event, "materialisation_resolve");
+    return commit(step.state, event, step.effects);
+  }
+  if (event.type === "materialisation_sources_observed") {
+    const found = findResolution(gate, event.gateEntryId);
+    if (
+      found === undefined ||
+      found.resolution.currentEffectId !== event.effectId ||
+      !matchingGateIntent(state, event, "materialisation_resolve")
+    )
+      return badObservation();
+    const {
+      currentEffectId: _currentEffectId,
+      disposition: _disposition,
+      followUpBeadId: _followUpBeadId,
+      lastRefusal: _lastRefusal,
+      ...settledResolution
+    } = found.resolution;
+    if (
+      event.result.status === "observed" &&
+      !resolutionSourcesAreValid(
+        state,
+        gate,
+        found.target,
+        event.result.sources,
+      )
+    )
+      return reject(
+        "invalid_event",
+        "source observation violates canonical bounds",
+      );
+    const observedTarget =
+      event.result.status === "observed"
+        ? {
+            ...found.target,
+            materialisations: materialisationsForSources(
+              state,
+              gate,
+              found.target,
+              found.resolution.sourceOid,
+              event.result.sources,
+            ),
+            resolution: {
+              ...settledResolution,
+              sources: event.result.sources,
+              status: "observed" as const,
+            },
+          }
+        : undefined;
+    const nextTarget: GateTargetState =
+      event.result.status === "refused"
+        ? {
+            ...found.target,
+            resolution: {
+              ...settledResolution,
+              lastRefusal: event.result.refusal,
+            },
+          }
+        : observedTarget!;
+    const changed = ensureDestinationProbes(
+      state,
+      updateGateTarget(
+        gate,
+        found.target.definition.targetId,
+        () => nextTarget,
+      ),
+      found.target.definition.scope,
+    );
+    const observedState = settleAmbiguityState(
+      markObserved(state, event.effectId, event.observationHash, {
+        gate: changed,
+      }),
+    );
+    if (
+      event.result.status === "observed" &&
+      (!projectionInputWithinBounds(provenanceInput(observedState, changed)) ||
+        canonicalByteLength({
+          payload: observedState as unknown as JsonValue,
+          schema: "sce.repository-run",
+          version: SCHEMA_VERSION,
+        }) > LIMITS.envelopeBytes)
+    )
+      return reject(
+        "invalid_event",
+        "source observation exceeds its committed evidence budget",
+      );
+    return commit(observedState, event, []);
+  }
+  if (event.type === "destination_probe_intent") {
+    if (hasUnresolvedGateEffect(state))
+      return reject(
+        "illegal_transition",
+        "gate already has an unresolved effect",
+      );
+    const probe = findDestinationProbe(gate, event.gateEntryId);
+    if (probe === undefined || probe.status !== "pending")
+      return reject("illegal_transition", "destination probe is not pending");
+    if (
+      !stageResolutionsSettled(gate, probe.stage) ||
+      (probe.stage === "unit" && state.wave.unitIds.length !== 0) ||
+      (probe.stage === "gate" && gate.aggregateVerify?.status !== "observed")
+    )
+      return reject(
+        "illegal_transition",
+        "destination probe stage is not ready",
+      );
+    const pending = gate.destinationProbes
+      .filter((item) => item.stage === probe.stage && item.status === "pending")
+      .sort((left, right) =>
+        compareProtocolText(left.gateEntryId, right.gateEntryId),
+      )[0];
+    if (pending?.gateEntryId !== event.gateEntryId)
+      return reject("illegal_transition", "destination probes are ordered");
+    const effectId = `${event.eventId}:destination_probe`;
+    const prepared = {
+      ...state,
+      gate: withDestinationProbeEffect(gate, event.gateEntryId, effectId),
+    };
+    const step = appendGateIntent(prepared, event, "destination_probe");
+    return commit(step.state, event, step.effects);
+  }
+  if (event.type === "destination_probe_observed") {
+    const probe = findDestinationProbe(gate, event.gateEntryId);
+    if (
+      probe === undefined ||
+      probe.currentEffectId !== event.effectId ||
+      !matchingGateIntent(state, event, "destination_probe")
+    )
+      return badObservation();
+    const {
+      currentEffectId: _currentEffectId,
+      disposition: _disposition,
+      followUpBeadId: _followUpBeadId,
+      identity: _identity,
+      lastRefusal: _lastRefusal,
+      ...settledProbe
+    } = probe;
+    const priorIdentities =
+      probe.stage === "gate"
+        ? priorDestinationIdentities(
+            gate,
+            probe.destinationAlias,
+            probe.destinationSubpath,
+          )
+        : [];
+    if (event.result.status === "observed") {
+      const observedIdentity = event.result.identity;
+      if (
+        priorIdentities.some(
+          (identity) => !sameDestinationIdentity(identity, observedIdentity),
+        )
+      )
+        return reject(
+          "invalid_event",
+          "gate destination identity contradicts its unit-stage probe",
+        );
+    }
+    const alias = contract.aliases.find(
+      (item) => item.alias === probe.destinationAlias,
+    );
+    const optionalUnmounted =
+      event.result.status === "refused" &&
+      event.result.refusal.code === "optional_alias_unmounted" &&
+      alias?.mountPolicy === "optional";
+    let nextGate = updateDestinationProbe(gate, event.gateEntryId, (item) =>
+      event.result.status === "observed"
+        ? {
+            ...settledProbe,
+            identity: event.result.identity,
+            status: "observed",
+          }
+        : optionalUnmounted
+          ? {
+              ...settledProbe,
+              disposition: "optional_alias_unmounted",
+              lastRefusal: event.result.refusal,
+              status: "voided",
+            }
+          : { ...settledProbe, lastRefusal: event.result.refusal },
+    );
+    if (optionalUnmounted)
+      nextGate = {
+        ...nextGate,
+        targets: nextGate.targets.map((target) =>
+          target.definition.scope === probe.stage &&
+          target.definition.target.destinationAlias ===
+            probe.destinationAlias &&
+          target.definition.target.destinationSubpath ===
+            probe.destinationSubpath
+            ? {
+                ...target,
+                disposition: "optional_alias_unmounted" as const,
+                materialisations: target.materialisations.map((item) => ({
+                  ...item,
+                  disposition: "optional_alias_unmounted" as const,
+                  status: "voided" as const,
+                })),
+                status: "voided" as const,
+              }
+            : target,
+        ),
+      };
+    const observedState = settleAmbiguityState(
+      markObserved(state, event.effectId, event.observationHash, {
+        gate: nextGate,
+      }),
+    );
+    return commit(maybeCreateProvenance(observedState), event, []);
+  }
+  if (event.type === "materialise_intent") {
+    if (hasUnresolvedGateEffect(state))
+      return reject(
+        "illegal_transition",
+        "gate already has an unresolved effect",
+      );
+    const found = findMaterialisation(gate, event.gateEntryId);
+    const stage = found?.target.definition.scope;
+    if (
+      found === undefined ||
+      stage === undefined ||
+      !stageNamesReady(gate, stage) ||
+      gateMaterialisations(gate, stage).some(
+        (item) =>
+          item.status === "pending" &&
+          item.lastRefusal?.code === "output_name_collision",
+      )
+    )
+      return reject(
+        "illegal_transition",
+        "materialisation namespace is not ready",
+      );
+    const pending = sortedPendingMaterialisation(gate, stage);
+    if (pending?.gateEntryId !== event.gateEntryId)
+      return reject("illegal_transition", "materialisations are ordered");
+    const effectId = `${event.eventId}:materialise`;
+    const prepared = {
+      ...state,
+      gate: withMaterialisationEffect(gate, event.gateEntryId, effectId),
+    };
+    const step = appendGateIntent(prepared, event, "materialise");
+    return commit(step.state, event, step.effects);
+  }
+  if (event.type === "materialise_observed") {
+    const found = findMaterialisation(gate, event.gateEntryId);
+    if (
+      found === undefined ||
+      found.materialisation.currentEffectId !== event.effectId ||
+      !matchingGateIntent(state, event, "materialise")
+    )
+      return badObservation();
+    if (
+      event.result.status === "observed" &&
+      !materialisationObservationMatches(
+        found.materialisation,
+        event.result.observation,
+      )
+    )
+      return reject(
+        "invalid_event",
+        "materialisation observation does not bind planned bytes",
+      );
+    const {
+      currentEffectId: _currentEffectId,
+      disposition: _disposition,
+      followUpBeadId: _followUpBeadId,
+      lastRefusal: _lastRefusal,
+      observation: _observation,
+      ...settledMaterialisation
+    } = found.materialisation;
+    const materialRefusal =
+      event.result.status === "refused" ? event.result.refusal : undefined;
+    const changed = settleTargetPromise(
+      updateGateMaterialisation(gate, event.gateEntryId, (item) =>
+        event.result.status === "observed"
+          ? {
+              ...settledMaterialisation,
+              observation: event.result.observation,
+              status: "observed",
+            }
+          : {
+              ...settledMaterialisation,
+              lastRefusal: materialRefusal!,
+            },
+      ),
+      found.target.definition.targetId,
+    );
+    const next = maybeCreateProvenance(
+      settleAmbiguityState(
+        markObserved(state, event.effectId, event.observationHash, {
+          gate: changed,
+        }),
+      ),
+    );
+    return commit(next, event, []);
+  }
+  if (event.type === "provenance_commit_intent") {
+    if (
+      hasUnresolvedGateEffect(state) ||
+      gate.provenance?.gateEntryId !== event.gateEntryId ||
+      gate.provenance.status !== "pending" ||
+      gate.provenance.timestamp === undefined ||
+      (gate.provenance.lastRefusal !== undefined &&
+        gate.provenance.lastRefusal.code !== "provenance_base_advanced") ||
+      !stageMaterialisationsSettled(gate, "unit")
+    )
+      return reject("illegal_transition", "provenance commit is not ready");
+    const effectId = `${event.eventId}:provenance_commit`;
+    const {
+      advancedBaseOid: _advancedBaseOid,
+      attemptedCommitOid: _attemptedCommitOid,
+      attemptedTreeOid: _attemptedTreeOid,
+      expectedBaseOid: _expectedBaseOid,
+      lastRefusal: _lastRefusal,
+      observedHeadOid: _observedHeadOid,
+      worktreeCondition: _worktreeCondition,
+      ...provenance
+    } = gate.provenance;
+    const worktreePath = deriveProvenanceWorktreePath(
+      contract.provenanceWorktreeRoot,
+      event.idempotencyKey,
+    );
+    const prepared: RepositoryRun = {
+      ...state,
+      gate: {
+        ...gate,
+        provenance: {
+          ...provenance,
+          attemptIdempotencyKey: event.idempotencyKey,
+          baseOid:
+            gate.provenance.advancedBaseOid ??
+            required(
+              gate.provenance.baseOid,
+              "provenance integration base",
+              "provenance_commit",
+            ),
+          currentEffectId: effectId,
+          worktreePath,
+        },
+      },
+    };
+    const step = appendGateIntent(prepared, event, "provenance_commit");
+    return commit(step.state, event, step.effects);
+  }
+  if (event.type === "provenance_commit_observed") {
+    if (
+      gate.provenance?.gateEntryId !== event.gateEntryId ||
+      gate.provenance.currentEffectId !== event.effectId ||
+      !matchingGateIntent(state, event, "provenance_commit")
+    )
+      return badObservation();
+    if (
+      (event.result.status === "committed" &&
+        event.result.attemptedBaseOid !== gate.provenance.baseOid) ||
+      (event.result.status === "worktree_refused" &&
+        event.result.expectedBaseOid !== gate.provenance.baseOid)
+    )
+      return reject(
+        "invalid_event",
+        "provenance observation does not bind the attempted base",
+      );
+    const { currentEffectId: _currentEffectId, ...settledProvenance } =
+      gate.provenance;
+    const provenance =
+      event.result.status === "committed"
+        ? {
+            ...settledProvenance,
+            commitOid: event.result.commitOid,
+            status: "observed" as const,
+            treeOid: event.result.treeOid,
+          }
+        : {
+            ...settledProvenance,
+            ...(event.result.status === "base_advanced"
+              ? { advancedBaseOid: event.result.advancedBaseOid }
+              : {}),
+            ...(event.result.status === "worktree_refused"
+              ? {
+                  expectedBaseOid: event.result.expectedBaseOid,
+                  observedHeadOid: event.result.observedHeadOid,
+                  worktreeCondition: event.result.condition,
+                }
+              : {
+                  attemptedCommitOid: event.result.attemptedCommitOid,
+                  attemptedTreeOid: event.result.attemptedTreeOid,
+                }),
+            lastRefusal:
+              event.result.status === "reproducibility_failed"
+                ? {
+                    code: "provenance_reproducibility_failed" as const,
+                    detailHash: event.result.reasonDigest,
+                  }
+                : event.result.status === "base_advanced"
+                  ? {
+                      code: "provenance_base_advanced" as const,
+                      detailHash: provenanceBaseAdvancedDetailHash(
+                        event.result.advancedBaseOid,
+                        event.result.attemptedCommitOid,
+                        event.result.attemptedTreeOid,
+                      ),
+                    }
+                  : {
+                      code:
+                        event.result.status === "worktree_refused"
+                          ? ("provenance_worktree_refused" as const)
+                          : ("provenance_integration_refused" as const),
+                      detailHash: event.result.reasonDigest,
+                    },
+          };
+    let nextGate: WaveGate = { ...gate, provenance };
+    if (event.result.status === "committed") {
+      const provenanceCommitOid = event.result.commitOid;
+      const {
+        aggregateVerifyPromise: _aggregateVerifyPromise,
+        ...withoutAggregateVerifyPromise
+      } = nextGate;
+      nextGate = {
+        ...withoutAggregateVerifyPromise,
+        aggregateVerify: {
+          gateEntryId: deriveGateEntryId(
+            state.controller.runId,
+            gate.waveId,
+            "aggregate-verify",
+            { provenanceGateEntryId: gate.provenance.gateEntryId },
+          ),
+          provenanceGateEntryId: gate.provenance.gateEntryId,
+          status: "pending",
+        },
+        provenanceUnitAccounting: gate.provenanceUnitAccounting.map((item) =>
+          item.status === "uncommitted"
+            ? {
+                closureEvidenceCommitment: item.closureEvidenceCommitment,
+                provenanceCommitOid,
+                status: "committed" as const,
+                unitId: item.unitId,
+              }
+            : item,
+        ),
+      };
+    }
+    return commit(
+      settleAmbiguityState(
+        markObserved(state, event.effectId, event.observationHash, {
+          gate: nextGate,
+        }),
+      ),
+      event,
+      [],
+    );
+  }
+  if (event.type === "verification_intent") {
+    if (
+      hasUnresolvedGateEffect(state) ||
+      gate.aggregateVerify?.gateEntryId !== event.gateEntryId ||
+      gate.aggregateVerify.status !== "pending" ||
+      gate.aggregateVerify.lastRefusal !== undefined ||
+      gate.provenance?.status !== "observed" ||
+      canonicalJson(event.commands as unknown as JsonValue) !==
+        canonicalJson(
+          contract.combinedVerificationCommands as unknown as JsonValue,
+        )
+    )
+      return reject(
+        "illegal_transition",
+        "aggregate verification is not ready",
+      );
+    const effectId = `${event.eventId}:verify`;
+    const prepared = {
+      ...state,
+      gate: {
+        ...gate,
+        aggregateVerify: { ...gate.aggregateVerify, currentEffectId: effectId },
+      },
+    };
+    const step = appendGateIntent(prepared, event, "verify");
+    return commit(step.state, event, step.effects);
+  }
+  if (
+    event.type === "verification_observed" ||
+    event.type === "verification_failed"
+  ) {
+    if (
+      gate.aggregateVerify?.gateEntryId !== event.gateEntryId ||
+      gate.aggregateVerify.currentEffectId !== event.effectId ||
+      gate.provenance?.commitOid !== event.headOid ||
+      gate.provenance.treeOid !== event.treeOid ||
+      gate.provenance.baseOid !== event.baseOid ||
+      !matchingGateIntent(state, event, "verify")
+    )
+      return badObservation();
+    let nextGate: WaveGate = {
+      ...gate,
+      aggregateVerify:
+        event.type === "verification_observed"
+          ? (() => {
+              const { currentEffectId: _currentEffectId, ...settled } =
+                gate.aggregateVerify;
+              return { ...settled, status: "observed" as const };
+            })()
+          : {
+              ...(() => {
+                const { currentEffectId: _currentEffectId, ...settled } =
+                  gate.aggregateVerify;
+                return settled;
+              })(),
+              lastRefusal: {
+                code: "verification_failed",
+                detailHash: event.observationHash,
+              },
+            },
+    };
+    if (event.type === "verification_observed")
+      nextGate = attachGateTargetSource(
+        state,
+        nextGate,
+        required(gate.provenance?.commitOid, "provenance commit", "verify"),
+      );
+    return commit(
+      settleAmbiguityState(
+        markObserved(state, event.effectId, event.observationHash, {
+          gate: nextGate,
+        }),
+      ),
+      event,
+      [],
+    );
+  }
+  return reject("illegal_transition", "unsupported aggregate gate event");
+}
+
+export function provenanceCarrySnapshotCommitment(
+  input: ProvenanceInput,
+): string {
+  return sha256(
+    canonicalJson({
+      domain: "sce.provenance-carry-snapshot.v1",
+      projectionInputSnapshot: input,
+    }),
+  );
+}
+
+export function provenanceCarryLineageCommitment(
+  lineageAncestorDigests: readonly string[],
+): string {
+  return sha256(
+    canonicalJson({
+      domain: "sce.provenance-carry-lineage.v1",
+      lineageAncestorDigests: [...lineageAncestorDigests],
+    }),
+  );
+}
+
+export function provenanceCarryAncestorDigest(
+  rootBeadId: string,
+  runId: string,
+): string {
+  return sha256(
+    canonicalJson({
+      domain: "sce.provenance-carry-ancestor.v1",
+      rootBeadId,
+      runId,
+    }),
+  );
+}
+
+export function deriveProvenanceCarryExportId(
+  input: Readonly<{
+    finalRevision: number;
+    integrationBranch: string;
+    predecessorRootAggregateCommitment: string;
+    predecessorRunId: string;
+    predecessorWaveId: string;
+    repositoryIdentity: string;
+    snapshotCommitment: string;
+    storeIdentity: string;
+  }>,
+): string {
+  return `sce:carry:${sha256(
+    canonicalJson({
+      domain: "sce.provenance-carry-export.v1",
+      integrationBranch: input.integrationBranch,
+      predecessorFinalRevision: input.finalRevision,
+      predecessorRootAggregateCommitment:
+        input.predecessorRootAggregateCommitment,
+      predecessorRunId: input.predecessorRunId,
+      predecessorWaveId: input.predecessorWaveId,
+      repositoryIdentity: input.repositoryIdentity,
+      snapshotCommitment: input.snapshotCommitment,
+      storeIdentity: input.storeIdentity,
+    }),
+  )}`;
+}
+
+function provenanceCarryExportId(
+  state: RepositoryRun,
+  event: Extract<ProtocolEvent, { type: "provenance_carry_claim_intent" }>,
+): string {
+  return deriveProvenanceCarryExportId({
+    finalRevision: event.predecessorFinalRevision,
+    integrationBranch: state.integrationBranch,
+    predecessorRootAggregateCommitment:
+      event.predecessorRootAggregateCommitment,
+    predecessorRunId: event.predecessorRunId,
+    predecessorWaveId: event.predecessorWaveId,
+    repositoryIdentity: state.repositoryIdentity,
+    snapshotCommitment: event.snapshotCommitment,
+    storeIdentity: state.storeIdentity,
+  });
+}
+
+function expectedCarryClaimRecordDigest(
+  state: RepositoryRun,
+  claim: NonNullable<RepositoryRun["provenanceCarryClaim"]>,
+): string {
+  return carryClaimRecordDigest(
+    state.controller.runId,
+    claim,
+    claim.claimToken,
+  );
+}
+
+function carryClaimRecordDigest(
+  currentRunId: string,
+  claim: Readonly<{
+    exportId: string;
+    predecessorRootBeadId: string;
+    predecessorRunId: string;
+    predecessorWaveId: string;
+    snapshotCommitment: string;
+  }>,
+  claimToken: string,
+): string {
+  const claimRecord = {
+    claimRevision: 1,
+    claimantRunId: currentRunId,
+    claimToken,
+    exportId: claim.exportId,
+    predecessorRootBeadId: claim.predecessorRootBeadId,
+    predecessorRunId: claim.predecessorRunId,
+    predecessorWaveId: claim.predecessorWaveId,
+    schema: "sce.provenance-carry-claim",
+    snapshotCommitment: claim.snapshotCommitment,
+    version: 1,
+  } as const;
+  return sha256(
+    canonicalJson({
+      claimRecord,
+      domain: "sce.provenance-carry-claim-record.v1",
+    }),
+  );
+}
+
+function carryClaimIsBeforeFirstWave(state: RepositoryRun): boolean {
+  const closed = decodeClosedUnitEvidence(state.closedUnitEvidence);
+  return (
+    closed !== undefined &&
+    Object.keys(closed).length === 0 &&
+    state.usedSessionCount === 0 &&
+    Object.values(state.units).every((unit) => unit.state === "planned") &&
+    Object.keys(state.reservations).length === 0 &&
+    state.activeModifyingUnitIds.length === 0 &&
+    state.qualificationOwnerUnitId === undefined &&
+    state.integrationOwnerUnitId === undefined &&
+    state.currentReviewerUnitId === undefined &&
+    state.qualificationQueue.length === 0 &&
+    state.integrationQueue.length === 0 &&
+    state.effectJournal.every((entry) => entry.unitId === null)
+  );
+}
+
+function reduceProvenanceCarry(
+  state: RepositoryRun,
+  event: Extract<
+    ProtocolEvent,
+    {
+      type: "provenance_carry_claim_intent" | "provenance_carry_claim_observed";
+    }
+  >,
+): Reduction {
+  if (
+    state.controller.state !== "acquired" ||
+    state.gate !== undefined ||
+    state.wave.unitIds.length !== 0 ||
+    state.pendingProvenanceCarry !== undefined ||
+    !carryClaimIsBeforeFirstWave(state)
+  )
+    return reject("illegal_transition", "provenance carry is not admissible");
+  if (event.type === "provenance_carry_claim_intent") {
+    if (
+      state.state !== "active" ||
+      state.completionBoundary === "branch-handoff" ||
+      state.completionBoundary === "pr-handoff" ||
+      state.provenanceCarryClaim !== undefined ||
+      state.effectJournal.some(
+        (entry) => entry.status === "intended" || entry.status === "ambiguous",
+      )
+    )
+      return reject(
+        "illegal_transition",
+        "a provenance carry claim is pending",
+      );
+    if (
+      event.claimToken !== event.idempotencyKey ||
+      event.idempotencyKey !==
+        deriveProvenanceCarryClaimKey(
+          state.controller.runId,
+          event.exportId,
+          event.predecessorRootBeadId,
+        ) ||
+      event.exportId !== provenanceCarryExportId(state, event)
+    )
+      return reject("invalid_event", "provenance carry claim binding mismatch");
+    const effectId = `${event.eventId}:provenance_carry_claim`;
+    const {
+      lastProvenanceCarryRefusal: _lastProvenanceCarryRefusal,
+      ...withoutLastRefusal
+    } = state;
+    const prepared = {
+      ...withoutLastRefusal,
+      provenanceCarryClaim: {
+        claimToken: event.claimToken,
+        currentEffectId: effectId,
+        exportId: event.exportId,
+        predecessorFinalRevision: event.predecessorFinalRevision,
+        predecessorJournalCheckpointCommitment:
+          event.predecessorJournalCheckpointCommitment,
+        predecessorRootBeadId: event.predecessorRootBeadId,
+        predecessorRootAggregateCommitment:
+          event.predecessorRootAggregateCommitment,
+        predecessorRunId: event.predecessorRunId,
+        predecessorWaveId: event.predecessorWaveId,
+        snapshotCommitment: event.snapshotCommitment,
+      },
+    };
+    const step = appendIntent(prepared, null, event, "provenance_carry_claim");
+    return commit(step.state, event, step.effects);
+  }
+  if (state.state !== "active" && state.state !== "blocked")
+    return reject("illegal_transition", "provenance carry is not admissible");
+  const claim = state.provenanceCarryClaim;
+  if (
+    claim?.currentEffectId !== event.effectId ||
+    !matchesRecoverableEffect(state, event, null, "provenance_carry_claim")
+  )
+    return badObservation();
+  if (event.result.status === "imported") {
+    const carry = event.result.carry;
+    if (
+      carry.exportId !== claim.exportId ||
+      carry.predecessorRootBeadId !== claim.predecessorRootBeadId ||
+      carry.predecessorRunId !== claim.predecessorRunId ||
+      carry.predecessorWaveId !== claim.predecessorWaveId ||
+      carry.predecessorFinalRevision !== claim.predecessorFinalRevision ||
+      carry.predecessorJournalCheckpointCommitment !==
+        claim.predecessorJournalCheckpointCommitment ||
+      carry.predecessorRootAggregateCommitment !==
+        claim.predecessorRootAggregateCommitment ||
+      carry.snapshotCommitment !== claim.snapshotCommitment ||
+      carry.snapshotCommitment !==
+        provenanceCarrySnapshotCommitment(carry.projectionInputSnapshot) ||
+      carry.claimRecordDigest !==
+        expectedCarryClaimRecordDigest(state, claim) ||
+      carry.predecessorRunId === state.controller.runId ||
+      carry.lineageCommitment !==
+        provenanceCarryLineageCommitment(carry.lineageAncestorDigests) ||
+      carry.lineageAncestorDigests.at(-1) !==
+        provenanceCarryAncestorDigest(
+          carry.predecessorRootBeadId,
+          carry.predecessorRunId,
+        ) ||
+      carry.projectionInputSnapshot.unitIds.length === 0 ||
+      !projectionInputFits(carry.projectionInputSnapshot)
+    )
+      return badObservation();
+  } else if (
+    (event.result.status === "already_claimed" &&
+      event.result.exportId !== claim.exportId) ||
+    (event.result.status === "predecessor_refused" &&
+      event.result.predecessorRootBeadId !== claim.predecessorRootBeadId)
+  )
+    return badObservation();
+  const observed = markObserved(
+    state,
+    event.effectId,
+    event.observationHash,
+    event.result.status === "imported"
+      ? { pendingProvenanceCarry: event.result.carry }
+      : { lastProvenanceCarryRefusal: event.result },
+  );
+  const { provenanceCarryClaim: _claim, ...withoutClaim } = observed;
+  return commit(settleAmbiguityState(withoutClaim), event, []);
+}
+
 /**
  * `reconcilingBlockedObservation` is only used after the outer reduction has
  * validated a durable blocked aggregate and prepared one exact observation.
@@ -488,6 +4904,7 @@ function reduceInternal(
   const declaredIntentKind = effectKindForIntent(event.type);
   if (
     declaredIntentKind !== undefined &&
+    event.type !== "provenance_carry_claim_intent" &&
     "idempotencyKey" in event &&
     event.idempotencyKey !==
       deriveIdempotencyKey(
@@ -495,6 +4912,7 @@ function reduceInternal(
         event.expectedRevision,
         "unitId" in event ? event.unitId : null,
         declaredIntentKind,
+        "gateEntryId" in event ? event.gateEntryId : undefined,
       )
   )
     return reject(
@@ -521,7 +4939,7 @@ function reduceInternal(
       : commit(blocked, event, []);
   }
   if (state.state === "blocked" && !reconcilingBlockedObservation) {
-    const recovered = prepareBlockedUnitObservation(state, event);
+    const recovered = prepareBlockedObservation(state, event);
     if (recovered === undefined)
       return reject("illegal_transition", "aggregate is blocked");
     return reduceInternal(recovered, event, true);
@@ -531,6 +4949,12 @@ function reduceInternal(
       "illegal_transition",
       "controller ownership has not been acquired",
     );
+  if (
+    event.type === "provenance_carry_claim_intent" ||
+    event.type === "provenance_carry_claim_observed"
+  )
+    return reduceProvenanceCarry(state, event);
+  if (isGateEvent(event)) return reduceGate(state, event);
   if (event.unitId === null)
     return reject("illegal_transition", "unit event requires a unit id");
   const unit = state.units[event.unitId];
@@ -1160,6 +5584,18 @@ function reduceInternal(
         {
           qualificationOwnerUnitId: null,
           integrationOwnerUnitId: null,
+          ...(state.gate === undefined
+            ? {}
+            : {
+                gate: {
+                  ...attachUnitTargetSource(
+                    state,
+                    unit.id,
+                    event.integrationOid,
+                  )!,
+                  currentIntegrationOid: event.integrationOid,
+                },
+              }),
           qualificationQueue: state.qualificationQueue.filter(
             (id) => id !== unit.id,
           ),
@@ -1223,7 +5659,9 @@ function reduceInternal(
       );
       result = {
         ...result,
-        state: closeUnitAfterRelease(result.state, unit.id),
+        state: maybeCreateProvenance(
+          closeUnitAfterRelease(result.state, unit.id),
+        ),
       };
       break;
     case "repair_intent":
@@ -1413,6 +5851,7 @@ function effectKindForIntent(
   const kinds: Partial<Record<ProtocolEvent["type"], EffectKind>> = {
     controller_acquire_intent: "controller_acquire",
     controller_release_intent: "controller_release",
+    provenance_carry_claim_intent: "provenance_carry_claim",
     reservation_intent: "reservation_acquire",
     branch_intent: "branch_create",
     worktree_intent: "worktree_create",
@@ -1430,6 +5869,10 @@ function effectKindForIntent(
     timeout_intent: "timeout",
     park_intent: "park",
     cancel_intent: "cancel",
+    materialisation_resolve_intent: "materialisation_resolve",
+    destination_probe_intent: "destination_probe",
+    materialise_intent: "materialise",
+    provenance_commit_intent: "provenance_commit",
   };
   return kinds[type];
 }
@@ -1438,6 +5881,7 @@ export function deriveIdempotencyKey(
   expectedRevision: number,
   unitId: string | null,
   kind: EffectKind,
+  gateEntryId?: string,
 ): string {
   // The provider only sees a domain-separated digest: no repository identity,
   // prompt, or other raw aggregate payload is exposed. Canonical JSON binds
@@ -1447,9 +5891,25 @@ export function deriveIdempotencyKey(
       domain: "sce.protocol.idempotency.v1",
       effectKind: kind,
       expectedRevision,
+      ...(gateEntryId === undefined ? {} : { gateEntryId }),
       incarnationId: state.controller.incarnationId,
       runId: state.controller.runId,
       unitId,
+    }),
+  )}`;
+}
+
+export function deriveProvenanceCarryClaimKey(
+  currentRunId: string,
+  exportId: string,
+  predecessorRootBeadId: string,
+): string {
+  return `carry-claim:${sha256(
+    canonicalJson({
+      currentRunId,
+      domain: "sce.provenance-carry-claim-key.v1",
+      exportId,
+      predecessorRootBeadId,
     }),
   )}`;
 }
@@ -1491,6 +5951,7 @@ export function rehydrateEffect(
       entry.unitId,
       entry.kind,
       entry.slotTransition,
+      entry.gateEntryId,
     ) as RuntimeEffect["params"];
     if (deriveParamsHash(entry.kind, params) !== entry.paramsHash)
       return undefined;
@@ -1502,6 +5963,9 @@ export function rehydrateEffect(
       paramsHash: entry.paramsHash,
       schemaVersion: SCHEMA_VERSION,
       unitId: entry.unitId,
+      ...(entry.gateEntryId === undefined
+        ? {}
+        : { gateEntryId: entry.gateEntryId }),
     } as ProtocolEffect;
     const checked = validate<RuntimeEffect>(RuntimeEffectSchema, effect);
     return checked.ok && checked.value !== undefined
@@ -1519,6 +5983,7 @@ export function deriveIntentCommitment(
     | "unitId"
     | "idempotencyKey"
     | "kind"
+    | "gateEntryId"
     | "intentRevision"
     | "paramsHash"
     | "slotTransition"
@@ -1532,6 +5997,9 @@ export function deriveIntentCommitment(
       unitId: entry.unitId,
       idempotencyKey: entry.idempotencyKey,
       kind: entry.kind,
+      ...(entry.gateEntryId === undefined
+        ? {}
+        : { gateEntryId: entry.gateEntryId }),
       intentRevision: entry.intentRevision,
       paramsHash: entry.paramsHash,
       ...(entry.slotTransition === undefined
@@ -2052,6 +6520,11 @@ function effectMatchesObservation(
     timeout: ["timeout_observed"],
     park: ["park_observed"],
     cancel: ["cancel_observed"],
+    materialisation_resolve: ["materialisation_sources_observed"],
+    destination_probe: ["destination_probe_observed"],
+    materialise: ["materialise_observed"],
+    provenance_commit: ["provenance_commit_observed"],
+    provenance_carry_claim: ["provenance_carry_claim_observed"],
   };
   return observations[kind]?.includes(type) ?? false;
 }
@@ -2061,10 +6534,65 @@ function effectMatchesObservation(
  * the ordinary observation case verify and commit the fact. Other ambiguous
  * effects remain untouched, so the aggregate cannot accidentally resume.
  */
-function prepareBlockedUnitObservation(
+function prepareBlockedObservation(
   state: RepositoryRun,
   event: ProtocolEvent,
 ): RepositoryRun | undefined {
+  if (
+    event.type === "provenance_carry_claim_observed" &&
+    "effectId" in event &&
+    "effectKind" in event
+  ) {
+    const entry = state.effectJournal.find(
+      (effect) =>
+        effect.effectId === event.effectId &&
+        effect.kind === "provenance_carry_claim" &&
+        effect.kind === event.effectKind &&
+        effect.unitId === null &&
+        (effect.status === "intended" || effect.status === "ambiguous"),
+    );
+    if (entry === undefined) return undefined;
+    return entry.status === "intended"
+      ? state
+      : {
+          ...state,
+          effectJournal: state.effectJournal.map((effect) =>
+            effect.effectId === entry.effectId
+              ? restoreIntended(effect)
+              : effect,
+          ),
+        };
+  }
+  if (
+    isGateEvent(event) &&
+    "effectId" in event &&
+    "effectKind" in event &&
+    "gateEntryId" in event
+  ) {
+    const entry = state.effectJournal.find(
+      (effect) =>
+        effect.effectId === event.effectId &&
+        effect.gateEntryId === event.gateEntryId &&
+        effect.kind === event.effectKind &&
+        effect.unitId === null &&
+        (effect.status === "intended" || effect.status === "ambiguous"),
+    );
+    if (
+      entry === undefined ||
+      !effectMatchesObservation(event.type, entry.kind)
+    )
+      return undefined;
+    return entry.status === "intended"
+      ? state
+      : {
+          ...state,
+          effectJournal: state.effectJournal.map((effect) =>
+            effect.effectId === entry.effectId
+              ? restoreIntended(effect)
+              : effect,
+          ),
+        };
+  }
   if (
     !("unitId" in event) ||
     event.unitId === null ||
@@ -2116,17 +6644,32 @@ function markEffectAmbiguous(
       candidate.effectId === event.effectId &&
       candidate.unitId === event.unitId &&
       candidate.kind === event.effectKind &&
+      candidate.gateEntryId === event.gateEntryId &&
       candidate.status === "intended",
   );
   if (entry === undefined) return undefined;
   if (entry.unitId === null) {
-    const expectedControllerState =
-      entry.kind === "controller_acquire"
-        ? "acquire_intent"
-        : entry.kind === "controller_release"
-          ? "release_intent"
-          : undefined;
-    if (expectedControllerState !== state.controller.state) return undefined;
+    if (entry.gateEntryId === undefined) {
+      const expectedControllerState =
+        entry.kind === "controller_acquire"
+          ? "acquire_intent"
+          : entry.kind === "controller_release"
+            ? "release_intent"
+            : undefined;
+      const isCurrentCarryClaim =
+        entry.kind === "provenance_carry_claim" &&
+        state.controller.state === "acquired" &&
+        state.gate === undefined &&
+        state.wave.unitIds.length === 0 &&
+        state.provenanceCarryClaim?.currentEffectId === entry.effectId &&
+        carryClaimIsBeforeFirstWave(state);
+      if (
+        expectedControllerState === undefined
+          ? !isCurrentCarryClaim
+          : expectedControllerState !== state.controller.state
+      )
+        return undefined;
+    } else if (state.gate === undefined) return undefined;
   } else {
     const unit = state.units[entry.unitId];
     const expectedUnitState = intentStateForEffect(entry.kind);
@@ -2335,6 +6878,7 @@ function appendIntent(
     unitId,
     kind,
     slotTransition,
+    undefined,
   ) as RuntimeEffect["params"];
   const paramsHash = deriveParamsHash(kind, params);
   const effect: ProtocolEffect = {
@@ -2374,6 +6918,7 @@ function runtimeEffectParams(
   unitId: string | null,
   kind: EffectKind,
   slotTransition?: import("./schemas.js").SlotTransitionIntent,
+  gateEntryId?: string,
 ): unknown {
   if (kind === "controller_acquire")
     return {
@@ -2390,7 +6935,35 @@ function runtimeEffectParams(
       controllerFencingToken: state.controllerFencingToken,
       ...(slotTransition === undefined ? {} : { slotTransition }),
     };
-  if (unitId === null) throw new Error(`${kind} requires a unit`);
+  if (kind === "provenance_carry_claim") {
+    const claim = required(
+      state.provenanceCarryClaim,
+      "provenance carry claim",
+      kind,
+    );
+    return {
+      claimToken: claim.claimToken,
+      currentRunId: state.controller.runId,
+      exportId: claim.exportId,
+      integrationBranch: state.integrationBranch,
+      predecessorFinalRevision: claim.predecessorFinalRevision,
+      predecessorJournalCheckpointCommitment:
+        claim.predecessorJournalCheckpointCommitment,
+      predecessorRootBeadId: claim.predecessorRootBeadId,
+      predecessorRootAggregateCommitment:
+        claim.predecessorRootAggregateCommitment,
+      predecessorRunId: claim.predecessorRunId,
+      predecessorWaveId: claim.predecessorWaveId,
+      repositoryIdentity: state.repositoryIdentity,
+      snapshotCommitment: claim.snapshotCommitment,
+      storeIdentity: state.storeIdentity,
+    };
+  }
+  if (unitId === null) {
+    if (gateEntryId === undefined)
+      throw new Error(`${kind} requires a unit or gate entry`);
+    return aggregateRuntimeEffectParams(state, gateEntryId, kind);
+  }
   const unit = state.units[unitId];
   if (unit === undefined) throw new Error(`${kind} has an unknown unit`);
   const worker = () => ({
@@ -2511,9 +7084,199 @@ function runtimeEffectParams(
     case "park":
     case "cancel":
       return terminalEffectParams(state, unit, kind);
+    case "materialisation_resolve":
+    case "destination_probe":
+    case "materialise":
+    case "provenance_commit":
+      throw new Error(`${kind} requires an aggregate gate entry`);
     default:
       return exhaustive(kind);
   }
+}
+
+function aggregateRuntimeEffectParams(
+  state: RepositoryRun,
+  gateEntryId: string,
+  kind: EffectKind,
+): unknown {
+  const gate = required(state.gate, "wave gate", kind);
+  const contract = required(
+    state.knowledgeContract,
+    "knowledge contract",
+    kind,
+  );
+  if (kind === "materialisation_resolve") {
+    const found = required(
+      findResolution(gate, gateEntryId),
+      "gate resolution",
+      kind,
+    );
+    const capacities = required(
+      found.resolution.capacities,
+      "resolution capacities",
+      kind,
+    );
+    return {
+      destinationProbeGateEntryId: destinationProbeGateEntryId(
+        state,
+        gate,
+        found.target.definition.scope,
+        found.target.definition.target.destinationAlias,
+        found.target.definition.target.destinationSubpath,
+      ),
+      domainScope: contract.domainScope,
+      driver: contract.humanDriver,
+      executorTool: required(state.harness, "harness", kind).family,
+      gateEntryId,
+      ...capacities,
+      originUnitId: found.target.definition.originUnitId,
+      repositoryIdentity: state.repositoryIdentity,
+      runId: state.controller.runId,
+      sourceOid: found.resolution.sourceOid,
+      sourcePattern: found.target.definition.target.sourcePattern,
+      stage: found.target.definition.scope,
+      target: found.target.definition.target,
+      targetId: found.target.definition.targetId,
+      targetOrdinal: found.target.definition.targetOrdinal,
+      waveId: gate.waveId,
+    };
+  }
+  if (kind === "destination_probe") {
+    const probe = required(
+      findDestinationProbe(gate, gateEntryId),
+      "destination probe",
+      kind,
+    );
+    const destination = required(
+      contract.aliases.find((item) => item.alias === probe.destinationAlias),
+      "destination alias",
+      kind,
+    );
+    const priorIdentities =
+      probe.stage === "gate"
+        ? priorDestinationIdentities(
+            gate,
+            probe.destinationAlias,
+            probe.destinationSubpath,
+          )
+        : [];
+    if (
+      priorIdentities.some(
+        (identity) => !sameDestinationIdentity(identity, priorIdentities[0]!),
+      )
+    )
+      throw new Error("carried destination identities are contradictory");
+    const prior = priorIdentities[0];
+    return {
+      destination,
+      destinationSubpath: probe.destinationSubpath,
+      ...(prior === undefined ? {} : { expectedPriorIdentity: prior }),
+      gateEntryId,
+      repositoryIdentity: state.repositoryIdentity,
+      stage: probe.stage,
+      waveId: gate.waveId,
+    };
+  }
+  if (kind === "materialise") {
+    const located = required(
+      findMaterialisation(gate, gateEntryId),
+      "gate materialisation",
+      kind,
+    );
+    const found = located.materialisation;
+    const destination = required(
+      contract.aliases.find(
+        (item) => item.alias === found.target.destinationAlias,
+      ),
+      "destination alias",
+      kind,
+    );
+    const destinationIdentity = required(
+      probeForMaterialisation(gate, located.target.definition.scope, found)
+        ?.identity,
+      "destination identity",
+      kind,
+    );
+    const artifactName = required(found.artifactName, "artifact name", kind);
+    const timestamp = required(found.timestamp, "materialisation clock", kind);
+    const sidecarBytes = sidecarFor(
+      state,
+      gate,
+      found,
+      artifactName,
+      timestamp,
+    ).bytes;
+    if (
+      utf8.encode(sidecarBytes).byteLength !==
+        required(found.sidecarByteCount, "sidecar byte count", kind) ||
+      sha256(sidecarBytes) !==
+        required(found.sidecarSha256, "sidecar digest", kind)
+    )
+      throw new Error("materialisation sidecar binding mismatch");
+    return {
+      artifactName,
+      destination,
+      destinationIdentity,
+      destinationProbeGateEntryId: found.destinationProbeGateEntryId,
+      destinationSubpath: found.target.destinationSubpath,
+      domainScope: contract.domainScope,
+      driver: contract.humanDriver,
+      executorTool: required(state.harness, "harness", kind).family,
+      gateEntryId,
+      namespaceControl: destination.namespaceControl,
+      originUnitId: found.originUnitId,
+      repositoryIdentity: state.repositoryIdentity,
+      runId: state.controller.runId,
+      sidecarByteCount: utf8.encode(sidecarBytes).byteLength,
+      sidecarBytes,
+      sidecarName: required(found.sidecarName, "sidecar name", kind),
+      sidecarSha256: sha256(sidecarBytes),
+      source: found.source,
+      sourceOid: found.sourceOid,
+      targetId: found.targetId,
+      timestamp,
+      waveId: gate.waveId,
+    };
+  }
+  if (kind === "provenance_commit") {
+    const provenance = required(gate.provenance, "provenance gate", kind);
+    return {
+      baseOid: required(provenance.baseOid, "provenance base", kind),
+      gateEntryId,
+      projectionInputSnapshot: provenance.projectionInputSnapshot,
+      knowledgeContract: contract,
+      runId: state.controller.runId,
+      timestamp: required(provenance.timestamp, "provenance clock", kind),
+      waveId: gate.waveId,
+      worktreePath: required(
+        provenance.worktreePath,
+        "provenance worktree",
+        kind,
+      ),
+    };
+  }
+  if (kind === "verify") {
+    const provenance = required(gate.provenance, "provenance gate", kind);
+    const verify = required(gate.aggregateVerify, "aggregate verify", kind);
+    if (verify.gateEntryId !== gateEntryId)
+      throw new Error("aggregate verify gate identity mismatch");
+    return {
+      candidate: {
+        baseOid: required(provenance.baseOid, "provenance base", kind),
+        headOid: required(provenance.commitOid, "provenance commit", kind),
+        treeOid: required(provenance.treeOid, "provenance tree", kind),
+      },
+      commands: contract.combinedVerificationCommands,
+      gateEntryId,
+      provenanceOid: required(provenance.commitOid, "provenance commit", kind),
+      worktreePath: required(
+        provenance.worktreePath,
+        "provenance worktree",
+        kind,
+      ),
+    };
+  }
+  throw new Error(`${kind} is not an aggregate gate effect`);
 }
 
 function terminalEffectParams(
@@ -2842,6 +7605,17 @@ function closedUnitEvidenceCommitment(dense: DenseClosureLedger): string {
     canonicalJson({
       domain: "sce.protocol.closed-evidence.v1",
       evidence: dense,
+    } as unknown as JsonValue),
+  );
+}
+
+export function unitClosureEvidenceCommitment(
+  evidence: ClosureEvidence,
+): string {
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.unit-closure-evidence.v1",
+      evidence,
     } as unknown as JsonValue),
   );
 }
@@ -3394,12 +8168,13 @@ function closeUnitAfterRelease(
   const record = evidence?.[unitId];
   if (evidence === undefined || record === undefined)
     throw new Error(`missing final closure evidence for ${unitId}`);
+  const finalRecord = {
+    ...record,
+    repairCount: closedUnit.repairCount,
+  } as ClosureEvidence;
   const closedUnitEvidence = encodeClosedUnitEvidence({
     ...evidence,
-    [unitId]: {
-      ...record,
-      repairCount: closedUnit.repairCount,
-    } as ClosureEvidence,
+    [unitId]: finalRecord,
   });
   const units = { ...state.units };
   delete units[unitId];
@@ -3408,8 +8183,27 @@ function closeUnitAfterRelease(
       ([, reservation]) => reservation.unitId !== unitId,
     ),
   );
+  const gate =
+    state.gate === undefined
+      ? undefined
+      : {
+          ...state.gate,
+          provenanceUnitAccounting:
+            record.outcome === "landed"
+              ? [
+                  ...state.gate.provenanceUnitAccounting,
+                  {
+                    closureEvidenceCommitment:
+                      unitClosureEvidenceCommitment(finalRecord),
+                    status: "uncommitted" as const,
+                    unitId,
+                  },
+                ]
+              : state.gate.provenanceUnitAccounting,
+        };
   return {
     ...state,
+    ...(gate === undefined ? {} : { gate }),
     units,
     reservations,
     wave: {
@@ -3423,11 +8217,27 @@ function closeUnitAfterRelease(
 function persistTerminalClosureEvidence(step: Step, unitId: string): Step {
   const unit = step.state.units[unitId];
   if (unit === undefined) throw new Error(`missing terminal unit ${unitId}`);
+  const disposition =
+    unit.state === "landed"
+      ? undefined
+      : unit.state === "handoff"
+        ? "handoff_boundary"
+        : "unit_not_landed";
+  const closedUnitEvidence = recordClosureEvidence(step.state, unit);
   return {
     ...step,
     state: {
       ...step.state,
-      closedUnitEvidence: recordClosureEvidence(step.state, unit),
+      closedUnitEvidence,
+      ...(step.state.gate === undefined
+        ? {}
+        : {
+            gate: {
+              ...(disposition === undefined
+                ? step.state.gate
+                : voidUnitTargets(step.state.gate, unitId, disposition)!),
+            },
+          }),
     },
   };
 }
@@ -3766,8 +8576,284 @@ function canReleaseController(state: RepositoryRun): boolean {
     state.qualificationOwnerUnitId === undefined &&
     state.integrationOwnerUnitId === undefined &&
     state.currentReviewerUnitId === undefined &&
+    state.provenanceCarryClaim === undefined &&
+    state.pendingProvenanceCarry === undefined &&
+    !state.effectJournal.some(
+      (entry) =>
+        entry.kind === "provenance_carry_claim" &&
+        (entry.status === "intended" || entry.status === "ambiguous"),
+    ) &&
     Object.keys(state.units).length === 0 &&
-    Object.keys(state.reservations).length === 0
+    Object.keys(state.reservations).length === 0 &&
+    gateIsGreen(state.gate)
+  );
+}
+
+function gateIsGreen(gate: WaveGate | undefined): boolean {
+  if (gate === undefined) return true;
+  const records = [
+    ...gate.targetPromises,
+    ...gate.targets,
+    ...gate.destinationProbes,
+    ...gate.targets.flatMap((target) => [
+      ...(target.resolution === undefined ? [] : [target.resolution]),
+      ...target.materialisations,
+    ]),
+    ...(gate.provenancePromise === undefined ? [] : [gate.provenancePromise]),
+    ...(gate.provenance === undefined ? [] : [gate.provenance]),
+    ...(gate.aggregateVerifyPromise === undefined
+      ? []
+      : [gate.aggregateVerifyPromise]),
+    ...(gate.aggregateVerify === undefined ? [] : [gate.aggregateVerify]),
+  ];
+  return (
+    records.every(settlementMetadataIsCoherent) &&
+    gate.destinationProbes.every(
+      (probe) =>
+        probe.status !== "pending" &&
+        (probe.status !== "observed" ||
+          (probe.identity !== undefined && probe.lastRefusal === undefined)),
+    ) &&
+    gate.targetPromises.every((promise) => promise.status === "voided") &&
+    gate.targets.every(
+      (target) =>
+        targetIsSettled(target) &&
+        (target.status !== "observed" ||
+          (target.resolution?.status === "observed" &&
+            target.materialisations.every(
+              (item) =>
+                item.status === "observed" &&
+                item.observation !== undefined &&
+                item.artifactName !== undefined &&
+                item.sidecarName !== undefined &&
+                item.timestamp !== undefined,
+            ))),
+    ) &&
+    (gate.provenancePromise?.status === "voided" ||
+      (gate.provenancePromise === undefined &&
+        gate.provenance !== undefined &&
+        (gate.provenance.status === "voided" ||
+          (gate.provenance.status === "observed" &&
+            gate.provenance.commitOid !== undefined &&
+            gate.provenance.treeOid !== undefined &&
+            gate.provenance.timestamp !== undefined &&
+            gate.provenance.worktreePath !== undefined &&
+            gate.provenance.lastRefusal === undefined)))) &&
+    (gate.aggregateVerifyPromise?.status === "voided" ||
+      (gate.aggregateVerifyPromise === undefined &&
+        gate.aggregateVerify !== undefined &&
+        (gate.aggregateVerify.status === "voided" ||
+          (gate.aggregateVerify.status === "observed" &&
+            gate.aggregateVerify.lastRefusal === undefined))))
+  );
+}
+
+function settlementMetadataIsCoherent(value: {
+  readonly disposition?: string;
+  readonly currentEffectId?: string;
+  readonly followUpBeadId?: string;
+  readonly lastRefusal?: unknown;
+  readonly status: "observed" | "pending" | "voided";
+}): boolean {
+  if (value.status !== "voided")
+    return (
+      value.disposition === undefined &&
+      value.followUpBeadId === undefined &&
+      (value.status === "pending" || value.currentEffectId === undefined) &&
+      (value.status !== "observed" || value.lastRefusal === undefined)
+    );
+  if (value.disposition === undefined) return false;
+  const deferred =
+    value.disposition === "deferred_by_controller" ||
+    value.disposition === "deferral_cascade";
+  if (deferred !== (value.followUpBeadId !== undefined)) return false;
+  return (
+    value.currentEffectId === undefined &&
+    (value.disposition !== "deferred_by_controller" ||
+      value.lastRefusal !== undefined) &&
+    (value.disposition !== "deferral_cascade" ||
+      value.lastRefusal === undefined)
+  );
+}
+
+function targetPromiseIsCoherent(value: GateTargetPromise): boolean {
+  return (
+    settlementMetadataIsCoherent(value) &&
+    (value.status === "pending" ||
+      value.disposition === "unit_not_landed" ||
+      value.disposition === "handoff_boundary" ||
+      value.disposition === "no_landed_units" ||
+      value.disposition === "deferral_cascade")
+  );
+}
+
+function gatePlaceholderIsCoherent(value: {
+  readonly disposition?: string;
+  readonly followUpBeadId?: string;
+  readonly status: "pending" | "voided";
+}): boolean {
+  return (
+    settlementMetadataIsCoherent(value) &&
+    (value.status === "pending" ||
+      value.disposition === "handoff_boundary" ||
+      value.disposition === "no_landed_units" ||
+      value.disposition === "deferral_cascade")
+  );
+}
+
+function resolutionRecordIsCoherent(value: GateResolution): boolean {
+  if (!settlementMetadataIsCoherent(value)) return false;
+  if (value.status === "observed")
+    return (
+      value.sources !== undefined &&
+      value.capacities !== undefined &&
+      value.lastRefusal === undefined
+    );
+  if (value.status === "pending")
+    return (
+      value.sources === undefined &&
+      (value.currentEffectId === undefined && value.lastRefusal === undefined
+        ? value.capacities === undefined
+        : value.capacities !== undefined)
+    );
+  return (
+    value.disposition === "deferred_by_controller" &&
+    value.lastRefusal !== undefined &&
+    value.capacities !== undefined &&
+    value.sources === undefined
+  );
+}
+
+function destinationProbeRecordIsCoherent(
+  value: GateDestinationProbe,
+): boolean {
+  if (!settlementMetadataIsCoherent(value)) return false;
+  if (value.status === "observed")
+    return value.identity !== undefined && value.lastRefusal === undefined;
+  if (value.status === "pending") return value.identity === undefined;
+  if (value.identity !== undefined || value.lastRefusal === undefined)
+    return false;
+  return value.disposition === "deferred_by_controller"
+    ? value.followUpBeadId !== undefined
+    : value.disposition === "optional_alias_unmounted" &&
+        value.followUpBeadId === undefined &&
+        value.lastRefusal.code === "optional_alias_unmounted";
+}
+
+function materialisationRecordIsCoherent(value: GateMaterialisation): boolean {
+  if (!settlementMetadataIsCoherent(value)) return false;
+  const named =
+    value.artifactName !== undefined &&
+    value.sidecarName !== undefined &&
+    value.sidecarByteCount !== undefined &&
+    value.sidecarSha256 !== undefined &&
+    value.timestamp !== undefined;
+  if (value.lastRefusal !== undefined && !named) return false;
+  if (value.status === "observed")
+    return (
+      named &&
+      value.observation !== undefined &&
+      materialisationObservationMatches(value, value.observation) &&
+      value.lastRefusal === undefined
+    );
+  if (value.status === "pending") return value.observation === undefined;
+  if (value.observation !== undefined) return false;
+  if (value.disposition === "deferred_by_controller")
+    return value.lastRefusal !== undefined;
+  return (
+    (value.disposition === "deferral_cascade" ||
+      value.disposition === "optional_alias_unmounted") &&
+    value.lastRefusal === undefined
+  );
+}
+
+function targetRecordIsCoherent(value: GateTargetState): boolean {
+  if (!settlementMetadataIsCoherent(value)) return false;
+  if (value.status === "pending") return true;
+  if (value.status === "observed")
+    return (
+      value.resolution?.status === "observed" &&
+      value.materialisations.length > 0 &&
+      value.materialisations.every((item) => item.status === "observed")
+    );
+  return (
+    (value.disposition === "deferral_cascade" ||
+      value.disposition === "optional_alias_unmounted") &&
+    targetIsSettled(value)
+  );
+}
+
+function provenanceRecordIsCoherent(value: GateProvenance): boolean {
+  if (!settlementMetadataIsCoherent(value)) return false;
+  if (value.baseOid === undefined) return false;
+  const attemptBound = value.attemptIdempotencyKey !== undefined;
+  if (attemptBound !== (value.worktreePath !== undefined)) return false;
+  const successFields =
+    value.commitOid !== undefined || value.treeOid !== undefined;
+  const observedHeadPresent = Object.prototype.hasOwnProperty.call(
+    value,
+    "observedHeadOid",
+  );
+  const worktreeFields =
+    value.expectedBaseOid !== undefined ||
+    observedHeadPresent ||
+    value.worktreeCondition !== undefined;
+  const attemptedFields =
+    value.attemptedCommitOid !== undefined ||
+    value.attemptedTreeOid !== undefined;
+  if (value.status === "observed")
+    return (
+      attemptBound &&
+      value.commitOid !== undefined &&
+      value.treeOid !== undefined &&
+      !worktreeFields &&
+      !attemptedFields &&
+      value.advancedBaseOid === undefined &&
+      value.lastRefusal === undefined
+    );
+  if (successFields) return false;
+  if (value.lastRefusal === undefined)
+    return (
+      !worktreeFields &&
+      !attemptedFields &&
+      value.advancedBaseOid === undefined &&
+      (value.currentEffectId === undefined ? !attemptBound : attemptBound)
+    );
+  const code = value.lastRefusal.code;
+  const refusalFieldsValid =
+    code === "provenance_worktree_refused"
+      ? value.expectedBaseOid === value.baseOid &&
+        observedHeadPresent &&
+        value.worktreeCondition !== undefined &&
+        !attemptedFields &&
+        value.advancedBaseOid === undefined
+      : attemptedFields &&
+        value.attemptedCommitOid !== undefined &&
+        value.attemptedTreeOid !== undefined &&
+        !worktreeFields &&
+        (code === "provenance_base_advanced"
+          ? value.advancedBaseOid !== undefined &&
+            value.lastRefusal.detailHash ===
+              provenanceBaseAdvancedDetailHash(
+                value.advancedBaseOid,
+                value.attemptedCommitOid,
+                value.attemptedTreeOid,
+              )
+          : value.advancedBaseOid === undefined);
+  return (
+    attemptBound &&
+    refusalFieldsValid &&
+    (value.status !== "voided" ||
+      value.disposition === "deferred_by_controller")
+  );
+}
+
+function aggregateVerifyRecordIsCoherent(value: GateAggregateVerify): boolean {
+  return (
+    settlementMetadataIsCoherent(value) &&
+    (value.status !== "voided" ||
+      value.disposition === "deferred_by_controller" ||
+      value.disposition === "deferral_cascade")
   );
 }
 
@@ -3884,6 +8970,99 @@ function runInvariantErrorsWithClosedEvidence(
       errors.push("queue contains a unit outside the current wave");
   }
   const oidLength = state.gitObjectFormat === "sha1" ? 40 : 64;
+  const knowledgeOids = [
+    state.pendingProvenanceCarry?.integrationOid,
+    state.gate?.currentIntegrationOid,
+    state.gate?.carriedProvenanceBaseOid,
+    state.gate?.provenance?.baseOid,
+    state.gate?.provenance?.advancedBaseOid,
+    state.gate?.provenance?.attemptedCommitOid,
+    state.gate?.provenance?.attemptedTreeOid,
+    state.gate?.provenance?.commitOid,
+    state.gate?.provenance?.treeOid,
+    state.gate?.provenance?.expectedBaseOid,
+    state.gate?.provenance?.observedHeadOid ?? undefined,
+    ...(state.gate?.targets.flatMap((target) => [
+      target.resolution?.sourceOid,
+      ...(target.resolution?.sources ?? []).flatMap((source) => [
+        source.blobOid,
+      ]),
+      ...target.materialisations.flatMap((item) => [
+        item.sourceOid,
+        item.source.blobOid,
+      ]),
+    ]) ?? []),
+    ...(state.gate?.provenanceUnitAccounting.flatMap((item) =>
+      item.status === "committed" ? [item.provenanceCommitOid] : [],
+    ) ?? []),
+    ...(state.pendingProvenanceCarry === undefined
+      ? []
+      : projectionInputOids(
+          state.pendingProvenanceCarry.projectionInputSnapshot,
+        )),
+    ...(state.gate?.carriedProjectionInputSnapshot === undefined
+      ? []
+      : projectionInputOids(state.gate.carriedProjectionInputSnapshot)),
+    ...(state.gate?.provenance === undefined
+      ? []
+      : projectionInputOids(state.gate.provenance.projectionInputSnapshot)),
+  ];
+  if (
+    knowledgeOids.some(
+      (value) => value !== undefined && value.length !== oidLength,
+    )
+  )
+    errors.push("knowledge gate has an OID incompatible with object format");
+  const pendingCarry = state.pendingProvenanceCarry;
+  if (
+    pendingCarry !== undefined &&
+    state.lastProvenanceCarryRefusal !== undefined
+  )
+    errors.push("pending provenance carry contradicts a claim refusal");
+  if (pendingCarry !== undefined) {
+    const claimToken = deriveProvenanceCarryClaimKey(
+      state.controller.runId,
+      pendingCarry.exportId,
+      pendingCarry.predecessorRootBeadId,
+    );
+    if (
+      state.gate !== undefined ||
+      state.wave.unitIds.length !== 0 ||
+      state.provenanceCarryClaim !== undefined ||
+      !carryClaimIsBeforeFirstWave(state) ||
+      !projectionInputFits(pendingCarry.projectionInputSnapshot) ||
+      pendingCarry.projectionInputSnapshot.unitIds.length === 0 ||
+      pendingCarry.snapshotCommitment !==
+        provenanceCarrySnapshotCommitment(
+          pendingCarry.projectionInputSnapshot,
+        ) ||
+      pendingCarry.exportId !==
+        deriveProvenanceCarryExportId({
+          finalRevision: pendingCarry.predecessorFinalRevision,
+          integrationBranch: state.integrationBranch,
+          predecessorRootAggregateCommitment:
+            pendingCarry.predecessorRootAggregateCommitment,
+          predecessorRunId: pendingCarry.predecessorRunId,
+          predecessorWaveId: pendingCarry.predecessorWaveId,
+          repositoryIdentity: state.repositoryIdentity,
+          snapshotCommitment: pendingCarry.snapshotCommitment,
+          storeIdentity: state.storeIdentity,
+        }) ||
+      pendingCarry.lineageAncestorDigests.length === 0 ||
+      new Set(pendingCarry.lineageAncestorDigests).size !==
+        pendingCarry.lineageAncestorDigests.length ||
+      pendingCarry.lineageCommitment !==
+        provenanceCarryLineageCommitment(pendingCarry.lineageAncestorDigests) ||
+      pendingCarry.lineageAncestorDigests.at(-1) !==
+        provenanceCarryAncestorDigest(
+          pendingCarry.predecessorRootBeadId,
+          pendingCarry.predecessorRunId,
+        ) ||
+      pendingCarry.claimRecordDigest !==
+        carryClaimRecordDigest(state.controller.runId, pendingCarry, claimToken)
+    )
+      errors.push("pending provenance carry has invalid bindings");
+  }
   const checkOid = (unit: Unit, value: string | undefined) => {
     if (value !== undefined && value.length !== oidLength)
       errors.push(
@@ -4168,6 +9347,17 @@ function runInvariantErrorsWithClosedEvidence(
         effect.status !== "observed")
     )
       errors.push(`effect ${effect.effectId} has unknown unit`);
+    const aggregateGateKind =
+      effect.kind === "materialisation_resolve" ||
+      effect.kind === "destination_probe" ||
+      effect.kind === "materialise" ||
+      effect.kind === "provenance_commit" ||
+      (effect.kind === "verify" && effect.unitId === null);
+    if (
+      (aggregateGateKind && effect.gateEntryId === undefined) ||
+      (!aggregateGateKind && effect.gateEntryId !== undefined)
+    )
+      errors.push(`effect ${effect.effectId} has invalid gate identity scope`);
     if (effect.intentCommitment !== deriveIntentCommitment(effect))
       errors.push(`effect ${effect.effectId} has an invalid intent commitment`);
     if (effect.status === "intended" && effect.observationHash !== undefined)
@@ -4191,6 +9381,7 @@ function runInvariantErrorsWithClosedEvidence(
           effect.unitId,
           effect.kind,
           effect.slotTransition,
+          effect.gateEntryId,
         ) as RuntimeEffect["params"];
         if (effect.paramsHash !== deriveParamsHash(effect.kind, expectedParams))
           errors.push(`effect ${effect.effectId} has an invalid params hash`);
@@ -4556,10 +9747,25 @@ function runInvariantErrorsWithClosedEvidence(
     )
       errors.push(`reserved ${id} has no exact acquisition journal lineage`);
   }
-  const controllerUnresolved = state.effectJournal.filter(
+  const preGateUnresolved = state.effectJournal.filter(
     (effect) =>
       effect.unitId === null &&
+      effect.gateEntryId === undefined &&
       (effect.status === "intended" || effect.status === "ambiguous"),
+  );
+  const controllerUnresolved = preGateUnresolved.filter(
+    (effect) =>
+      effect.kind === "controller_acquire" ||
+      effect.kind === "controller_release",
+  );
+  const carryUnresolved = preGateUnresolved.filter(
+    (effect) => effect.kind === "provenance_carry_claim",
+  );
+  const unrelatedPreGate = preGateUnresolved.filter(
+    (effect) =>
+      effect.kind !== "controller_acquire" &&
+      effect.kind !== "controller_release" &&
+      effect.kind !== "provenance_carry_claim",
   );
   const expectedControllerKind =
     state.controller.state === "acquire_intent"
@@ -4575,6 +9781,45 @@ function runInvariantErrorsWithClosedEvidence(
         controllerUnresolved[0]?.kind !== expectedControllerKind))
   )
     errors.push("controller has an orphan or multiple unresolved effects");
+  const carry = state.provenanceCarryClaim;
+  const carryKey =
+    carry === undefined
+      ? undefined
+      : deriveProvenanceCarryClaimKey(
+          state.controller.runId,
+          carry.exportId,
+          carry.predecessorRootBeadId,
+        );
+  const carryExportId =
+    carry === undefined
+      ? undefined
+      : deriveProvenanceCarryExportId({
+          finalRevision: carry.predecessorFinalRevision,
+          integrationBranch: state.integrationBranch,
+          predecessorRootAggregateCommitment:
+            carry.predecessorRootAggregateCommitment,
+          predecessorRunId: carry.predecessorRunId,
+          predecessorWaveId: carry.predecessorWaveId,
+          repositoryIdentity: state.repositoryIdentity,
+          snapshotCommitment: carry.snapshotCommitment,
+          storeIdentity: state.storeIdentity,
+        });
+  if (
+    unrelatedPreGate.length !== 0 ||
+    (carry === undefined && carryUnresolved.length !== 0) ||
+    (carry !== undefined &&
+      (state.controller.state !== "acquired" ||
+        state.gate !== undefined ||
+        state.wave.unitIds.length !== 0 ||
+        !carryClaimIsBeforeFirstWave(state) ||
+        carryUnresolved.length !== 1 ||
+        carryUnresolved[0]?.effectId !== carry.currentEffectId ||
+        carry.claimToken !== carryKey ||
+        carry.exportId !== carryExportId ||
+        carryUnresolved[0]?.idempotencyKey !== carry.claimToken))
+  )
+    errors.push("pre-gate carry has an orphan or invalid unresolved effect");
+  errors.push(...gateInvariantErrors(state));
   const qualificationQueueStates = new Set<UnitState>([
     "candidate_committed",
     "verification_intent",
@@ -4720,8 +9965,14 @@ function runInvariantErrorsWithClosedEvidence(
     errors.push("reviewer is not owned by qualification");
   if (
     state.state === "blocked" &&
-    controllerUnresolved.every((entry) => entry.status !== "ambiguous") &&
-    !Object.values(state.units).some((unit) => unit.state === "blocked")
+    [...controllerUnresolved, ...carryUnresolved].every(
+      (entry) => entry.status !== "ambiguous",
+    ) &&
+    !Object.values(state.units).some((unit) => unit.state === "blocked") &&
+    !state.effectJournal.some(
+      (entry) =>
+        entry.gateEntryId !== undefined && entry.status === "ambiguous",
+    )
   )
     errors.push("blocked aggregate lacks ambiguous durable evidence");
   if (state.state === "active" && state.controller.state !== "acquired")
@@ -4732,6 +9983,847 @@ function runInvariantErrorsWithClosedEvidence(
     errors.push("released controller has non-released aggregate");
   return errors;
 }
+
+function gateInvariantErrors(state: RepositoryRun): string[] {
+  const errors: string[] = [];
+  if ((state.gate === undefined) !== (state.knowledgeContract === undefined)) {
+    errors.push("knowledge contract and gate must be present together");
+    return errors;
+  }
+  const gate = state.gate;
+  if (gate === undefined) return errors;
+  if (
+    state.knowledgeContract === undefined ||
+    state.harness === undefined ||
+    !knowledgeContractRuntimeValid(state.knowledgeContract, state.harness)
+  )
+    errors.push("knowledge gate has an invalid runtime contract");
+  const settlementRecords = [
+    ...gate.targetPromises,
+    ...gate.targets,
+    ...gate.destinationProbes,
+    ...gate.targets.flatMap((target) => [
+      ...(target.resolution === undefined ? [] : [target.resolution]),
+      ...target.materialisations,
+    ]),
+    ...(gate.provenancePromise === undefined ? [] : [gate.provenancePromise]),
+    ...(gate.provenance === undefined ? [] : [gate.provenance]),
+    ...(gate.aggregateVerifyPromise === undefined
+      ? []
+      : [gate.aggregateVerifyPromise]),
+    ...(gate.aggregateVerify === undefined ? [] : [gate.aggregateVerify]),
+  ];
+  if (settlementRecords.some((record) => !settlementMetadataIsCoherent(record)))
+    errors.push("knowledge gate has incoherent settlement metadata");
+  if (
+    gate.targetPromises.some((record) => !targetPromiseIsCoherent(record)) ||
+    gate.targets.some((record) => !targetRecordIsCoherent(record)) ||
+    gate.destinationProbes.some(
+      (record) => !destinationProbeRecordIsCoherent(record),
+    ) ||
+    gate.targets.some(
+      (target) =>
+        (target.resolution !== undefined &&
+          !resolutionRecordIsCoherent(target.resolution)) ||
+        target.materialisations.some(
+          (record) => !materialisationRecordIsCoherent(record),
+        ),
+    ) ||
+    (gate.provenancePromise !== undefined &&
+      !gatePlaceholderIsCoherent(gate.provenancePromise)) ||
+    (gate.aggregateVerifyPromise !== undefined &&
+      !gatePlaceholderIsCoherent(gate.aggregateVerifyPromise)) ||
+    (gate.provenance !== undefined &&
+      !provenanceRecordIsCoherent(gate.provenance)) ||
+    (gate.aggregateVerify !== undefined &&
+      !aggregateVerifyRecordIsCoherent(gate.aggregateVerify))
+  )
+    errors.push("knowledge gate has incoherent record-specific evidence");
+  if (gate.waveId !== state.wave.id)
+    errors.push("knowledge gate does not bind the current wave");
+  if (
+    (gate.carriedProjectionInputSnapshot !== undefined &&
+      !projectionInputFits(gate.carriedProjectionInputSnapshot)) ||
+    (gate.provenance !== undefined &&
+      !projectionInputFits(gate.provenance.projectionInputSnapshot))
+  )
+    errors.push("knowledge gate has an invalid provenance input snapshot");
+  if (
+    (gate.provenance === undefined &&
+      (gate.carriedProjectionInputSnapshot === undefined) !==
+        (gate.carriedSnapshotCommitment === undefined)) ||
+    (gate.provenance !== undefined &&
+      gate.carriedProjectionInputSnapshot !== undefined) ||
+    (gate.carriedProjectionInputSnapshot !== undefined &&
+      (gate.carriedSnapshotCommitment !==
+        provenanceCarrySnapshotCommitment(
+          gate.carriedProjectionInputSnapshot,
+        ) ||
+        gate.carriedProjectionInputSnapshot.unitIds.some((unitId) =>
+          gate.originalUnitIds.includes(unitId),
+        )))
+  )
+    errors.push("knowledge gate has an invalid carried snapshot commitment");
+  if (gate.provenance !== undefined) {
+    const snapshot = gate.provenance.projectionInputSnapshot;
+    const durableClosureEvidence = decodeClosedUnitEvidence(
+      state.closedUnitEvidence,
+    );
+    const expectedCurrentIds = gate.originalUnitIds
+      .filter(
+        (unitId) => durableClosureEvidence?.[unitId]?.outcome === "landed",
+      )
+      .sort(compareProtocolText);
+    const currentIds = snapshot.unitIds.filter((unitId) =>
+      gate.originalUnitIds.includes(unitId),
+    );
+    const carriedIds = snapshot.unitIds.filter(
+      (unitId) => !gate.originalUnitIds.includes(unitId),
+    );
+    const currentSlice = projectionInputSlice(snapshot, currentIds);
+    const expectedCurrent = currentProjectionInput(state, gate, currentIds);
+    const carriedSlice = projectionInputSlice(snapshot, carriedIds);
+    if (
+      !sameStringArray(currentIds, expectedCurrentIds) ||
+      currentSlice === undefined ||
+      expectedCurrent === undefined ||
+      canonicalJson(currentSlice as unknown as JsonValue) !==
+        canonicalJson(expectedCurrent as unknown as JsonValue)
+    )
+      errors.push("provenance snapshot does not bind current landed evidence");
+    if (
+      gate.carriedSnapshotCommitment === undefined
+        ? carriedIds.length !== 0
+        : carriedSlice === undefined ||
+          provenanceCarrySnapshotCommitment(carriedSlice) !==
+            gate.carriedSnapshotCommitment
+    )
+      errors.push("provenance snapshot does not bind carried evidence");
+  }
+  const durableClosureEvidence = decodeClosedUnitEvidence(
+    state.closedUnitEvidence,
+  );
+  const handoffBoundary =
+    state.completionBoundary === "branch-handoff" ||
+    state.completionBoundary === "pr-handoff";
+  const noLandedProjection =
+    state.wave.unitIds.length === 0 &&
+    gate.provenanceUnitAccounting.length === 0 &&
+    gate.originalUnitIds.every(
+      (unitId) => durableClosureEvidence?.[unitId]?.outcome !== "landed",
+    ) &&
+    gate.carriedProjectionInputSnapshot === undefined &&
+    gate.provenance === undefined;
+  if (gate.provenancePromise?.status === "voided") {
+    const valid =
+      (gate.provenancePromise.disposition === "handoff_boundary" &&
+        handoffBoundary &&
+        gate.provenancePromise.followUpBeadId === undefined) ||
+      (gate.provenancePromise.disposition === "no_landed_units" &&
+        noLandedProjection &&
+        gate.provenancePromise.followUpBeadId === undefined);
+    if (!valid) errors.push("provenance promise has invalid void origin");
+  }
+  if (gate.aggregateVerifyPromise?.status === "voided") {
+    const valid =
+      (gate.aggregateVerifyPromise.disposition === "handoff_boundary" &&
+        handoffBoundary &&
+        gate.aggregateVerifyPromise.followUpBeadId === undefined) ||
+      (gate.aggregateVerifyPromise.disposition === "no_landed_units" &&
+        noLandedProjection &&
+        gate.aggregateVerifyPromise.followUpBeadId === undefined &&
+        gate.provenancePromise?.status === "voided" &&
+        gate.provenancePromise.disposition === "no_landed_units") ||
+      (gate.aggregateVerifyPromise.disposition === "deferral_cascade" &&
+        gate.aggregateVerifyPromise.followUpBeadId !== undefined &&
+        gate.provenance?.status === "voided" &&
+        gate.provenance.disposition === "deferred_by_controller" &&
+        gate.provenance.followUpBeadId ===
+          gate.aggregateVerifyPromise.followUpBeadId);
+    if (!valid) errors.push("aggregate verify promise has invalid void origin");
+  }
+  const landedOriginals = gate.originalUnitIds
+    .map((unitId) => durableClosureEvidence?.[unitId])
+    .filter(
+      (entry): entry is Extract<ClosureEvidence, { outcome: "landed" }> =>
+        entry?.outcome === "landed",
+    )
+    .sort(
+      (left, right) =>
+        left.terminalEffect.intentRevision -
+          right.terminalEffect.intentRevision ||
+        compareProtocolText(left.unitId, right.unitId),
+    );
+  const expectedIntegrationOid =
+    landedOriginals.at(-1)?.landedOid ?? gate.carriedProvenanceBaseOid;
+  if (gate.currentIntegrationOid !== expectedIntegrationOid)
+    errors.push("knowledge gate current integration OID is not authoritative");
+  if (
+    state.wave.unitIds.some(
+      (unitId) => !gate.originalUnitIds.includes(unitId),
+    ) ||
+    gate.originalUnitIds.some(
+      (unitId) =>
+        (state.units[unitId] !== undefined) !==
+          state.wave.unitIds.includes(unitId) ||
+        (state.units[unitId] === undefined &&
+          durableClosureEvidence?.[unitId] === undefined),
+    )
+  )
+    errors.push("knowledge gate original membership is not durable");
+  if (gate.provenance !== undefined && !unitProjectionStageSettled(state, gate))
+    errors.push("provenance entry preceded settled original unit stage");
+  if (
+    new Set(gate.lineageAncestorDigests).size !==
+      gate.lineageAncestorDigests.length ||
+    gate.lineageCommitment !==
+      provenanceCarryLineageCommitment(gate.lineageAncestorDigests)
+  )
+    errors.push("knowledge gate has invalid provenance lineage");
+  const targets = gate.targets;
+  if (!gateTargetDefinitionsAreBound(gate))
+    errors.push("knowledge gate target definitions do not match commitment");
+  const ids = new Set<string>();
+  const entries = new Set<string>();
+  const probeKeys = new Set<string>();
+  const referencedProbes = new Map<
+    string,
+    {
+      readonly alias: string;
+      readonly stage: "gate" | "unit";
+      readonly subpath: string;
+    }
+  >();
+  for (const target of gate.targets)
+    for (const item of target.materialisations) {
+      const reference = {
+        alias: target.definition.target.destinationAlias,
+        stage: target.definition.scope,
+        subpath: target.definition.target.destinationSubpath,
+      };
+      const previous = referencedProbes.get(item.destinationProbeGateEntryId);
+      if (
+        previous !== undefined &&
+        (previous.alias !== reference.alias ||
+          previous.stage !== reference.stage ||
+          previous.subpath !== reference.subpath)
+      )
+        errors.push(
+          `destination probe ${item.destinationProbeGateEntryId} has contradictory references`,
+        );
+      referencedProbes.set(item.destinationProbeGateEntryId, reference);
+    }
+  const collisionWitnesses = {
+    gate: nameCollisionWitnesses(gate, "gate", true),
+    unit: nameCollisionWitnesses(gate, "unit", true),
+  };
+  if (!observedFinalNamesAreUnique(gate))
+    errors.push("observed materialisation final names collide");
+  for (const probe of gate.destinationProbes) {
+    const expected = destinationProbeGateEntryId(
+      state,
+      gate,
+      probe.stage,
+      probe.destinationAlias,
+      probe.destinationSubpath,
+    );
+    if (probe.gateEntryId !== expected)
+      errors.push(
+        `destination probe ${probe.gateEntryId} has invalid identity`,
+      );
+    const reference = referencedProbes.get(probe.gateEntryId);
+    if (
+      reference === undefined ||
+      reference.alias !== probe.destinationAlias ||
+      reference.stage !== probe.stage ||
+      reference.subpath !== probe.destinationSubpath
+    )
+      errors.push(
+        `destination probe ${probe.gateEntryId} is not exactly referenced`,
+      );
+    if (!stageResolutionsSettled(gate, probe.stage))
+      errors.push(
+        `destination probe ${probe.gateEntryId} preceded settled resolutions`,
+      );
+    const key = `${probe.stage}\u0000${probe.destinationAlias}\u0000${probe.destinationSubpath}`;
+    if (probeKeys.has(key))
+      errors.push(`duplicate destination probe ${probe.gateEntryId}`);
+    probeKeys.add(key);
+    entries.add(probe.gateEntryId);
+    if (
+      probe.status === "observed" &&
+      (probe.identity === undefined || probe.lastRefusal !== undefined)
+    )
+      errors.push(
+        `observed destination probe ${probe.gateEntryId} is incomplete`,
+      );
+    if (
+      probe.status === "voided" &&
+      (probe.identity !== undefined || probe.lastRefusal === undefined)
+    )
+      errors.push(
+        `voided destination probe ${probe.gateEntryId} is incoherent`,
+      );
+    if (
+      probe.status === "voided" &&
+      probe.disposition === "optional_alias_unmounted" &&
+      state.knowledgeContract?.aliases.find(
+        (alias) => alias.alias === probe.destinationAlias,
+      )?.mountPolicy !== "optional"
+    )
+      errors.push(
+        `destination probe ${probe.gateEntryId} contradicts mount policy`,
+      );
+    if (
+      probe.status === "pending" &&
+      probe.lastRefusal !== undefined &&
+      !hasLatestObservedGateAttempt(
+        state,
+        probe.gateEntryId,
+        "destination_probe",
+      )
+    )
+      errors.push(
+        `destination probe ${probe.gateEntryId} lacks refusal lineage`,
+      );
+  }
+  for (const [gateEntryId, reference] of referencedProbes)
+    if (
+      stageResolutionsSettled(gate, reference.stage) &&
+      !gate.destinationProbes.some((probe) => probe.gateEntryId === gateEntryId)
+    )
+      errors.push("knowledge gate destination probe set is incomplete");
+  for (const promise of gate.targetPromises) {
+    const definition = promise.definition;
+    if (promise.status === "voided") {
+      const dispositionValid =
+        (promise.disposition === "handoff_boundary" &&
+          (state.completionBoundary === "branch-handoff" ||
+            state.completionBoundary === "pr-handoff") &&
+          promise.followUpBeadId === undefined) ||
+        (promise.disposition === "unit_not_landed" &&
+          definition.scope === "unit" &&
+          definition.originUnitId !== null &&
+          durableClosureEvidence?.[definition.originUnitId]?.outcome !==
+            "landed" &&
+          durableClosureEvidence?.[definition.originUnitId] !== undefined &&
+          promise.followUpBeadId === undefined) ||
+        (promise.disposition === "no_landed_units" &&
+          definition.scope === "gate" &&
+          state.wave.unitIds.length === 0 &&
+          gate.provenanceUnitAccounting.length === 0 &&
+          gate.provenancePromise?.status === "voided" &&
+          gate.provenancePromise.disposition === "no_landed_units" &&
+          promise.followUpBeadId === undefined) ||
+        (promise.disposition === "deferral_cascade" &&
+          definition.scope === "gate" &&
+          promise.followUpBeadId !== undefined &&
+          [
+            gate.provenance,
+            gate.provenancePromise,
+            gate.aggregateVerify,
+            gate.aggregateVerifyPromise,
+          ].some(
+            (upstream) =>
+              upstream?.status === "voided" &&
+              upstream.followUpBeadId === promise.followUpBeadId &&
+              (upstream.disposition === "deferred_by_controller" ||
+                upstream.disposition === "deferral_cascade"),
+          ));
+      if (!dispositionValid)
+        errors.push(
+          `target promise ${definition.targetId} has invalid void origin`,
+        );
+    }
+    if (
+      definition.targetId !==
+      deriveMaterialisationTargetId(
+        definition.scope,
+        definition.originUnitId,
+        definition.targetOrdinal,
+        definition.target,
+      )
+    )
+      errors.push(`target promise ${definition.targetId} has invalid identity`);
+    if (ids.has(definition.targetId))
+      errors.push(`duplicate target lineage ${definition.targetId}`);
+    ids.add(definition.targetId);
+  }
+  for (const target of targets) {
+    const definition = target.definition;
+    if (
+      definition.targetId !==
+      deriveMaterialisationTargetId(
+        definition.scope,
+        definition.originUnitId,
+        definition.targetOrdinal,
+        definition.target,
+      )
+    )
+      errors.push(`target ${definition.targetId} has invalid identity`);
+    if (ids.has(definition.targetId))
+      errors.push(`duplicate target lineage ${definition.targetId}`);
+    ids.add(definition.targetId);
+    if ((definition.scope === "unit") !== (definition.originUnitId !== null))
+      errors.push(`target ${definition.targetId} has invalid origin scope`);
+    const resolution = target.resolution;
+    const originEvidence =
+      definition.originUnitId === null
+        ? undefined
+        : durableClosureEvidence?.[definition.originUnitId];
+    const authoritativeSourceOid =
+      definition.scope === "unit" && definition.originUnitId !== null
+        ? originEvidence?.outcome === "landed"
+          ? originEvidence.landedOid
+          : undefined
+        : gate.aggregateVerify?.status === "observed" &&
+            gate.provenance?.status === "observed"
+          ? gate.provenance.commitOid
+          : undefined;
+    if (
+      authoritativeSourceOid === undefined ||
+      resolution?.sourceOid !== authoritativeSourceOid
+    )
+      errors.push(`target ${definition.targetId} lacks authoritative source`);
+    if (resolution === undefined)
+      errors.push(
+        `source-bound target ${definition.targetId} lacks resolution`,
+      );
+    if (resolution !== undefined) {
+      const expected = resolutionFor(
+        state.controller.runId,
+        gate.waveId,
+        definition,
+        resolution.sourceOid,
+      ).gateEntryId;
+      if (resolution.gateEntryId !== expected)
+        errors.push(
+          `resolution ${resolution.gateEntryId} has invalid identity`,
+        );
+      if (entries.has(resolution.gateEntryId))
+        errors.push(`duplicate gate identity ${resolution.gateEntryId}`);
+      entries.add(resolution.gateEntryId);
+      if (
+        (resolution.currentEffectId !== undefined ||
+          resolution.lastRefusal !== undefined) &&
+        !resolutionCapacitiesBindLatestAttempt(state, gate, target)
+      )
+        errors.push(
+          `resolution ${resolution.gateEntryId} has invalid capacities`,
+        );
+      if (
+        resolution.status === "pending" &&
+        resolution.lastRefusal !== undefined &&
+        !hasLatestObservedGateAttempt(
+          state,
+          resolution.gateEntryId,
+          "materialisation_resolve",
+        )
+      )
+        errors.push(
+          `resolution ${resolution.gateEntryId} lacks refusal lineage`,
+        );
+      if (
+        resolution.status === "observed" &&
+        (resolution.sources === undefined ||
+          resolution.lastRefusal !== undefined ||
+          !resolutionSourcesFitRecordedCapacities(state, gate, target))
+      )
+        errors.push(
+          `observed resolution ${resolution.gateEntryId} is incomplete`,
+        );
+      if (
+        resolution.status === "observed" &&
+        (resolution.sources?.length !== target.materialisations.length ||
+          resolution.sources.some(
+            (source, index) =>
+              canonicalJson(source as unknown as JsonValue) !==
+              canonicalJson(
+                target.materialisations[index]?.source as unknown as JsonValue,
+              ),
+          ))
+      )
+        errors.push(
+          `resolution ${resolution.gateEntryId} does not bind every expanded output`,
+        );
+    }
+    for (const item of target.materialisations) {
+      const expectedCollision = collisionWitnesses[definition.scope].get(
+        item.gateEntryId,
+      );
+      if (
+        item.targetId !== definition.targetId ||
+        item.sourceOid !== resolution?.sourceOid ||
+        item.originUnitId !== definition.originUnitId ||
+        canonicalJson(item.target as unknown as JsonValue) !==
+          canonicalJson(definition.target as unknown as JsonValue)
+      )
+        errors.push(`materialisation ${item.gateEntryId} has invalid lineage`);
+      const expected = deriveGateEntryId(
+        state.controller.runId,
+        gate.waveId,
+        `${definition.scope}-materialise`,
+        {
+          blobOid: item.source.blobOid,
+          destinationProbeGateEntryId: item.destinationProbeGateEntryId,
+          path: item.source.path,
+          sourceOid: item.sourceOid,
+          targetId: item.targetId,
+        },
+      );
+      if (item.gateEntryId !== expected)
+        errors.push(`materialisation ${item.gateEntryId} has invalid identity`);
+      const expectedProbeId = destinationProbeGateEntryId(
+        state,
+        gate,
+        definition.scope,
+        item.target.destinationAlias,
+        item.target.destinationSubpath,
+      );
+      if (item.destinationProbeGateEntryId !== expectedProbeId)
+        errors.push(
+          `materialisation ${item.gateEntryId} has invalid probe identity`,
+        );
+      if (entries.has(item.gateEntryId))
+        errors.push(`duplicate gate identity ${item.gateEntryId}`);
+      entries.add(item.gateEntryId);
+      const namedFields = [
+        item.artifactName,
+        item.sidecarName,
+        item.sidecarByteCount,
+        item.sidecarSha256,
+        item.timestamp,
+      ];
+      if (
+        namedFields.some((value) => value !== undefined) &&
+        namedFields.some((value) => value === undefined)
+      )
+        errors.push(`materialisation ${item.gateEntryId} has partial naming`);
+      if (item.timestamp !== undefined) {
+        try {
+          const artifactName = materialisationName(
+            item.source,
+            item.target.namingPolicy,
+            item.timestamp,
+          );
+          const sidecar = sidecarFor(
+            state,
+            gate,
+            item,
+            artifactName,
+            item.timestamp,
+          );
+          if (
+            item.artifactName !== artifactName ||
+            item.sidecarName !== `${artifactName}.sce-provenance.json` ||
+            item.sidecarByteCount !== utf8.encode(sidecar.bytes).byteLength ||
+            item.sidecarSha256 !== sha256(sidecar.bytes)
+          )
+            errors.push(
+              `materialisation ${item.gateEntryId} has invalid planned bytes`,
+            );
+        } catch {
+          errors.push(
+            `materialisation ${item.gateEntryId} has invalid planned bytes`,
+          );
+        }
+      }
+      if (
+        item.status === "pending" &&
+        item.lastRefusal !== undefined &&
+        item.lastRefusal.code !== "output_name_collision" &&
+        !hasLatestObservedGateAttempt(state, item.gateEntryId, "materialise")
+      )
+        errors.push(
+          `materialisation ${item.gateEntryId} lacks refusal lineage`,
+        );
+      if (
+        item.lastRefusal?.code === "output_name_collision"
+          ? item.lastRefusal.conflictingGateEntryId !== expectedCollision
+          : item.status === "pending" &&
+            stageNamesReady(gate, definition.scope) &&
+            expectedCollision !== undefined
+      )
+        errors.push(
+          `materialisation ${item.gateEntryId} has invalid collision witness`,
+        );
+      if (
+        item.status === "observed" &&
+        (item.observation === undefined ||
+          !materialisationObservationMatches(item, item.observation) ||
+          item.artifactName === undefined ||
+          item.sidecarName === undefined ||
+          item.sidecarByteCount === undefined ||
+          item.sidecarSha256 === undefined ||
+          item.timestamp === undefined ||
+          item.lastRefusal !== undefined)
+      )
+        errors.push(
+          `observed materialisation ${item.gateEntryId} is incomplete`,
+        );
+    }
+    if (
+      (target.status === "observed" &&
+        (resolution?.status !== "observed" ||
+          target.materialisations.some(
+            (item) => item.status !== "observed",
+          ))) ||
+      (target.status === "voided" &&
+        (resolution?.status === "pending" ||
+          target.materialisations.some((item) => item.status === "pending")))
+    )
+      errors.push(`target ${definition.targetId} has incoherent status`);
+    if (target.status === "voided") {
+      const followUp = target.followUpBeadId;
+      const matchingProbe = gate.destinationProbes.find(
+        (probe) =>
+          probe.stage === definition.scope &&
+          probe.destinationAlias === definition.target.destinationAlias &&
+          probe.destinationSubpath === definition.target.destinationSubpath,
+      );
+      const alias = state.knowledgeContract?.aliases.find(
+        (item) => item.alias === definition.target.destinationAlias,
+      );
+      const contextualDisposition =
+        target.disposition === "optional_alias_unmounted"
+          ? followUp === undefined &&
+            alias?.mountPolicy === "optional" &&
+            matchingProbe?.status === "voided" &&
+            matchingProbe.disposition === "optional_alias_unmounted" &&
+            target.resolution?.status === "observed" &&
+            target.materialisations.every(
+              (item) =>
+                item.status === "voided" &&
+                item.disposition === "optional_alias_unmounted" &&
+                item.followUpBeadId === undefined &&
+                item.lastRefusal === undefined,
+            )
+          : target.disposition === "deferral_cascade" &&
+            followUp !== undefined &&
+            (target.resolution?.status === "voided" &&
+            target.resolution.disposition === "deferred_by_controller" &&
+            target.resolution.followUpBeadId === followUp
+              ? true
+              : matchingProbe?.status === "voided" &&
+                  matchingProbe.disposition === "deferred_by_controller" &&
+                  matchingProbe.followUpBeadId === followUp
+                ? true
+                : target.materialisations.some(
+                    (item) =>
+                      item.status === "voided" &&
+                      item.disposition === "deferred_by_controller" &&
+                      item.followUpBeadId === followUp,
+                  ));
+      if (!contextualDisposition)
+        errors.push(`target ${definition.targetId} has invalid void origin`);
+    }
+    for (const item of target.materialisations) {
+      if (item.status !== "voided") continue;
+      const matchingProbe = gate.destinationProbes.find(
+        (probe) => probe.gateEntryId === item.destinationProbeGateEntryId,
+      );
+      const contextualDisposition =
+        item.disposition === "deferred_by_controller"
+          ? item.followUpBeadId !== undefined && item.lastRefusal !== undefined
+          : item.disposition === "optional_alias_unmounted"
+            ? item.followUpBeadId === undefined &&
+              item.lastRefusal === undefined &&
+              matchingProbe?.status === "voided" &&
+              matchingProbe.disposition === "optional_alias_unmounted" &&
+              state.knowledgeContract?.aliases.find(
+                (alias) => alias.alias === item.target.destinationAlias,
+              )?.mountPolicy === "optional"
+            : item.disposition === "deferral_cascade" &&
+              item.followUpBeadId !== undefined &&
+              item.lastRefusal === undefined &&
+              ((target.resolution?.status === "voided" &&
+                target.resolution.disposition === "deferred_by_controller" &&
+                target.resolution.followUpBeadId === item.followUpBeadId) ||
+                (matchingProbe?.status === "voided" &&
+                  matchingProbe.disposition === "deferred_by_controller" &&
+                  matchingProbe.followUpBeadId === item.followUpBeadId));
+      if (!contextualDisposition)
+        errors.push(
+          `materialisation ${item.gateEntryId} has invalid void origin`,
+        );
+    }
+  }
+  const accountingIds = new Set<string>();
+  let accountingInput: ProvenanceInput | undefined;
+  try {
+    accountingInput =
+      gate.provenance?.projectionInputSnapshot ?? provenanceInput(state, gate);
+  } catch {
+    errors.push("knowledge gate has invalid provenance accounting input");
+  }
+  const closureEvidence =
+    accountingInput === undefined
+      ? {}
+      : (decodeClosedUnitEvidence(accountingInput.closedUnitEvidence) ?? {});
+  for (const accounting of gate.provenanceUnitAccounting) {
+    if (accountingIds.has(accounting.unitId))
+      errors.push(`duplicate provenance accounting ${accounting.unitId}`);
+    accountingIds.add(accounting.unitId);
+    if (
+      closureEvidence[accounting.unitId] === undefined ||
+      unitClosureEvidenceCommitment(closureEvidence[accounting.unitId]!) !==
+        accounting.closureEvidenceCommitment
+    )
+      errors.push(
+        `provenance accounting ${accounting.unitId} has invalid closure binding`,
+      );
+    if (
+      accounting.status === "committed" &&
+      accounting.provenanceCommitOid.length !==
+        (state.gitObjectFormat === "sha1" ? 40 : 64)
+    )
+      errors.push(
+        `provenance accounting ${accounting.unitId} has invalid commit OID`,
+      );
+    if (
+      gate.provenance?.status === "observed"
+        ? accounting.status !== "committed" ||
+          accounting.provenanceCommitOid !== gate.provenance.commitOid
+        : accounting.status !== "uncommitted"
+    )
+      errors.push(
+        `provenance accounting ${accounting.unitId} contradicts provenance status`,
+      );
+  }
+  if (
+    accountingInput !== undefined &&
+    !sameStringArray(
+      [...accountingIds].sort(compareProtocolText),
+      accountingInput.unitIds,
+    )
+  )
+    errors.push("knowledge gate provenance accounting membership is invalid");
+  const totals = sourceTotals(gate);
+  if (
+    totals.items > LIMITS.materialisationOutputs ||
+    totals.bytes > LIMITS.materialisationWaveBytes
+  )
+    errors.push("materialisation source totals exceed wave limits");
+  if (
+    gateMaterialisations(gate, "unit").some(
+      (item) => item.currentEffectId !== undefined,
+    ) &&
+    !stageNamesReady(gate, "unit")
+  )
+    errors.push("unit publication preceded namespace preflight");
+  if (
+    gate.provenance !== undefined &&
+    gate.provenance.status !== "voided" &&
+    !stageMaterialisationsSettled(gate, "unit")
+  )
+    errors.push("provenance preceded settled unit materialisations");
+  if (gate.provenance !== undefined) {
+    const expected = deriveGateEntryId(
+      state.controller.runId,
+      gate.waveId,
+      "provenance",
+      gate.provenance.projectionInputSnapshot as unknown as JsonValue,
+    );
+    if (gate.provenance.gateEntryId !== expected)
+      errors.push("provenance entry has invalid identity");
+    const attemptKey = gate.provenance.attemptIdempotencyKey;
+    if (
+      attemptKey !== undefined &&
+      (state.knowledgeContract === undefined ||
+        gate.provenance.worktreePath !==
+          deriveProvenanceWorktreePath(
+            state.knowledgeContract.provenanceWorktreeRoot,
+            attemptKey,
+          ))
+    )
+      errors.push("provenance worktree does not bind its attempt key");
+    if (
+      gate.provenance.currentEffectId !== undefined &&
+      !state.effectJournal.some(
+        (entry) =>
+          entry.effectId === gate.provenance!.currentEffectId &&
+          entry.kind === "provenance_commit" &&
+          entry.gateEntryId === gate.provenance!.gateEntryId &&
+          entry.idempotencyKey === attemptKey &&
+          (entry.status === "intended" || entry.status === "ambiguous"),
+      )
+    )
+      errors.push("provenance attempt key does not bind its journal intent");
+    if (
+      gate.provenance.status === "observed" &&
+      (gate.provenance.commitOid === undefined ||
+        gate.provenance.treeOid === undefined ||
+        gate.provenance.timestamp === undefined ||
+        gate.provenance.worktreePath === undefined ||
+        gate.provenance.lastRefusal !== undefined)
+    )
+      errors.push("observed provenance entry is incomplete");
+    entries.add(gate.provenance.gateEntryId);
+    if (gate.provenancePromise !== undefined)
+      errors.push("provenance entry coexists with its promise");
+  } else if (gate.provenancePromise === undefined) {
+    errors.push("knowledge gate lacks provenance lineage");
+  }
+  if (gate.aggregateVerify !== undefined) {
+    const expected = deriveGateEntryId(
+      state.controller.runId,
+      gate.waveId,
+      "aggregate-verify",
+      { provenanceGateEntryId: gate.aggregateVerify.provenanceGateEntryId },
+    );
+    if (gate.aggregateVerify.gateEntryId !== expected)
+      errors.push("aggregate verify entry has invalid identity");
+    if (
+      gate.aggregateVerify.status === "observed" &&
+      gate.aggregateVerify.lastRefusal !== undefined
+    )
+      errors.push("observed aggregate verify retains refusal evidence");
+    entries.add(gate.aggregateVerify.gateEntryId);
+    if (gate.provenance?.status !== "observed")
+      errors.push("aggregate verify preceded provenance observation");
+    if (gate.aggregateVerifyPromise !== undefined)
+      errors.push("aggregate verify entry coexists with its promise");
+    if (
+      gate.aggregateVerify.status === "voided" &&
+      gate.aggregateVerify.disposition === "deferral_cascade" &&
+      !(
+        gate.aggregateVerify.followUpBeadId !== undefined &&
+        gate.provenance?.status === "voided" &&
+        gate.provenance.disposition === "deferred_by_controller" &&
+        gate.provenance.followUpBeadId === gate.aggregateVerify.followUpBeadId
+      )
+    )
+      errors.push("aggregate verify entry has invalid cascade origin");
+  } else if (gate.aggregateVerifyPromise === undefined) {
+    errors.push("knowledge gate lacks aggregate verify lineage");
+  }
+  if (
+    gate.targets.some((target) => target.definition.scope === "gate") &&
+    gate.aggregateVerify?.status !== "observed"
+  )
+    errors.push("gate targets preceded aggregate verification");
+  if (
+    gateMaterialisations(gate, "gate").some(
+      (item) => item.currentEffectId !== undefined,
+    ) &&
+    !stageNamesReady(gate, "gate")
+  )
+    errors.push("gate publication preceded namespace preflight");
+  for (const entry of state.effectJournal.filter(
+    (item) =>
+      item.gateEntryId !== undefined &&
+      (item.status === "intended" || item.status === "ambiguous"),
+  )) {
+    if (
+      !entries.has(entry.gateEntryId!) &&
+      gate.provenance?.gateEntryId !== entry.gateEntryId &&
+      gate.aggregateVerify?.gateEntryId !== entry.gateEntryId
+    )
+      errors.push(`journal effect ${entry.effectId} has unknown gate entry`);
+  }
+  return errors;
+}
+
 function illegal(unit: Unit, eventType: ProtocolEvent["type"]): Reduction {
   return reject(
     "illegal_transition",

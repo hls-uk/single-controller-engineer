@@ -23,6 +23,12 @@ import {
   type GitRunner,
 } from "../adapters/git/index.js";
 import {
+  createMaterialisationAdapter,
+  type MaterialisationAdapter,
+} from "../adapters/materialise/index.js";
+import { canonicalJson, type JsonValue } from "../protocol/canonical.js";
+import { sha256 } from "../protocol/evidence.js";
+import {
   acknowledgeVerificationTool,
   createHarnessRecoveryEffectAdapter,
   type HarnessPort,
@@ -30,18 +36,36 @@ import {
 } from "../harness/index.js";
 import {
   deriveCandidateDiffHash,
+  canFreezeKnowledgeContractAtFirstWave,
+  deriveProvenanceCarryClaimKey,
+  deriveProvenanceCarryExportId,
+  projectionInputIsValid,
   rehydrateEffect,
   type ProtocolEffect,
 } from "../protocol/reducer.js";
-import type { FencingScope } from "../fencing/index.js";
+import type { FencingScope, RootProjection } from "../fencing/index.js";
 import type {
   ProtocolEvent,
+  KnowledgeContract,
   RepositoryRun,
   SlotTransitionIntent,
 } from "../protocol/schemas.js";
 import {
+  LIMITS,
+  ProvenanceInputSchema,
+  validate,
+  type ProvenanceCarry,
+  type ProvenanceInput,
+} from "../protocol/schemas.js";
+import {
+  provenanceCarryAncestorDigest,
+  provenanceCarryLineageCommitment,
+  provenanceCarrySnapshotCommitment,
+} from "../protocol/reducer.js";
+import {
   createRecoveryRunner,
   observationHash,
+  recoveryEventId,
   type ExecuteResult,
   type ControllerTransitionPlanResult,
   type ReconcileResult,
@@ -86,6 +110,213 @@ export interface ProductionRecoveryEffectAdapterOptions {
   readonly topology?: ControllerTransitionRecoveryPort;
   /** Explicit versioned harness support; absent harness effects fail closed. */
   readonly harness?: Readonly<{ port?: HarnessPort; support: unknown }>;
+  /** Injectable only for deterministic adapter fixtures. */
+  readonly materialisation?: MaterialisationAdapter;
+  /** Sole configured authority for knowledge-profile events and recovery. */
+  readonly knowledgeContract?: KnowledgeContract;
+  /** Authoritative Beads-root carry read/CAS/readback surface. */
+  readonly carry?: ProvenanceCarryClaimRecoveryPort;
+}
+
+export type ProvenanceCarryClaimPlan = Readonly<{
+  exportId: string;
+  predecessorFinalRevision: number;
+  predecessorJournalCheckpointCommitment: string;
+  predecessorRootAggregateCommitment: string;
+  predecessorRunId: string;
+  predecessorWaveId: string;
+  snapshotCommitment: string;
+}>;
+
+export type ProvenanceCarryProjectionPlan = Readonly<{
+  carry: Omit<ProvenanceCarry, "claimRecordDigest" | "claimRevision">;
+  plan: ProvenanceCarryClaimPlan;
+}>;
+
+export function planProvenanceCarryFromProjection(
+  predecessorRootIssueId: string,
+  currentRootIssueId: string,
+  currentRun: RepositoryRun,
+  predecessor: RootProjection,
+):
+  | Readonly<{ status: "planned"; value: ProvenanceCarryProjectionPlan }>
+  | Readonly<{
+      status: "refused";
+      evidenceDigest: string;
+      reason: Extract<
+        ProtocolEvent,
+        { type: "provenance_carry_claim_observed" }
+      >["result"] extends infer Result
+        ? Result extends { status: "predecessor_refused"; reason: infer Reason }
+          ? Reason
+          : never
+        : never;
+    }> {
+  const refuse = (
+    reason: Extract<
+      ProtocolEvent,
+      { type: "provenance_carry_claim_observed" }
+    >["result"] extends infer Result
+      ? Result extends { status: "predecessor_refused"; reason: infer Reason }
+        ? Reason
+        : never
+      : never,
+  ) => ({
+    evidenceDigest: sha256(
+      canonicalJson({
+        domain: "sce.provenance-carry-predecessor-refusal.v1",
+        predecessorRootIssueId,
+        reason,
+      }),
+    ),
+    reason,
+    status: "refused" as const,
+  });
+  if (predecessorRootIssueId === currentRootIssueId)
+    return refuse("lineage_invalid");
+  const run = predecessor.run;
+  if (
+    run.storeIdentity !== currentRun.storeIdentity ||
+    run.repositoryIdentity !== currentRun.repositoryIdentity ||
+    run.integrationBranch !== currentRun.integrationBranch ||
+    run.gitObjectFormat !== currentRun.gitObjectFormat
+  )
+    return refuse("scope_mismatch");
+  if (run.state !== "released" || run.controller.state !== "released")
+    return refuse("not_released");
+  if (run.effectJournal.some((entry) => entry.status !== "observed"))
+    return refuse("effects_unsettled");
+  const provenance = run.gate?.provenance;
+  if (
+    provenance?.status !== "voided" ||
+    provenance.disposition !== "deferred_by_controller"
+  )
+    return refuse("provenance_not_deferred");
+  const snapshot = validate<ProvenanceInput>(
+    ProvenanceInputSchema,
+    provenance.projectionInputSnapshot,
+  );
+  if (
+    !snapshot.ok ||
+    snapshot.value === undefined ||
+    snapshot.value.unitIds.length === 0 ||
+    !projectionInputIsValid(snapshot.value) ||
+    Buffer.byteLength(
+      canonicalJson(snapshot.value as unknown as JsonValue),
+      "utf8",
+    ) > 65_536 ||
+    snapshot.value.targetEvidence.reduce(
+      (total, target) => total + target.materialisations.length,
+      0,
+    ) > LIMITS.materialisationOutputs
+  )
+    return refuse("snapshot_invalid");
+  const ancestors = run.gate?.lineageAncestorDigests ?? [];
+  if (
+    new Set(ancestors).size !== ancestors.length ||
+    run.gate?.lineageCommitment !== provenanceCarryLineageCommitment(ancestors)
+  )
+    return refuse("lineage_invalid");
+  if (ancestors.length >= 128) return refuse("lineage_limit_exceeded");
+  const currentAncestor = provenanceCarryAncestorDigest(
+    currentRootIssueId,
+    currentRun.controller.runId,
+  );
+  const predecessorAncestor = provenanceCarryAncestorDigest(
+    predecessorRootIssueId,
+    run.controller.runId,
+  );
+  if (
+    ancestors.includes(currentAncestor) ||
+    ancestors.includes(predecessorAncestor) ||
+    run.controller.runId === currentRun.controller.runId
+  )
+    return refuse("lineage_invalid");
+  const lineageAncestorDigests = [...ancestors, predecessorAncestor];
+  const snapshotCommitment = provenanceCarrySnapshotCommitment(snapshot.value);
+  const integrationOid =
+    provenance.advancedBaseOid ??
+    provenance.baseOid ??
+    run.gate?.currentIntegrationOid;
+  if (integrationOid === undefined) return refuse("projection_invalid");
+  const exportId = deriveProvenanceCarryExportId({
+    finalRevision: run.revision,
+    integrationBranch: run.integrationBranch,
+    predecessorRootAggregateCommitment: predecessor.aggregateCommitment,
+    predecessorRunId: run.controller.runId,
+    predecessorWaveId: run.gate!.waveId,
+    repositoryIdentity: run.repositoryIdentity,
+    snapshotCommitment,
+    storeIdentity: run.storeIdentity,
+  });
+  const plan: ProvenanceCarryClaimPlan = {
+    exportId,
+    predecessorFinalRevision: run.revision,
+    predecessorJournalCheckpointCommitment: run.journalCheckpoint.commitment,
+    predecessorRootAggregateCommitment: predecessor.aggregateCommitment,
+    predecessorRunId: run.controller.runId,
+    predecessorWaveId: run.gate!.waveId,
+    snapshotCommitment,
+  };
+  return {
+    status: "planned",
+    value: {
+      plan,
+      carry: {
+        exportId,
+        integrationOid,
+        lineageAncestorDigests,
+        lineageCommitment: provenanceCarryLineageCommitment(
+          lineageAncestorDigests,
+        ),
+        predecessorFinalRevision: run.revision,
+        predecessorJournalCheckpointCommitment:
+          run.journalCheckpoint.commitment,
+        predecessorRootAggregateCommitment: predecessor.aggregateCommitment,
+        predecessorRootBeadId: predecessorRootIssueId,
+        predecessorRunId: run.controller.runId,
+        predecessorWaveId: run.gate!.waveId,
+        projectionInputSnapshot: snapshot.value,
+        snapshotCommitment,
+      },
+    },
+  };
+}
+
+export interface ProvenanceCarryClaimRecoveryPort {
+  prepareProvenanceCarryClaim(
+    predecessorRootIssueId: string,
+    currentRun: RepositoryRun,
+  ): Promise<
+    | Readonly<{ status: "planned"; plan: ProvenanceCarryClaimPlan }>
+    | Readonly<{ status: "blocked" | "ambiguous" | "unavailable" }>
+  >;
+  executeProvenanceCarryClaim(
+    effect: Extract<ProtocolEffect, { kind: "provenance_carry_claim" }>,
+    run: RepositoryRun,
+  ): Promise<
+    | Readonly<{
+        status: "observed";
+        result: Extract<
+          ProtocolEvent,
+          { type: "provenance_carry_claim_observed" }
+        >["result"];
+      }>
+    | Readonly<{ status: "ambiguous" | "unavailable" }>
+  >;
+  reconcileProvenanceCarryClaim(
+    effect: Extract<ProtocolEffect, { kind: "provenance_carry_claim" }>,
+    run: RepositoryRun,
+  ): Promise<
+    | Readonly<{
+        status: "observed";
+        result: Extract<
+          ProtocolEvent,
+          { type: "provenance_carry_claim_observed" }
+        >["result"];
+      }>
+    | Readonly<{ status: "absent" | "ambiguous" | "unavailable" }>
+  >;
 }
 
 /** Exact composition input; callers must supply topology proof and stores. */
@@ -117,7 +348,7 @@ function eventBase(effect: ProtocolEffect, run: RepositoryRun) {
   return {
     effectId: effect.effectId,
     effectKind: effect.kind,
-    eventId: `recover-${effect.effectId}`,
+    eventId: recoveryEventId(effect.effectId),
     expectedRevision: run.revision,
     observationHash: observationHash({
       effectId: effect.effectId,
@@ -125,6 +356,9 @@ function eventBase(effect: ProtocolEffect, run: RepositoryRun) {
       paramsHash: effect.paramsHash,
     }),
     unitId: effect.unitId,
+    ...(effect.gateEntryId === undefined
+      ? {}
+      : { gateEntryId: effect.gateEntryId }),
   };
 }
 
@@ -133,11 +367,13 @@ function observed(
   run: RepositoryRun,
 ): Extract<ReconcileResult, { status: "observed" }> | undefined {
   const base = eventBase(effect, run);
+  const { unitId: omittedControllerUnitId, ...controllerBase } = base;
+  void omittedControllerUnitId;
   switch (effect.kind) {
     case "controller_acquire":
       return {
         observation: {
-          ...base,
+          ...controllerBase,
           controllerFencingToken: effect.params.controllerFencingToken,
           holder: effect.params.holder,
           type: "controller_acquired",
@@ -146,7 +382,10 @@ function observed(
       };
     case "controller_release":
       return {
-        observation: { ...base, type: "controller_released" } as ProtocolEvent,
+        observation: {
+          ...controllerBase,
+          type: "controller_released",
+        } as ProtocolEvent,
         status: "observed",
       };
     case "branch_create":
@@ -195,6 +434,102 @@ function observed(
     default:
       return undefined;
   }
+}
+
+function carryObservation(
+  effect: Extract<ProtocolEffect, { kind: "provenance_carry_claim" }>,
+  run: RepositoryRun,
+  result: Extract<
+    ProtocolEvent,
+    { type: "provenance_carry_claim_observed" }
+  >["result"],
+): Extract<ExecuteResult, { status: "observed" }> {
+  const { unitId: omittedUnitId, ...base } = eventBase(effect, run);
+  void omittedUnitId;
+  return {
+    observation: {
+      ...base,
+      observationHash: observationHash(result as unknown as JsonValue),
+      result,
+      type: "provenance_carry_claim_observed",
+    } as ProtocolEvent,
+    status: "observed",
+  };
+}
+
+async function materialisationResult(
+  effect: Extract<
+    ProtocolEffect,
+    {
+      kind: "materialisation_resolve" | "destination_probe" | "materialise";
+    }
+  >,
+  run: RepositoryRun,
+  adapter: MaterialisationAdapter,
+): Promise<ExecuteResult> {
+  const result =
+    effect.kind === "materialisation_resolve"
+      ? await adapter.resolve(effect)
+      : effect.kind === "destination_probe"
+        ? await adapter.probe(effect)
+        : await adapter.materialise(effect);
+  if (result.status === "ambiguous")
+    return {
+      status: "ambiguous",
+      ...(result.observationHash === undefined
+        ? {}
+        : { observationHash: result.observationHash }),
+    };
+  const base = {
+    ...eventBase(effect, run),
+    observationHash: observationHash(result as unknown as JsonValue),
+  };
+  return {
+    observation:
+      effect.kind === "materialisation_resolve"
+        ? ({
+            ...base,
+            result,
+            type: "materialisation_sources_observed",
+          } as ProtocolEvent)
+        : effect.kind === "destination_probe"
+          ? ({
+              ...base,
+              result,
+              type: "destination_probe_observed",
+            } as ProtocolEvent)
+          : ({
+              ...base,
+              result,
+              type: "materialise_observed",
+            } as ProtocolEvent),
+    status: "observed",
+  };
+}
+
+async function discoveredMaterialisationResult(
+  effect: Extract<ProtocolEffect, { kind: "materialise" }>,
+  run: RepositoryRun,
+  adapter: MaterialisationAdapter,
+): Promise<ReconcileResult> {
+  const result = await adapter.discoverMaterialise(effect);
+  if (result.status === "absent") return { status: "absent" };
+  if (result.status === "ambiguous")
+    return {
+      status: "ambiguous",
+      ...(result.observationHash === undefined
+        ? {}
+        : { observationHash: result.observationHash }),
+    };
+  return {
+    observation: {
+      ...eventBase(effect, run),
+      observationHash: observationHash(result as unknown as JsonValue),
+      result,
+      type: "materialise_observed",
+    } as ProtocolEvent,
+    status: "observed",
+  };
 }
 
 function controllerTransition(
@@ -280,6 +615,7 @@ async function verificationRequest(
       delivery: "mark_ambiguous";
     }>
 > {
+  if (effect.unitId === null) return ambiguous();
   const unit = run.units[effect.unitId];
   if (
     unit === undefined ||
@@ -379,6 +715,12 @@ export function createProductionRecoveryEffectAdapter(
   options: ProductionRecoveryEffectAdapterOptions,
 ): RecoveryEffectAdapter {
   const git = options.git;
+  const materialisation =
+    options.materialisation ??
+    createMaterialisationAdapter(
+      git.repository.cwd,
+      git.repository.objectFormat,
+    );
   const harness =
     options.harness === undefined
       ? undefined
@@ -391,7 +733,43 @@ export function createProductionRecoveryEffectAdapter(
     effect: ProtocolEffect,
     run: RepositoryRun,
   ): Promise<ReconcileResult> {
+    if (effect.kind === "provenance_carry_claim") {
+      if (options.carry === undefined) return unavailable();
+      try {
+        const result = await options.carry.reconcileProvenanceCarryClaim(
+          effect,
+          run,
+        );
+        return result.status === "observed"
+          ? carryObservation(effect, run, result.result)
+          : result;
+      } catch {
+        return ambiguous();
+      }
+    }
+    if (
+      effect.kind === "materialisation_resolve" ||
+      effect.kind === "destination_probe" ||
+      effect.kind === "materialise"
+    ) {
+      if (
+        !gitMatchesRun(git.repository, run) ||
+        effect.params.repositoryIdentity !== git.repository.identity ||
+        (await verifyRepository(git.runner, git.repository)).state !==
+          "observed"
+      )
+        return ambiguous();
+      try {
+        return effect.kind === "materialise"
+          ? await discoveredMaterialisationResult(effect, run, materialisation)
+          : await materialisationResult(effect, run, materialisation);
+      } catch {
+        return ambiguous();
+      }
+    }
+    if (effect.kind === "provenance_commit") return unavailable();
     if (effect.kind === "verify") {
+      if (effect.unitId === null) return unavailable();
       if (!gitMatchesRun(git.repository, run)) return ambiguous();
       try {
         return await verificationRequest(effect, run, git);
@@ -506,7 +884,41 @@ export function createProductionRecoveryEffectAdapter(
     effect: ProtocolEffect,
     run: RepositoryRun,
   ): Promise<ExecuteResult> {
+    if (effect.kind === "provenance_carry_claim") {
+      if (options.carry === undefined) return unavailable();
+      try {
+        const result = await options.carry.executeProvenanceCarryClaim(
+          effect,
+          run,
+        );
+        return result.status === "observed"
+          ? carryObservation(effect, run, result.result)
+          : result;
+      } catch {
+        return ambiguous();
+      }
+    }
+    if (
+      effect.kind === "materialisation_resolve" ||
+      effect.kind === "destination_probe" ||
+      effect.kind === "materialise"
+    ) {
+      if (
+        !gitMatchesRun(git.repository, run) ||
+        effect.params.repositoryIdentity !== git.repository.identity ||
+        (await verifyRepository(git.runner, git.repository)).state !==
+          "observed"
+      )
+        return ambiguous();
+      try {
+        return await materialisationResult(effect, run, materialisation);
+      } catch {
+        return ambiguous();
+      }
+    }
+    if (effect.kind === "provenance_commit") return unavailable();
     if (effect.kind === "verify") {
+      if (effect.unitId === null) return unavailable();
       if (!gitMatchesRun(git.repository, run)) return ambiguous();
       try {
         return await verificationRequest(effect, run, git);
@@ -621,9 +1033,23 @@ export function createProductionRecoveryEffectAdapter(
 
   return {
     canExecute: (effect) =>
-      effect.kind === "verify" || (harness?.canExecute?.(effect) ?? false),
+      effect.kind === "verify" ||
+      effect.kind === "materialisation_resolve" ||
+      effect.kind === "destination_probe" ||
+      effect.kind === "materialise" ||
+      effect.kind === "provenance_commit" ||
+      (effect.kind === "provenance_carry_claim" &&
+        options.carry !== undefined) ||
+      (harness?.canExecute?.(effect) ?? false),
     canReconcile: (effect) =>
-      effect.kind === "verify" || (harness?.canReconcile?.(effect) ?? false),
+      effect.kind === "verify" ||
+      effect.kind === "materialisation_resolve" ||
+      effect.kind === "destination_probe" ||
+      effect.kind === "materialise" ||
+      effect.kind === "provenance_commit" ||
+      (effect.kind === "provenance_carry_claim" &&
+        options.carry !== undefined) ||
+      (harness?.canReconcile?.(effect) ?? false),
     acknowledge: async (acknowledgement, run) => {
       const verified = acknowledgeVerificationTool(acknowledgement, run);
       if (verified !== undefined) {
@@ -638,6 +1064,7 @@ export function createProductionRecoveryEffectAdapter(
         if (effect?.kind !== "verify" || !gitMatchesRun(git.repository, run))
           return ambiguous();
         try {
+          if (effect.unitId === null) return ambiguous();
           const binding = await verifyCandidateWorktree(
             git.runner,
             git.repository,
@@ -670,11 +1097,118 @@ export function createProductionRecoveryEffectAdapter(
 export function createProductionRecoveryRunner(
   options: ProductionRecoveryRunnerOptions,
 ) {
-  const { git, topology, harness, ...recovery } = options;
+  const { git, topology, harness, knowledgeContract, carry, ...recovery } =
+    options;
+  const authoritativeIntegrationOid = async (
+    run: RepositoryRun,
+  ): Promise<string | undefined> => {
+    const verified = await verifyRepository(git.runner, git.repository);
+    if (verified.state !== "observed") return undefined;
+    const argv =
+      run.integrationProfile === "local-ff"
+        ? [
+            "for-each-ref",
+            "--format=%(objectname)",
+            `refs/heads/${run.integrationBranch}`,
+          ]
+        : git.remote === undefined
+          ? undefined
+          : [
+              "ls-remote",
+              "--refs",
+              "--exit-code",
+              git.remote,
+              `refs/heads/${run.integrationBranch}`,
+            ];
+    if (argv === undefined) return undefined;
+    let result;
+    try {
+      result = await git.runner({ argv, cwd: git.repository.cwd });
+    } catch {
+      return undefined;
+    }
+    if (result.exitCode !== 0 || result.signal !== null) return undefined;
+    const match =
+      run.integrationProfile === "local-ff"
+        ? /^([0-9a-f]+)\n$/u.exec(result.stdout)
+        : new RegExp(
+            `^([0-9a-f]+)\\t${`refs/heads/${run.integrationBranch}`.replace(
+              /[.*+?^${}()|[\]\\]/gu,
+              "\\$&",
+            )}\\n$`,
+            "u",
+          ).exec(result.stdout);
+    const oid = match?.[1];
+    return oid?.length === (run.gitObjectFormat === "sha1" ? 40 : 64)
+      ? oid
+      : undefined;
+  };
+  const carryWithGit: ProvenanceCarryClaimRecoveryPort | undefined =
+    carry === undefined
+      ? undefined
+      : {
+          prepareProvenanceCarryClaim: async (predecessorRootIssueId, run) =>
+            await carry.prepareProvenanceCarryClaim(
+              predecessorRootIssueId,
+              run,
+            ),
+          executeProvenanceCarryClaim: async (effect, run) => {
+            const result = await carry.executeProvenanceCarryClaim(effect, run);
+            if (
+              result.status !== "observed" ||
+              result.result.status !== "imported"
+            )
+              return result;
+            const integrationOid = await authoritativeIntegrationOid(run);
+            return integrationOid === undefined
+              ? { status: "unavailable" as const }
+              : {
+                  result: {
+                    ...result.result,
+                    carry: { ...result.result.carry, integrationOid },
+                  },
+                  status: "observed" as const,
+                };
+          },
+          reconcileProvenanceCarryClaim: async (effect, run) => {
+            const result = await carry.reconcileProvenanceCarryClaim(
+              effect,
+              run,
+            );
+            if (
+              result.status !== "observed" ||
+              result.result.status !== "imported"
+            )
+              return result;
+            const integrationOid = await authoritativeIntegrationOid(run);
+            return integrationOid === undefined
+              ? { status: "unavailable" as const }
+              : {
+                  result: {
+                    ...result.result,
+                    carry: { ...result.result.carry, integrationOid },
+                  },
+                  status: "observed" as const,
+                };
+          },
+        };
+  const contractMatches = (value: KnowledgeContract | undefined) =>
+    (knowledgeContract === undefined) === (value === undefined) &&
+    (knowledgeContract === undefined ||
+      value === undefined ||
+      canonicalJson(knowledgeContract as unknown as JsonValue) ===
+        canonicalJson(value as unknown as JsonValue));
+  const contractMayBeFrozenByFirstWave = (run: RepositoryRun) => {
+    return (
+      knowledgeContract !== undefined &&
+      canFreezeKnowledgeContractAtFirstWave(run)
+    );
+  };
   return createRecoveryRunner({
     ...recovery,
     adapter: createProductionRecoveryEffectAdapter({
       git,
+      ...(carryWithGit === undefined ? {} : { carry: carryWithGit }),
       ...(harness === undefined ? {} : { harness }),
       ...(topology === undefined ? {} : { topology }),
     }),
@@ -688,15 +1222,59 @@ export function createProductionRecoveryRunner(
               scope: input.scope,
             }),
         }),
+    ...(carry === undefined
+      ? {}
+      : {
+          prepareProvenanceCarryClaim: async ({
+            predecessorRootBeadId,
+            run,
+          }) => {
+            const planned = await carry.prepareProvenanceCarryClaim(
+              predecessorRootBeadId,
+              run,
+            );
+            if (planned.status !== "planned") return planned;
+            const idempotencyKey = deriveProvenanceCarryClaimKey(
+              run.controller.runId,
+              planned.plan.exportId,
+              predecessorRootBeadId,
+            );
+            const keyDigest = idempotencyKey.slice("carry-claim:".length);
+            return {
+              event: {
+                claimToken: idempotencyKey,
+                eventId: `carry-claim-${keyDigest}`,
+                expectedRevision: run.revision,
+                exportId: planned.plan.exportId,
+                idempotencyKey,
+                predecessorFinalRevision: planned.plan.predecessorFinalRevision,
+                predecessorJournalCheckpointCommitment:
+                  planned.plan.predecessorJournalCheckpointCommitment,
+                predecessorRootAggregateCommitment:
+                  planned.plan.predecessorRootAggregateCommitment,
+                predecessorRootBeadId,
+                predecessorRunId: planned.plan.predecessorRunId,
+                predecessorWaveId: planned.plan.predecessorWaveId,
+                snapshotCommitment: planned.plan.snapshotCommitment,
+                type: "provenance_carry_claim_intent",
+              } as ProtocolEvent,
+              status: "planned" as const,
+            };
+          },
+        }),
     validateLoadedRun: ({ proof, run }) =>
       run.repositoryIdentity === git.repository.identity &&
       run.gitObjectFormat === git.repository.objectFormat &&
       run.storeIdentity === proof.scope.beadsStoreIdentity &&
       run.repositoryIdentity === proof.scope.gitRepositoryIdentity &&
       run.integrationBranch === proof.scope.integrationBranch &&
-      run.controller.holder === proof.holder
+      run.controller.holder === proof.holder &&
+      (contractMatches(run.knowledgeContract) ||
+        contractMayBeFrozenByFirstWave(run))
         ? { status: "ok" }
         : { status: "unavailable" },
+    validateEvent: (event) =>
+      event.type !== "wave_planned" || contractMatches(event.knowledgeContract),
     proveTopology: async () => {
       let proof;
       try {
@@ -719,7 +1297,8 @@ export function createProductionRecoveryRunner(
           recovery.initialRun.storeIdentity !==
             proof.scope.beadsStoreIdentity ||
           recovery.initialRun.integrationBranch !==
-            proof.scope.integrationBranch)
+            proof.scope.integrationBranch ||
+          !contractMatches(recovery.initialRun.knowledgeContract))
       )
         return undefined;
       const verified = await verifyRepository(git.runner, git.repository);

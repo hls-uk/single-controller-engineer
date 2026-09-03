@@ -203,6 +203,53 @@ function batch(): MutationBatch {
   return batchForRun();
 }
 
+function rootOnlyClosureBatch(): Readonly<{
+  batch: MutationBatch;
+  before: RootProjection;
+}> {
+  let current = run();
+  const apply = (type: Parameters<typeof event>[1], fields = {}) => {
+    const reduced = reduce(current, event(current, type, fields));
+    if (!reduced.ok) assert.fail(`${reduced.code}: ${reduced.reason}`);
+    current = reduced.nextState;
+  };
+  apply("failure_intent");
+  apply("failure_observed", {
+    effectId: current.effectJournal.at(-1)!.effectId,
+    effectKind: "failure",
+    observationHash: "a".repeat(64),
+  });
+  apply("reservation_release_intent");
+  const before = makeRootProjection(current);
+  apply("reservation_released", {
+    effectId: current.effectJournal.at(-1)!.effectId,
+    effectKind: "reservation_release",
+    observationHash: "a".repeat(64),
+  });
+  const base = makeRootProjection(current);
+  const root = withBatchCheckpoint(base, []);
+  return {
+    before,
+    batch: {
+      changedRows: [],
+      checkpoint: {
+        aggregateRevision: root.aggregateRevision,
+        changedRowsCommitment: deriveChangedRowsCommitment([]),
+        rootCommitment: root.aggregateCommitment,
+      },
+      expectedAggregateCommitment: before.aggregateCommitment,
+      expectedAggregateRevision: before.aggregateRevision,
+      expectedChildren: [],
+      expectedHolder: holder,
+      holder,
+      next: { children: [], root },
+      schema: "sce.fencing.batch",
+      scope,
+      version: 1,
+    },
+  };
+}
+
 function initialServerAcquire(): InitialControllerAcquire {
   const base = run();
   const initial = {
@@ -1517,7 +1564,10 @@ type ConcreteProbeFault =
  * It intentionally never supports transaction execution: these tests prove
  * rejected preflight/invalid input reaches no SQL or bd command at all.
  */
-function concreteReadinessHarness(fault?: ConcreteProbeFault) {
+function concreteReadinessHarness(
+  fault?: ConcreteProbeFault,
+  discoveryRun: ReturnType<typeof run> = run(),
+) {
   const driverIdentity = identity();
   const adapterIdentity =
     fault === "identity" ? identity("on", "127.0.0.1:3307") : driverIdentity;
@@ -1534,8 +1584,10 @@ function concreteReadinessHarness(fault?: ConcreteProbeFault) {
     writer: 0,
     writerQueries: [] as string[],
   };
-  const discoveryRoot = makeRootProjection(run());
-  const discoveryChild = makeChildProjection(discoveryRoot, "unit-1");
+  const discoveryRoot = makeRootProjection(discoveryRun);
+  const discoveryChild =
+    makeChildProjection(discoveryRoot, "unit-1") ??
+    makeChildProjection(makeRootProjection(run()), "unit-1");
   assert.ok(discoveryChild);
   const issueColumns = [
     ["id", "varchar"],
@@ -1623,21 +1675,33 @@ function concreteReadinessHarness(fault?: ConcreteProbeFault) {
         };
       if (
         query.startsWith("SELECT id, JSON_UNQUOTE(JSON_EXTRACT(metadata, '$'))")
-      )
+      ) {
+        const rows = [
+          ...(query.includes("7363652d6368696c64")
+            ? [
+                {
+                  id: "sce-child",
+                  metadata: JSON.stringify({ sce: discoveryChild }),
+                },
+              ]
+            : []),
+          ...(query.includes("7363652d726f6f74")
+            ? [
+                {
+                  id: "sce-root",
+                  metadata: JSON.stringify({ sce: discoveryRoot }),
+                },
+              ]
+            : []),
+        ].sort((left, right) =>
+          left.id === right.id ? 0 : left.id < right.id ? -1 : 1,
+        );
         return {
           exitCode: 0,
-          output: JSON.stringify([
-            {
-              id: "sce-child",
-              metadata: JSON.stringify({ sce: discoveryChild }),
-            },
-            {
-              id: "sce-root",
-              metadata: JSON.stringify({ sce: discoveryRoot }),
-            },
-          ]),
+          output: JSON.stringify(rows),
           timedOut: false,
         };
+      }
       if (query.includes("information_schema.tables"))
         return {
           exitCode: 0,
@@ -1952,7 +2016,11 @@ test("unprobed concrete discovery live-binds before authoritative rows", async (
     prefix: "sce",
     scope,
   });
-  assert.equal(discovered.status, "ok");
+  assert.equal(
+    discovered.status,
+    "ok",
+    JSON.stringify(valid.calls.writerQueries),
+  );
   const before = {
     bd: valid.calls.bd,
     worker: valid.calls.worker,
@@ -1965,6 +2033,30 @@ test("unprobed concrete discovery live-binds before authoritative rows", async (
   assert.equal(valid.calls.bd, before.bd);
   assert.equal(valid.calls.worker, before.worker);
   assert.equal(valid.calls.writer, before.writer);
+});
+
+test("concrete discovery follows root child membership and ignores retired child rows", async () => {
+  const retired = concreteReadinessHarness(undefined, run([]));
+  const discovered = await retired.driver.discover({
+    identity: retired.identity,
+    prefix: "sce",
+    scope,
+  });
+  assert.equal(
+    discovered.status,
+    "ok",
+    JSON.stringify(retired.calls.writerQueries),
+  );
+  if (discovered.status !== "ok" || "status" in discovered.value)
+    throw new Error("root-only discovery failed");
+  assert.deepEqual(discovered.value.root, makeRootProjection(run([])));
+  assert.deepEqual(discovered.value.children, []);
+  const metadataQueries = retired.calls.writerQueries.filter((query) =>
+    query.startsWith("SELECT id, JSON_UNQUOTE(JSON_EXTRACT(metadata, '$'))"),
+  );
+  assert.equal(metadataQueries.length, 1);
+  assert.match(metadataQueries[0]!, /7363652d726f6f74/u);
+  assert.doesNotMatch(metadataQueries[0]!, /7363652d6368696c64/u);
 });
 
 test("adapter revokes a driver that returns malformed, mismatched, or throws", async () => {
@@ -4378,6 +4470,50 @@ test("allowlisted SQL program predicates every owned row and parser rejects non-
     ),
     undefined,
   );
+
+  const closureFixture = rootOnlyClosureBatch();
+  const closure = closureFixture.batch;
+  const validClosure = validateMutationBatch(closure);
+  if (!validClosure.ok) assert.fail(validClosure.reason);
+  const closureProgram = buildServerCasProgram(identity(), closure, {
+    childBeadIds: { "unit-1": "sce-2" },
+    rootBeadId: "sce-1",
+  });
+  assert.ok(closureProgram);
+  assert.equal(
+    closureProgram.statements.filter(
+      (statement) => statement.sql === "SELECT ROW_COUNT() AS affected_rows",
+    ).length,
+    1,
+  );
+  assert.equal(
+    closureProgram.statements.some((statement) =>
+      statement.sql.includes("CONVERT(0x7363652d32 USING utf8mb4)"),
+    ),
+    false,
+  );
+  assert.ok(
+    closureProgram.statements.some(
+      (statement) =>
+        statement.sql.includes("$.sce.holder") &&
+        statement.sql.includes(`$.sce.aggregateCommitment`),
+    ),
+  );
+  const closureServer = new FakeServer(identity());
+  closureServer.root = closureFixture.before;
+  await closureServer.mergeSlotAcquire({ actor: holder, prefix: "sce", scope });
+  const closureRaw = await closureServer.mutate({
+    batch: closure,
+    identity: identity(),
+  });
+  assert.equal(closureRaw.status, "ok");
+  if (closureRaw.status !== "ok") throw new Error("root-only CAS failed");
+  assert.equal(closureRaw.value.result.status, "applied");
+  if (closureRaw.value.result.status !== "applied")
+    throw new Error("root-only CAS did not apply");
+  assert.equal(closureRaw.value.result.affectedRowCount, 1);
+  assert.deepEqual(closureRaw.value.result.children, []);
+  assert.ok(parseServerCasReadback(closureRaw.value, identity(), closure));
 });
 
 test("SQL executor rolls back immediately when a root or child CAS affects the wrong row count", async () => {

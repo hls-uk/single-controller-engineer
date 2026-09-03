@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   JudgmentSchema,
+  MaterialisationDestinationIdentitySchema,
   ProtocolEventSchema,
   RepositoryRunEnvelopeSchema,
   RuntimeEffectSchema,
@@ -48,6 +49,184 @@ test("strict schemas reject unknown properties, coercion, and incomplete effect 
     }).ok,
     false,
   );
+});
+
+test("journal checkpoint counters have an exact safe-integer ceiling", () => {
+  const initial = run();
+  const envelope = {
+    payload: {
+      ...initial,
+      journalCheckpoint: {
+        ...initial.journalCheckpoint,
+        compactedEffects: Number.MAX_SAFE_INTEGER,
+        compactedEvents: Number.MAX_SAFE_INTEGER,
+        compactedIdempotencyKeys: Number.MAX_SAFE_INTEGER,
+      },
+    },
+    schema: "sce.repository-run" as const,
+    version: 1 as const,
+  };
+  assert.equal(validate(RepositoryRunEnvelopeSchema, envelope).ok, true);
+  for (const field of [
+    "compactedEffects",
+    "compactedEvents",
+    "compactedIdempotencyKeys",
+  ] as const)
+    assert.equal(
+      validate(RepositoryRunEnvelopeSchema, {
+        ...envelope,
+        payload: {
+          ...envelope.payload,
+          journalCheckpoint: {
+            ...envelope.payload.journalCheckpoint,
+            [field]: Number.MAX_SAFE_INTEGER + 1,
+          },
+        },
+      }).ok,
+      false,
+    );
+});
+
+test("knowledge destination identities use canonical unsigned 20-digit bounds", () => {
+  const identity = {
+    canonicalPath: "/mnt/knowledge",
+    device: "12345678901234567890",
+    inode: "99999999999999999999",
+  };
+  assert.equal(
+    validate(MaterialisationDestinationIdentitySchema, identity).ok,
+    true,
+  );
+  assert.equal(
+    validate(MaterialisationDestinationIdentitySchema, {
+      ...identity,
+      device: "123456789012345678901",
+    }).ok,
+    false,
+  );
+  assert.equal(
+    validate(MaterialisationDestinationIdentitySchema, {
+      ...identity,
+      inode: "01",
+    }).ok,
+    false,
+  );
+});
+
+test("provenance observations are strict disjoint variants", () => {
+  const base = {
+    effectId: "effect-provenance",
+    effectKind: "provenance_commit",
+    eventId: "event-provenance",
+    expectedRevision: 1,
+    gateEntryId: "gate-provenance",
+    observationHash: HASH,
+    type: "provenance_commit_observed",
+    unitId: null,
+  };
+  assert.equal(
+    validate(ProtocolEventSchema, {
+      ...base,
+      result: {
+        attemptedBaseOid: OID_A,
+        commitOid: OID_B,
+        status: "committed",
+        treeOid: OID_C,
+      },
+    }).ok,
+    true,
+  );
+  assert.equal(
+    validate(ProtocolEventSchema, {
+      ...base,
+      result: {
+        commitOid: OID_B,
+        status: "committed",
+        treeOid: OID_C,
+      },
+    }).ok,
+    false,
+  );
+  assert.equal(
+    validate(ProtocolEventSchema, {
+      ...base,
+      result: {
+        attemptedBaseOid: OID_A,
+        attemptedCommitOid: OID_B,
+        commitOid: OID_B,
+        status: "committed",
+        treeOid: OID_C,
+      },
+    }).ok,
+    false,
+  );
+  assert.equal(
+    validate(ProtocolEventSchema, {
+      ...base,
+      result: {
+        condition: "dirty_worktree",
+        expectedBaseOid: OID_A,
+        observedHeadOid: OID_A,
+        reasonDigest: HASH,
+        status: "worktree_refused",
+      },
+    }).ok,
+    true,
+  );
+  assert.equal(
+    validate(ProtocolEventSchema, {
+      ...base,
+      result: {
+        condition: "dirty",
+        expectedBaseOid: OID_A,
+        observedHeadOid: OID_A,
+        reasonDigest: HASH,
+        status: "worktree_refused",
+      },
+    }).ok,
+    false,
+  );
+});
+
+test("knowledge refusal codes are scoped to their exact effect boundary", () => {
+  const base = {
+    effectId: "effect-knowledge",
+    eventId: "event-knowledge",
+    expectedRevision: 1,
+    gateEntryId: "gate-knowledge",
+    observationHash: HASH,
+    unitId: null,
+  } as const;
+  const cases = [
+    {
+      effectKind: "materialisation_resolve",
+      type: "materialisation_sources_observed",
+      valid: "evidence_budget_exceeded",
+      invalid: "invalid_destination",
+    },
+    {
+      effectKind: "destination_probe",
+      type: "destination_probe_observed",
+      valid: "optional_alias_unmounted",
+      invalid: "hard_links_unsupported",
+    },
+    {
+      effectKind: "materialise",
+      type: "materialise_observed",
+      valid: "hard_links_unsupported",
+      invalid: "optional_alias_unmounted",
+    },
+  ] as const;
+  for (const item of cases) {
+    const value = (code: string) => ({
+      ...base,
+      effectKind: item.effectKind,
+      result: { refusal: { code, detailHash: HASH }, status: "refused" },
+      type: item.type,
+    });
+    assert.equal(validate(ProtocolEventSchema, value(item.valid)).ok, true);
+    assert.equal(validate(ProtocolEventSchema, value(item.invalid)).ok, false);
+  }
 });
 
 test("text fields enforce both character and UTF-8 byte limits", () => {

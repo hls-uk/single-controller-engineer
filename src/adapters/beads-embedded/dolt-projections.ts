@@ -8,13 +8,20 @@ import {
   type MergeSlotObservation,
   type MutationBatch,
   type RootProjection,
+  validateMergeSlotObservation,
   validateChildProjection,
   validateMutationBatch,
   validateRootProjection,
 } from "../../fencing/index.js";
 import { canonicalJson, type JsonValue } from "../../protocol/canonical.js";
+import {
+  ProvenanceCarryClaimRecordSchema,
+  validate,
+  type ProvenanceCarryClaimRecord,
+} from "../../protocol/schemas.js";
 
 import type {
+  CarryCheckpointIntent,
   CrashDiscovery,
   EmbeddedInitialProjection,
   EmbeddedLoad,
@@ -99,7 +106,13 @@ export type ProjectionInitializationAuthority =
   typeof PROJECTION_INITIALIZATION_AUTHORITY;
 
 function same(left: unknown, right: unknown): boolean {
-  return canonicalJson(left as JsonValue) === canonicalJson(right as JsonValue);
+  try {
+    return (
+      canonicalJson(left as JsonValue) === canonicalJson(right as JsonValue)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function compareCodeUnits(left: string, right: string): number {
@@ -379,6 +392,289 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
             root: parsedRoot.value,
           },
         };
+  }
+
+  public async readCarry(
+    predecessorRootIssueId: string,
+  ): Promise<EmbeddedResponse> {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u.test(predecessorRootIssueId))
+      return { kind: "carry_read", value: { status: "unavailable" } };
+    const source = await this.sql(
+      this.carrySelectStatement(predecessorRootIssueId),
+    );
+    const rows = source === undefined ? undefined : parseRows(source);
+    if (rows === undefined)
+      return { kind: "carry_read", value: { status: "unavailable" } };
+    if (rows.length === 0)
+      return { kind: "carry_read", value: { status: "not_found" } };
+    if (
+      rows.length !== 1 ||
+      rows[0]?.id !== predecessorRootIssueId ||
+      Object.keys(rows[0]).length !== 5
+    )
+      return { kind: "carry_read", value: { status: "unavailable" } };
+    const row = rows[0];
+    const envelope = object(row.sce);
+    const root = validateRootProjection(envelope?.projection);
+    const envelopeValid =
+      envelope !== undefined &&
+      Object.keys(envelope).length === 2 &&
+      typeof envelope.commitment === "string" &&
+      Object.prototype.hasOwnProperty.call(envelope, "projection") &&
+      root.ok &&
+      root.value.aggregateCommitment === envelope.commitment;
+    const claims =
+      row.claims_present === 0 &&
+      row.claims === null &&
+      row.claims_type === null
+        ? {}
+        : row.claims_present === 1 && row.claims_type === "OBJECT"
+          ? row.claims
+          : undefined;
+    return {
+      kind: "carry_read",
+      value: {
+        claims,
+        root: envelopeValid ? root.value : undefined,
+        status: "observed",
+      },
+    };
+  }
+
+  private carrySelectStatement(predecessorRootIssueId: string): string {
+    return `SELECT id, JSON_EXTRACT(metadata,'$.sce') AS sce, JSON_EXTRACT(metadata,'$.sce_carry_claims') AS claims, JSON_CONTAINS_PATH(metadata,'one','$.sce_carry_claims') AS claims_present, JSON_TYPE(JSON_EXTRACT(metadata,'$.sce_carry_claims')) AS claims_type FROM issues WHERE id=${stringLiteral(predecessorRootIssueId)}`;
+  }
+
+  public async discoverCarry(
+    request: Extract<EmbeddedRequest, { readonly kind: "carry_discover" }>,
+    ref?: string,
+  ): Promise<CrashDiscovery | undefined> {
+    const intent = request.intent;
+    if (
+      !this.validCarryCheckpointIntent(intent) ||
+      (ref !== undefined &&
+        !(
+          /^[A-Za-z0-9._-]{1,80}\/main$/u.test(ref) ||
+          /^[0-9a-z]{20,64}$/u.test(ref)
+        ))
+    )
+      return undefined;
+    const statement = this.carrySelectStatement(intent.predecessorRootIssueId);
+    const source = await this.sql(
+      ref === undefined
+        ? statement
+        : statement.replace(" FROM issues", ` FROM issues AS OF '${ref}'`),
+    );
+    const rows = source === undefined ? undefined : parseRows(source);
+    const currentHead = await this.head(ref);
+    if (
+      rows === undefined ||
+      rows.length !== 1 ||
+      rows[0]?.id !== intent.predecessorRootIssueId ||
+      Object.keys(rows[0]).length !== 5 ||
+      currentHead === undefined
+    )
+      return undefined;
+    const row = rows[0];
+    const envelope = object(row.sce);
+    const root = validateRootProjection(envelope?.projection);
+    if (
+      envelope === undefined ||
+      Object.keys(envelope).length !== 2 ||
+      envelope.commitment !== intent.expectedAggregateCommitment ||
+      !Object.prototype.hasOwnProperty.call(envelope, "projection") ||
+      !root.ok ||
+      root.value.aggregateCommitment !== intent.expectedAggregateCommitment
+    )
+      return { head: currentHead, status: "ambiguous" };
+    const claims =
+      row.claims_present === 0 &&
+      row.claims === null &&
+      row.claims_type === null
+        ? {}
+        : row.claims_present === 1 && row.claims_type === "OBJECT"
+          ? object(row.claims)
+          : undefined;
+    if (claims === undefined) return { head: currentHead, status: "ambiguous" };
+    if (Object.keys(claims).length === 0)
+      return { head: currentHead, status: "absent" };
+    const singleton = { [intent.exportDigest]: intent.record };
+    return Object.keys(claims).length === 1 && same(claims, singleton)
+      ? {
+          head: currentHead,
+          rootCommitment: root.value.aggregateCommitment,
+          status: "observed",
+        }
+      : { head: currentHead, status: "ambiguous" };
+  }
+
+  public matchesCarryDelta(
+    intent: CarryCheckpointIntent,
+    source: string,
+  ): boolean {
+    if (!this.validCarryCheckpointIntent(intent)) return false;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(source) as unknown;
+    } catch {
+      return false;
+    }
+    const tables = object(parsed)?.tables;
+    const table = Array.isArray(tables) ? object(tables[0]) : undefined;
+    const changes = table?.data_diff;
+    if (
+      !Array.isArray(tables) ||
+      tables.length !== 1 ||
+      table?.name !== "issues" ||
+      !Array.isArray(changes) ||
+      changes.length !== 1
+    )
+      return false;
+    const delta = object(changes[0]);
+    const before = object(delta?.from_row);
+    const after = object(delta?.to_row);
+    if (
+      delta === undefined ||
+      Object.keys(delta).length !== 2 ||
+      before === undefined ||
+      after === undefined ||
+      before.id !== intent.predecessorRootIssueId ||
+      after.id !== before.id ||
+      !isPinnedBdIssueRow(before) ||
+      !isPinnedBdIssueRow(after) ||
+      Object.keys(before).length !== Object.keys(after).length ||
+      Object.keys(before).some(
+        (key) => !Object.prototype.hasOwnProperty.call(after, key),
+      )
+    )
+      return false;
+    for (const key of Object.keys(before)) {
+      if (
+        key !== "metadata" &&
+        key !== "updated_at" &&
+        !same(before[key], after[key])
+      )
+        return false;
+    }
+    const beforeMetadata = object(before.metadata);
+    const afterMetadata = object(after.metadata);
+    if (beforeMetadata === undefined || afterMetadata === undefined)
+      return false;
+    const beforeClaims = beforeMetadata.sce_carry_claims;
+    if (
+      !(
+        beforeClaims === undefined ||
+        (object(beforeClaims) !== undefined &&
+          Object.keys(object(beforeClaims)!).length === 0)
+      ) ||
+      !same(afterMetadata.sce_carry_claims, {
+        [intent.exportDigest]: intent.record,
+      })
+    )
+      return false;
+    const siblingKeys = new Set([
+      ...Object.keys(beforeMetadata),
+      ...Object.keys(afterMetadata),
+    ]);
+    for (const key of siblingKeys) {
+      if (
+        key !== "sce_carry_claims" &&
+        !same(beforeMetadata[key], afterMetadata[key])
+      )
+        return false;
+    }
+    const sce = object(beforeMetadata.sce);
+    return (
+      sce?.commitment === intent.expectedAggregateCommitment &&
+      same(beforeMetadata.sce, afterMetadata.sce)
+    );
+  }
+
+  private validCarryCheckpointIntent(intent: CarryCheckpointIntent): boolean {
+    const record = validate<ProvenanceCarryClaimRecord>(
+      ProvenanceCarryClaimRecordSchema,
+      intent.record,
+    );
+    return (
+      /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u.test(
+        intent.predecessorRootIssueId,
+      ) &&
+      /^[0-9a-f]{64}$/u.test(intent.exportDigest) &&
+      /^[0-9a-f]{64}$/u.test(intent.expectedAggregateCommitment) &&
+      record.ok &&
+      record.value !== undefined &&
+      record.value.predecessorRootBeadId === intent.predecessorRootIssueId &&
+      record.value.exportId === `sce:carry:${intent.exportDigest}`
+    );
+  }
+
+  public async claimCarry(
+    request: Extract<EmbeddedRequest, { readonly kind: "carry_claim" }>,
+  ): Promise<EmbeddedResponse> {
+    const parsedRecord = validate<ProvenanceCarryClaimRecord>(
+      ProvenanceCarryClaimRecordSchema,
+      request.record,
+    );
+    const slotPrefix = request.slot.slotId.endsWith("-merge-slot")
+      ? request.slot.slotId.slice(0, -"-merge-slot".length)
+      : "";
+    if (
+      !parsedRecord.ok ||
+      parsedRecord.value === undefined ||
+      !/^[0-9a-f]{64}$/u.test(request.exportDigest) ||
+      request.record.exportId !== `sce:carry:${request.exportDigest}` ||
+      request.record.predecessorRootBeadId !== request.predecessorRootIssueId ||
+      !/^[0-9a-f]{64}$/u.test(request.expectedAggregateCommitment) ||
+      !validateMergeSlotObservation(
+        request.slot,
+        slotPrefix,
+        request.slot.scope,
+      ).ok ||
+      request.slot.status !== "acquired" ||
+      request.slot.holder === undefined
+    )
+      return { kind: "carry_claim", value: { status: "unavailable" } };
+    const singleton = { [request.exportDigest]: request.record };
+    const slot = request.slot;
+    const slotHolder = slot.holder!;
+    const acquiredSlotPredicate = ` AND (SELECT COUNT(*) FROM issues WHERE id=${stringLiteral(slot.slotId)} AND title=${stringLiteral(slot.title)} AND status='in_progress' AND external_ref=${stringLiteral(`sce-scope:v1:${slot.scopeCommitment}`)} AND design=${stringLiteral(canonicalJson(slot.scope as JsonValue))} AND JSON_TYPE(metadata)='OBJECT' AND JSON_LENGTH(metadata)=1 AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.holder'))=${stringLiteral(slotHolder)})=1 AND (SELECT COUNT(*) FROM labels WHERE issue_id=${stringLiteral(slot.slotId)})=1 AND (SELECT COUNT(*) FROM labels WHERE issue_id=${stringLiteral(slot.slotId)} AND label=${stringLiteral(slot.label)})=1`;
+    const readback = `SELECT @sce_affected AS affected, r.id AS root_id, JSON_EXTRACT(r.metadata,'$.sce') AS root_sce, JSON_EXTRACT(r.metadata,'$.sce_carry_claims') AS claims, s.id AS slot_id, s.title AS slot_title, s.status AS slot_status, s.external_ref AS slot_external_ref, s.design AS slot_design, s.metadata AS slot_metadata, (SELECT COUNT(*) FROM labels WHERE issue_id=s.id) AS label_count, (SELECT COUNT(*) FROM labels WHERE issue_id=s.id AND label=${stringLiteral(slot.label)}) AS matching_label_count FROM issues r JOIN issues s ON s.id=${stringLiteral(slot.slotId)} WHERE r.id=${stringLiteral(request.predecessorRootIssueId)}`;
+    const output = await this.sql(
+      `START TRANSACTION; UPDATE issues SET metadata=JSON_SET(metadata,'$.sce_carry_claims',${jsonLiteral(singleton)}) WHERE id=${stringLiteral(request.predecessorRootIssueId)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.sce.commitment'))=${stringLiteral(request.expectedAggregateCommitment)} AND (JSON_EXTRACT(metadata,'$.sce_carry_claims') IS NULL OR (JSON_TYPE(JSON_EXTRACT(metadata,'$.sce_carry_claims'))='OBJECT' AND JSON_LENGTH(JSON_EXTRACT(metadata,'$.sce_carry_claims'))=0))${acquiredSlotPredicate}; SET @sce_affected=ROW_COUNT(); ${readback} FOR UPDATE; COMMIT; ${readback}`,
+    );
+    if (output === undefined)
+      return { kind: "carry_claim", value: { status: "unavailable" } };
+    const rows = parseRows(output);
+    const row = rows?.length === 1 ? rows[0] : undefined;
+    if (row?.affected !== 1)
+      return { kind: "carry_claim", value: { status: "stale" } };
+    const rootEnvelope = object(row.root_sce);
+    const root = validateRootProjection(rootEnvelope?.projection);
+    if (
+      Object.keys(row).length !== 12 ||
+      row.root_id !== request.predecessorRootIssueId ||
+      !root.ok ||
+      root.value.aggregateCommitment !== request.expectedAggregateCommitment ||
+      rootEnvelope?.commitment !== request.expectedAggregateCommitment ||
+      !same(row.claims, singleton) ||
+      row.slot_id !== slot.slotId ||
+      row.slot_title !== slot.title ||
+      row.slot_status !== "in_progress" ||
+      row.slot_external_ref !== `sce-scope:v1:${slot.scopeCommitment}` ||
+      row.slot_design !== canonicalJson(slot.scope as JsonValue) ||
+      !same(row.slot_metadata, { holder: slotHolder }) ||
+      row.label_count !== 1 ||
+      row.matching_label_count !== 1
+    )
+      return { kind: "carry_claim", value: { status: "unavailable" } };
+    return {
+      kind: "carry_claim",
+      value: {
+        claims: row.claims,
+        root: rootEnvelope?.projection,
+        status: "observed",
+      },
+    };
   }
 
   public async readback(

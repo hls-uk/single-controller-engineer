@@ -410,11 +410,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants4) {
+      optimizeNames(names, constants5) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants4);
+          this.rhs = optimizeExpr(this.rhs, names, constants5);
         return this;
       }
       get names() {
@@ -431,10 +431,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants4) {
+      optimizeNames(names, constants5) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants4);
+        this.rhs = optimizeExpr(this.rhs, names, constants5);
         return this;
       }
       get names() {
@@ -495,8 +495,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants4) {
-        this.code = optimizeExpr(this.code, names, constants4);
+      optimizeNames(names, constants5) {
+        this.code = optimizeExpr(this.code, names, constants5);
         return this;
       }
       get names() {
@@ -525,12 +525,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants4) {
+      optimizeNames(names, constants5) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants4))
+          if (n.optimizeNames(names, constants5))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -583,12 +583,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants4) {
+      optimizeNames(names, constants5) {
         var _a;
-        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants4);
-        if (!(super.optimizeNames(names, constants4) || this.else))
+        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants5);
+        if (!(super.optimizeNames(names, constants5) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants4);
+        this.condition = optimizeExpr(this.condition, names, constants5);
         return this;
       }
       get names() {
@@ -611,10 +611,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants4) {
-        if (!super.optimizeNames(names, constants4))
+      optimizeNames(names, constants5) {
+        if (!super.optimizeNames(names, constants5))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants4);
+        this.iteration = optimizeExpr(this.iteration, names, constants5);
         return this;
       }
       get names() {
@@ -650,10 +650,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants4) {
-        if (!super.optimizeNames(names, constants4))
+      optimizeNames(names, constants5) {
+        if (!super.optimizeNames(names, constants5))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants4);
+        this.iterable = optimizeExpr(this.iterable, names, constants5);
         return this;
       }
       get names() {
@@ -695,11 +695,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants4) {
+      optimizeNames(names, constants5) {
         var _a, _b;
-        super.optimizeNames(names, constants4);
-        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants4);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants4);
+        super.optimizeNames(names, constants5);
+        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants5);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants5);
         return this;
       }
       get names() {
@@ -1000,7 +1000,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants4) {
+    function optimizeExpr(expr, names, constants5) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -1015,14 +1015,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants4[n.str];
+        const c = constants5[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants4[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants5[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -2235,8 +2235,8 @@ var require_resolve = __commonJS({
       }
       return count;
     }
-    function getFullPath(resolver, id = "", normalize6) {
-      if (normalize6 !== false)
+    function getFullPath(resolver, id = "", normalize7) {
+      if (normalize7 !== false)
         id = normalizeId(id);
       const p = resolver.parse(id);
       return _getFullPath(resolver, p);
@@ -2984,7 +2984,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve8.call(this, root, ref);
+      let _sch = resolve9.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3011,7 +3011,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve8(root, ref) {
+    function resolve9(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3826,7 +3826,7 @@ var require_fast_uri = __commonJS({
       }
       return decodedScheme;
     }
-    function normalize6(uri, options) {
+    function normalize7(uri, options) {
       if (typeof uri === "string") {
         uri = /** @type {T} */
         normalizeString2(uri, options);
@@ -3836,7 +3836,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve8(baseURI, relativeURI, options) {
+    function resolve9(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -3869,49 +3869,49 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative3, options, skipNormalization) {
+    function resolveComponent(base, relative5, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse(serialize(base, options), options);
-        relative3 = parse(serialize(relative3, options), options);
+        relative5 = parse(serialize(relative5, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative3.scheme) {
-        target.scheme = relative3.scheme;
-        target.userinfo = relative3.userinfo;
-        target.host = relative3.host;
-        target.port = relative3.port;
-        target.path = removeDotSegments(relative3.path || "");
-        target.query = relative3.query;
+      if (!options.tolerant && relative5.scheme) {
+        target.scheme = relative5.scheme;
+        target.userinfo = relative5.userinfo;
+        target.host = relative5.host;
+        target.port = relative5.port;
+        target.path = removeDotSegments(relative5.path || "");
+        target.query = relative5.query;
       } else {
-        if (relative3.userinfo !== void 0 || relative3.host !== void 0 || relative3.port !== void 0) {
-          target.userinfo = relative3.userinfo;
-          target.host = relative3.host;
-          target.port = relative3.port;
-          target.path = removeDotSegments(relative3.path || "");
-          target.query = relative3.query;
+        if (relative5.userinfo !== void 0 || relative5.host !== void 0 || relative5.port !== void 0) {
+          target.userinfo = relative5.userinfo;
+          target.host = relative5.host;
+          target.port = relative5.port;
+          target.path = removeDotSegments(relative5.path || "");
+          target.query = relative5.query;
         } else {
-          if (!relative3.path) {
+          if (!relative5.path) {
             target.path = base.path;
-            if (relative3.query !== void 0) {
-              target.query = relative3.query;
+            if (relative5.query !== void 0) {
+              target.query = relative5.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative3.path[0] === "/") {
-              target.path = removeDotSegments(relative3.path);
+            if (relative5.path[0] === "/") {
+              target.path = removeDotSegments(relative5.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative3.path;
+                target.path = "/" + relative5.path;
               } else if (!base.path) {
-                target.path = relative3.path;
+                target.path = relative5.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative3.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative5.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative3.query;
+            target.query = relative5.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3919,7 +3919,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative3.fragment;
+      target.fragment = relative5.fragment;
       return target;
     }
     function equal2(uriA, uriB, options) {
@@ -4197,8 +4197,8 @@ var require_fast_uri = __commonJS({
     }
     var fastUri = {
       SCHEMES,
-      normalize: normalize6,
-      resolve: resolve8,
+      normalize: normalize7,
+      resolve: resolve9,
       resolveComponent,
       equal: equal2,
       serialize,
@@ -6875,10 +6875,10 @@ import { realpathSync as realpathSync7 } from "node:fs";
 import {
   basename as basename4,
   dirname as dirname6,
-  isAbsolute as isAbsolute9,
-  join as join7,
-  normalize as normalize5,
-  resolve as resolve7
+  isAbsolute as isAbsolute10,
+  join as join8,
+  normalize as normalize6,
+  resolve as resolve8
 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -7822,7 +7822,7 @@ function Boolean(options) {
 }
 
 // node_modules/@sinclair/typebox/build/esm/type/bigint/bigint.mjs
-function BigInt(options) {
+function BigInt2(options) {
   return CreateType({ [Kind]: "BigInt", type: "bigint" }, options);
 }
 
@@ -7839,7 +7839,7 @@ function String2(options) {
 // node_modules/@sinclair/typebox/build/esm/type/template-literal/syntax.mjs
 function* FromUnion(syntax) {
   const trim = syntax.trim().replace(/"|'/g, "");
-  return trim === "boolean" ? yield Boolean() : trim === "number" ? yield Number2() : trim === "bigint" ? yield BigInt() : trim === "string" ? yield String2() : yield (() => {
+  return trim === "boolean" ? yield Boolean() : trim === "number" ? yield Number2() : trim === "bigint" ? yield BigInt2() : trim === "string" ? yield String2() : yield (() => {
     const literals = trim.split("|").map((literal) => Literal(literal.trim()));
     return literals.length === 0 ? Never() : literals.length === 1 ? literals[0] : UnionEvaluated(literals);
   })();
@@ -8361,7 +8361,7 @@ function ConditionalReadonly(T, root) {
   return root === true ? T : Readonly(T);
 }
 function FromValue(value, root) {
-  return IsAsyncIterator(value) ? ConditionalReadonly(Any(), root) : IsIterator(value) ? ConditionalReadonly(Any(), root) : IsArray(value) ? Readonly(Tuple(FromArray3(value))) : IsUint8Array(value) ? Uint8Array2() : IsDate(value) ? Date2() : IsObject(value) ? ConditionalReadonly(Object2(FromProperties7(value)), root) : IsFunction(value) ? ConditionalReadonly(Function2([], Unknown()), root) : IsUndefined(value) ? Undefined() : IsNull(value) ? Null() : IsSymbol(value) ? Symbol2() : IsBigInt(value) ? BigInt() : IsNumber(value) ? Literal(value) : IsBoolean(value) ? Literal(value) : IsString(value) ? Literal(value) : Object2({});
+  return IsAsyncIterator(value) ? ConditionalReadonly(Any(), root) : IsIterator(value) ? ConditionalReadonly(Any(), root) : IsArray(value) ? Readonly(Tuple(FromArray3(value))) : IsUint8Array(value) ? Uint8Array2() : IsDate(value) ? Date2() : IsObject(value) ? ConditionalReadonly(Object2(FromProperties7(value)), root) : IsFunction(value) ? ConditionalReadonly(Function2([], Unknown()), root) : IsUndefined(value) ? Undefined() : IsNull(value) ? Null() : IsSymbol(value) ? Symbol2() : IsBigInt(value) ? BigInt2() : IsNumber(value) ? Literal(value) : IsBoolean(value) ? Literal(value) : IsString(value) ? Literal(value) : Object2({});
 }
 function Const(T, options) {
   return CreateType(FromValue(T, true), options);
@@ -9426,7 +9426,7 @@ __export(type_exports2, {
   Array: () => Array2,
   AsyncIterator: () => AsyncIterator,
   Awaited: () => Awaited,
-  BigInt: () => BigInt,
+  BigInt: () => BigInt2,
   Boolean: () => Boolean,
   Capitalize: () => Capitalize,
   Composite: () => Composite,
@@ -9586,7 +9586,13 @@ var LIMITS = {
   units: 64,
   reservations: 128,
   text: 8192,
-  findings: 64
+  findings: 64,
+  materialisationBlobBytes: 16 * 1024 * 1024,
+  materialisationMatches: 64,
+  materialisationOutputs: 128,
+  materialisationPathBytes: 192,
+  materialisationSidecarBytes: 8192,
+  materialisationWaveBytes: 64 * 1024 * 1024
 };
 var HARNESS_PACKET_BYTES = 8192;
 var utf8 = new TextEncoder();
@@ -9658,7 +9664,12 @@ var EffectKindSchema = Type.Union([
   Type.Literal("timeout"),
   Type.Literal("park"),
   Type.Literal("cancel"),
-  Type.Literal("controller_release")
+  Type.Literal("controller_release"),
+  Type.Literal("provenance_carry_claim"),
+  Type.Literal("materialisation_resolve"),
+  Type.Literal("destination_probe"),
+  Type.Literal("materialise"),
+  Type.Literal("provenance_commit")
 ]);
 var SlotScopeSchema = strictObject({
   beadsStoreIdentity: identifier(),
@@ -9717,6 +9728,8 @@ var EffectJournalEntrySchema = strictObject({
   unitId: nullableIdentifier(),
   idempotencyKey: idempotencyKey(),
   kind: EffectKindSchema,
+  /** Stable logical identity for aggregate gate effects only. */
+  gateEntryId: Type.Optional(identifier()),
   intentRevision: revision(),
   intentCommitment: hash(),
   paramsHash: hash(),
@@ -9885,6 +9898,493 @@ var HarnessPacketBindingSchema = Type.Union([
   harnessPacketBinding(1),
   harnessPacketBinding(2)
 ]);
+var canonicalSourcePath = () => Type.String({
+  minLength: 1,
+  maxLength: LIMITS.materialisationPathBytes,
+  maxUtf8Bytes: LIMITS.materialisationPathBytes,
+  pattern: "^(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)(?!.*\\\\)(?!.*\\*\\*)[A-Za-z0-9][A-Za-z0-9._*?-]*(?:/[A-Za-z0-9][A-Za-z0-9._*?-]*)*$"
+});
+var canonicalResolvedPath = () => Type.String({
+  minLength: 1,
+  maxLength: LIMITS.materialisationPathBytes,
+  maxUtf8Bytes: LIMITS.materialisationPathBytes,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
+});
+var canonicalSubpath = () => canonicalResolvedPath();
+var plainBasename = () => Type.String({
+  minLength: 1,
+  maxLength: 255,
+  maxUtf8Bytes: 255,
+  pattern: "^[A-Za-z0-9.][A-Za-z0-9._-]*$"
+});
+var absolutePath = () => Type.String({
+  minLength: 2,
+  maxLength: 4096,
+  maxUtf8Bytes: 4096,
+  pattern: "^/[^\\u0000\\r\\n]*$"
+});
+var utcSecond = () => Type.String({
+  minLength: 20,
+  maxLength: 20,
+  pattern: "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$"
+});
+var MaterialisationTargetSchema = strictObject({
+  destinationAlias: Type.String({
+    minLength: 1,
+    maxLength: 63,
+    pattern: "^[a-z][a-z0-9-]{0,62}$"
+  }),
+  destinationSubpath: canonicalSubpath(),
+  namingPolicy: Type.Union([
+    Type.Literal("source-basename"),
+    Type.Literal("iso-date-prefix"),
+    Type.Literal("content-hash-suffix")
+  ]),
+  sidecarRequired: Type.Literal(true),
+  sourcePattern: canonicalSourcePath()
+});
+var DriveAliasSchema = strictObject({
+  alias: Type.String({
+    minLength: 1,
+    maxLength: 63,
+    pattern: "^[a-z][a-z0-9-]{0,62}$"
+  }),
+  canonicalRoot: absolutePath(),
+  markerFile: plainBasename(),
+  mountPolicy: Type.Union([Type.Literal("required"), Type.Literal("optional")]),
+  namespaceControl: Type.Literal("exclusive")
+});
+var commandArgument = () => Type.String({
+  minLength: 1,
+  maxLength: 1024,
+  maxUtf8Bytes: 1024,
+  pattern: "^(?:[^\\u0000\\uD800-\\uDFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])+$"
+});
+var commandVector = () => Type.Array(commandArgument(), { minItems: 1, maxItems: 32 });
+var KnowledgeContractSchema = strictObject({
+  aliases: Type.Array(DriveAliasSchema, {
+    maxItems: 64
+  }),
+  combinedVerificationCommands: Type.Array(commandVector(), {
+    minItems: 1,
+    maxItems: 32
+  }),
+  domainScope: identifier(),
+  gateTargets: Type.Array(MaterialisationTargetSchema, { maxItems: 64 }),
+  humanDriver: text(),
+  provenance: strictObject({
+    eventsDirectory: ownedPath(),
+    recordFormatVersion: Type.Literal(1),
+    reproducibilityCommand: commandVector(),
+    rollupGeneratorCommand: commandVector()
+  }),
+  provenanceWorktreeRoot: Type.String({
+    minLength: 2,
+    maxLength: 3840,
+    maxUtf8Bytes: 3840,
+    pattern: "^/[^\\u0000\\r\\n]*$"
+  })
+});
+var MaterialisationSourceSchema = strictObject({
+  blobOid: oid(),
+  byteCount: Type.Integer({
+    minimum: 0,
+    maximum: LIMITS.materialisationBlobBytes
+  }),
+  path: canonicalResolvedPath(),
+  sha256: hash()
+});
+var MaterialisationSidecarSchema = strictObject({
+  artifactName: plainBasename(),
+  blobOid: oid(),
+  byteCount: Type.Integer({
+    minimum: 0,
+    maximum: LIMITS.materialisationBlobBytes
+  }),
+  destinationAlias: Type.String({
+    minLength: 1,
+    maxLength: 63,
+    pattern: "^[a-z][a-z0-9-]{0,62}$"
+  }),
+  destinationSubpath: canonicalSubpath(),
+  domainScope: identifier(),
+  driver: text(),
+  executorTool: identifier(),
+  gateEntryId: identifier(),
+  originUnitId: nullableIdentifier(),
+  runId: identifier(),
+  schema: Type.Literal("sce.materialisation-provenance"),
+  sha256: hash(),
+  sourceOid: oid(),
+  sourcePath: canonicalResolvedPath(),
+  targetId: identifier(),
+  timestamp: utcSecond(),
+  version: Type.Literal(1),
+  waveId: identifier()
+});
+var refusalSchema = (code) => strictObject({ code, detailHash: hash() });
+var MaterialisationResolveRefusalSchema = refusalSchema(
+  Type.Union([
+    Type.Literal("source_absent"),
+    Type.Literal("zero_matches"),
+    Type.Literal("too_many_matches"),
+    Type.Literal("wave_item_limit"),
+    Type.Literal("wave_byte_limit"),
+    Type.Literal("unsafe_path"),
+    Type.Literal("non_blob"),
+    Type.Literal("blob_too_large"),
+    Type.Literal("evidence_budget_exceeded")
+  ])
+);
+var DestinationProbeRefusalSchema = refusalSchema(
+  Type.Union([
+    Type.Literal("optional_alias_unmounted"),
+    Type.Literal("required_alias_unmounted"),
+    Type.Literal("invalid_destination")
+  ])
+);
+var MaterialiseRefusalSchema = refusalSchema(
+  Type.Union([
+    Type.Literal("source_absent"),
+    Type.Literal("hard_links_unsupported")
+  ])
+);
+var GateMaterialisationRefusalSchema = refusalSchema(
+  Type.Union([
+    Type.Literal("source_absent"),
+    Type.Literal("hard_links_unsupported")
+  ])
+);
+var OutputNameCollisionRefusalSchema = strictObject({
+  code: Type.Literal("output_name_collision"),
+  conflictingGateEntryId: identifier()
+});
+var GateMaterialisationEntryRefusalSchema = Type.Union([
+  GateMaterialisationRefusalSchema,
+  OutputNameCollisionRefusalSchema
+]);
+var ProvenanceRefusalSchema = refusalSchema(
+  Type.Union([
+    Type.Literal("provenance_reproducibility_failed"),
+    Type.Literal("provenance_base_advanced"),
+    Type.Literal("provenance_worktree_refused"),
+    Type.Literal("provenance_integration_refused")
+  ])
+);
+var AggregateVerificationRefusalSchema = refusalSchema(
+  Type.Literal("verification_failed")
+);
+var MaterialisationRefusalSchema = Type.Union([
+  MaterialisationResolveRefusalSchema,
+  DestinationProbeRefusalSchema,
+  GateMaterialisationRefusalSchema,
+  OutputNameCollisionRefusalSchema,
+  ProvenanceRefusalSchema,
+  AggregateVerificationRefusalSchema
+]);
+var gateDisposition = () => Type.Union([
+  Type.Literal("unit_not_landed"),
+  Type.Literal("handoff_boundary"),
+  Type.Literal("optional_alias_unmounted"),
+  Type.Literal("no_landed_units"),
+  Type.Literal("deferred_by_controller"),
+  Type.Literal("deferral_cascade")
+]);
+var gateStatus = () => Type.Union([
+  Type.Literal("pending"),
+  Type.Literal("observed"),
+  Type.Literal("voided")
+]);
+var GateTargetDefinitionSchema = strictObject({
+  originUnitId: nullableIdentifier(),
+  scope: Type.Union([Type.Literal("unit"), Type.Literal("gate")]),
+  target: MaterialisationTargetSchema,
+  targetId: identifier(),
+  targetOrdinal: Type.Integer({ minimum: 0, maximum: 63 })
+});
+var GateResolutionSchema = strictObject({
+  capacities: Type.Optional(
+    strictObject({
+      remainingAggregateEnvelopeByteCapacity: Type.Integer({
+        minimum: 0,
+        maximum: LIMITS.envelopeBytes
+      }),
+      remainingItemCapacity: Type.Integer({
+        minimum: 0,
+        maximum: LIMITS.materialisationOutputs
+      }),
+      remainingProjectionSnapshotByteCapacity: Type.Integer({
+        minimum: 0,
+        maximum: 65536
+      }),
+      remainingSourceByteCapacity: Type.Integer({
+        minimum: 0,
+        maximum: LIMITS.materialisationWaveBytes
+      })
+    })
+  ),
+  currentEffectId: Type.Optional(effectIdentifier()),
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  gateEntryId: identifier(),
+  lastRefusal: Type.Optional(MaterialisationResolveRefusalSchema),
+  sourceOid: oid(),
+  sources: Type.Optional(
+    Type.Array(MaterialisationSourceSchema, {
+      minItems: 1,
+      maxItems: LIMITS.materialisationMatches
+    })
+  ),
+  status: gateStatus(),
+  targetId: identifier()
+});
+var MaterialisationObservationSchema = strictObject({
+  artifactByteCount: Type.Integer({
+    minimum: 0,
+    maximum: LIMITS.materialisationBlobBytes
+  }),
+  artifactSha256: hash(),
+  artifactStatus: Type.Union([
+    Type.Literal("published"),
+    Type.Literal("already_present")
+  ]),
+  sidecarByteCount: Type.Integer({
+    minimum: 1,
+    maximum: LIMITS.materialisationSidecarBytes
+  }),
+  sidecarSha256: hash(),
+  sidecarStatus: Type.Union([
+    Type.Literal("published"),
+    Type.Literal("already_present")
+  ])
+});
+var GateMaterialisationSchema = strictObject({
+  artifactName: Type.Optional(plainBasename()),
+  currentEffectId: Type.Optional(effectIdentifier()),
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  gateEntryId: identifier(),
+  destinationProbeGateEntryId: identifier(),
+  lastRefusal: Type.Optional(GateMaterialisationEntryRefusalSchema),
+  observation: Type.Optional(MaterialisationObservationSchema),
+  originUnitId: nullableIdentifier(),
+  sidecarByteCount: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      maximum: LIMITS.materialisationSidecarBytes
+    })
+  ),
+  sidecarName: Type.Optional(plainBasename()),
+  sidecarSha256: Type.Optional(hash()),
+  source: MaterialisationSourceSchema,
+  sourceOid: oid(),
+  status: gateStatus(),
+  target: MaterialisationTargetSchema,
+  targetId: identifier(),
+  timestamp: Type.Optional(utcSecond())
+});
+var GateTargetStateSchema = strictObject({
+  definition: GateTargetDefinitionSchema,
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  materialisations: Type.Array(GateMaterialisationSchema, {
+    maxItems: LIMITS.materialisationMatches
+  }),
+  resolution: Type.Optional(GateResolutionSchema),
+  status: gateStatus()
+});
+var GateTargetPromiseSchema = strictObject({
+  definition: GateTargetDefinitionSchema,
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  status: Type.Union([Type.Literal("pending"), Type.Literal("voided")])
+});
+var MaterialisationDestinationIdentitySchema = strictObject({
+  canonicalPath: absolutePath(),
+  device: Type.String({ pattern: "^(?:0|[1-9][0-9]{0,19})$" }),
+  inode: Type.String({ pattern: "^(?:0|[1-9][0-9]{0,19})$" })
+});
+var GateDestinationProbeSchema = strictObject({
+  currentEffectId: Type.Optional(effectIdentifier()),
+  destinationAlias: Type.String({
+    minLength: 1,
+    maxLength: 63,
+    pattern: "^[a-z][a-z0-9-]{0,62}$"
+  }),
+  destinationSubpath: canonicalSubpath(),
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  gateEntryId: identifier(),
+  identity: Type.Optional(MaterialisationDestinationIdentitySchema),
+  lastRefusal: Type.Optional(DestinationProbeRefusalSchema),
+  stage: Type.Union([Type.Literal("unit"), Type.Literal("gate")]),
+  status: gateStatus()
+});
+var ProvenanceInputSchema = strictObject({
+  closedUnitEvidence: Type.String({
+    maxLength: LIMITS.envelopeBytes,
+    pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+  }),
+  closureEvidenceCommitment: hash(),
+  destinationProbeEvidence: Type.Array(GateDestinationProbeSchema, {
+    maxItems: 128
+  }),
+  targetEvidence: Type.Array(GateTargetStateSchema, { maxItems: 192 }),
+  unitIds: Type.Array(identifier(), { maxItems: LIMITS.units })
+});
+var ProvenanceCarryClaimRecordSchema = strictObject({
+  schema: Type.Literal("sce.provenance-carry-claim"),
+  version: Type.Literal(1),
+  exportId: identifier(),
+  predecessorRootBeadId: identifier(),
+  predecessorRunId: identifier(),
+  predecessorWaveId: identifier(),
+  snapshotCommitment: hash(),
+  claimantRunId: identifier(),
+  claimToken: idempotencyKey(),
+  claimRevision: Type.Literal(1)
+});
+var ProvenanceCarryRefusalReasonSchema = Type.Union([
+  Type.Literal("not_found"),
+  Type.Literal("projection_invalid"),
+  Type.Literal("scope_mismatch"),
+  Type.Literal("not_released"),
+  Type.Literal("effects_unsettled"),
+  Type.Literal("provenance_not_deferred"),
+  Type.Literal("snapshot_invalid"),
+  Type.Literal("lineage_invalid"),
+  Type.Literal("lineage_limit_exceeded")
+]);
+var ProvenanceCarrySchema = strictObject({
+  claimRecordDigest: hash(),
+  claimRevision: Type.Literal(1),
+  exportId: identifier(),
+  integrationOid: oid(),
+  lineageAncestorDigests: Type.Array(hash(), {
+    maxItems: 128,
+    uniqueItems: true
+  }),
+  lineageCommitment: hash(),
+  predecessorFinalRevision: revision(),
+  predecessorJournalCheckpointCommitment: hash(),
+  predecessorRootBeadId: identifier(),
+  predecessorRootAggregateCommitment: hash(),
+  predecessorRunId: identifier(),
+  predecessorWaveId: identifier(),
+  projectionInputSnapshot: ProvenanceInputSchema,
+  snapshotCommitment: hash()
+});
+var ProvenanceCarryClaimStateSchema = strictObject({
+  claimToken: idempotencyKey(),
+  currentEffectId: effectIdentifier(),
+  exportId: identifier(),
+  predecessorFinalRevision: revision(),
+  predecessorJournalCheckpointCommitment: hash(),
+  predecessorRootBeadId: identifier(),
+  predecessorRootAggregateCommitment: hash(),
+  predecessorRunId: identifier(),
+  predecessorWaveId: identifier(),
+  snapshotCommitment: hash()
+});
+var ProvenanceCarryRefusalSchema = Type.Union([
+  strictObject({
+    status: Type.Literal("already_claimed"),
+    exportId: identifier(),
+    claimantRunId: identifier(),
+    claimRecordDigest: hash(),
+    claimRevision: Type.Literal(1)
+  }),
+  strictObject({
+    status: Type.Literal("predecessor_refused"),
+    predecessorRootBeadId: identifier(),
+    evidenceDigest: hash(),
+    reason: ProvenanceCarryRefusalReasonSchema
+  })
+]);
+var GateProvenanceSchema = strictObject({
+  advancedBaseOid: Type.Optional(oid()),
+  attemptIdempotencyKey: Type.Optional(idempotencyKey()),
+  attemptedCommitOid: Type.Optional(oid()),
+  attemptedTreeOid: Type.Optional(oid()),
+  baseOid: Type.Optional(oid()),
+  commitOid: Type.Optional(oid()),
+  currentEffectId: Type.Optional(effectIdentifier()),
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  gateEntryId: identifier(),
+  projectionInputSnapshot: ProvenanceInputSchema,
+  lastRefusal: Type.Optional(ProvenanceRefusalSchema),
+  observedHeadOid: Type.Optional(Type.Union([oid(), Type.Null()])),
+  status: gateStatus(),
+  timestamp: Type.Optional(utcSecond()),
+  treeOid: Type.Optional(oid()),
+  worktreeCondition: Type.Optional(
+    Type.Union([
+      Type.Literal("dirty_worktree"),
+      Type.Literal("unexpected_head")
+    ])
+  ),
+  expectedBaseOid: Type.Optional(oid()),
+  worktreePath: Type.Optional(absolutePath())
+});
+var GateAggregateVerifySchema = strictObject({
+  currentEffectId: Type.Optional(effectIdentifier()),
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  gateEntryId: identifier(),
+  lastRefusal: Type.Optional(AggregateVerificationRefusalSchema),
+  provenanceGateEntryId: identifier(),
+  status: gateStatus()
+});
+var WaveGateSchema = strictObject({
+  aggregateVerify: Type.Optional(GateAggregateVerifySchema),
+  aggregateVerifyPromise: Type.Optional(
+    strictObject({
+      disposition: Type.Optional(gateDisposition()),
+      followUpBeadId: Type.Optional(identifier()),
+      status: Type.Union([Type.Literal("pending"), Type.Literal("voided")])
+    })
+  ),
+  carriedProjectionInputSnapshot: Type.Optional(ProvenanceInputSchema),
+  carriedSnapshotCommitment: Type.Optional(hash()),
+  carriedProvenanceBaseOid: Type.Optional(oid()),
+  currentIntegrationOid: Type.Optional(oid()),
+  destinationProbes: Type.Array(GateDestinationProbeSchema, { maxItems: 128 }),
+  lineageAncestorDigests: Type.Array(hash(), {
+    maxItems: 128,
+    uniqueItems: true
+  }),
+  lineageCommitment: hash(),
+  provenancePromise: Type.Optional(
+    strictObject({
+      disposition: Type.Optional(gateDisposition()),
+      followUpBeadId: Type.Optional(identifier()),
+      status: Type.Union([Type.Literal("pending"), Type.Literal("voided")])
+    })
+  ),
+  provenance: Type.Optional(GateProvenanceSchema),
+  provenanceUnitAccounting: Type.Array(
+    Type.Union([
+      strictObject({
+        closureEvidenceCommitment: hash(),
+        status: Type.Literal("uncommitted"),
+        unitId: identifier()
+      }),
+      strictObject({
+        closureEvidenceCommitment: hash(),
+        provenanceCommitOid: oid(),
+        status: Type.Literal("committed"),
+        unitId: identifier()
+      })
+    ]),
+    { maxItems: 64 }
+  ),
+  targetPromises: Type.Array(GateTargetPromiseSchema, { maxItems: 256 }),
+  targets: Type.Array(GateTargetStateSchema, { maxItems: 256 }),
+  targetDefinitionCommitment: hash(),
+  originalUnitIds: Type.Array(identifier(), { maxItems: 3, uniqueItems: true }),
+  waveId: identifier()
+});
 var WaveTaskMetadataSchema = strictObject({
   acceptanceIds: Type.Array(identifier(), {
     minItems: 1,
@@ -9901,6 +10401,9 @@ var WaveTaskMetadataSchema = strictObject({
   }),
   independence: Type.Union([Type.Literal("ambiguous"), Type.Literal("proven")]),
   mandatoryVerification: packetStrings(1, 32),
+  materialisationTargets: Type.Optional(
+    Type.Array(MaterialisationTargetSchema, { maxItems: 64 })
+  ),
   ownedPaths: Type.Array(ownedPath(), {
     minItems: 1,
     maxItems: 128,
@@ -9917,6 +10420,12 @@ var WaveTaskMetadataSchema = strictObject({
     Type.Literal("medium"),
     Type.Literal("low")
   ]),
+  supersedes: Type.Optional(
+    Type.Array(identifier(), { maxItems: 64, uniqueItems: true })
+  ),
+  tombstones: Type.Optional(
+    Type.Array(identifier(), { maxItems: 64, uniqueItems: true })
+  ),
   unitId: identifier()
 });
 var UnitSchema = strictObject({
@@ -10152,9 +10661,18 @@ var WaveSchema = strictObject({
 });
 var JournalCheckpointSchema = strictObject({
   revision: revision(),
-  compactedEffects: Type.Integer({ minimum: 0 }),
-  compactedEvents: Type.Integer({ minimum: 0 }),
-  compactedIdempotencyKeys: Type.Integer({ minimum: 0 }),
+  compactedEffects: Type.Integer({
+    minimum: 0,
+    maximum: Number.MAX_SAFE_INTEGER
+  }),
+  compactedEvents: Type.Integer({
+    minimum: 0,
+    maximum: Number.MAX_SAFE_INTEGER
+  }),
+  compactedIdempotencyKeys: Type.Integer({
+    minimum: 0,
+    maximum: Number.MAX_SAFE_INTEGER
+  }),
   commitment: hash()
 });
 var ControllerOwnershipSchema = strictObject({
@@ -10191,6 +10709,14 @@ var RepositoryRunSchema = strictObject({
   controllerFencingToken: identifier(),
   controller: ControllerOwnershipSchema,
   harness: Type.Optional(HarnessConfigurationSchema),
+  /** Frozen by wave_planned; absent for ordinary software runs. */
+  knowledgeContract: Type.Optional(KnowledgeContractSchema),
+  /** Aggregate post-integration work; absent for ordinary software runs. */
+  gate: Type.Optional(WaveGateSchema),
+  /** Claimed predecessor evidence awaiting one knowledge wave. */
+  pendingProvenanceCarry: Type.Optional(ProvenanceCarrySchema),
+  provenanceCarryClaim: Type.Optional(ProvenanceCarryClaimStateSchema),
+  lastProvenanceCarryRefusal: Type.Optional(ProvenanceCarryRefusalSchema),
   units: Type.Record(identifier(), UnitSchema, {
     maxProperties: LIMITS.units,
     additionalProperties: false
@@ -10380,9 +10906,11 @@ var ProtocolEventSchema = Type.Union([
     expectedRevision: revision(),
     type: Type.Literal("wave_planned"),
     tasks: Type.Array(WaveTaskMetadataSchema, {
-      minItems: 1,
+      minItems: 0,
       maxItems: LIMITS.units
     }),
+    carryOnly: Type.Optional(Type.Literal(true)),
+    knowledgeContract: Type.Optional(KnowledgeContractSchema),
     waveId: identifier()
   }),
   strictObject({
@@ -10400,6 +10928,32 @@ var ProtocolEventSchema = Type.Union([
   }),
   strictObject({
     ...controllerEventBase,
+    type: Type.Literal("provenance_carry_claim_intent"),
+    ...effectIntent,
+    claimToken: idempotencyKey(),
+    exportId: identifier(),
+    predecessorFinalRevision: revision(),
+    predecessorJournalCheckpointCommitment: hash(),
+    predecessorRootBeadId: identifier(),
+    predecessorRootAggregateCommitment: hash(),
+    predecessorRunId: identifier(),
+    predecessorWaveId: identifier(),
+    snapshotCommitment: hash()
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("provenance_carry_claim_observed"),
+    ...observedEffect,
+    result: Type.Union([
+      strictObject({
+        status: Type.Literal("imported"),
+        carry: ProvenanceCarrySchema
+      }),
+      ProvenanceCarryRefusalSchema
+    ])
+  }),
+  strictObject({
+    ...controllerEventBase,
     type: Type.Literal("controller_release_intent"),
     ...effectIntent,
     slotTransition: Type.Optional(SlotTransitionIntentSchema)
@@ -10408,6 +10962,173 @@ var ProtocolEventSchema = Type.Union([
     ...controllerEventBase,
     type: Type.Literal("controller_released"),
     ...observedEffect
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("materialisation_resolve_intent"),
+    ...effectIntent,
+    gateEntryId: identifier(),
+    unitId: Type.Null()
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("materialisation_sources_observed"),
+    ...observedEffect,
+    gateEntryId: identifier(),
+    result: Type.Union([
+      strictObject({
+        status: Type.Literal("observed"),
+        sources: Type.Array(MaterialisationSourceSchema, {
+          minItems: 1,
+          maxItems: LIMITS.materialisationMatches
+        })
+      }),
+      strictObject({
+        status: Type.Literal("refused"),
+        refusal: MaterialisationResolveRefusalSchema
+      })
+    ]),
+    unitId: Type.Null()
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("gate_clock_observed"),
+    gateEntryId: identifier(),
+    timestamp: utcSecond(),
+    unitId: Type.Null()
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("destination_probe_intent"),
+    ...effectIntent,
+    gateEntryId: identifier(),
+    unitId: Type.Null()
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("destination_probe_observed"),
+    ...observedEffect,
+    gateEntryId: identifier(),
+    result: Type.Union([
+      strictObject({
+        status: Type.Literal("observed"),
+        identity: MaterialisationDestinationIdentitySchema
+      }),
+      strictObject({
+        status: Type.Literal("refused"),
+        refusal: DestinationProbeRefusalSchema
+      })
+    ]),
+    unitId: Type.Null()
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("materialise_intent"),
+    ...effectIntent,
+    gateEntryId: identifier(),
+    unitId: Type.Null()
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("materialise_observed"),
+    ...observedEffect,
+    gateEntryId: identifier(),
+    result: Type.Union([
+      strictObject({
+        status: Type.Literal("observed"),
+        observation: MaterialisationObservationSchema
+      }),
+      strictObject({
+        status: Type.Literal("refused"),
+        refusal: MaterialiseRefusalSchema
+      })
+    ]),
+    unitId: Type.Null()
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("provenance_commit_intent"),
+    ...effectIntent,
+    gateEntryId: identifier(),
+    unitId: Type.Null()
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("provenance_commit_observed"),
+    ...observedEffect,
+    gateEntryId: identifier(),
+    result: Type.Union([
+      strictObject({
+        status: Type.Literal("committed"),
+        attemptedBaseOid: oid(),
+        commitOid: oid(),
+        treeOid: oid()
+      }),
+      strictObject({
+        status: Type.Literal("reproducibility_failed"),
+        attemptedCommitOid: oid(),
+        attemptedTreeOid: oid(),
+        reasonDigest: hash()
+      }),
+      strictObject({
+        status: Type.Literal("base_advanced"),
+        advancedBaseOid: oid(),
+        attemptedCommitOid: oid(),
+        attemptedTreeOid: oid()
+      }),
+      strictObject({
+        status: Type.Literal("worktree_refused"),
+        condition: Type.Union([
+          Type.Literal("dirty_worktree"),
+          Type.Literal("unexpected_head")
+        ]),
+        expectedBaseOid: oid(),
+        observedHeadOid: Type.Union([oid(), Type.Null()]),
+        reasonDigest: hash()
+      }),
+      strictObject({
+        status: Type.Literal("integration_refused"),
+        attemptedCommitOid: oid(),
+        attemptedTreeOid: oid(),
+        reasonDigest: hash()
+      })
+    ]),
+    unitId: Type.Null()
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("gate_entry_deferred"),
+    followUpBeadId: identifier(),
+    gateEntryId: identifier(),
+    unitId: Type.Null()
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("verification_intent"),
+    ...effectIntent,
+    commands: Type.Array(commandVector(), { minItems: 1, maxItems: 32 }),
+    gateEntryId: identifier(),
+    unitId: Type.Null()
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("verification_observed"),
+    ...observedEffect,
+    baseOid: oid(),
+    gateEntryId: identifier(),
+    headOid: oid(),
+    treeOid: oid(),
+    unitId: Type.Null()
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("verification_failed"),
+    ...observedEffect,
+    baseOid: oid(),
+    gateEntryId: identifier(),
+    headOid: oid(),
+    treeOid: oid(),
+    unitId: Type.Null()
   }),
   strictObject({
     ...eventBase,
@@ -10659,6 +11380,7 @@ var ProtocolEventSchema = Type.Union([
     type: Type.Literal("effect_ambiguous"),
     effectId: effectIdentifier(),
     effectKind: EffectKindSchema,
+    gateEntryId: Type.Optional(identifier()),
     observationHash: Type.Optional(hash())
   })
 ]);
@@ -10666,6 +11388,7 @@ var runtimeEffectBase = {
   effectId: effectIdentifier(),
   unitId: nullableIdentifier(),
   idempotencyKey: idempotencyKey(),
+  gateEntryId: Type.Optional(identifier()),
   // The reducer derives this domain-separated digest from the typed params
   // below; adapters execute the typed params, never the opaque digest.
   paramsHash: hash(),
@@ -10743,6 +11466,128 @@ var RuntimeEffectSchema = Type.Union([
     kind: Type.Literal("candidate_collect"),
     unitId: identifier(),
     params: strictObject({ branchRef: identifier(), worktreePath: text() })
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    gateEntryId: identifier(),
+    kind: Type.Literal("materialisation_resolve"),
+    unitId: Type.Null(),
+    params: strictObject({
+      destinationProbeGateEntryId: identifier(),
+      domainScope: text(),
+      driver: text(),
+      executorTool: identifier(),
+      gateEntryId: identifier(),
+      remainingAggregateEnvelopeByteCapacity: Type.Integer({
+        minimum: 0,
+        maximum: LIMITS.envelopeBytes
+      }),
+      remainingProjectionSnapshotByteCapacity: Type.Integer({
+        minimum: 0,
+        maximum: 65536
+      }),
+      remainingSourceByteCapacity: Type.Integer({
+        minimum: 0,
+        maximum: LIMITS.materialisationWaveBytes
+      }),
+      remainingItemCapacity: Type.Integer({
+        minimum: 0,
+        maximum: LIMITS.materialisationOutputs
+      }),
+      originUnitId: nullableIdentifier(),
+      repositoryIdentity: identifier(),
+      runId: identifier(),
+      sourceOid: oid(),
+      sourcePattern: canonicalSourcePath(),
+      stage: Type.Union([Type.Literal("unit"), Type.Literal("gate")]),
+      target: MaterialisationTargetSchema,
+      targetId: identifier(),
+      targetOrdinal: Type.Integer({ minimum: 0, maximum: 63 }),
+      waveId: identifier()
+    })
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    gateEntryId: identifier(),
+    kind: Type.Literal("destination_probe"),
+    unitId: Type.Null(),
+    params: strictObject({
+      destination: DriveAliasSchema,
+      destinationSubpath: canonicalSubpath(),
+      expectedPriorIdentity: Type.Optional(
+        MaterialisationDestinationIdentitySchema
+      ),
+      gateEntryId: identifier(),
+      repositoryIdentity: identifier(),
+      stage: Type.Union([Type.Literal("unit"), Type.Literal("gate")]),
+      waveId: identifier()
+    })
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    gateEntryId: identifier(),
+    kind: Type.Literal("materialise"),
+    unitId: Type.Null(),
+    params: strictObject({
+      artifactName: plainBasename(),
+      destination: DriveAliasSchema,
+      destinationIdentity: MaterialisationDestinationIdentitySchema,
+      destinationProbeGateEntryId: identifier(),
+      destinationSubpath: canonicalSubpath(),
+      domainScope: identifier(),
+      driver: text(),
+      executorTool: identifier(),
+      gateEntryId: identifier(),
+      namespaceControl: Type.Literal("exclusive"),
+      originUnitId: nullableIdentifier(),
+      repositoryIdentity: identifier(),
+      runId: identifier(),
+      sidecarByteCount: Type.Integer({
+        minimum: 1,
+        maximum: LIMITS.materialisationSidecarBytes
+      }),
+      sidecarBytes: Type.String({
+        minLength: 1,
+        maxLength: LIMITS.materialisationSidecarBytes,
+        maxUtf8Bytes: LIMITS.materialisationSidecarBytes
+      }),
+      sidecarName: plainBasename(),
+      sidecarSha256: hash(),
+      source: MaterialisationSourceSchema,
+      sourceOid: oid(),
+      targetId: identifier(),
+      timestamp: utcSecond(),
+      waveId: identifier()
+    })
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    gateEntryId: identifier(),
+    kind: Type.Literal("provenance_commit"),
+    unitId: Type.Null(),
+    params: strictObject({
+      baseOid: oid(),
+      gateEntryId: identifier(),
+      projectionInputSnapshot: ProvenanceInputSchema,
+      knowledgeContract: KnowledgeContractSchema,
+      runId: identifier(),
+      timestamp: utcSecond(),
+      waveId: identifier(),
+      worktreePath: absolutePath()
+    })
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    gateEntryId: identifier(),
+    kind: Type.Literal("verify"),
+    unitId: Type.Null(),
+    params: strictObject({
+      candidate: CandidateBindingSchema,
+      commands: Type.Array(commandVector(), { minItems: 1, maxItems: 32 }),
+      gateEntryId: identifier(),
+      provenanceOid: oid(),
+      worktreePath: absolutePath()
+    })
   }),
   strictObject({
     ...runtimeEffectBase,
@@ -10836,6 +11681,26 @@ var RuntimeEffectSchema = Type.Union([
   ),
   strictObject({
     ...runtimeEffectBase,
+    kind: Type.Literal("provenance_carry_claim"),
+    unitId: Type.Null(),
+    params: strictObject({
+      claimToken: idempotencyKey(),
+      currentRunId: identifier(),
+      exportId: identifier(),
+      integrationBranch: identifier(),
+      predecessorFinalRevision: revision(),
+      predecessorJournalCheckpointCommitment: hash(),
+      predecessorRootBeadId: identifier(),
+      predecessorRootAggregateCommitment: hash(),
+      predecessorRunId: identifier(),
+      predecessorWaveId: identifier(),
+      repositoryIdentity: identifier(),
+      snapshotCommitment: hash(),
+      storeIdentity: identifier()
+    })
+  }),
+  strictObject({
+    ...runtimeEffectBase,
     kind: Type.Literal("controller_release"),
     unitId: Type.Null(),
     params: strictObject({
@@ -10885,6 +11750,7 @@ function formatError(error) {
 
 // src/protocol/reducer.ts
 import { deflateRawSync, inflateRawSync } from "node:zlib";
+import { posix } from "node:path";
 
 // src/protocol/guards.ts
 var TERMINAL_INTENT_STATES = /* @__PURE__ */ new Set([
@@ -10907,6 +11773,9 @@ function canEnterTerminalIntent(state) {
 
 // src/protocol/reducer.ts
 var utf82 = new TextEncoder();
+function compareProtocolText(left, right) {
+  return left === right ? 0 : left < right ? -1 : 1;
+}
 function reduce(stateInput, eventInput) {
   return reduceInternal(stateInput, eventInput);
 }
@@ -11012,6 +11881,649 @@ ${packet.payload}`) !== packet.hash)
     return "launch packet cannot be parsed";
   }
 }
+function deriveMaterialisationTargetId(scope, originUnitId, targetOrdinal, target) {
+  return `sce:tgt:${sha256(
+    canonicalJson({
+      domain: "sce.materialisation-target.v1",
+      originUnitId,
+      scope,
+      target,
+      targetOrdinal
+    })
+  )}`;
+}
+function deriveGateEntryId(runId2, waveId, stage, identity2) {
+  return `sce:gate:${sha256(
+    canonicalJson({
+      domain: "sce.gate-entry.v1",
+      identity: identity2,
+      runId: runId2,
+      stage,
+      waveId
+    })
+  )}`;
+}
+function targetDefinition(scope, originUnitId, targetOrdinal, target) {
+  return {
+    originUnitId,
+    scope,
+    target,
+    targetId: deriveMaterialisationTargetId(
+      scope,
+      originUnitId,
+      targetOrdinal,
+      target
+    ),
+    targetOrdinal
+  };
+}
+function deriveTargetDefinitionCommitment(waveId, originalUnitIds, definitions) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.knowledge-target-definitions.v1",
+      originalUnitIds,
+      targetDefinitions: definitions,
+      waveId
+    })
+  );
+}
+function newGate(state, waveId, selectedUnitIds, metadata, contract, carriedProjectionInputSnapshot, carriedSnapshotCommitment, carriedProvenanceBaseOid, lineageAncestorDigests = []) {
+  const byId = new Map(metadata.map((task) => [task.unitId, task]));
+  const handoff = state.completionBoundary === "branch-handoff" || state.completionBoundary === "pr-handoff";
+  const unitTargets = selectedUnitIds.flatMap(
+    (unitId) => (byId.get(unitId)?.materialisationTargets ?? []).map((target, ordinal) => ({
+      definition: targetDefinition("unit", unitId, ordinal, target),
+      status: "pending"
+    }))
+  );
+  const gateTargets = contract.gateTargets.map((target, ordinal) => ({
+    definition: targetDefinition("gate", null, ordinal, target),
+    ...handoff ? { disposition: "handoff_boundary" } : {},
+    status: handoff ? "voided" : "pending"
+  }));
+  return {
+    aggregateVerifyPromise: {
+      ...handoff ? { disposition: "handoff_boundary" } : {},
+      status: handoff ? "voided" : "pending"
+    },
+    destinationProbes: [],
+    ...carriedProvenanceBaseOid === void 0 ? {} : { currentIntegrationOid: carriedProvenanceBaseOid },
+    lineageAncestorDigests: [...lineageAncestorDigests],
+    lineageCommitment: provenanceCarryLineageCommitment(lineageAncestorDigests),
+    provenancePromise: {
+      ...handoff ? { disposition: "handoff_boundary" } : {},
+      status: handoff ? "voided" : "pending"
+    },
+    provenanceUnitAccounting: handoff || carriedProjectionInputSnapshot === void 0 ? [] : carriedProjectionInputSnapshot.unitIds.map((unitId) => ({
+      closureEvidenceCommitment: unitClosureEvidenceCommitment(
+        required(
+          decodeClosedUnitEvidence(
+            carriedProjectionInputSnapshot.closedUnitEvidence
+          )?.[unitId],
+          `carried closure evidence ${unitId}`,
+          "provenance_commit"
+        )
+      ),
+      status: "uncommitted",
+      unitId
+    })),
+    targetPromises: [...unitTargets, ...gateTargets],
+    targetDefinitionCommitment: deriveTargetDefinitionCommitment(
+      waveId,
+      selectedUnitIds,
+      [...unitTargets, ...gateTargets].map((promise) => promise.definition)
+    ),
+    targets: [],
+    originalUnitIds: [...selectedUnitIds],
+    waveId,
+    ...carriedProjectionInputSnapshot === void 0 ? {} : { carriedProjectionInputSnapshot },
+    ...carriedSnapshotCommitment === void 0 ? {} : { carriedSnapshotCommitment },
+    ...carriedProvenanceBaseOid === void 0 ? {} : { carriedProvenanceBaseOid }
+  };
+}
+function targetAliasesAreValid(metadata, contract, harness) {
+  const aliases = contract.aliases.map((item) => item.alias);
+  const known = new Set(aliases);
+  return knowledgeContractRuntimeValid(contract, harness) && [
+    ...metadata.flatMap((task) => task.materialisationTargets ?? []),
+    ...contract.gateTargets
+  ].every((target) => known.has(target.destinationAlias));
+}
+function canonicalCommandArgument(value) {
+  if (value.length === 0 || utf82.encode(value).byteLength > 1024) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit === 0 || unit >= 56320 && unit <= 57343) return false;
+    if (unit >= 55296 && unit <= 56319) {
+      const low = value.charCodeAt(index + 1);
+      if (low < 56320 || low > 57343) return false;
+      index += 1;
+    }
+  }
+  return true;
+}
+function canonicalCommandVector(command) {
+  return command.length >= 1 && command.length <= 32 && command.every(canonicalCommandArgument) && utf82.encode(canonicalJson(command)).byteLength <= 8192;
+}
+function knowledgeContractRuntimeValid(contract, harness) {
+  const aliases = contract.aliases.map((item) => item.alias);
+  const roots = [
+    ...contract.aliases.map((item) => item.canonicalRoot),
+    contract.provenanceWorktreeRoot
+  ];
+  const commands = contract.combinedVerificationCommands;
+  return new Set(aliases).size === aliases.length && roots.every((root) => root !== "/" && posix.normalize(root) === root) && roots.every(
+    (root, index) => roots.slice(index + 1).every(
+      (other) => root !== other && !root.startsWith(`${other}/`) && !other.startsWith(`${root}/`)
+    )
+  ) && commands.length >= 1 && commands.length <= 32 && commands.every(canonicalCommandVector) && canonicalCommandVector(contract.provenance.rollupGeneratorCommand) && canonicalCommandVector(contract.provenance.reproducibilityCommand) && utf82.encode(canonicalJson(commands)).byteLength <= 32768 && maximumMaterialisationSidecarBytes(contract, harness) <= LIMITS.materialisationSidecarBytes;
+}
+function canFreezeKnowledgeContractAtFirstWave(state) {
+  const carryLifecycle = [
+    state.provenanceCarryClaim,
+    state.pendingProvenanceCarry,
+    state.lastProvenanceCarryRefusal
+  ].filter((value) => value !== void 0).length;
+  const carryEntries = state.effectJournal.filter(
+    (entry) => entry.kind === "provenance_carry_claim"
+  );
+  return state.knowledgeContract === void 0 && state.controller.state === "acquired" && state.gate === void 0 && state.wave.unitIds.length === 0 && state.closedUnitEvidence === "" && state.usedSessionCount === 0 && Object.values(state.units).every((unit) => unit.state === "planned") && Object.keys(state.reservations).length === 0 && state.activeModifyingUnitIds.length === 0 && state.qualificationOwnerUnitId === void 0 && state.integrationOwnerUnitId === void 0 && state.currentReviewerUnitId === void 0 && state.qualificationQueue.length === 0 && state.integrationQueue.length === 0 && carryLifecycle <= 1 && (carryLifecycle !== 0 || carryEntries.length === 0) && state.effectJournal.every(
+    (entry) => entry.unitId === null && entry.gateEntryId === void 0 && (entry.kind === "controller_acquire" || entry.kind === "controller_release" || entry.kind === "provenance_carry_claim")
+  ) && runInvariantErrors(state).length === 0;
+}
+function maximumMaterialisationSidecarBytes(contract, harness) {
+  const value = {
+    artifactName: "a".repeat(255),
+    blobOid: "a".repeat(64),
+    byteCount: LIMITS.materialisationBlobBytes,
+    destinationAlias: "a".repeat(63),
+    destinationSubpath: "a".repeat(LIMITS.materialisationPathBytes),
+    domainScope: contract.domainScope,
+    driver: contract.humanDriver,
+    executorTool: harness.family,
+    gateEntryId: "a".repeat(160),
+    originUnitId: "a".repeat(160),
+    runId: "a".repeat(160),
+    schema: "sce.materialisation-provenance",
+    sha256: "a".repeat(64),
+    sourceOid: "a".repeat(64),
+    sourcePath: "a".repeat(LIMITS.materialisationPathBytes),
+    targetId: "a".repeat(160),
+    timestamp: "9999-12-31T23:59:59Z",
+    version: 1,
+    waveId: "a".repeat(160)
+  };
+  return utf82.encode(`${canonicalJson(value)}
+`).byteLength;
+}
+function deriveProvenanceWorktreePath(root, idempotencyKey2) {
+  return posix.join(
+    root,
+    `sce-provenance-${sha256(
+      canonicalJson({
+        domain: "sce.provenance-worktree-path.v1",
+        idempotencyKey: idempotencyKey2
+      })
+    )}`
+  );
+}
+function resolutionFor(runId2, waveId, definition, sourceOid) {
+  return {
+    gateEntryId: deriveGateEntryId(
+      runId2,
+      waveId,
+      `${definition.scope}-resolve`,
+      {
+        sourceOid,
+        targetId: definition.targetId
+      }
+    ),
+    sourceOid,
+    status: "pending",
+    targetId: definition.targetId
+  };
+}
+function attachUnitTargetSource(state, unitId, sourceOid) {
+  const gate = state.gate;
+  if (gate === void 0) return void 0;
+  const matching = gate.targetPromises.filter(
+    (target) => target.status === "pending" && target.definition.originUnitId === unitId
+  );
+  return {
+    ...gate,
+    targetPromises: gate.targetPromises.filter(
+      (target) => !matching.includes(target)
+    ),
+    targets: [
+      ...gate.targets,
+      ...matching.map((target) => ({
+        definition: target.definition,
+        materialisations: [],
+        resolution: resolutionFor(
+          state.controller.runId,
+          gate.waveId,
+          target.definition,
+          sourceOid
+        ),
+        status: "pending"
+      }))
+    ]
+  };
+}
+function attachGateTargetSource(state, gate, sourceOid) {
+  const matching = gate.targetPromises.filter(
+    (target) => target.status === "pending" && target.definition.scope === "gate"
+  );
+  return {
+    ...gate,
+    targetPromises: gate.targetPromises.filter(
+      (target) => !matching.includes(target)
+    ),
+    targets: [
+      ...gate.targets,
+      ...matching.map((target) => ({
+        definition: target.definition,
+        materialisations: [],
+        resolution: resolutionFor(
+          state.controller.runId,
+          gate.waveId,
+          target.definition,
+          sourceOid
+        ),
+        status: "pending"
+      }))
+    ]
+  };
+}
+function voidUnitTargets(gate, unitId, disposition) {
+  if (gate === void 0) return void 0;
+  return {
+    ...gate,
+    targetPromises: gate.targetPromises.map(
+      (target) => target.definition.originUnitId === unitId ? {
+        ...target,
+        disposition,
+        status: "voided"
+      } : target
+    ),
+    targets: gate.targets.map(
+      (target) => target.definition.originUnitId === unitId ? {
+        ...target,
+        disposition,
+        status: "voided",
+        materialisations: target.materialisations.map((item) => ({
+          ...item,
+          disposition,
+          status: "voided"
+        })),
+        ...target.resolution === void 0 ? {} : {
+          resolution: {
+            ...target.resolution,
+            disposition,
+            status: "voided"
+          }
+        }
+      } : target
+    )
+  };
+}
+function targetIsSettled(target) {
+  if (target.status === "voided")
+    return target.resolution?.status !== "pending" && target.materialisations.every((item) => item.status !== "pending");
+  return target.resolution?.status === "observed" && target.materialisations.length > 0 && target.materialisations.every((item) => item.status !== "pending");
+}
+function materialisationObservationMatches(item, observation) {
+  return observation.artifactByteCount === item.source.byteCount && observation.artifactSha256 === item.source.sha256 && observation.sidecarByteCount === item.sidecarByteCount && observation.sidecarSha256 === item.sidecarSha256;
+}
+function provenanceBaseAdvancedDetailHash(advancedBaseOid, attemptedCommitOid, attemptedTreeOid) {
+  return sha256(
+    canonicalJson({
+      advancedBaseOid,
+      attemptedCommitOid,
+      attemptedTreeOid,
+      domain: "sce.provenance-base-advanced.v1"
+    })
+  );
+}
+function provenanceInput(state, gate) {
+  const details = decodeClosedUnitEvidenceDetails(state.closedUnitEvidence);
+  const evidence = details?.evidence ?? {};
+  const carried = gate.carriedProjectionInputSnapshot;
+  const carriedEvidence = carried === void 0 ? {} : decodeClosedUnitEvidence(carried.closedUnitEvidence) ?? {};
+  const mergedEvidence = {
+    ...carriedEvidence
+  };
+  for (const item of Object.values(evidence).filter(
+    (candidate) => candidate.outcome === "landed" && gate.provenanceUnitAccounting.some(
+      (item2) => item2.unitId === candidate.unitId && item2.status === "uncommitted"
+    )
+  )) {
+    const previous = mergedEvidence[item.unitId];
+    if (previous !== void 0 && canonicalJson(previous) !== canonicalJson(item))
+      throw new Error(`contradictory carried evidence for ${item.unitId}`);
+    mergedEvidence[item.unitId] = item;
+  }
+  const targets = /* @__PURE__ */ new Map();
+  for (const target of [
+    ...carried?.targetEvidence ?? [],
+    ...gate.targets.filter((target2) => target2.definition.scope === "unit")
+  ]) {
+    const previous = targets.get(target.definition.targetId);
+    if (previous !== void 0 && canonicalJson(previous) !== canonicalJson(target))
+      throw new Error(
+        `contradictory carried target ${target.definition.targetId}`
+      );
+    targets.set(target.definition.targetId, target);
+  }
+  const closedUnitEvidence = encodeClosedUnitEvidence(mergedEvidence);
+  const mergedDetails = decodeClosedUnitEvidenceDetails(closedUnitEvidence);
+  if (mergedDetails === void 0)
+    throw new Error("merged provenance closure evidence is invalid");
+  const destinationProbes = /* @__PURE__ */ new Map();
+  for (const probe of [
+    ...carried?.destinationProbeEvidence ?? [],
+    ...gate.destinationProbes.filter((candidate) => candidate.stage === "unit")
+  ]) {
+    const previous = destinationProbes.get(probe.gateEntryId);
+    if (previous !== void 0 && canonicalJson(previous) !== canonicalJson(probe))
+      throw new Error(`contradictory carried probe ${probe.gateEntryId}`);
+    destinationProbes.set(probe.gateEntryId, probe);
+  }
+  return {
+    closedUnitEvidence,
+    closureEvidenceCommitment: mergedDetails.commitment,
+    destinationProbeEvidence: [...destinationProbes.values()].sort(
+      (left, right) => compareProtocolText(left.gateEntryId, right.gateEntryId)
+    ),
+    targetEvidence: [...targets.values()].sort(
+      (left, right) => compareProtocolText(
+        left.definition.originUnitId ?? "",
+        right.definition.originUnitId ?? ""
+      ) || left.definition.targetOrdinal - right.definition.targetOrdinal || compareProtocolText(
+        left.definition.targetId,
+        right.definition.targetId
+      )
+    ),
+    unitIds: [
+      .../* @__PURE__ */ new Set([...carried?.unitIds ?? [], ...Object.keys(mergedEvidence)])
+    ].sort()
+  };
+}
+function projectionCollisionWitnesses(input) {
+  const probes = new Map(
+    input.destinationProbeEvidence.filter(
+      (probe) => probe.status === "observed" && probe.identity !== void 0
+    ).map((probe) => [probe.gateEntryId, probe.identity])
+  );
+  const destinations = /* @__PURE__ */ new Map();
+  for (const item of input.targetEvidence.flatMap(
+    (target) => target.materialisations
+  )) {
+    const identity2 = probes.get(item.destinationProbeGateEntryId);
+    if (identity2 === void 0 || item.artifactName === void 0 || item.sidecarName === void 0)
+      continue;
+    const key = `${identity2.device}\0${identity2.inode}`;
+    const names = destinations.get(key) ?? /* @__PURE__ */ new Map();
+    for (const name of [item.artifactName, item.sidecarName])
+      names.set(name, [...names.get(name) ?? [], item.gateEntryId]);
+    destinations.set(key, names);
+  }
+  const witnesses = /* @__PURE__ */ new Map();
+  for (const names of destinations.values())
+    for (const ids of names.values())
+      for (const id of ids) {
+        const first = ids.filter((candidate) => candidate !== id).sort(compareProtocolText)[0];
+        if (first === void 0) continue;
+        const prior = witnesses.get(id);
+        witnesses.set(
+          id,
+          prior === void 0 || compareProtocolText(first, prior) < 0 ? first : prior
+        );
+      }
+  return witnesses;
+}
+function projectionInputIsValid(input) {
+  const details = decodeClosedUnitEvidenceDetails(input.closedUnitEvidence);
+  if (details === void 0 || details.commitment !== input.closureEvidenceCommitment)
+    return false;
+  const evidenceIds = Object.keys(details.evidence).sort(compareProtocolText);
+  if (!sameStringArray(input.unitIds, evidenceIds) || input.unitIds.some(
+    (unitId, index) => index > 0 ? compareProtocolText(input.unitIds[index - 1], unitId) >= 0 : false
+  ))
+    return false;
+  const targetIds = /* @__PURE__ */ new Set();
+  const entryIds = /* @__PURE__ */ new Set();
+  const collisionWitnesses = projectionCollisionWitnesses(input);
+  for (const [index, target] of input.targetEvidence.entries()) {
+    const origin = target.definition.originUnitId;
+    if (target.definition.scope !== "unit" || origin === null || !input.unitIds.includes(origin) || target.definition.targetId !== deriveMaterialisationTargetId(
+      "unit",
+      origin,
+      target.definition.targetOrdinal,
+      target.definition.target
+    ) || targetIds.has(target.definition.targetId) || index > 0 && (compareProtocolText(
+      input.targetEvidence[index - 1].definition.originUnitId ?? "",
+      origin
+    ) > 0 || input.targetEvidence[index - 1].definition.originUnitId === origin && input.targetEvidence[index - 1].definition.targetOrdinal >= target.definition.targetOrdinal) || !targetIsSettled(target) || !targetRecordIsCoherent(target) || target.resolution === void 0 || target.resolution.targetId !== target.definition.targetId || entryIds.has(target.resolution.gateEntryId) || !resolutionRecordIsCoherent(target.resolution) || target.resolution.status === "observed" && (target.resolution.sources === void 0 || target.resolution.sources.length !== target.materialisations.length) || target.status === "observed" && (target.resolution.status !== "observed" || target.materialisations.some((item) => item.status !== "observed")))
+      return false;
+    targetIds.add(target.definition.targetId);
+    entryIds.add(target.resolution.gateEntryId);
+    for (const materialisation of target.materialisations) {
+      const expectedCollision = collisionWitnesses.get(
+        materialisation.gateEntryId
+      );
+      if (materialisation.targetId !== target.definition.targetId || materialisation.originUnitId !== origin || materialisation.sourceOid !== target.resolution.sourceOid || canonicalJson(materialisation.target) !== canonicalJson(target.definition.target) || entryIds.has(materialisation.gateEntryId) || !materialisationRecordIsCoherent(materialisation) || (expectedCollision === void 0 ? materialisation.lastRefusal?.code === "output_name_collision" : materialisation.lastRefusal?.code !== "output_name_collision" || materialisation.lastRefusal.conflictingGateEntryId !== expectedCollision) || (materialisation.status === "observed" ? materialisation.observation === void 0 || !materialisationObservationMatches(
+        materialisation,
+        materialisation.observation
+      ) || materialisation.artifactName === void 0 || materialisation.sidecarName === void 0 || materialisation.sidecarByteCount === void 0 || materialisation.sidecarSha256 === void 0 || materialisation.timestamp === void 0 : materialisation.observation !== void 0) || target.resolution.status === "observed" && canonicalJson(
+        target.resolution.sources?.[target.materialisations.indexOf(materialisation)]
+      ) !== canonicalJson(materialisation.source))
+        return false;
+      entryIds.add(materialisation.gateEntryId);
+    }
+  }
+  const probeIds = /* @__PURE__ */ new Set();
+  for (const [index, probe] of input.destinationProbeEvidence.entries()) {
+    if (probe.stage !== "unit" || probe.status === "pending" || !destinationProbeRecordIsCoherent(probe) || (probe.status === "observed" ? probe.identity === void 0 || probe.lastRefusal !== void 0 : probe.identity !== void 0) || probeIds.has(probe.gateEntryId) || index > 0 && compareProtocolText(
+      input.destinationProbeEvidence[index - 1].gateEntryId,
+      probe.gateEntryId
+    ) >= 0 || !input.targetEvidence.some(
+      (target) => target.definition.target.destinationAlias === probe.destinationAlias && target.definition.target.destinationSubpath === probe.destinationSubpath && target.materialisations.some(
+        (item) => item.destinationProbeGateEntryId === probe.gateEntryId
+      )
+    ))
+      return false;
+    probeIds.add(probe.gateEntryId);
+  }
+  return input.targetEvidence.every(
+    (target) => target.materialisations.every(
+      (item) => probeIds.has(item.destinationProbeGateEntryId)
+    )
+  );
+}
+function projectionInputSlice(input, unitIds) {
+  const details = decodeClosedUnitEvidenceDetails(input.closedUnitEvidence);
+  if (details === void 0) return void 0;
+  const selected = new Set(unitIds);
+  const evidence = Object.fromEntries(
+    Object.entries(details.evidence).filter(([unitId]) => selected.has(unitId))
+  );
+  const closedUnitEvidence = encodeClosedUnitEvidence(evidence);
+  const slicedDetails = decodeClosedUnitEvidenceDetails(closedUnitEvidence);
+  if (slicedDetails === void 0) return void 0;
+  const targetEvidence = input.targetEvidence.filter(
+    (target) => selected.has(target.definition.originUnitId ?? "")
+  );
+  const probeIds = new Set(
+    targetEvidence.flatMap(
+      (target) => target.materialisations.map((item) => item.destinationProbeGateEntryId)
+    )
+  );
+  return {
+    closedUnitEvidence,
+    closureEvidenceCommitment: slicedDetails.commitment,
+    destinationProbeEvidence: input.destinationProbeEvidence.filter(
+      (probe) => probeIds.has(probe.gateEntryId)
+    ),
+    targetEvidence,
+    unitIds: [...unitIds]
+  };
+}
+function currentProjectionInput(state, gate, unitIds) {
+  const details = decodeClosedUnitEvidenceDetails(state.closedUnitEvidence);
+  if (details === void 0) return void 0;
+  const selected = new Set(unitIds);
+  const evidence = Object.fromEntries(
+    Object.entries(details.evidence).filter(([unitId]) => selected.has(unitId))
+  );
+  if (Object.keys(evidence).length !== unitIds.length) return void 0;
+  const closedUnitEvidence = encodeClosedUnitEvidence(evidence);
+  const slicedDetails = decodeClosedUnitEvidenceDetails(closedUnitEvidence);
+  if (slicedDetails === void 0) return void 0;
+  const targetEvidence = gate.targets.filter((target) => selected.has(target.definition.originUnitId ?? "")).sort(
+    (left, right) => compareProtocolText(
+      left.definition.originUnitId ?? "",
+      right.definition.originUnitId ?? ""
+    ) || left.definition.targetOrdinal - right.definition.targetOrdinal || compareProtocolText(
+      left.definition.targetId,
+      right.definition.targetId
+    )
+  );
+  const probeIds = new Set(
+    targetEvidence.flatMap(
+      (target) => target.materialisations.map((item) => item.destinationProbeGateEntryId)
+    )
+  );
+  return {
+    closedUnitEvidence,
+    closureEvidenceCommitment: slicedDetails.commitment,
+    destinationProbeEvidence: gate.destinationProbes.filter(
+      (probe) => probe.stage === "unit" && probeIds.has(probe.gateEntryId)
+    ).sort(
+      (left, right) => compareProtocolText(left.gateEntryId, right.gateEntryId)
+    ),
+    targetEvidence,
+    unitIds: [...unitIds]
+  };
+}
+function projectionInputWithinBounds(input) {
+  try {
+    return input.unitIds.length <= 64 && input.targetEvidence.reduce(
+      (count, target) => count + target.materialisations.length,
+      0
+    ) <= 128 && utf82.encode(canonicalJson(input)).byteLength <= 65536;
+  } catch {
+    return false;
+  }
+}
+function projectionInputFits(input) {
+  return projectionInputWithinBounds(input) && projectionInputIsValid(input);
+}
+function closureEvidenceOids(evidence) {
+  const success2 = "verification" in evidence ? evidence : void 0;
+  const repair = "repairContext" in evidence ? evidence.repairContext : void 0;
+  return [
+    evidence.baseOid,
+    evidence.candidate?.headOid,
+    evidence.candidate?.treeOid,
+    success2?.verification.baseOid,
+    success2?.verification.headOid,
+    success2?.verification.treeOid,
+    success2?.review.baseOid,
+    success2?.review.headOid,
+    success2?.review.treeOid,
+    repair?.baseOid,
+    repair?.headOid,
+    repair?.treeOid,
+    "landedOid" in evidence ? evidence.landedOid : void 0,
+    "publishedHeadOid" in evidence ? evidence.publishedHeadOid : void 0,
+    "pullRequest" in evidence ? evidence.pullRequest.baseOid : void 0,
+    "pullRequest" in evidence ? evidence.pullRequest.remoteHeadOid : void 0
+  ].filter((value) => value !== void 0);
+}
+function projectionInputOids(input) {
+  const evidence = decodeClosedUnitEvidence(input.closedUnitEvidence);
+  return [
+    ...Object.values(evidence ?? {}).flatMap(closureEvidenceOids),
+    ...input.targetEvidence.flatMap((target) => [
+      target.resolution?.sourceOid,
+      ...(target.resolution?.sources ?? []).map((source) => source.blobOid),
+      ...target.materialisations.flatMap((item) => [
+        item.sourceOid,
+        item.source.blobOid
+      ])
+    ])
+  ].filter((value) => value !== void 0);
+}
+function createProvenanceEntry(state, gate) {
+  if (gate.provenance !== void 0) return gate;
+  const input = provenanceInput(state, gate);
+  if (!projectionInputFits(input))
+    throw new Error("provenance projection input exceeds its durable bound");
+  const provenanceGateEntryId = deriveGateEntryId(
+    state.controller.runId,
+    gate.waveId,
+    "provenance",
+    input
+  );
+  const provenance = {
+    baseOid: required(
+      gate.currentIntegrationOid ?? gate.carriedProvenanceBaseOid,
+      "provenance integration base",
+      "provenance_commit"
+    ),
+    gateEntryId: provenanceGateEntryId,
+    projectionInputSnapshot: input,
+    status: "pending"
+  };
+  const {
+    carriedProjectionInputSnapshot: _carriedProjectionInputSnapshot,
+    provenancePromise: _provenancePromise,
+    ...withoutCarry
+  } = gate;
+  return {
+    ...withoutCarry,
+    provenance
+  };
+}
+function maybeCreateProvenance(state) {
+  const gate = state.gate;
+  if (gate === void 0 || gate.provenance !== void 0 || !unitProjectionStageSettled(state, gate))
+    return state;
+  if (gate.provenancePromise?.status === "voided" && gate.provenancePromise.disposition === "handoff_boundary")
+    return state;
+  const input = provenanceInput(state, gate);
+  if (input.unitIds.length === 0)
+    return {
+      ...state,
+      gate: {
+        ...gate,
+        aggregateVerifyPromise: {
+          disposition: "no_landed_units",
+          status: "voided"
+        },
+        provenancePromise: {
+          disposition: "no_landed_units",
+          status: "voided"
+        },
+        targetPromises: gate.targetPromises.map(
+          (target) => target.definition.scope === "gate" ? {
+            ...target,
+            disposition: "no_landed_units",
+            status: "voided"
+          } : target
+        )
+      }
+    };
+  return { ...state, gate: createProvenanceEntry(state, gate) };
+}
+function unitProjectionStageSettled(state, gate) {
+  return state.wave.unitIds.length === 0 && gate.targetPromises.every(
+    (target) => target.definition.scope !== "unit" || target.status !== "pending"
+  ) && gate.targets.filter((target) => target.definition.scope === "unit").every(targetIsSettled) && gate.destinationProbes.every(
+    (probe) => probe.stage !== "unit" || probe.status !== "pending"
+  );
+}
 function reduceWavePlan(state, event) {
   if (state.state !== "active" || state.controller.state !== "acquired")
     return reject(
@@ -11020,14 +12532,20 @@ function reduceWavePlan(state, event) {
     );
   if (state.wave.unitIds.length !== 0 || state.activeModifyingUnitIds.length !== 0 || state.qualificationOwnerUnitId !== void 0 || state.integrationOwnerUnitId !== void 0 || state.currentReviewerUnitId !== void 0 || state.qualificationQueue.length !== 0 || state.integrationQueue.length !== 0 || state.effectJournal.some(
     (entry) => entry.status === "intended" || entry.status === "ambiguous"
-  ))
+  ) || !gateIsGreen(state.gate))
     return reject("illegal_transition", "prior wave has not drained");
   if (Object.values(state.units).some((unit) => unit.state !== "planned"))
     return reject(
       "illegal_transition",
       "only planned units may form a new wave"
     );
-  const selected = selectWaveUnits(state, event.tasks);
+  const carryOnly = event.carryOnly === true;
+  if (carryOnly !== (event.tasks.length === 0) || carryOnly && (Object.keys(state.units).length !== 0 || state.pendingProvenanceCarry === void 0 || event.knowledgeContract === void 0))
+    return reject(
+      "invalid_event",
+      "an empty wave requires one authoritative pending provenance carry"
+    );
+  const selected = carryOnly ? { ok: true, value: [] } : selectWaveUnits(state, event.tasks);
   if (!selected.ok) return reject("invalid_event", selected.reason);
   const metadata = event.tasks.map(canonicalTaskMetadata);
   if (!metadataFitsEnvelope(metadata))
@@ -11035,18 +12553,73 @@ function reduceWavePlan(state, event) {
       "invalid_event",
       "wave task metadata exceeds durable envelope"
     );
+  if (event.knowledgeContract === void 0 && metadata.some((task) => (task.materialisationTargets?.length ?? 0) > 0))
+    return reject(
+      "invalid_event",
+      "materialisation targets require a recorded knowledge contract"
+    );
+  if (event.knowledgeContract !== void 0 && state.harness === void 0)
+    return reject(
+      "invalid_event",
+      "knowledge waves require a recorded harness configuration"
+    );
+  if (event.knowledgeContract !== void 0 && !targetAliasesAreValid(metadata, event.knowledgeContract, state.harness))
+    return reject(
+      "invalid_event",
+      "knowledge targets must reference a unique declared destination alias"
+    );
   const byUnitId = new Map(metadata.map((task) => [task.unitId, task]));
+  const carriedProjectionInputSnapshot = state.gate?.provenance?.status === "voided" && state.gate.provenance.disposition === "deferred_by_controller" ? state.gate.provenance.projectionInputSnapshot : state.pendingProvenanceCarry?.projectionInputSnapshot;
+  const carriedProvenanceBaseOid = state.gate?.provenance?.status === "voided" && state.gate.provenance.disposition === "deferred_by_controller" ? state.gate.provenance.advancedBaseOid ?? state.gate.provenance.baseOid ?? state.gate.currentIntegrationOid : state.pendingProvenanceCarry?.integrationOid;
+  const carriedSnapshotCommitment = state.gate?.provenance?.status === "voided" && state.gate.provenance.disposition === "deferred_by_controller" ? provenanceCarrySnapshotCommitment(
+    state.gate.provenance.projectionInputSnapshot
+  ) : state.pendingProvenanceCarry?.snapshotCommitment;
+  const lineageAncestorDigests = state.gate?.provenance?.status === "voided" && state.gate.provenance.disposition === "deferred_by_controller" ? state.gate.lineageAncestorDigests : state.pendingProvenanceCarry?.lineageAncestorDigests ?? [];
+  if (carriedProjectionInputSnapshot !== void 0 && event.knowledgeContract === void 0)
+    return reject(
+      "invalid_event",
+      "deferred provenance cannot be dropped by a software-only wave"
+    );
+  if (carriedProjectionInputSnapshot !== void 0 && !projectionInputFits(carriedProjectionInputSnapshot))
+    return reject("invalid_event", "carried provenance exceeds its bound");
+  if (carriedProjectionInputSnapshot === void 0 !== (carriedSnapshotCommitment === void 0) || carriedProjectionInputSnapshot !== void 0 && (carriedSnapshotCommitment !== provenanceCarrySnapshotCommitment(carriedProjectionInputSnapshot) || carriedProjectionInputSnapshot.unitIds.length === 0 || carriedProjectionInputSnapshot.unitIds.some(
+    (unitId) => selected.value.includes(unitId)
+  )))
+    return reject(
+      "invalid_event",
+      "carried provenance identity contradicts the selected wave"
+    );
+  const gate = event.knowledgeContract === void 0 ? void 0 : newGate(
+    state,
+    event.waveId,
+    selected.value,
+    metadata,
+    event.knowledgeContract,
+    carriedProjectionInputSnapshot,
+    carriedSnapshotCommitment,
+    carriedProvenanceBaseOid,
+    lineageAncestorDigests
+  );
+  const { pendingProvenanceCarry: _pendingCarry, ...stateWithoutPendingCarry } = state;
+  const planned = {
+    ...stateWithoutPendingCarry,
+    units: Object.fromEntries(
+      Object.entries(state.units).map(([unitId, unit]) => [
+        unitId,
+        { ...unit, taskMetadata: byUnitId.get(unitId) }
+      ])
+    ),
+    wave: { id: event.waveId, unitIds: [...selected.value] }
+  };
+  if (event.knowledgeContract === void 0) {
+    delete planned.gate;
+    delete planned.knowledgeContract;
+  } else {
+    planned.gate = gate;
+    planned.knowledgeContract = event.knowledgeContract;
+  }
   return commit(
-    {
-      ...state,
-      units: Object.fromEntries(
-        Object.entries(state.units).map(([unitId, unit]) => [
-          unitId,
-          { ...unit, taskMetadata: byUnitId.get(unitId) }
-        ])
-      ),
-      wave: { id: event.waveId, unitIds: [...selected.value] }
-    },
+    carryOnly ? maybeCreateProvenance(planned) : planned,
     event,
     []
   );
@@ -11059,7 +12632,9 @@ function canonicalTaskMetadata(task) {
     dependencies: sortedStrings(task.dependencies),
     mandatoryVerification: sortedStrings(task.mandatoryVerification),
     ownedPaths: sortedStrings(task.ownedPaths),
-    reservations: sortedStrings(task.reservations)
+    reservations: sortedStrings(task.reservations),
+    ...task.supersedes === void 0 ? {} : { supersedes: sortedStrings(task.supersedes) },
+    ...task.tombstones === void 0 ? {} : { tombstones: sortedStrings(task.tombstones) }
   };
 }
 function metadataFitsEnvelope(metadata) {
@@ -11073,7 +12648,7 @@ function sameStringArray(left, right) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 function sortedStrings(values) {
-  return [...values].sort((left, right) => left.localeCompare(right));
+  return [...values].sort(compareProtocolText);
 }
 function selectWaveUnits(state, metadata) {
   if (metadata.length !== Object.keys(state.units).length || new Set(metadata.map((task) => task.unitId)).size !== metadata.length || metadata.some((task) => state.units[task.unitId] === void 0))
@@ -11082,9 +12657,11 @@ function selectWaveUnits(state, metadata) {
       reason: "wave metadata must cover every remaining unit exactly once"
     };
   const byId = new Map(metadata.map((task) => [task.unitId, task]));
+  const closedEvidence = decodeClosedUnitEvidence(state.closedUnitEvidence);
+  const dependencyIsSatisfied = (dependency) => byId.has(dependency) || closedEvidence?.[dependency]?.outcome === "landed";
   if (metadata.some(
     (task) => task.dependencies.some(
-      (dependency) => byId.get(dependency) === void 0
+      (dependency) => !dependencyIsSatisfied(dependency)
     ) || task.dependencies.includes(task.unitId) || task.ownedPaths.some((path2) => !validOwnedPath(path2))
   ))
     return {
@@ -11101,6 +12678,7 @@ function selectWaveUnits(state, metadata) {
     const task = byId.get(id);
     let current = 0;
     for (const dependency of task.dependencies) {
+      if (!byId.has(dependency)) continue;
       const found = visit(dependency);
       if (found === void 0) {
         visiting.delete(id);
@@ -11114,8 +12692,10 @@ function selectWaveUnits(state, metadata) {
   };
   if (metadata.some((task) => visit(task.unitId) === void 0))
     return { ok: false, reason: "wave dependency graph contains a cycle" };
-  const ordered = metadata.filter((task) => task.dependencies.length === 0).sort(
-    (left, right) => depth.get(left.unitId) - depth.get(right.unitId) || riskOrder(left.risk) - riskOrder(right.risk) || left.priority - right.priority || left.unitId.localeCompare(right.unitId)
+  const ordered = metadata.filter(
+    (task) => task.dependencies.every((dependency) => !byId.has(dependency))
+  ).sort(
+    (left, right) => depth.get(left.unitId) - depth.get(right.unitId) || riskOrder(left.risk) - riskOrder(right.risk) || left.priority - right.priority || compareProtocolText(left.unitId, right.unitId)
   );
   const first = ordered[0];
   if (first === void 0)
@@ -11150,6 +12730,2345 @@ function taskConflict(left, right) {
     )
   );
 }
+function isGateEvent(event) {
+  return "unitId" in event && event.unitId === null && event.type !== "effect_ambiguous";
+}
+function gateTargetsForStage(gate, stage) {
+  return gate.targets.filter((target) => target.definition.scope === stage);
+}
+function gateMaterialisations(gate, stage) {
+  const targets = stage === void 0 ? gate.targets : gateTargetsForStage(gate, stage);
+  return targets.flatMap((target) => target.materialisations);
+}
+function updateGateTarget(gate, targetId, update) {
+  const map = (target) => target.definition.targetId === targetId ? update(target) : target;
+  return {
+    ...gate,
+    targets: gate.targets.map(map)
+  };
+}
+function updateGateMaterialisation(gate, gateEntryId, update) {
+  const map = (target) => ({
+    ...target,
+    materialisations: target.materialisations.map(
+      (item) => item.gateEntryId === gateEntryId ? update(item) : item
+    )
+  });
+  return {
+    ...gate,
+    targets: gate.targets.map(map)
+  };
+}
+function settleTargetPromise(gate, targetId) {
+  return updateGateTarget(gate, targetId, (target) => {
+    if (target.status !== "pending" || target.resolution?.status !== "observed" || target.materialisations.length === 0 || target.materialisations.some((item) => item.status === "pending"))
+      return target;
+    const deferred = target.materialisations.find(
+      (item) => item.status === "voided"
+    );
+    return deferred === void 0 ? { ...target, status: "observed" } : {
+      ...target,
+      disposition: "deferral_cascade",
+      followUpBeadId: required(
+        deferred.followUpBeadId,
+        "materialisation deferral follow-up",
+        "materialise"
+      ),
+      status: "voided"
+    };
+  });
+}
+function findResolution(gate, gateEntryId) {
+  for (const target of gate.targets)
+    if (target.resolution?.gateEntryId === gateEntryId)
+      return { target, resolution: target.resolution };
+  return void 0;
+}
+function findMaterialisation(gate, gateEntryId) {
+  for (const target of gate.targets) {
+    const materialisation = target.materialisations.find(
+      (item) => item.gateEntryId === gateEntryId
+    );
+    if (materialisation !== void 0) return { target, materialisation };
+  }
+  return void 0;
+}
+function findDestinationProbe(gate, gateEntryId) {
+  return gate.destinationProbes.find(
+    (probe) => probe.gateEntryId === gateEntryId
+  );
+}
+function destinationProbeGateEntryId(state, gate, stage, destinationAlias, destinationSubpath) {
+  const destination = required(
+    state.knowledgeContract?.aliases.find(
+      (candidate) => candidate.alias === destinationAlias
+    ),
+    "destination alias",
+    "destination_probe"
+  );
+  return deriveGateEntryId(
+    state.controller.runId,
+    gate.waveId,
+    `${stage}-destination-probe`,
+    { destination, destinationSubpath }
+  );
+}
+function updateDestinationProbe(gate, gateEntryId, update) {
+  return {
+    ...gate,
+    destinationProbes: gate.destinationProbes.map(
+      (probe) => probe.gateEntryId === gateEntryId ? update(probe) : probe
+    )
+  };
+}
+function ensureDestinationProbes(state, gate, stage) {
+  if (!stageResolutionsSettled(gate, stage)) return gate;
+  const destinations = /* @__PURE__ */ new Map();
+  for (const target of gateTargetsForStage(gate, stage)) {
+    if (target.status === "voided" || target.materialisations.length === 0)
+      continue;
+    const destinationAlias = target.definition.target.destinationAlias;
+    const destinationSubpath = target.definition.target.destinationSubpath;
+    const key = `${destinationAlias}\0${destinationSubpath}`;
+    destinations.set(key, {
+      destinationAlias,
+      destinationSubpath,
+      gateEntryId: destinationProbeGateEntryId(
+        state,
+        gate,
+        stage,
+        destinationAlias,
+        destinationSubpath
+      ),
+      stage,
+      status: "pending"
+    });
+  }
+  for (const probe of gate.destinationProbes.filter(
+    (candidate) => candidate.stage === stage
+  ))
+    destinations.set(
+      `${probe.destinationAlias}\0${probe.destinationSubpath}`,
+      probe
+    );
+  return {
+    ...gate,
+    destinationProbes: [
+      ...gate.destinationProbes.filter((probe) => probe.stage !== stage),
+      ...[...destinations.values()].sort(
+        (left, right) => compareProtocolText(left.stage, right.stage) || compareProtocolText(left.gateEntryId, right.gateEntryId)
+      )
+    ]
+  };
+}
+function probeForMaterialisation(gate, stage, item) {
+  return gate.destinationProbes.find(
+    (probe) => probe.stage === stage && probe.destinationAlias === item.target.destinationAlias && probe.destinationSubpath === item.target.destinationSubpath
+  );
+}
+function projectionSnapshot(gate) {
+  return gate.provenance?.projectionInputSnapshot ?? gate.carriedProjectionInputSnapshot;
+}
+function unitDestinationProbeEvidence(gate) {
+  const probes = /* @__PURE__ */ new Map();
+  for (const probe of [
+    ...projectionSnapshot(gate)?.destinationProbeEvidence ?? [],
+    ...gate.destinationProbes.filter((candidate) => candidate.stage === "unit")
+  ])
+    probes.set(probe.gateEntryId, probe);
+  return [...probes.values()];
+}
+function priorDestinationIdentities(gate, destinationAlias, destinationSubpath) {
+  const identities = /* @__PURE__ */ new Map();
+  for (const probe of unitDestinationProbeEvidence(gate)) {
+    if (probe.destinationAlias !== destinationAlias || probe.destinationSubpath !== destinationSubpath || probe.status !== "observed" || probe.identity === void 0)
+      continue;
+    const key = `${probe.identity.canonicalPath}\0${probe.identity.device}\0${probe.identity.inode}`;
+    identities.set(key, probe.identity);
+  }
+  return [...identities.values()];
+}
+function destinationIdentityForMaterialisation(gate, stage, item) {
+  if (stage === "gate")
+    return probeForMaterialisation(gate, stage, item)?.identity;
+  return unitDestinationProbeEvidence(gate).find(
+    (probe) => probe.destinationAlias === item.target.destinationAlias && probe.destinationSubpath === item.target.destinationSubpath && probe.status === "observed"
+  )?.identity;
+}
+function observedUnitMaterialisations(gate) {
+  const entries = /* @__PURE__ */ new Map();
+  for (const item of [
+    ...projectionSnapshot(gate)?.targetEvidence.flatMap(
+      (target) => target.materialisations
+    ) ?? [],
+    ...gateMaterialisations(gate, "unit")
+  ])
+    if (item.status === "observed") entries.set(item.gateEntryId, item);
+  return [...entries.values()];
+}
+function sameDestinationIdentity(left, right) {
+  return left.canonicalPath === right.canonicalPath && left.device === right.device && left.inode === right.inode;
+}
+function matchesMaterialisationPattern(pattern, path2) {
+  const patterns = pattern.split("/");
+  const parts = path2.split("/");
+  if (patterns.length !== parts.length) return false;
+  return patterns.every((segment, index) => {
+    let expression = "^";
+    for (const character of segment) {
+      if (character === "*") expression += "[A-Za-z0-9._-]*";
+      else if (character === "?") expression += "[A-Za-z0-9._-]";
+      else expression += character.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    }
+    return new RegExp(`${expression}$`, "u").test(parts[index] ?? "");
+  });
+}
+function materialisationName(source, policy, timestamp) {
+  const basename5 = source.path.split("/").at(-1);
+  const dot = basename5.lastIndexOf(".");
+  const suffix = dot > 0 ? basename5.slice(dot + 1) : "";
+  const retainExtension = /^[A-Za-z0-9]{1,10}$/u.test(suffix);
+  const rawStem = retainExtension ? basename5.slice(0, dot) : basename5;
+  const stem = rawStem.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 80).replace(/-+$/u, "");
+  const extension = retainExtension ? `.${suffix.toLowerCase()}` : "";
+  const compactClock = timestamp.replace(/[-:]/gu, "");
+  const oid12 = source.blobOid.slice(0, 12);
+  if (policy === "iso-date-prefix")
+    return `${timestamp.slice(0, 10)}--${stem}--${oid12}--${compactClock}${extension}`;
+  if (policy === "content-hash-suffix")
+    return `${stem}--${source.sha256.slice(0, 12)}--${oid12}--${compactClock}${extension}`;
+  return `${stem}--${oid12}--${compactClock}${extension}`;
+}
+function validUtcSecond(value) {
+  const instant = new Date(value);
+  return !Number.isNaN(instant.valueOf()) && instant.toISOString().replace(".000Z", "Z") === value;
+}
+function sidecarFor(state, gate, item, artifactName, timestamp) {
+  const contract = required(
+    state.knowledgeContract,
+    "knowledge contract",
+    "materialise"
+  );
+  const value = {
+    artifactName,
+    blobOid: item.source.blobOid,
+    byteCount: item.source.byteCount,
+    destinationAlias: item.target.destinationAlias,
+    destinationSubpath: item.target.destinationSubpath,
+    domainScope: contract.domainScope,
+    driver: contract.humanDriver,
+    executorTool: required(state.harness, "harness", "materialise").family,
+    gateEntryId: item.gateEntryId,
+    originUnitId: item.originUnitId,
+    runId: state.controller.runId,
+    schema: "sce.materialisation-provenance",
+    sha256: item.source.sha256,
+    sourceOid: item.sourceOid,
+    sourcePath: item.source.path,
+    targetId: item.targetId,
+    timestamp,
+    version: 1,
+    waveId: gate.waveId
+  };
+  return { bytes: `${canonicalJson(value)}
+`, value };
+}
+function sourceTotals(gate) {
+  const settledUnitTargets = gate.provenance?.projectionInputSnapshot.targetEvidence ?? [
+    ...gate.carriedProjectionInputSnapshot?.targetEvidence ?? [],
+    ...gate.targets.filter((target) => target.definition.scope === "unit")
+  ];
+  const sources = [
+    ...settledUnitTargets,
+    ...gate.targets.filter((target) => target.definition.scope === "gate")
+  ].flatMap((target) => target.resolution?.sources ?? []);
+  return {
+    bytes: sources.reduce((total, source) => total + source.byteCount, 0),
+    items: sources.length
+  };
+}
+function canonicalByteLength(value) {
+  return utf82.encode(canonicalJson(value)).byteLength;
+}
+var MAX_GATE_EVENT_ID_BYTES = 160;
+var GATE_IDEMPOTENCY_KEY_BYTES = 68;
+function canonicalAsciiArrayBytes(lengths) {
+  return 2 + lengths.reduce((total, length) => total + length + 2, 0) + Math.max(0, lengths.length - 1);
+}
+function maximumFifoHistoryGrowth(current, appendedItemBytes) {
+  const currentLengths = current.map((item) => utf82.encode(item).byteLength);
+  const currentBytes = canonicalAsciiArrayBytes(currentLengths);
+  let maximumBytes = currentBytes;
+  for (let appended = 1; appended <= LIMITS.eventHistory; appended += 1) {
+    const future = [
+      ...currentLengths,
+      ...Array.from({ length: appended }, () => appendedItemBytes)
+    ].slice(-LIMITS.eventHistory);
+    maximumBytes = Math.max(maximumBytes, canonicalAsciiArrayBytes(future));
+  }
+  return maximumBytes - currentBytes;
+}
+function maximumAggregateCounterGrowth(state) {
+  const current = {
+    journalCheckpoint: {
+      compactedEffects: state.journalCheckpoint.compactedEffects,
+      compactedEvents: state.journalCheckpoint.compactedEvents,
+      compactedIdempotencyKeys: state.journalCheckpoint.compactedIdempotencyKeys,
+      revision: state.journalCheckpoint.revision
+    },
+    revision: state.revision
+  };
+  const maximum = {
+    journalCheckpoint: {
+      compactedEffects: Number.MAX_SAFE_INTEGER,
+      compactedEvents: Number.MAX_SAFE_INTEGER,
+      compactedIdempotencyKeys: Number.MAX_SAFE_INTEGER,
+      revision: Number.MAX_SAFE_INTEGER
+    },
+    revision: Number.MAX_SAFE_INTEGER
+  };
+  return canonicalByteLength(maximum) - canonicalByteLength(current);
+}
+function maximumAggregateHistoryGrowth(state) {
+  return maximumFifoHistoryGrowth(state.processedEventIds, MAX_GATE_EVENT_ID_BYTES) + maximumFifoHistoryGrowth(
+    state.processedIdempotencyKeys,
+    GATE_IDEMPOTENCY_KEY_BYTES
+  ) + maximumAggregateCounterGrowth(state);
+}
+function materialisationGateEntryIdForSource(source, binding) {
+  return deriveGateEntryId(
+    binding.runId,
+    binding.waveId,
+    `${binding.stage}-materialise`,
+    {
+      blobOid: source.blobOid,
+      destinationProbeGateEntryId: binding.destinationProbeGateEntryId,
+      path: source.path,
+      sourceOid: binding.sourceOid,
+      targetId: binding.targetId
+    }
+  );
+}
+function maximumSidecarByteCountForSource(source, binding, artifactName) {
+  const sidecar = {
+    artifactName,
+    blobOid: source.blobOid,
+    byteCount: source.byteCount,
+    destinationAlias: binding.target.destinationAlias,
+    destinationSubpath: binding.target.destinationSubpath,
+    domainScope: binding.domainScope,
+    driver: binding.driver,
+    executorTool: binding.executorTool,
+    gateEntryId: materialisationGateEntryIdForSource(source, binding),
+    originUnitId: binding.originUnitId,
+    runId: binding.runId,
+    schema: "sce.materialisation-provenance",
+    sha256: source.sha256,
+    sourceOid: binding.sourceOid,
+    sourcePath: source.path,
+    targetId: binding.targetId,
+    timestamp: "9999-12-31T23:59:59Z",
+    version: 1,
+    waveId: binding.waveId
+  };
+  return utf82.encode(`${canonicalJson(sidecar)}
+`).byteLength;
+}
+function reachableMaterialisationVariants(source, binding) {
+  const base = {
+    destinationProbeGateEntryId: binding.destinationProbeGateEntryId,
+    gateEntryId: materialisationGateEntryIdForSource(source, binding),
+    originUnitId: binding.originUnitId,
+    source,
+    sourceOid: binding.sourceOid,
+    target: binding.target,
+    targetId: binding.targetId
+  };
+  const artifactName = materialisationName(
+    source,
+    binding.target.namingPolicy,
+    "9999-12-31T23:59:59Z"
+  );
+  const sidecarByteCount = maximumSidecarByteCountForSource(
+    source,
+    binding,
+    artifactName
+  );
+  const named = {
+    ...base,
+    artifactName,
+    sidecarByteCount,
+    sidecarName: `${artifactName}.sce-provenance.json`,
+    sidecarSha256: "a".repeat(64),
+    timestamp: "9999-12-31T23:59:59Z"
+  };
+  return {
+    pending: { ...base, status: "pending" },
+    intended: {
+      ...base,
+      currentEffectId: `${"a".repeat(160)}:materialise`,
+      status: "pending"
+    },
+    collision: {
+      ...named,
+      lastRefusal: {
+        code: "output_name_collision",
+        conflictingGateEntryId: `sce:gate:${"a".repeat(64)}`
+      },
+      status: "pending"
+    },
+    materialRefusal: {
+      ...named,
+      lastRefusal: {
+        code: "hard_links_unsupported",
+        detailHash: "a".repeat(64)
+      },
+      status: "pending"
+    },
+    observed: {
+      ...named,
+      observation: {
+        artifactByteCount: source.byteCount,
+        artifactSha256: "a".repeat(64),
+        artifactStatus: "already_present",
+        sidecarByteCount,
+        sidecarSha256: "a".repeat(64),
+        sidecarStatus: "already_present"
+      },
+      status: "observed"
+    },
+    deferred: {
+      ...named,
+      disposition: "deferred_by_controller",
+      followUpBeadId: "a".repeat(160),
+      lastRefusal: {
+        code: "output_name_collision",
+        conflictingGateEntryId: `sce:gate:${"a".repeat(64)}`
+      },
+      status: "voided"
+    },
+    materialDeferred: {
+      ...named,
+      disposition: "deferred_by_controller",
+      followUpBeadId: "a".repeat(160),
+      lastRefusal: {
+        code: "hard_links_unsupported",
+        detailHash: "a".repeat(64)
+      },
+      status: "voided"
+    },
+    cascade: {
+      ...base,
+      disposition: "deferral_cascade",
+      followUpBeadId: "a".repeat(160),
+      status: "voided"
+    }
+  };
+}
+function reachableTargetVariants(sources, binding) {
+  const materialisationVariants = sources.map(
+    (source) => reachableMaterialisationVariants(source, binding)
+  );
+  const definition = {
+    originUnitId: binding.originUnitId,
+    scope: binding.stage,
+    target: binding.target,
+    targetId: binding.targetId,
+    targetOrdinal: binding.targetOrdinal
+  };
+  const baseline = {
+    definition,
+    materialisations: [],
+    resolution: {
+      gateEntryId: binding.resolutionGateEntryId,
+      sourceOid: binding.sourceOid,
+      status: "pending",
+      targetId: binding.targetId
+    },
+    status: "pending"
+  };
+  const resolution = {
+    capacities: binding.capacities,
+    gateEntryId: binding.resolutionGateEntryId,
+    sourceOid: binding.sourceOid,
+    sources,
+    status: "observed",
+    targetId: binding.targetId
+  };
+  const largestSettledMaterialisations = materialisationVariants.map(
+    (item) => [item.deferred, item.materialDeferred, item.observed].reduce(
+      (largest, candidate) => canonicalByteLength(candidate) > canonicalByteLength(largest) ? candidate : largest
+    )
+  );
+  const independentlyDeferredTargets = materialisationVariants.map(
+    (item, deferredIndex) => ({
+      definition,
+      disposition: "deferral_cascade",
+      followUpBeadId: "a".repeat(160),
+      materialisations: largestSettledMaterialisations.map(
+        (settled, index) => index === deferredIndex ? canonicalByteLength(item.materialDeferred) > canonicalByteLength(item.deferred) ? item.materialDeferred : item.deferred : settled
+      ),
+      resolution,
+      status: "voided"
+    })
+  );
+  const variants = [
+    {
+      definition,
+      materialisations: [],
+      resolution: {
+        ...baseline.resolution,
+        capacities: binding.capacities,
+        currentEffectId: `${"a".repeat(160)}:materialisation_resolve`
+      },
+      status: "pending"
+    },
+    {
+      definition,
+      materialisations: [],
+      resolution: {
+        ...baseline.resolution,
+        capacities: binding.capacities,
+        lastRefusal: {
+          code: "evidence_budget_exceeded",
+          detailHash: "a".repeat(64)
+        }
+      },
+      status: "pending"
+    },
+    {
+      definition,
+      materialisations: materialisationVariants.map((item) => item.collision),
+      resolution,
+      status: "pending"
+    },
+    {
+      definition,
+      materialisations: materialisationVariants.map(
+        (item) => item.materialRefusal
+      ),
+      resolution,
+      status: "pending"
+    },
+    {
+      definition,
+      materialisations: materialisationVariants.map((item) => item.observed),
+      resolution,
+      status: "observed"
+    },
+    ...independentlyDeferredTargets,
+    {
+      definition,
+      disposition: "deferral_cascade",
+      followUpBeadId: "a".repeat(160),
+      materialisations: materialisationVariants.map((item) => item.cascade),
+      resolution,
+      status: "voided"
+    },
+    ...materialisationVariants.map((_, intendedIndex) => ({
+      definition,
+      materialisations: materialisationVariants.map(
+        (item, index) => index === intendedIndex ? item.intended : item.pending
+      ),
+      resolution,
+      status: "pending"
+    }))
+  ];
+  return { baseline, variants };
+}
+function materialisationExpansionCost(sources, binding) {
+  const { baseline, variants } = reachableTargetVariants(sources, binding);
+  const baselineBytes = canonicalByteLength(baseline);
+  return Math.max(
+    ...variants.map(
+      (target) => canonicalByteLength(target) - baselineBytes
+    )
+  );
+}
+function materialisationAggregateExpansionCost(sources, binding) {
+  const expansion = materialisationExpansionCost(sources, binding);
+  return binding.stage === "unit" ? 2 * expansion : expansion;
+}
+function materialisationProjectionExpansionCost(sources, binding) {
+  return binding.stage === "unit" ? materialisationExpansionCost(sources, binding) : 0;
+}
+function maximumReachableDestinationProbeValue(destinationAlias, destinationSubpath, gateEntryId = `sce:gate:${"a".repeat(64)}`, stage = "unit") {
+  const base = {
+    destinationAlias,
+    destinationSubpath,
+    gateEntryId,
+    stage
+  };
+  const refusal2 = {
+    code: "invalid_destination",
+    detailHash: "a".repeat(64)
+  };
+  const reachable = [
+    { ...base, status: "pending" },
+    {
+      ...base,
+      currentEffectId: `${"a".repeat(160)}:destination_probe`,
+      status: "pending"
+    },
+    { ...base, lastRefusal: refusal2, status: "pending" },
+    {
+      ...base,
+      identity: {
+        canonicalPath: `/${"a".repeat(4095)}`,
+        device: "9".repeat(20),
+        inode: "9".repeat(20)
+      },
+      status: "observed"
+    },
+    {
+      ...base,
+      disposition: "deferred_by_controller",
+      followUpBeadId: "a".repeat(160),
+      lastRefusal: refusal2,
+      status: "voided"
+    },
+    {
+      ...base,
+      disposition: "deferral_cascade",
+      followUpBeadId: "a".repeat(160),
+      status: "voided"
+    }
+  ];
+  return reachable.reduce(
+    (largest, candidate) => canonicalByteLength(candidate) > canonicalByteLength(largest) ? candidate : largest
+  );
+}
+function maximumFutureDestinationProbes(state, gate, stage) {
+  const probes = /* @__PURE__ */ new Map();
+  for (const probe of gate.destinationProbes) {
+    const key = `${probe.stage}\0${probe.destinationAlias}\0${probe.destinationSubpath}`;
+    probes.set(
+      key,
+      probe.stage === stage && probe.status === "pending" ? maximumReachableDestinationProbeValue(
+        probe.destinationAlias,
+        probe.destinationSubpath,
+        probe.gateEntryId,
+        probe.stage
+      ) : probe
+    );
+  }
+  for (const target of [...gate.targetPromises, ...gate.targets]) {
+    if (target.status === "voided" || target.definition.scope !== stage)
+      continue;
+    const { scope, target: definition } = target.definition;
+    const key = `${scope}\0${definition.destinationAlias}\0${definition.destinationSubpath}`;
+    if (probes.has(key)) continue;
+    const gateEntryId = destinationProbeGateEntryId(
+      state,
+      gate,
+      scope,
+      definition.destinationAlias,
+      definition.destinationSubpath
+    );
+    probes.set(
+      key,
+      maximumReachableDestinationProbeValue(
+        definition.destinationAlias,
+        definition.destinationSubpath,
+        gateEntryId,
+        scope
+      )
+    );
+  }
+  return [...probes.values()].sort(
+    (left, right) => compareProtocolText(left.stage, right.stage) || compareProtocolText(left.gateEntryId, right.gateEntryId)
+  );
+}
+function maximumUnitProbeProjectionGrowth(state, gate) {
+  const current = provenanceInput(state, gate);
+  const future = provenanceInput(state, {
+    ...gate,
+    destinationProbes: [...maximumFutureDestinationProbes(state, gate, "unit")]
+  });
+  return Math.max(
+    0,
+    canonicalByteLength(future) - canonicalByteLength(current)
+  );
+}
+function maximumGateJournalEntry(kind) {
+  return {
+    effectId: `${"a".repeat(160)}:${kind}`,
+    gateEntryId: `sce:gate:${"a".repeat(64)}`,
+    idempotencyKey: `sce:${"a".repeat(64)}`,
+    intentCommitment: "a".repeat(64),
+    intentRevision: Number.MAX_SAFE_INTEGER,
+    kind,
+    observationHash: "a".repeat(64),
+    paramsHash: "a".repeat(64),
+    schemaVersion: SCHEMA_VERSION,
+    status: "observed",
+    unitId: null
+  };
+}
+function maximumFixedGateVariants(state, gate, stage) {
+  const futureGate = {
+    ...gate,
+    destinationProbes: [...maximumFutureDestinationProbes(state, gate, stage)]
+  };
+  if (stage === "gate")
+    return [{ gate: futureGate, journalKind: "materialise" }];
+  const projectionInputSnapshot = provenanceInput(state, futureGate);
+  const provenanceGateEntryId = deriveGateEntryId(
+    state.controller.runId,
+    gate.waveId,
+    "provenance",
+    projectionInputSnapshot
+  );
+  const baseOid = required(
+    gate.currentIntegrationOid ?? gate.carriedProvenanceBaseOid,
+    "provenance integration base",
+    "provenance_commit"
+  );
+  const oid3 = "a".repeat(state.gitObjectFormat === "sha1" ? 40 : 64);
+  const attemptIdempotencyKey = `sce:${"a".repeat(64)}`;
+  const provenanceBase = {
+    baseOid,
+    gateEntryId: provenanceGateEntryId,
+    projectionInputSnapshot
+  };
+  const provenanceAttempt = {
+    ...provenanceBase,
+    attemptIdempotencyKey,
+    timestamp: "9999-12-31T23:59:59Z",
+    worktreePath: deriveProvenanceWorktreePath(
+      required(
+        state.knowledgeContract,
+        "knowledge contract",
+        "provenance_commit"
+      ).provenanceWorktreeRoot,
+      attemptIdempotencyKey
+    )
+  };
+  const attemptedResult = {
+    ...provenanceAttempt,
+    attemptedCommitOid: oid3,
+    attemptedTreeOid: oid3
+  };
+  const committedProvenance = {
+    ...provenanceAttempt,
+    commitOid: oid3,
+    status: "observed",
+    treeOid: oid3
+  };
+  const {
+    carriedProjectionInputSnapshot: _carriedProjectionInputSnapshot,
+    provenance: _existingProvenance,
+    provenancePromise: _provenancePromise,
+    ...withoutProvenance
+  } = futureGate;
+  const withProvenance = (provenance) => ({
+    ...withoutProvenance,
+    provenance
+  });
+  const provenanceVariants = [
+    { ...provenanceBase, status: "pending" },
+    {
+      ...provenanceBase,
+      status: "pending",
+      timestamp: "9999-12-31T23:59:59Z"
+    },
+    {
+      ...provenanceAttempt,
+      currentEffectId: `${"a".repeat(160)}:provenance_commit`,
+      status: "pending"
+    },
+    {
+      ...attemptedResult,
+      lastRefusal: {
+        code: "provenance_reproducibility_failed",
+        detailHash: "a".repeat(64)
+      },
+      status: "pending"
+    },
+    {
+      ...attemptedResult,
+      advancedBaseOid: oid3,
+      lastRefusal: {
+        code: "provenance_base_advanced",
+        detailHash: "a".repeat(64)
+      },
+      status: "pending"
+    },
+    {
+      ...provenanceAttempt,
+      expectedBaseOid: baseOid,
+      lastRefusal: {
+        code: "provenance_worktree_refused",
+        detailHash: "a".repeat(64)
+      },
+      observedHeadOid: oid3,
+      status: "pending",
+      worktreeCondition: "unexpected_head"
+    },
+    {
+      ...attemptedResult,
+      lastRefusal: {
+        code: "provenance_integration_refused",
+        detailHash: "a".repeat(64)
+      },
+      status: "pending"
+    },
+    {
+      ...attemptedResult,
+      disposition: "deferred_by_controller",
+      followUpBeadId: "a".repeat(160),
+      lastRefusal: {
+        code: "provenance_reproducibility_failed",
+        detailHash: "a".repeat(64)
+      },
+      status: "voided"
+    }
+  ];
+  const committedAccounting = gate.provenanceUnitAccounting.map((entry) => ({
+    ...entry,
+    provenanceCommitOid: oid3,
+    status: "committed"
+  }));
+  const committedGate = withProvenance(committedProvenance);
+  const {
+    aggregateVerify: _existingAggregateVerify,
+    aggregateVerifyPromise: _aggregateVerifyPromise,
+    ...withoutAggregateVerify
+  } = committedGate;
+  const aggregateBase = {
+    gateEntryId: deriveGateEntryId(
+      state.controller.runId,
+      gate.waveId,
+      "aggregate-verify",
+      { provenanceGateEntryId }
+    ),
+    provenanceGateEntryId,
+    status: "pending"
+  };
+  const aggregateVariants = [
+    aggregateBase,
+    {
+      ...aggregateBase,
+      currentEffectId: `${"a".repeat(160)}:verify`
+    },
+    {
+      ...aggregateBase,
+      lastRefusal: {
+        code: "verification_failed",
+        detailHash: "a".repeat(64)
+      }
+    },
+    { ...aggregateBase, status: "observed" },
+    {
+      ...aggregateBase,
+      disposition: "deferred_by_controller",
+      followUpBeadId: "a".repeat(160),
+      lastRefusal: {
+        code: "verification_failed",
+        detailHash: "a".repeat(64)
+      },
+      status: "voided"
+    }
+  ];
+  const aggregateGates = aggregateVariants.map((aggregateVerify) => {
+    let candidate = {
+      ...withoutAggregateVerify,
+      aggregateVerify,
+      provenanceUnitAccounting: committedAccounting
+    };
+    if (aggregateVerify.status === "observed")
+      return attachGateTargetSource(state, candidate, oid3);
+    if (aggregateVerify.status === "voided") {
+      const followUpBeadId = required(
+        aggregateVerify.followUpBeadId,
+        "aggregate verification deferral follow-up",
+        "verify"
+      );
+      candidate = {
+        ...candidate,
+        targetPromises: candidate.targetPromises.map(
+          (target) => target.definition.scope === "gate" ? {
+            ...target,
+            disposition: "deferral_cascade",
+            followUpBeadId,
+            status: "voided"
+          } : target
+        ),
+        targets: candidate.targets.map(
+          (target) => target.definition.scope === "gate" ? {
+            ...target,
+            disposition: "deferral_cascade",
+            followUpBeadId,
+            materialisations: target.materialisations.map((item) => ({
+              ...item,
+              disposition: "deferral_cascade",
+              followUpBeadId,
+              status: "voided"
+            })),
+            ...target.resolution === void 0 ? {} : {
+              resolution: {
+                ...target.resolution,
+                disposition: "deferral_cascade",
+                followUpBeadId,
+                status: "voided"
+              }
+            },
+            status: "voided"
+          } : target
+        )
+      };
+    }
+    return candidate;
+  });
+  const provenanceGates = provenanceVariants.map((provenance) => {
+    const candidate = withProvenance(provenance);
+    if (provenance.status !== "voided") return candidate;
+    const followUpBeadId = required(
+      provenance.followUpBeadId,
+      "provenance deferral follow-up",
+      "provenance_commit"
+    );
+    return {
+      ...candidate,
+      aggregateVerifyPromise: {
+        disposition: "deferral_cascade",
+        followUpBeadId,
+        status: "voided"
+      },
+      targetPromises: candidate.targetPromises.map(
+        (target) => target.definition.scope === "gate" ? {
+          ...target,
+          disposition: "deferral_cascade",
+          followUpBeadId,
+          status: "voided"
+        } : target
+      )
+    };
+  });
+  return [
+    { gate: futureGate, journalKind: "materialise" },
+    ...provenanceGates.map(
+      (provenanceGate, index) => ({
+        gate: provenanceGate,
+        journalKind: index < 2 ? "materialise" : "provenance_commit"
+      })
+    ),
+    ...aggregateGates.map(
+      (aggregateGate, index) => ({
+        gate: aggregateGate,
+        journalKind: index === 0 ? "provenance_commit" : "verify"
+      })
+    )
+  ];
+}
+function materialisationFixedCompletionReserve(state, gate, stage) {
+  const currentGateBytes = canonicalByteLength(gate);
+  const currentJournalBytes = canonicalByteLength(
+    state.effectJournal
+  );
+  const phaseGrowth = Math.max(
+    0,
+    ...maximumFixedGateVariants(state, gate, stage).map(
+      (scenario) => Math.max(
+        0,
+        canonicalByteLength(scenario.gate) - currentGateBytes + (canonicalByteLength([
+          ...state.effectJournal,
+          maximumGateJournalEntry(scenario.journalKind)
+        ]) - currentJournalBytes)
+      )
+    )
+  );
+  return phaseGrowth + maximumAggregateHistoryGrowth(state);
+}
+function resolutionCapacities(state, gate, stage) {
+  const compacted = compactJournal(state);
+  const totals = sourceTotals(gate);
+  const projectionBytes = canonicalByteLength(
+    provenanceInput(state, gate)
+  );
+  const futureUnitProbeBytes = stage === "unit" ? maximumUnitProbeProjectionGrowth(state, gate) : 0;
+  const envelopeBytes = canonicalByteLength({
+    payload: compacted,
+    schema: "sce.repository-run",
+    version: SCHEMA_VERSION
+  });
+  const fixedCompletionBytes = materialisationFixedCompletionReserve(
+    compacted,
+    gate,
+    stage
+  );
+  return {
+    remainingAggregateEnvelopeByteCapacity: Math.max(
+      0,
+      LIMITS.envelopeBytes - envelopeBytes - fixedCompletionBytes
+    ),
+    remainingItemCapacity: Math.max(
+      0,
+      LIMITS.materialisationOutputs - totals.items
+    ),
+    remainingProjectionSnapshotByteCapacity: Math.max(
+      0,
+      stage === "unit" ? 65536 - projectionBytes - futureUnitProbeBytes : 0
+    ),
+    remainingSourceByteCapacity: Math.max(
+      0,
+      LIMITS.materialisationWaveBytes - totals.bytes
+    )
+  };
+}
+function repositoryEnvelopeBytes(state) {
+  return canonicalByteLength({
+    payload: state,
+    schema: "sce.repository-run",
+    version: SCHEMA_VERSION
+  });
+}
+function maximumEnvelopeWithGateJournal(state, gate, kind) {
+  const candidate = {
+    ...state,
+    effectJournal: [...state.effectJournal, maximumGateJournalEntry(kind)],
+    gate
+  };
+  return repositoryEnvelopeBytes(candidate) + maximumAggregateHistoryGrowth(state);
+}
+function resolutionIntentCompletionFits(state, gate, target, capacities) {
+  try {
+    const compacted = compactJournal(state);
+    if (compacted.effectJournal.length >= LIMITS.effectJournal) return false;
+    const effectId = `${"a".repeat(160)}:materialisation_resolve`;
+    const intendedGate = withResolutionEffect(
+      gate,
+      target.resolution.gateEntryId,
+      effectId,
+      capacities
+    );
+    const refusal2 = {
+      code: "evidence_budget_exceeded",
+      detailHash: "a".repeat(64)
+    };
+    const refusedGate = updateGateTarget(
+      intendedGate,
+      target.definition.targetId,
+      (current) => {
+        const {
+          currentEffectId: _currentEffectId,
+          ...resolutionWithoutEffect
+        } = current.resolution;
+        return {
+          ...current,
+          resolution: {
+            ...resolutionWithoutEffect,
+            lastRefusal: refusal2
+          }
+        };
+      }
+    );
+    const followUpBeadId = "a".repeat(160);
+    const deferredGate = updateGateTarget(
+      refusedGate,
+      target.definition.targetId,
+      (current) => ({
+        ...current,
+        disposition: "deferral_cascade",
+        followUpBeadId,
+        resolution: {
+          ...current.resolution,
+          disposition: "deferred_by_controller",
+          followUpBeadId,
+          status: "voided"
+        },
+        status: "voided"
+      })
+    );
+    const stage = target.definition.scope;
+    const deferredState = { ...compacted, gate: deferredGate };
+    const immediateMaximum = Math.max(
+      maximumEnvelopeWithGateJournal(
+        compacted,
+        intendedGate,
+        "materialisation_resolve"
+      ),
+      maximumEnvelopeWithGateJournal(
+        compacted,
+        refusedGate,
+        "materialisation_resolve"
+      ),
+      maximumEnvelopeWithGateJournal(
+        compacted,
+        deferredGate,
+        "materialisation_resolve"
+      )
+    );
+    const completedMaximum = repositoryEnvelopeBytes(deferredState) + materialisationFixedCompletionReserve(deferredState, deferredGate, stage);
+    const projectionMaximum = stage === "unit" ? canonicalByteLength(
+      provenanceInput(compacted, {
+        ...deferredGate,
+        destinationProbes: [
+          ...maximumFutureDestinationProbes(
+            compacted,
+            deferredGate,
+            "unit"
+          )
+        ]
+      })
+    ) : 0;
+    return Math.max(immediateMaximum, completedMaximum) <= LIMITS.envelopeBytes && projectionMaximum <= 65536;
+  } catch {
+    return false;
+  }
+}
+function stageResolutionsSettled(gate, stage) {
+  return gateTargetsForStage(gate, stage).every(
+    (target) => target.status === "voided" || target.resolution?.status === "observed"
+  );
+}
+function stageNamesReady(gate, stage) {
+  return stageResolutionsSettled(gate, stage) && gate.destinationProbes.filter((probe) => probe.stage === stage).every((probe) => probe.status !== "pending") && gateTargetsForStage(gate, stage).filter(
+    (target) => target.status !== "voided" && target.materialisations.length > 0
+  ).every(
+    (target) => target.materialisations.every(
+      (item) => probeForMaterialisation(gate, stage, item)?.status === "observed"
+    )
+  ) && gateMaterialisations(gate, stage).every(
+    (item) => item.status !== "pending" || item.disposition !== void 0 || item.timestamp !== void 0 && item.artifactName !== void 0 && item.sidecarName !== void 0 && item.sidecarByteCount !== void 0 && item.sidecarSha256 !== void 0
+  );
+}
+function stageMaterialisationsSettled(gate, stage) {
+  return stageNamesReady(gate, stage) && gateMaterialisations(gate, stage).every((item) => item.status !== "pending");
+}
+function recordNameCollisions(gate, stage) {
+  if (!stageNamesReady(gate, stage)) return gate;
+  const conflicts = nameCollisionWitnesses(gate, stage);
+  if (conflicts.size === 0) return gate;
+  let next = gate;
+  for (const [id, conflictingGateEntryId] of conflicts)
+    next = updateGateMaterialisation(next, id, (item) => ({
+      ...item,
+      lastRefusal: {
+        code: "output_name_collision",
+        conflictingGateEntryId
+      }
+    }));
+  return next;
+}
+function nameCollisionWitnesses(gate, stage, includeVoided = false) {
+  const destinations = /* @__PURE__ */ new Map();
+  const candidates = [
+    ...gateMaterialisations(gate, stage).map((item) => ({
+      item,
+      pending: item.status === "pending" || includeVoided && item.status === "voided" && item.lastRefusal?.code === "output_name_collision"
+    })),
+    ...(stage === "gate" ? observedUnitMaterialisations(gate) : (gate.carriedProjectionInputSnapshot?.targetEvidence.flatMap(
+      (target) => target.materialisations
+    ) ?? []).filter((item) => item.status === "observed")).map((item) => ({ item, pending: false }))
+  ];
+  for (const { item, pending } of candidates) {
+    if (!pending && item.status !== "observed" || item.artifactName === void 0 || item.sidecarName === void 0)
+      continue;
+    const itemStage = pending ? stage : "unit";
+    const identity2 = destinationIdentityForMaterialisation(
+      gate,
+      itemStage,
+      item
+    );
+    if (identity2 === void 0) continue;
+    const key = `${identity2.device}\0${identity2.inode}`;
+    const names = destinations.get(key) ?? /* @__PURE__ */ new Map();
+    for (const name of [item.artifactName, item.sidecarName])
+      names.set(name, [
+        ...names.get(name) ?? [],
+        { gateEntryId: item.gateEntryId, pending }
+      ]);
+    destinations.set(key, names);
+  }
+  const conflicts = /* @__PURE__ */ new Map();
+  for (const names of destinations.values())
+    for (const entries of names.values()) {
+      if (entries.length < 2) continue;
+      for (const entry of entries.filter((item) => item.pending)) {
+        const first = entries.map((item) => item.gateEntryId).filter((id) => id !== entry.gateEntryId).sort(compareProtocolText)[0];
+        if (first !== void 0) {
+          const prior = conflicts.get(entry.gateEntryId);
+          conflicts.set(
+            entry.gateEntryId,
+            prior === void 0 || compareProtocolText(first, prior) < 0 ? first : prior
+          );
+        }
+      }
+    }
+  return conflicts;
+}
+function observedFinalNamesAreUnique(gate) {
+  const destinations = /* @__PURE__ */ new Map();
+  const targets = /* @__PURE__ */ new Map();
+  for (const target of [
+    ...projectionSnapshot(gate)?.targetEvidence ?? [],
+    ...gate.targets
+  ])
+    targets.set(target.definition.targetId, target);
+  for (const target of targets.values()) {
+    for (const item of target.materialisations) {
+      if (item.status !== "observed" || item.artifactName === void 0 || item.sidecarName === void 0)
+        continue;
+      const identity2 = destinationIdentityForMaterialisation(
+        gate,
+        target.definition.scope,
+        item
+      );
+      if (identity2 === void 0) return false;
+      const key = `${identity2.device}\0${identity2.inode}`;
+      const names = destinations.get(key) ?? /* @__PURE__ */ new Set();
+      for (const name of [item.artifactName, item.sidecarName]) {
+        if (names.has(name)) return false;
+        names.add(name);
+      }
+      destinations.set(key, names);
+    }
+  }
+  return true;
+}
+function gateTargetDefinitionsAreBound(gate) {
+  const definitions = [
+    ...gate.targetPromises.map((promise) => promise.definition),
+    ...gate.targets.map((target) => target.definition)
+  ];
+  if (new Set(definitions.map((definition) => definition.targetId)).size !== definitions.length || definitions.some(
+    (definition) => definition.targetId !== deriveMaterialisationTargetId(
+      definition.scope,
+      definition.originUnitId,
+      definition.targetOrdinal,
+      definition.target
+    )
+  ))
+    return false;
+  const ordered = [];
+  for (const unitId of gate.originalUnitIds) {
+    const unitDefinitions = definitions.filter(
+      (definition) => definition.scope === "unit" && definition.originUnitId === unitId
+    ).sort((left, right) => left.targetOrdinal - right.targetOrdinal);
+    if (unitDefinitions.some(
+      (definition, ordinal) => definition.targetOrdinal !== ordinal
+    ))
+      return false;
+    ordered.push(...unitDefinitions);
+  }
+  const gateDefinitions = definitions.filter(
+    (definition) => definition.scope === "gate" && definition.originUnitId === null
+  ).sort((left, right) => left.targetOrdinal - right.targetOrdinal);
+  if (gateDefinitions.some(
+    (definition, ordinal) => definition.targetOrdinal !== ordinal
+  ) || ordered.length + gateDefinitions.length !== definitions.length)
+    return false;
+  ordered.push(...gateDefinitions);
+  return gate.targetDefinitionCommitment === deriveTargetDefinitionCommitment(gate.waveId, gate.originalUnitIds, ordered);
+}
+function resetStageNames(gate, stage) {
+  let next = gate;
+  for (const item of gateMaterialisations(gate, stage)) {
+    if (item.status !== "pending") continue;
+    next = updateGateMaterialisation(next, item.gateEntryId, (current) => {
+      const {
+        artifactName: _artifactName,
+        lastRefusal: _lastRefusal,
+        sidecarByteCount: _sidecarByteCount,
+        sidecarName: _sidecarName,
+        sidecarSha256: _sidecarSha256,
+        timestamp: _timestamp,
+        ...unnamed
+      } = current;
+      return unnamed;
+    });
+  }
+  return next;
+}
+function sortedPendingMaterialisation(gate, stage) {
+  return [...gateMaterialisations(gate, stage)].filter(
+    (item) => item.status === "pending" && item.lastRefusal?.code !== "output_name_collision"
+  ).sort(
+    (left, right) => compareProtocolText(left.gateEntryId, right.gateEntryId)
+  )[0];
+}
+function hasUnresolvedGateEffect(state) {
+  return state.effectJournal.some(
+    (entry) => entry.gateEntryId !== void 0 && (entry.status === "intended" || entry.status === "ambiguous")
+  );
+}
+function appendGateIntent(state, event, kind) {
+  const compacted = compactJournal(state);
+  const effectId = `${event.eventId}:${kind}`;
+  const params = runtimeEffectParams(
+    compacted,
+    null,
+    kind,
+    void 0,
+    event.gateEntryId
+  );
+  const paramsHash = deriveParamsHash(kind, params);
+  const effect2 = {
+    effectId,
+    gateEntryId: event.gateEntryId,
+    idempotencyKey: event.idempotencyKey,
+    kind,
+    params,
+    paramsHash,
+    schemaVersion: SCHEMA_VERSION,
+    unitId: null
+  };
+  const entry = {
+    effectId,
+    gateEntryId: event.gateEntryId,
+    idempotencyKey: event.idempotencyKey,
+    intentCommitment: "0".repeat(64),
+    intentRevision: state.revision,
+    kind,
+    paramsHash,
+    schemaVersion: SCHEMA_VERSION,
+    status: "intended",
+    unitId: null
+  };
+  entry.intentCommitment = deriveIntentCommitment(entry);
+  const valid = validate(RuntimeEffectSchema, effect2);
+  if (!valid.ok)
+    throw new Error(
+      `aggregate effect construction failed: ${valid.errors.join("; ")}`
+    );
+  return {
+    effects: [effect2],
+    state: { ...compacted, effectJournal: [...compacted.effectJournal, entry] }
+  };
+}
+function withResolutionEffect(gate, gateEntryId, effectId, capacities) {
+  const found = findResolution(gate, gateEntryId);
+  if (found === void 0) return gate;
+  const { lastRefusal: _lastRefusal, ...resolution } = found.resolution;
+  return updateGateTarget(gate, found.target.definition.targetId, (target) => ({
+    ...target,
+    resolution: { ...resolution, capacities, currentEffectId: effectId }
+  }));
+}
+function withMaterialisationEffect(gate, gateEntryId, effectId) {
+  return updateGateMaterialisation(gate, gateEntryId, (item) => {
+    const { lastRefusal: _lastRefusal, ...pending } = item;
+    return { ...pending, currentEffectId: effectId };
+  });
+}
+function withDestinationProbeEffect(gate, gateEntryId, effectId) {
+  return updateDestinationProbe(gate, gateEntryId, (probe) => {
+    const { lastRefusal: _lastRefusal, ...pending } = probe;
+    return { ...pending, currentEffectId: effectId };
+  });
+}
+function matchingGateIntent(state, event, kind) {
+  return state.effectJournal.some(
+    (entry) => entry.effectId === event.effectId && entry.gateEntryId === event.gateEntryId && entry.unitId === null && entry.kind === kind && event.effectKind === kind && entry.status === "intended"
+  );
+}
+function hasLatestObservedGateAttempt(state, gateEntryId, kind) {
+  const latest = state.effectJournal.filter(
+    (entry) => entry.unitId === null && entry.gateEntryId === gateEntryId && entry.kind === kind
+  ).sort((left, right) => right.intentRevision - left.intentRevision)[0];
+  return latest?.status === "observed";
+}
+function resolutionCapacitiesBindLatestAttempt(state, gate, target) {
+  const resolution = target.resolution;
+  if (resolution?.capacities === void 0) return false;
+  const latest = state.effectJournal.filter(
+    (entry) => entry.unitId === null && entry.gateEntryId === resolution.gateEntryId && entry.kind === "materialisation_resolve"
+  ).sort((left, right) => right.intentRevision - left.intentRevision)[0];
+  if (latest === void 0) return false;
+  const params = {
+    destinationProbeGateEntryId: destinationProbeGateEntryId(
+      state,
+      gate,
+      target.definition.scope,
+      target.definition.target.destinationAlias,
+      target.definition.target.destinationSubpath
+    ),
+    domainScope: state.knowledgeContract.domainScope,
+    driver: state.knowledgeContract.humanDriver,
+    executorTool: state.harness.family,
+    gateEntryId: resolution.gateEntryId,
+    ...resolution.capacities,
+    originUnitId: target.definition.originUnitId,
+    repositoryIdentity: state.repositoryIdentity,
+    runId: state.controller.runId,
+    sourceOid: resolution.sourceOid,
+    sourcePattern: target.definition.target.sourcePattern,
+    stage: target.definition.scope,
+    target: target.definition.target,
+    targetId: target.definition.targetId,
+    targetOrdinal: target.definition.targetOrdinal,
+    waveId: gate.waveId
+  };
+  return latest.paramsHash === deriveParamsHash("materialisation_resolve", params);
+}
+function materialisationExpansionBinding(state, gate, target) {
+  const resolution = required(
+    target.resolution,
+    "target resolution",
+    "materialisation_resolve"
+  );
+  return {
+    capacities: required(
+      resolution.capacities,
+      "resolution capacities",
+      "materialisation_resolve"
+    ),
+    destinationProbeGateEntryId: destinationProbeGateEntryId(
+      state,
+      gate,
+      target.definition.scope,
+      target.definition.target.destinationAlias,
+      target.definition.target.destinationSubpath
+    ),
+    domainScope: required(
+      state.knowledgeContract,
+      "knowledge contract",
+      "materialisation_resolve"
+    ).domainScope,
+    driver: required(
+      state.knowledgeContract,
+      "knowledge contract",
+      "materialisation_resolve"
+    ).humanDriver,
+    executorTool: required(state.harness, "harness", "materialisation_resolve").family,
+    originUnitId: target.definition.originUnitId,
+    resolutionGateEntryId: resolution.gateEntryId,
+    runId: state.controller.runId,
+    sourceOid: resolution.sourceOid,
+    stage: target.definition.scope,
+    target: target.definition.target,
+    targetId: target.definition.targetId,
+    targetOrdinal: target.definition.targetOrdinal,
+    waveId: gate.waveId
+  };
+}
+function resolutionSourcesAreValid(state, gate, target, sources) {
+  const totals = sourceTotals(gate);
+  const capacities = target.resolution?.capacities;
+  const paths2 = sources.map((source) => source.path);
+  const byteCount = sources.reduce(
+    (total, source) => total + source.byteCount,
+    0
+  );
+  const expansionBinding = materialisationExpansionBinding(state, gate, target);
+  const projectionEvidenceBytes = materialisationProjectionExpansionCost(
+    sources,
+    expansionBinding
+  );
+  const aggregateEvidenceBytes = materialisationAggregateExpansionCost(
+    sources,
+    expansionBinding
+  );
+  return capacities !== void 0 && sources.length <= LIMITS.materialisationMatches && sources.length <= capacities.remainingItemCapacity && byteCount <= capacities.remainingSourceByteCapacity && projectionEvidenceBytes <= capacities.remainingProjectionSnapshotByteCapacity && aggregateEvidenceBytes <= capacities.remainingAggregateEnvelopeByteCapacity && totals.items + sources.length <= LIMITS.materialisationOutputs && totals.bytes + byteCount <= LIMITS.materialisationWaveBytes && new Set(paths2).size === paths2.length && paths2.every(
+    (path2, index) => index === 0 || compareProtocolText(paths2[index - 1], path2) < 0
+  ) && paths2.every(
+    (path2) => matchesMaterialisationPattern(
+      target.definition.target.sourcePattern,
+      path2
+    )
+  );
+}
+function resolutionSourcesFitRecordedCapacities(state, gate, target) {
+  const resolution = target.resolution;
+  const sources = resolution?.sources;
+  const capacities = resolution?.capacities;
+  if (sources === void 0 || capacities === void 0) return false;
+  const paths2 = sources.map((source) => source.path);
+  const bytes2 = sources.reduce((total, source) => total + source.byteCount, 0);
+  const expansionBinding = materialisationExpansionBinding(state, gate, target);
+  const projectionExpansion = materialisationProjectionExpansionCost(
+    sources,
+    expansionBinding
+  );
+  const aggregateExpansion = materialisationAggregateExpansionCost(
+    sources,
+    expansionBinding
+  );
+  return sources.length <= LIMITS.materialisationMatches && sources.length <= capacities.remainingItemCapacity && bytes2 <= capacities.remainingSourceByteCapacity && projectionExpansion <= capacities.remainingProjectionSnapshotByteCapacity && aggregateExpansion <= capacities.remainingAggregateEnvelopeByteCapacity && new Set(paths2).size === paths2.length && paths2.every(
+    (path2, index) => index === 0 || compareProtocolText(paths2[index - 1], path2) < 0
+  ) && paths2.every(
+    (path2) => matchesMaterialisationPattern(
+      target.definition.target.sourcePattern,
+      path2
+    )
+  );
+}
+function materialisationsForSources(state, gate, target, sourceOid, sources) {
+  const destinationProbeId = destinationProbeGateEntryId(
+    state,
+    gate,
+    target.definition.scope,
+    target.definition.target.destinationAlias,
+    target.definition.target.destinationSubpath
+  );
+  return sources.map((source) => ({
+    destinationProbeGateEntryId: destinationProbeId,
+    gateEntryId: deriveGateEntryId(
+      state.controller.runId,
+      gate.waveId,
+      `${target.definition.scope}-materialise`,
+      {
+        blobOid: source.blobOid,
+        path: source.path,
+        destinationProbeGateEntryId: destinationProbeId,
+        sourceOid,
+        targetId: target.definition.targetId
+      }
+    ),
+    originUnitId: target.definition.originUnitId,
+    source,
+    sourceOid,
+    status: "pending",
+    target: target.definition.target,
+    targetId: target.definition.targetId
+  }));
+}
+function deferGateEntry(state, gateEntryId, followUpBeadId) {
+  const gate = state.gate;
+  if (gate === void 0) return void 0;
+  const resolution = findResolution(gate, gateEntryId);
+  if (resolution !== void 0 && resolution.resolution.status === "pending" && resolution.resolution.lastRefusal !== void 0) {
+    const nextGate = ensureDestinationProbes(
+      state,
+      updateGateTarget(
+        gate,
+        resolution.target.definition.targetId,
+        (target) => ({
+          ...target,
+          disposition: "deferral_cascade",
+          followUpBeadId,
+          materialisations: target.materialisations.map((item) => ({
+            ...item,
+            disposition: "deferral_cascade",
+            followUpBeadId,
+            status: "voided"
+          })),
+          resolution: {
+            ...resolution.resolution,
+            disposition: "deferred_by_controller",
+            followUpBeadId,
+            status: "voided"
+          },
+          status: "voided"
+        })
+      ),
+      resolution.target.definition.scope
+    );
+    return maybeCreateProvenance({ ...state, gate: nextGate });
+  }
+  const probe = findDestinationProbe(gate, gateEntryId);
+  if (probe !== void 0 && probe.status === "pending" && probe.lastRefusal !== void 0) {
+    let nextGate = updateDestinationProbe(gate, gateEntryId, (item) => ({
+      ...item,
+      disposition: "deferred_by_controller",
+      followUpBeadId,
+      status: "voided"
+    }));
+    nextGate = {
+      ...nextGate,
+      targets: nextGate.targets.map(
+        (target) => target.definition.scope === probe.stage && target.definition.target.destinationAlias === probe.destinationAlias && target.definition.target.destinationSubpath === probe.destinationSubpath ? {
+          ...target,
+          disposition: "deferral_cascade",
+          followUpBeadId,
+          materialisations: target.materialisations.map((item) => ({
+            ...item,
+            disposition: "deferral_cascade",
+            followUpBeadId,
+            status: "voided"
+          })),
+          status: "voided"
+        } : target
+      )
+    };
+    return maybeCreateProvenance({ ...state, gate: nextGate });
+  }
+  const materialisation = findMaterialisation(gate, gateEntryId);
+  if (materialisation !== void 0 && materialisation.materialisation.status === "pending" && materialisation.materialisation.lastRefusal !== void 0)
+    return maybeCreateProvenance({
+      ...state,
+      gate: settleTargetPromise(
+        updateGateTarget(
+          gate,
+          materialisation.target.definition.targetId,
+          (target) => ({
+            ...target,
+            materialisations: target.materialisations.map(
+              (item) => item.gateEntryId === gateEntryId ? {
+                ...item,
+                disposition: "deferred_by_controller",
+                followUpBeadId,
+                status: "voided"
+              } : item
+            )
+          })
+        ),
+        materialisation.target.definition.targetId
+      )
+    });
+  if (gate.provenance?.gateEntryId === gateEntryId && gate.provenance.status === "pending" && gate.provenance.lastRefusal !== void 0)
+    return {
+      ...state,
+      gate: {
+        ...gate,
+        aggregateVerifyPromise: {
+          disposition: "deferral_cascade",
+          followUpBeadId,
+          status: "voided"
+        },
+        ...gate.aggregateVerify === void 0 ? {} : {
+          aggregateVerify: {
+            ...gate.aggregateVerify,
+            disposition: "deferral_cascade",
+            followUpBeadId,
+            status: "voided"
+          }
+        },
+        targetPromises: gate.targetPromises.map(
+          (target) => target.definition.scope === "gate" ? {
+            ...target,
+            disposition: "deferral_cascade",
+            followUpBeadId,
+            status: "voided"
+          } : target
+        ),
+        provenance: {
+          ...gate.provenance,
+          disposition: "deferred_by_controller",
+          followUpBeadId,
+          status: "voided"
+        }
+      }
+    };
+  if (gate.aggregateVerify?.gateEntryId === gateEntryId && gate.aggregateVerify.status === "pending" && gate.aggregateVerify.lastRefusal !== void 0)
+    return {
+      ...state,
+      gate: {
+        ...gate,
+        aggregateVerify: {
+          ...gate.aggregateVerify,
+          disposition: "deferred_by_controller",
+          followUpBeadId,
+          status: "voided"
+        },
+        targetPromises: gate.targetPromises.map(
+          (target) => target.definition.scope === "gate" ? {
+            ...target,
+            disposition: "deferral_cascade",
+            followUpBeadId,
+            status: "voided"
+          } : target
+        ),
+        targets: gate.targets.map(
+          (target) => target.definition.scope === "gate" ? {
+            ...target,
+            disposition: "deferral_cascade",
+            followUpBeadId,
+            materialisations: target.materialisations.map((item) => ({
+              ...item,
+              disposition: "deferral_cascade",
+              followUpBeadId,
+              status: "voided"
+            })),
+            ...target.resolution === void 0 ? {} : {
+              resolution: {
+                ...target.resolution,
+                disposition: "deferral_cascade",
+                followUpBeadId,
+                status: "voided"
+              }
+            },
+            status: "voided"
+          } : target
+        )
+      }
+    };
+  return void 0;
+}
+function reduceGate(state, event) {
+  const gate = state.gate;
+  const contract = state.knowledgeContract;
+  if (gate === void 0 || contract === void 0)
+    return reject("illegal_transition", "knowledge gate is not configured");
+  if (event.type === "gate_entry_deferred") {
+    const deferred = deferGateEntry(
+      state,
+      event.gateEntryId,
+      event.followUpBeadId
+    );
+    return deferred === void 0 ? reject("illegal_transition", "gate entry has no deferrable refusal") : commit(deferred, event, []);
+  }
+  if (event.type === "gate_clock_observed") {
+    if (!validUtcSecond(event.timestamp) || hasUnresolvedGateEffect(state))
+      return reject(
+        "invalid_event",
+        "clock must be an exact unused UTC second"
+      );
+    const materialisation = findMaterialisation(gate, event.gateEntryId);
+    if (materialisation !== void 0) {
+      const stage = materialisation.target.definition.scope;
+      const collisionRetry = materialisation.materialisation.lastRefusal?.code === "output_name_collision";
+      const ordered = gateMaterialisations(gate, stage).filter((item) => item.status === "pending").sort(
+        (left, right) => compareProtocolText(left.gateEntryId, right.gateEntryId)
+      );
+      const nextClock = ordered.find((item) => item.timestamp === void 0) ?? ordered.find(
+        (item) => item.lastRefusal?.code === "output_name_collision"
+      );
+      if (nextClock?.gateEntryId !== event.gateEntryId || !stageResolutionsSettled(gate, stage) || gate.destinationProbes.some(
+        (probe) => probe.stage === stage && probe.status === "pending"
+      ) || (() => {
+        const probe = findDestinationProbe(
+          gate,
+          materialisation.materialisation.destinationProbeGateEntryId
+        );
+        return probe?.status !== "observed" || probe.identity === void 0;
+      })() || materialisation.materialisation.status !== "pending" || !collisionRetry && (materialisation.materialisation.timestamp !== void 0 || materialisation.materialisation.lastRefusal !== void 0))
+        return reject("illegal_transition", "materialisation clock is not due");
+      const clockGate = collisionRetry ? resetStageNames(gate, stage) : gate;
+      const clockItem = required(
+        findMaterialisation(clockGate, event.gateEntryId),
+        "clock materialisation",
+        "materialise"
+      ).materialisation;
+      const artifactName = materialisationName(
+        clockItem.source,
+        clockItem.target.namingPolicy,
+        event.timestamp
+      );
+      const sidecar = sidecarFor(
+        state,
+        clockGate,
+        clockItem,
+        artifactName,
+        event.timestamp
+      );
+      if (utf82.encode(sidecar.bytes).byteLength > LIMITS.materialisationSidecarBytes)
+        return reject(
+          "invalid_event",
+          "canonical sidecar exceeds its byte bound"
+        );
+      const named = updateGateMaterialisation(
+        clockGate,
+        event.gateEntryId,
+        (item) => ({
+          ...item,
+          artifactName,
+          sidecarByteCount: utf82.encode(sidecar.bytes).byteLength,
+          sidecarName: `${artifactName}.sce-provenance.json`,
+          sidecarSha256: sha256(sidecar.bytes),
+          timestamp: event.timestamp
+        })
+      );
+      return commit(
+        { ...state, gate: recordNameCollisions(named, stage) },
+        event,
+        []
+      );
+    }
+    if (gate.provenance?.gateEntryId !== event.gateEntryId || gate.provenance.status !== "pending" || gate.provenance.timestamp !== void 0 || !stageMaterialisationsSettled(gate, "unit"))
+      return reject("illegal_transition", "provenance clock is not due");
+    return commit(
+      {
+        ...state,
+        gate: {
+          ...gate,
+          provenance: { ...gate.provenance, timestamp: event.timestamp }
+        }
+      },
+      event,
+      []
+    );
+  }
+  if (event.type === "materialisation_resolve_intent") {
+    if (hasUnresolvedGateEffect(state))
+      return reject(
+        "illegal_transition",
+        "gate already has an unresolved effect"
+      );
+    const found = findResolution(gate, event.gateEntryId);
+    if (found === void 0 || found.resolution.status !== "pending")
+      return reject("illegal_transition", "source resolution is not pending");
+    const stage = found.target.definition.scope;
+    if (stage === "unit" && state.wave.unitIds.length !== 0 || stage === "gate" && gate.aggregateVerify?.status !== "observed")
+      return reject(
+        "illegal_transition",
+        "source resolution stage is not ready"
+      );
+    const pending = gateTargetsForStage(gate, stage).map((target) => target.resolution).filter(
+      (item) => item !== void 0 && item.status === "pending"
+    ).sort(
+      (left, right) => compareProtocolText(left.gateEntryId, right.gateEntryId)
+    )[0];
+    if (pending?.gateEntryId !== event.gateEntryId)
+      return reject("illegal_transition", "source resolutions are ordered");
+    const effectId = `${event.eventId}:materialisation_resolve`;
+    const capacities = resolutionCapacities(state, gate, stage);
+    if (!resolutionIntentCompletionFits(state, gate, found.target, capacities))
+      return reject(
+        "illegal_transition",
+        "source resolution evidence cannot fit the durable envelope"
+      );
+    const prepared = {
+      ...state,
+      gate: withResolutionEffect(gate, event.gateEntryId, effectId, capacities)
+    };
+    const step = appendGateIntent(prepared, event, "materialisation_resolve");
+    return commit(step.state, event, step.effects);
+  }
+  if (event.type === "materialisation_sources_observed") {
+    const found = findResolution(gate, event.gateEntryId);
+    if (found === void 0 || found.resolution.currentEffectId !== event.effectId || !matchingGateIntent(state, event, "materialisation_resolve"))
+      return badObservation();
+    const {
+      currentEffectId: _currentEffectId,
+      disposition: _disposition,
+      followUpBeadId: _followUpBeadId,
+      lastRefusal: _lastRefusal,
+      ...settledResolution
+    } = found.resolution;
+    if (event.result.status === "observed" && !resolutionSourcesAreValid(
+      state,
+      gate,
+      found.target,
+      event.result.sources
+    ))
+      return reject(
+        "invalid_event",
+        "source observation violates canonical bounds"
+      );
+    const observedTarget = event.result.status === "observed" ? {
+      ...found.target,
+      materialisations: materialisationsForSources(
+        state,
+        gate,
+        found.target,
+        found.resolution.sourceOid,
+        event.result.sources
+      ),
+      resolution: {
+        ...settledResolution,
+        sources: event.result.sources,
+        status: "observed"
+      }
+    } : void 0;
+    const nextTarget = event.result.status === "refused" ? {
+      ...found.target,
+      resolution: {
+        ...settledResolution,
+        lastRefusal: event.result.refusal
+      }
+    } : observedTarget;
+    const changed = ensureDestinationProbes(
+      state,
+      updateGateTarget(
+        gate,
+        found.target.definition.targetId,
+        () => nextTarget
+      ),
+      found.target.definition.scope
+    );
+    const observedState = settleAmbiguityState(
+      markObserved(state, event.effectId, event.observationHash, {
+        gate: changed
+      })
+    );
+    if (event.result.status === "observed" && (!projectionInputWithinBounds(provenanceInput(observedState, changed)) || canonicalByteLength({
+      payload: observedState,
+      schema: "sce.repository-run",
+      version: SCHEMA_VERSION
+    }) > LIMITS.envelopeBytes))
+      return reject(
+        "invalid_event",
+        "source observation exceeds its committed evidence budget"
+      );
+    return commit(observedState, event, []);
+  }
+  if (event.type === "destination_probe_intent") {
+    if (hasUnresolvedGateEffect(state))
+      return reject(
+        "illegal_transition",
+        "gate already has an unresolved effect"
+      );
+    const probe = findDestinationProbe(gate, event.gateEntryId);
+    if (probe === void 0 || probe.status !== "pending")
+      return reject("illegal_transition", "destination probe is not pending");
+    if (!stageResolutionsSettled(gate, probe.stage) || probe.stage === "unit" && state.wave.unitIds.length !== 0 || probe.stage === "gate" && gate.aggregateVerify?.status !== "observed")
+      return reject(
+        "illegal_transition",
+        "destination probe stage is not ready"
+      );
+    const pending = gate.destinationProbes.filter((item) => item.stage === probe.stage && item.status === "pending").sort(
+      (left, right) => compareProtocolText(left.gateEntryId, right.gateEntryId)
+    )[0];
+    if (pending?.gateEntryId !== event.gateEntryId)
+      return reject("illegal_transition", "destination probes are ordered");
+    const effectId = `${event.eventId}:destination_probe`;
+    const prepared = {
+      ...state,
+      gate: withDestinationProbeEffect(gate, event.gateEntryId, effectId)
+    };
+    const step = appendGateIntent(prepared, event, "destination_probe");
+    return commit(step.state, event, step.effects);
+  }
+  if (event.type === "destination_probe_observed") {
+    const probe = findDestinationProbe(gate, event.gateEntryId);
+    if (probe === void 0 || probe.currentEffectId !== event.effectId || !matchingGateIntent(state, event, "destination_probe"))
+      return badObservation();
+    const {
+      currentEffectId: _currentEffectId,
+      disposition: _disposition,
+      followUpBeadId: _followUpBeadId,
+      identity: _identity,
+      lastRefusal: _lastRefusal,
+      ...settledProbe
+    } = probe;
+    const priorIdentities = probe.stage === "gate" ? priorDestinationIdentities(
+      gate,
+      probe.destinationAlias,
+      probe.destinationSubpath
+    ) : [];
+    if (event.result.status === "observed") {
+      const observedIdentity = event.result.identity;
+      if (priorIdentities.some(
+        (identity2) => !sameDestinationIdentity(identity2, observedIdentity)
+      ))
+        return reject(
+          "invalid_event",
+          "gate destination identity contradicts its unit-stage probe"
+        );
+    }
+    const alias = contract.aliases.find(
+      (item) => item.alias === probe.destinationAlias
+    );
+    const optionalUnmounted = event.result.status === "refused" && event.result.refusal.code === "optional_alias_unmounted" && alias?.mountPolicy === "optional";
+    let nextGate = updateDestinationProbe(
+      gate,
+      event.gateEntryId,
+      (item) => event.result.status === "observed" ? {
+        ...settledProbe,
+        identity: event.result.identity,
+        status: "observed"
+      } : optionalUnmounted ? {
+        ...settledProbe,
+        disposition: "optional_alias_unmounted",
+        lastRefusal: event.result.refusal,
+        status: "voided"
+      } : { ...settledProbe, lastRefusal: event.result.refusal }
+    );
+    if (optionalUnmounted)
+      nextGate = {
+        ...nextGate,
+        targets: nextGate.targets.map(
+          (target) => target.definition.scope === probe.stage && target.definition.target.destinationAlias === probe.destinationAlias && target.definition.target.destinationSubpath === probe.destinationSubpath ? {
+            ...target,
+            disposition: "optional_alias_unmounted",
+            materialisations: target.materialisations.map((item) => ({
+              ...item,
+              disposition: "optional_alias_unmounted",
+              status: "voided"
+            })),
+            status: "voided"
+          } : target
+        )
+      };
+    const observedState = settleAmbiguityState(
+      markObserved(state, event.effectId, event.observationHash, {
+        gate: nextGate
+      })
+    );
+    return commit(maybeCreateProvenance(observedState), event, []);
+  }
+  if (event.type === "materialise_intent") {
+    if (hasUnresolvedGateEffect(state))
+      return reject(
+        "illegal_transition",
+        "gate already has an unresolved effect"
+      );
+    const found = findMaterialisation(gate, event.gateEntryId);
+    const stage = found?.target.definition.scope;
+    if (found === void 0 || stage === void 0 || !stageNamesReady(gate, stage) || gateMaterialisations(gate, stage).some(
+      (item) => item.status === "pending" && item.lastRefusal?.code === "output_name_collision"
+    ))
+      return reject(
+        "illegal_transition",
+        "materialisation namespace is not ready"
+      );
+    const pending = sortedPendingMaterialisation(gate, stage);
+    if (pending?.gateEntryId !== event.gateEntryId)
+      return reject("illegal_transition", "materialisations are ordered");
+    const effectId = `${event.eventId}:materialise`;
+    const prepared = {
+      ...state,
+      gate: withMaterialisationEffect(gate, event.gateEntryId, effectId)
+    };
+    const step = appendGateIntent(prepared, event, "materialise");
+    return commit(step.state, event, step.effects);
+  }
+  if (event.type === "materialise_observed") {
+    const found = findMaterialisation(gate, event.gateEntryId);
+    if (found === void 0 || found.materialisation.currentEffectId !== event.effectId || !matchingGateIntent(state, event, "materialise"))
+      return badObservation();
+    if (event.result.status === "observed" && !materialisationObservationMatches(
+      found.materialisation,
+      event.result.observation
+    ))
+      return reject(
+        "invalid_event",
+        "materialisation observation does not bind planned bytes"
+      );
+    const {
+      currentEffectId: _currentEffectId,
+      disposition: _disposition,
+      followUpBeadId: _followUpBeadId,
+      lastRefusal: _lastRefusal,
+      observation: _observation,
+      ...settledMaterialisation
+    } = found.materialisation;
+    const materialRefusal = event.result.status === "refused" ? event.result.refusal : void 0;
+    const changed = settleTargetPromise(
+      updateGateMaterialisation(
+        gate,
+        event.gateEntryId,
+        (item) => event.result.status === "observed" ? {
+          ...settledMaterialisation,
+          observation: event.result.observation,
+          status: "observed"
+        } : {
+          ...settledMaterialisation,
+          lastRefusal: materialRefusal
+        }
+      ),
+      found.target.definition.targetId
+    );
+    const next = maybeCreateProvenance(
+      settleAmbiguityState(
+        markObserved(state, event.effectId, event.observationHash, {
+          gate: changed
+        })
+      )
+    );
+    return commit(next, event, []);
+  }
+  if (event.type === "provenance_commit_intent") {
+    if (hasUnresolvedGateEffect(state) || gate.provenance?.gateEntryId !== event.gateEntryId || gate.provenance.status !== "pending" || gate.provenance.timestamp === void 0 || gate.provenance.lastRefusal !== void 0 && gate.provenance.lastRefusal.code !== "provenance_base_advanced" || !stageMaterialisationsSettled(gate, "unit"))
+      return reject("illegal_transition", "provenance commit is not ready");
+    const effectId = `${event.eventId}:provenance_commit`;
+    const {
+      advancedBaseOid: _advancedBaseOid,
+      attemptedCommitOid: _attemptedCommitOid,
+      attemptedTreeOid: _attemptedTreeOid,
+      expectedBaseOid: _expectedBaseOid,
+      lastRefusal: _lastRefusal,
+      observedHeadOid: _observedHeadOid,
+      worktreeCondition: _worktreeCondition,
+      ...provenance
+    } = gate.provenance;
+    const worktreePath = deriveProvenanceWorktreePath(
+      contract.provenanceWorktreeRoot,
+      event.idempotencyKey
+    );
+    const prepared = {
+      ...state,
+      gate: {
+        ...gate,
+        provenance: {
+          ...provenance,
+          attemptIdempotencyKey: event.idempotencyKey,
+          baseOid: gate.provenance.advancedBaseOid ?? required(
+            gate.provenance.baseOid,
+            "provenance integration base",
+            "provenance_commit"
+          ),
+          currentEffectId: effectId,
+          worktreePath
+        }
+      }
+    };
+    const step = appendGateIntent(prepared, event, "provenance_commit");
+    return commit(step.state, event, step.effects);
+  }
+  if (event.type === "provenance_commit_observed") {
+    if (gate.provenance?.gateEntryId !== event.gateEntryId || gate.provenance.currentEffectId !== event.effectId || !matchingGateIntent(state, event, "provenance_commit"))
+      return badObservation();
+    if (event.result.status === "committed" && event.result.attemptedBaseOid !== gate.provenance.baseOid || event.result.status === "worktree_refused" && event.result.expectedBaseOid !== gate.provenance.baseOid)
+      return reject(
+        "invalid_event",
+        "provenance observation does not bind the attempted base"
+      );
+    const { currentEffectId: _currentEffectId, ...settledProvenance } = gate.provenance;
+    const provenance = event.result.status === "committed" ? {
+      ...settledProvenance,
+      commitOid: event.result.commitOid,
+      status: "observed",
+      treeOid: event.result.treeOid
+    } : {
+      ...settledProvenance,
+      ...event.result.status === "base_advanced" ? { advancedBaseOid: event.result.advancedBaseOid } : {},
+      ...event.result.status === "worktree_refused" ? {
+        expectedBaseOid: event.result.expectedBaseOid,
+        observedHeadOid: event.result.observedHeadOid,
+        worktreeCondition: event.result.condition
+      } : {
+        attemptedCommitOid: event.result.attemptedCommitOid,
+        attemptedTreeOid: event.result.attemptedTreeOid
+      },
+      lastRefusal: event.result.status === "reproducibility_failed" ? {
+        code: "provenance_reproducibility_failed",
+        detailHash: event.result.reasonDigest
+      } : event.result.status === "base_advanced" ? {
+        code: "provenance_base_advanced",
+        detailHash: provenanceBaseAdvancedDetailHash(
+          event.result.advancedBaseOid,
+          event.result.attemptedCommitOid,
+          event.result.attemptedTreeOid
+        )
+      } : {
+        code: event.result.status === "worktree_refused" ? "provenance_worktree_refused" : "provenance_integration_refused",
+        detailHash: event.result.reasonDigest
+      }
+    };
+    let nextGate = { ...gate, provenance };
+    if (event.result.status === "committed") {
+      const provenanceCommitOid = event.result.commitOid;
+      const {
+        aggregateVerifyPromise: _aggregateVerifyPromise,
+        ...withoutAggregateVerifyPromise
+      } = nextGate;
+      nextGate = {
+        ...withoutAggregateVerifyPromise,
+        aggregateVerify: {
+          gateEntryId: deriveGateEntryId(
+            state.controller.runId,
+            gate.waveId,
+            "aggregate-verify",
+            { provenanceGateEntryId: gate.provenance.gateEntryId }
+          ),
+          provenanceGateEntryId: gate.provenance.gateEntryId,
+          status: "pending"
+        },
+        provenanceUnitAccounting: gate.provenanceUnitAccounting.map(
+          (item) => item.status === "uncommitted" ? {
+            closureEvidenceCommitment: item.closureEvidenceCommitment,
+            provenanceCommitOid,
+            status: "committed",
+            unitId: item.unitId
+          } : item
+        )
+      };
+    }
+    return commit(
+      settleAmbiguityState(
+        markObserved(state, event.effectId, event.observationHash, {
+          gate: nextGate
+        })
+      ),
+      event,
+      []
+    );
+  }
+  if (event.type === "verification_intent") {
+    if (hasUnresolvedGateEffect(state) || gate.aggregateVerify?.gateEntryId !== event.gateEntryId || gate.aggregateVerify.status !== "pending" || gate.aggregateVerify.lastRefusal !== void 0 || gate.provenance?.status !== "observed" || canonicalJson(event.commands) !== canonicalJson(
+      contract.combinedVerificationCommands
+    ))
+      return reject(
+        "illegal_transition",
+        "aggregate verification is not ready"
+      );
+    const effectId = `${event.eventId}:verify`;
+    const prepared = {
+      ...state,
+      gate: {
+        ...gate,
+        aggregateVerify: { ...gate.aggregateVerify, currentEffectId: effectId }
+      }
+    };
+    const step = appendGateIntent(prepared, event, "verify");
+    return commit(step.state, event, step.effects);
+  }
+  if (event.type === "verification_observed" || event.type === "verification_failed") {
+    if (gate.aggregateVerify?.gateEntryId !== event.gateEntryId || gate.aggregateVerify.currentEffectId !== event.effectId || gate.provenance?.commitOid !== event.headOid || gate.provenance.treeOid !== event.treeOid || gate.provenance.baseOid !== event.baseOid || !matchingGateIntent(state, event, "verify"))
+      return badObservation();
+    let nextGate = {
+      ...gate,
+      aggregateVerify: event.type === "verification_observed" ? (() => {
+        const { currentEffectId: _currentEffectId, ...settled } = gate.aggregateVerify;
+        return { ...settled, status: "observed" };
+      })() : {
+        ...(() => {
+          const { currentEffectId: _currentEffectId, ...settled } = gate.aggregateVerify;
+          return settled;
+        })(),
+        lastRefusal: {
+          code: "verification_failed",
+          detailHash: event.observationHash
+        }
+      }
+    };
+    if (event.type === "verification_observed")
+      nextGate = attachGateTargetSource(
+        state,
+        nextGate,
+        required(gate.provenance?.commitOid, "provenance commit", "verify")
+      );
+    return commit(
+      settleAmbiguityState(
+        markObserved(state, event.effectId, event.observationHash, {
+          gate: nextGate
+        })
+      ),
+      event,
+      []
+    );
+  }
+  return reject("illegal_transition", "unsupported aggregate gate event");
+}
+function provenanceCarrySnapshotCommitment(input) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.provenance-carry-snapshot.v1",
+      projectionInputSnapshot: input
+    })
+  );
+}
+function provenanceCarryLineageCommitment(lineageAncestorDigests) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.provenance-carry-lineage.v1",
+      lineageAncestorDigests: [...lineageAncestorDigests]
+    })
+  );
+}
+function provenanceCarryAncestorDigest(rootBeadId, runId2) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.provenance-carry-ancestor.v1",
+      rootBeadId,
+      runId: runId2
+    })
+  );
+}
+function deriveProvenanceCarryExportId(input) {
+  return `sce:carry:${sha256(
+    canonicalJson({
+      domain: "sce.provenance-carry-export.v1",
+      integrationBranch: input.integrationBranch,
+      predecessorFinalRevision: input.finalRevision,
+      predecessorRootAggregateCommitment: input.predecessorRootAggregateCommitment,
+      predecessorRunId: input.predecessorRunId,
+      predecessorWaveId: input.predecessorWaveId,
+      repositoryIdentity: input.repositoryIdentity,
+      snapshotCommitment: input.snapshotCommitment,
+      storeIdentity: input.storeIdentity
+    })
+  )}`;
+}
+function provenanceCarryExportId(state, event) {
+  return deriveProvenanceCarryExportId({
+    finalRevision: event.predecessorFinalRevision,
+    integrationBranch: state.integrationBranch,
+    predecessorRootAggregateCommitment: event.predecessorRootAggregateCommitment,
+    predecessorRunId: event.predecessorRunId,
+    predecessorWaveId: event.predecessorWaveId,
+    repositoryIdentity: state.repositoryIdentity,
+    snapshotCommitment: event.snapshotCommitment,
+    storeIdentity: state.storeIdentity
+  });
+}
+function expectedCarryClaimRecordDigest(state, claim) {
+  return carryClaimRecordDigest(
+    state.controller.runId,
+    claim,
+    claim.claimToken
+  );
+}
+function carryClaimRecordDigest(currentRunId, claim, claimToken) {
+  const claimRecord = {
+    claimRevision: 1,
+    claimantRunId: currentRunId,
+    claimToken,
+    exportId: claim.exportId,
+    predecessorRootBeadId: claim.predecessorRootBeadId,
+    predecessorRunId: claim.predecessorRunId,
+    predecessorWaveId: claim.predecessorWaveId,
+    schema: "sce.provenance-carry-claim",
+    snapshotCommitment: claim.snapshotCommitment,
+    version: 1
+  };
+  return sha256(
+    canonicalJson({
+      claimRecord,
+      domain: "sce.provenance-carry-claim-record.v1"
+    })
+  );
+}
+function carryClaimIsBeforeFirstWave(state) {
+  const closed = decodeClosedUnitEvidence(state.closedUnitEvidence);
+  return closed !== void 0 && Object.keys(closed).length === 0 && state.usedSessionCount === 0 && Object.values(state.units).every((unit) => unit.state === "planned") && Object.keys(state.reservations).length === 0 && state.activeModifyingUnitIds.length === 0 && state.qualificationOwnerUnitId === void 0 && state.integrationOwnerUnitId === void 0 && state.currentReviewerUnitId === void 0 && state.qualificationQueue.length === 0 && state.integrationQueue.length === 0 && state.effectJournal.every((entry) => entry.unitId === null);
+}
+function reduceProvenanceCarry(state, event) {
+  if (state.controller.state !== "acquired" || state.gate !== void 0 || state.wave.unitIds.length !== 0 || state.pendingProvenanceCarry !== void 0 || !carryClaimIsBeforeFirstWave(state))
+    return reject("illegal_transition", "provenance carry is not admissible");
+  if (event.type === "provenance_carry_claim_intent") {
+    if (state.state !== "active" || state.completionBoundary === "branch-handoff" || state.completionBoundary === "pr-handoff" || state.provenanceCarryClaim !== void 0 || state.effectJournal.some(
+      (entry) => entry.status === "intended" || entry.status === "ambiguous"
+    ))
+      return reject(
+        "illegal_transition",
+        "a provenance carry claim is pending"
+      );
+    if (event.claimToken !== event.idempotencyKey || event.idempotencyKey !== deriveProvenanceCarryClaimKey(
+      state.controller.runId,
+      event.exportId,
+      event.predecessorRootBeadId
+    ) || event.exportId !== provenanceCarryExportId(state, event))
+      return reject("invalid_event", "provenance carry claim binding mismatch");
+    const effectId = `${event.eventId}:provenance_carry_claim`;
+    const {
+      lastProvenanceCarryRefusal: _lastProvenanceCarryRefusal,
+      ...withoutLastRefusal
+    } = state;
+    const prepared = {
+      ...withoutLastRefusal,
+      provenanceCarryClaim: {
+        claimToken: event.claimToken,
+        currentEffectId: effectId,
+        exportId: event.exportId,
+        predecessorFinalRevision: event.predecessorFinalRevision,
+        predecessorJournalCheckpointCommitment: event.predecessorJournalCheckpointCommitment,
+        predecessorRootBeadId: event.predecessorRootBeadId,
+        predecessorRootAggregateCommitment: event.predecessorRootAggregateCommitment,
+        predecessorRunId: event.predecessorRunId,
+        predecessorWaveId: event.predecessorWaveId,
+        snapshotCommitment: event.snapshotCommitment
+      }
+    };
+    const step = appendIntent(prepared, null, event, "provenance_carry_claim");
+    return commit(step.state, event, step.effects);
+  }
+  if (state.state !== "active" && state.state !== "blocked")
+    return reject("illegal_transition", "provenance carry is not admissible");
+  const claim = state.provenanceCarryClaim;
+  if (claim?.currentEffectId !== event.effectId || !matchesRecoverableEffect(state, event, null, "provenance_carry_claim"))
+    return badObservation();
+  if (event.result.status === "imported") {
+    const carry = event.result.carry;
+    if (carry.exportId !== claim.exportId || carry.predecessorRootBeadId !== claim.predecessorRootBeadId || carry.predecessorRunId !== claim.predecessorRunId || carry.predecessorWaveId !== claim.predecessorWaveId || carry.predecessorFinalRevision !== claim.predecessorFinalRevision || carry.predecessorJournalCheckpointCommitment !== claim.predecessorJournalCheckpointCommitment || carry.predecessorRootAggregateCommitment !== claim.predecessorRootAggregateCommitment || carry.snapshotCommitment !== claim.snapshotCommitment || carry.snapshotCommitment !== provenanceCarrySnapshotCommitment(carry.projectionInputSnapshot) || carry.claimRecordDigest !== expectedCarryClaimRecordDigest(state, claim) || carry.predecessorRunId === state.controller.runId || carry.lineageCommitment !== provenanceCarryLineageCommitment(carry.lineageAncestorDigests) || carry.lineageAncestorDigests.at(-1) !== provenanceCarryAncestorDigest(
+      carry.predecessorRootBeadId,
+      carry.predecessorRunId
+    ) || carry.projectionInputSnapshot.unitIds.length === 0 || !projectionInputFits(carry.projectionInputSnapshot))
+      return badObservation();
+  } else if (event.result.status === "already_claimed" && event.result.exportId !== claim.exportId || event.result.status === "predecessor_refused" && event.result.predecessorRootBeadId !== claim.predecessorRootBeadId)
+    return badObservation();
+  const observed2 = markObserved(
+    state,
+    event.effectId,
+    event.observationHash,
+    event.result.status === "imported" ? { pendingProvenanceCarry: event.result.carry } : { lastProvenanceCarryRefusal: event.result }
+  );
+  const { provenanceCarryClaim: _claim, ...withoutClaim } = observed2;
+  return commit(settleAmbiguityState(withoutClaim), event, []);
+}
 function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = false) {
   const parsedState = validate(RepositoryRunSchema, stateInput);
   if (!parsedState.ok || parsedState.value === void 0)
@@ -11176,11 +15095,12 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
       "idempotency key has already been applied"
     );
   const declaredIntentKind = effectKindForIntent(event.type);
-  if (declaredIntentKind !== void 0 && "idempotencyKey" in event && event.idempotencyKey !== deriveIdempotencyKey(
+  if (declaredIntentKind !== void 0 && event.type !== "provenance_carry_claim_intent" && "idempotencyKey" in event && event.idempotencyKey !== deriveIdempotencyKey(
     state,
     event.expectedRevision,
     "unitId" in event ? event.unitId : null,
-    declaredIntentKind
+    declaredIntentKind,
+    "gateEntryId" in event ? event.gateEntryId : void 0
   ))
     return reject(
       "invalid_event",
@@ -11198,7 +15118,7 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
     return blocked === void 0 ? badObservation() : commit(blocked, event, []);
   }
   if (state.state === "blocked" && !reconcilingBlockedObservation) {
-    const recovered = prepareBlockedUnitObservation(state, event);
+    const recovered = prepareBlockedObservation(state, event);
     if (recovered === void 0)
       return reject("illegal_transition", "aggregate is blocked");
     return reduceInternal(recovered, event, true);
@@ -11208,6 +15128,9 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
       "illegal_transition",
       "controller ownership has not been acquired"
     );
+  if (event.type === "provenance_carry_claim_intent" || event.type === "provenance_carry_claim_observed")
+    return reduceProvenanceCarry(state, event);
+  if (isGateEvent(event)) return reduceGate(state, event);
   if (event.unitId === null)
     return reject("illegal_transition", "unit event requires a unit id");
   const unit = state.units[event.unitId];
@@ -11741,6 +15664,16 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
         {
           qualificationOwnerUnitId: null,
           integrationOwnerUnitId: null,
+          ...state.gate === void 0 ? {} : {
+            gate: {
+              ...attachUnitTargetSource(
+                state,
+                unit.id,
+                event.integrationOid
+              ),
+              currentIntegrationOid: event.integrationOid
+            }
+          },
           qualificationQueue: state.qualificationQueue.filter(
             (id) => id !== unit.id
           ),
@@ -11802,7 +15735,9 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
       );
       result2 = {
         ...result2,
-        state: closeUnitAfterRelease(result2.state, unit.id)
+        state: maybeCreateProvenance(
+          closeUnitAfterRelease(result2.state, unit.id)
+        )
       };
       break;
     case "repair_intent":
@@ -11953,6 +15888,7 @@ function effectKindForIntent(type) {
   const kinds = {
     controller_acquire_intent: "controller_acquire",
     controller_release_intent: "controller_release",
+    provenance_carry_claim_intent: "provenance_carry_claim",
     reservation_intent: "reservation_acquire",
     branch_intent: "branch_create",
     worktree_intent: "worktree_create",
@@ -11969,19 +15905,34 @@ function effectKindForIntent(type) {
     failure_intent: "failure",
     timeout_intent: "timeout",
     park_intent: "park",
-    cancel_intent: "cancel"
+    cancel_intent: "cancel",
+    materialisation_resolve_intent: "materialisation_resolve",
+    destination_probe_intent: "destination_probe",
+    materialise_intent: "materialise",
+    provenance_commit_intent: "provenance_commit"
   };
   return kinds[type];
 }
-function deriveIdempotencyKey(state, expectedRevision, unitId, kind) {
+function deriveIdempotencyKey(state, expectedRevision, unitId, kind, gateEntryId) {
   return `sce:${sha256(
     canonicalJson({
       domain: "sce.protocol.idempotency.v1",
       effectKind: kind,
       expectedRevision,
+      ...gateEntryId === void 0 ? {} : { gateEntryId },
       incarnationId: state.controller.incarnationId,
       runId: state.controller.runId,
       unitId
+    })
+  )}`;
+}
+function deriveProvenanceCarryClaimKey(currentRunId, exportId, predecessorRootBeadId) {
+  return `carry-claim:${sha256(
+    canonicalJson({
+      currentRunId,
+      domain: "sce.provenance-carry-claim-key.v1",
+      exportId,
+      predecessorRootBeadId
     })
   )}`;
 }
@@ -12003,7 +15954,8 @@ function rehydrateEffect(state, entry) {
       state,
       entry.unitId,
       entry.kind,
-      entry.slotTransition
+      entry.slotTransition,
+      entry.gateEntryId
     );
     if (deriveParamsHash(entry.kind, params) !== entry.paramsHash)
       return void 0;
@@ -12014,7 +15966,8 @@ function rehydrateEffect(state, entry) {
       params,
       paramsHash: entry.paramsHash,
       schemaVersion: SCHEMA_VERSION,
-      unitId: entry.unitId
+      unitId: entry.unitId,
+      ...entry.gateEntryId === void 0 ? {} : { gateEntryId: entry.gateEntryId }
     };
     const checked = validate(RuntimeEffectSchema, effect2);
     return checked.ok && checked.value !== void 0 ? checked.value : void 0;
@@ -12030,6 +15983,7 @@ function deriveIntentCommitment(entry) {
       unitId: entry.unitId,
       idempotencyKey: entry.idempotencyKey,
       kind: entry.kind,
+      ...entry.gateEntryId === void 0 ? {} : { gateEntryId: entry.gateEntryId },
       intentRevision: entry.intentRevision,
       paramsHash: entry.paramsHash,
       ...entry.slotTransition === void 0 ? {} : { slotTransition: entry.slotTransition },
@@ -12344,11 +16298,41 @@ function effectMatchesObservation(type, kind) {
     failure: ["failure_observed"],
     timeout: ["timeout_observed"],
     park: ["park_observed"],
-    cancel: ["cancel_observed"]
+    cancel: ["cancel_observed"],
+    materialisation_resolve: ["materialisation_sources_observed"],
+    destination_probe: ["destination_probe_observed"],
+    materialise: ["materialise_observed"],
+    provenance_commit: ["provenance_commit_observed"],
+    provenance_carry_claim: ["provenance_carry_claim_observed"]
   };
   return observations[kind]?.includes(type) ?? false;
 }
-function prepareBlockedUnitObservation(state, event) {
+function prepareBlockedObservation(state, event) {
+  if (event.type === "provenance_carry_claim_observed" && "effectId" in event && "effectKind" in event) {
+    const entry2 = state.effectJournal.find(
+      (effect2) => effect2.effectId === event.effectId && effect2.kind === "provenance_carry_claim" && effect2.kind === event.effectKind && effect2.unitId === null && (effect2.status === "intended" || effect2.status === "ambiguous")
+    );
+    if (entry2 === void 0) return void 0;
+    return entry2.status === "intended" ? state : {
+      ...state,
+      effectJournal: state.effectJournal.map(
+        (effect2) => effect2.effectId === entry2.effectId ? restoreIntended(effect2) : effect2
+      )
+    };
+  }
+  if (isGateEvent(event) && "effectId" in event && "effectKind" in event && "gateEntryId" in event) {
+    const entry2 = state.effectJournal.find(
+      (effect2) => effect2.effectId === event.effectId && effect2.gateEntryId === event.gateEntryId && effect2.kind === event.effectKind && effect2.unitId === null && (effect2.status === "intended" || effect2.status === "ambiguous")
+    );
+    if (entry2 === void 0 || !effectMatchesObservation(event.type, entry2.kind))
+      return void 0;
+    return entry2.status === "intended" ? state : {
+      ...state,
+      effectJournal: state.effectJournal.map(
+        (effect2) => effect2.effectId === entry2.effectId ? restoreIntended(effect2) : effect2
+      )
+    };
+  }
   if (!("unitId" in event) || event.unitId === null || event.type === "effect_ambiguous" || !("effectId" in event) || !("effectKind" in event))
     return void 0;
   const unit = state.units[event.unitId];
@@ -12375,12 +16359,16 @@ function restoreIntended(entry) {
 }
 function markEffectAmbiguous(state, event) {
   const entry = state.effectJournal.find(
-    (candidate) => candidate.effectId === event.effectId && candidate.unitId === event.unitId && candidate.kind === event.effectKind && candidate.status === "intended"
+    (candidate) => candidate.effectId === event.effectId && candidate.unitId === event.unitId && candidate.kind === event.effectKind && candidate.gateEntryId === event.gateEntryId && candidate.status === "intended"
   );
   if (entry === void 0) return void 0;
   if (entry.unitId === null) {
-    const expectedControllerState = entry.kind === "controller_acquire" ? "acquire_intent" : entry.kind === "controller_release" ? "release_intent" : void 0;
-    if (expectedControllerState !== state.controller.state) return void 0;
+    if (entry.gateEntryId === void 0) {
+      const expectedControllerState = entry.kind === "controller_acquire" ? "acquire_intent" : entry.kind === "controller_release" ? "release_intent" : void 0;
+      const isCurrentCarryClaim = entry.kind === "provenance_carry_claim" && state.controller.state === "acquired" && state.gate === void 0 && state.wave.unitIds.length === 0 && state.provenanceCarryClaim?.currentEffectId === entry.effectId && carryClaimIsBeforeFirstWave(state);
+      if (expectedControllerState === void 0 ? !isCurrentCarryClaim : expectedControllerState !== state.controller.state)
+        return void 0;
+    } else if (state.gate === void 0) return void 0;
   } else {
     const unit = state.units[entry.unitId];
     const expectedUnitState = intentStateForEffect(entry.kind);
@@ -12526,7 +16514,8 @@ function appendIntent(state, unitId, event, kind, slotTransition) {
     compacted,
     unitId,
     kind,
-    slotTransition
+    slotTransition,
+    void 0
   );
   const paramsHash = deriveParamsHash(kind, params);
   const effect2 = {
@@ -12561,7 +16550,7 @@ function appendIntent(state, unitId, event, kind, slotTransition) {
     effects: [effect2]
   };
 }
-function runtimeEffectParams(state, unitId, kind, slotTransition) {
+function runtimeEffectParams(state, unitId, kind, slotTransition, gateEntryId) {
   if (kind === "controller_acquire")
     return {
       holder: state.controller.holder,
@@ -12577,7 +16566,33 @@ function runtimeEffectParams(state, unitId, kind, slotTransition) {
       controllerFencingToken: state.controllerFencingToken,
       ...slotTransition === void 0 ? {} : { slotTransition }
     };
-  if (unitId === null) throw new Error(`${kind} requires a unit`);
+  if (kind === "provenance_carry_claim") {
+    const claim = required(
+      state.provenanceCarryClaim,
+      "provenance carry claim",
+      kind
+    );
+    return {
+      claimToken: claim.claimToken,
+      currentRunId: state.controller.runId,
+      exportId: claim.exportId,
+      integrationBranch: state.integrationBranch,
+      predecessorFinalRevision: claim.predecessorFinalRevision,
+      predecessorJournalCheckpointCommitment: claim.predecessorJournalCheckpointCommitment,
+      predecessorRootBeadId: claim.predecessorRootBeadId,
+      predecessorRootAggregateCommitment: claim.predecessorRootAggregateCommitment,
+      predecessorRunId: claim.predecessorRunId,
+      predecessorWaveId: claim.predecessorWaveId,
+      repositoryIdentity: state.repositoryIdentity,
+      snapshotCommitment: claim.snapshotCommitment,
+      storeIdentity: state.storeIdentity
+    };
+  }
+  if (unitId === null) {
+    if (gateEntryId === void 0)
+      throw new Error(`${kind} requires a unit or gate entry`);
+    return aggregateRuntimeEffectParams(state, gateEntryId, kind);
+  }
   const unit = state.units[unitId];
   if (unit === void 0) throw new Error(`${kind} has an unknown unit`);
   const worker = () => ({
@@ -12694,9 +16709,183 @@ function runtimeEffectParams(state, unitId, kind, slotTransition) {
     case "park":
     case "cancel":
       return terminalEffectParams(state, unit, kind);
+    case "materialisation_resolve":
+    case "destination_probe":
+    case "materialise":
+    case "provenance_commit":
+      throw new Error(`${kind} requires an aggregate gate entry`);
     default:
       return exhaustive(kind);
   }
+}
+function aggregateRuntimeEffectParams(state, gateEntryId, kind) {
+  const gate = required(state.gate, "wave gate", kind);
+  const contract = required(
+    state.knowledgeContract,
+    "knowledge contract",
+    kind
+  );
+  if (kind === "materialisation_resolve") {
+    const found = required(
+      findResolution(gate, gateEntryId),
+      "gate resolution",
+      kind
+    );
+    const capacities = required(
+      found.resolution.capacities,
+      "resolution capacities",
+      kind
+    );
+    return {
+      destinationProbeGateEntryId: destinationProbeGateEntryId(
+        state,
+        gate,
+        found.target.definition.scope,
+        found.target.definition.target.destinationAlias,
+        found.target.definition.target.destinationSubpath
+      ),
+      domainScope: contract.domainScope,
+      driver: contract.humanDriver,
+      executorTool: required(state.harness, "harness", kind).family,
+      gateEntryId,
+      ...capacities,
+      originUnitId: found.target.definition.originUnitId,
+      repositoryIdentity: state.repositoryIdentity,
+      runId: state.controller.runId,
+      sourceOid: found.resolution.sourceOid,
+      sourcePattern: found.target.definition.target.sourcePattern,
+      stage: found.target.definition.scope,
+      target: found.target.definition.target,
+      targetId: found.target.definition.targetId,
+      targetOrdinal: found.target.definition.targetOrdinal,
+      waveId: gate.waveId
+    };
+  }
+  if (kind === "destination_probe") {
+    const probe = required(
+      findDestinationProbe(gate, gateEntryId),
+      "destination probe",
+      kind
+    );
+    const destination = required(
+      contract.aliases.find((item) => item.alias === probe.destinationAlias),
+      "destination alias",
+      kind
+    );
+    const priorIdentities = probe.stage === "gate" ? priorDestinationIdentities(
+      gate,
+      probe.destinationAlias,
+      probe.destinationSubpath
+    ) : [];
+    if (priorIdentities.some(
+      (identity2) => !sameDestinationIdentity(identity2, priorIdentities[0])
+    ))
+      throw new Error("carried destination identities are contradictory");
+    const prior = priorIdentities[0];
+    return {
+      destination,
+      destinationSubpath: probe.destinationSubpath,
+      ...prior === void 0 ? {} : { expectedPriorIdentity: prior },
+      gateEntryId,
+      repositoryIdentity: state.repositoryIdentity,
+      stage: probe.stage,
+      waveId: gate.waveId
+    };
+  }
+  if (kind === "materialise") {
+    const located = required(
+      findMaterialisation(gate, gateEntryId),
+      "gate materialisation",
+      kind
+    );
+    const found = located.materialisation;
+    const destination = required(
+      contract.aliases.find(
+        (item) => item.alias === found.target.destinationAlias
+      ),
+      "destination alias",
+      kind
+    );
+    const destinationIdentity = required(
+      probeForMaterialisation(gate, located.target.definition.scope, found)?.identity,
+      "destination identity",
+      kind
+    );
+    const artifactName = required(found.artifactName, "artifact name", kind);
+    const timestamp = required(found.timestamp, "materialisation clock", kind);
+    const sidecarBytes = sidecarFor(
+      state,
+      gate,
+      found,
+      artifactName,
+      timestamp
+    ).bytes;
+    if (utf82.encode(sidecarBytes).byteLength !== required(found.sidecarByteCount, "sidecar byte count", kind) || sha256(sidecarBytes) !== required(found.sidecarSha256, "sidecar digest", kind))
+      throw new Error("materialisation sidecar binding mismatch");
+    return {
+      artifactName,
+      destination,
+      destinationIdentity,
+      destinationProbeGateEntryId: found.destinationProbeGateEntryId,
+      destinationSubpath: found.target.destinationSubpath,
+      domainScope: contract.domainScope,
+      driver: contract.humanDriver,
+      executorTool: required(state.harness, "harness", kind).family,
+      gateEntryId,
+      namespaceControl: destination.namespaceControl,
+      originUnitId: found.originUnitId,
+      repositoryIdentity: state.repositoryIdentity,
+      runId: state.controller.runId,
+      sidecarByteCount: utf82.encode(sidecarBytes).byteLength,
+      sidecarBytes,
+      sidecarName: required(found.sidecarName, "sidecar name", kind),
+      sidecarSha256: sha256(sidecarBytes),
+      source: found.source,
+      sourceOid: found.sourceOid,
+      targetId: found.targetId,
+      timestamp,
+      waveId: gate.waveId
+    };
+  }
+  if (kind === "provenance_commit") {
+    const provenance = required(gate.provenance, "provenance gate", kind);
+    return {
+      baseOid: required(provenance.baseOid, "provenance base", kind),
+      gateEntryId,
+      projectionInputSnapshot: provenance.projectionInputSnapshot,
+      knowledgeContract: contract,
+      runId: state.controller.runId,
+      timestamp: required(provenance.timestamp, "provenance clock", kind),
+      waveId: gate.waveId,
+      worktreePath: required(
+        provenance.worktreePath,
+        "provenance worktree",
+        kind
+      )
+    };
+  }
+  if (kind === "verify") {
+    const provenance = required(gate.provenance, "provenance gate", kind);
+    const verify = required(gate.aggregateVerify, "aggregate verify", kind);
+    if (verify.gateEntryId !== gateEntryId)
+      throw new Error("aggregate verify gate identity mismatch");
+    return {
+      candidate: {
+        baseOid: required(provenance.baseOid, "provenance base", kind),
+        headOid: required(provenance.commitOid, "provenance commit", kind),
+        treeOid: required(provenance.treeOid, "provenance tree", kind)
+      },
+      commands: contract.combinedVerificationCommands,
+      gateEntryId,
+      provenanceOid: required(provenance.commitOid, "provenance commit", kind),
+      worktreePath: required(
+        provenance.worktreePath,
+        "provenance worktree",
+        kind
+      )
+    };
+  }
+  throw new Error(`${kind} is not an aggregate gate effect`);
 }
 function terminalEffectParams(state, unit, kind) {
   if (state.currentReviewerUnitId === unit.id)
@@ -12938,6 +17127,14 @@ function closedUnitEvidenceCommitment(dense) {
     canonicalJson({
       domain: "sce.protocol.closed-evidence.v1",
       evidence: dense
+    })
+  );
+}
+function unitClosureEvidenceCommitment(evidence) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.protocol.unit-closure-evidence.v1",
+      evidence
     })
   );
 }
@@ -13360,12 +17557,13 @@ function closeUnitAfterRelease(state, unitId) {
   const record3 = evidence?.[unitId];
   if (evidence === void 0 || record3 === void 0)
     throw new Error(`missing final closure evidence for ${unitId}`);
+  const finalRecord = {
+    ...record3,
+    repairCount: closedUnit.repairCount
+  };
   const closedUnitEvidence = encodeClosedUnitEvidence({
     ...evidence,
-    [unitId]: {
-      ...record3,
-      repairCount: closedUnit.repairCount
-    }
+    [unitId]: finalRecord
   });
   const units = { ...state.units };
   delete units[unitId];
@@ -13374,8 +17572,20 @@ function closeUnitAfterRelease(state, unitId) {
       ([, reservation]) => reservation.unitId !== unitId
     )
   );
+  const gate = state.gate === void 0 ? void 0 : {
+    ...state.gate,
+    provenanceUnitAccounting: record3.outcome === "landed" ? [
+      ...state.gate.provenanceUnitAccounting,
+      {
+        closureEvidenceCommitment: unitClosureEvidenceCommitment(finalRecord),
+        status: "uncommitted",
+        unitId
+      }
+    ] : state.gate.provenanceUnitAccounting
+  };
   return {
     ...state,
+    ...gate === void 0 ? {} : { gate },
     units,
     reservations,
     wave: {
@@ -13388,11 +17598,18 @@ function closeUnitAfterRelease(state, unitId) {
 function persistTerminalClosureEvidence(step, unitId) {
   const unit = step.state.units[unitId];
   if (unit === void 0) throw new Error(`missing terminal unit ${unitId}`);
+  const disposition = unit.state === "landed" ? void 0 : unit.state === "handoff" ? "handoff_boundary" : "unit_not_landed";
+  const closedUnitEvidence = recordClosureEvidence(step.state, unit);
   return {
     ...step,
     state: {
       ...step.state,
-      closedUnitEvidence: recordClosureEvidence(step.state, unit)
+      closedUnitEvidence,
+      ...step.state.gate === void 0 ? {} : {
+        gate: {
+          ...disposition === void 0 ? step.state.gate : voidUnitTargets(step.state.gate, unitId, disposition)
+        }
+      }
     }
   };
 }
@@ -13574,7 +17791,110 @@ function clearUnitOwners(state, unitId) {
   };
 }
 function canReleaseController(state) {
-  return state.controller.state === "acquired" && state.activeModifyingUnitIds.length === 0 && state.qualificationOwnerUnitId === void 0 && state.integrationOwnerUnitId === void 0 && state.currentReviewerUnitId === void 0 && Object.keys(state.units).length === 0 && Object.keys(state.reservations).length === 0;
+  return state.controller.state === "acquired" && state.activeModifyingUnitIds.length === 0 && state.qualificationOwnerUnitId === void 0 && state.integrationOwnerUnitId === void 0 && state.currentReviewerUnitId === void 0 && state.provenanceCarryClaim === void 0 && state.pendingProvenanceCarry === void 0 && !state.effectJournal.some(
+    (entry) => entry.kind === "provenance_carry_claim" && (entry.status === "intended" || entry.status === "ambiguous")
+  ) && Object.keys(state.units).length === 0 && Object.keys(state.reservations).length === 0 && gateIsGreen(state.gate);
+}
+function gateIsGreen(gate) {
+  if (gate === void 0) return true;
+  const records = [
+    ...gate.targetPromises,
+    ...gate.targets,
+    ...gate.destinationProbes,
+    ...gate.targets.flatMap((target) => [
+      ...target.resolution === void 0 ? [] : [target.resolution],
+      ...target.materialisations
+    ]),
+    ...gate.provenancePromise === void 0 ? [] : [gate.provenancePromise],
+    ...gate.provenance === void 0 ? [] : [gate.provenance],
+    ...gate.aggregateVerifyPromise === void 0 ? [] : [gate.aggregateVerifyPromise],
+    ...gate.aggregateVerify === void 0 ? [] : [gate.aggregateVerify]
+  ];
+  return records.every(settlementMetadataIsCoherent) && gate.destinationProbes.every(
+    (probe) => probe.status !== "pending" && (probe.status !== "observed" || probe.identity !== void 0 && probe.lastRefusal === void 0)
+  ) && gate.targetPromises.every((promise) => promise.status === "voided") && gate.targets.every(
+    (target) => targetIsSettled(target) && (target.status !== "observed" || target.resolution?.status === "observed" && target.materialisations.every(
+      (item) => item.status === "observed" && item.observation !== void 0 && item.artifactName !== void 0 && item.sidecarName !== void 0 && item.timestamp !== void 0
+    ))
+  ) && (gate.provenancePromise?.status === "voided" || gate.provenancePromise === void 0 && gate.provenance !== void 0 && (gate.provenance.status === "voided" || gate.provenance.status === "observed" && gate.provenance.commitOid !== void 0 && gate.provenance.treeOid !== void 0 && gate.provenance.timestamp !== void 0 && gate.provenance.worktreePath !== void 0 && gate.provenance.lastRefusal === void 0)) && (gate.aggregateVerifyPromise?.status === "voided" || gate.aggregateVerifyPromise === void 0 && gate.aggregateVerify !== void 0 && (gate.aggregateVerify.status === "voided" || gate.aggregateVerify.status === "observed" && gate.aggregateVerify.lastRefusal === void 0));
+}
+function settlementMetadataIsCoherent(value) {
+  if (value.status !== "voided")
+    return value.disposition === void 0 && value.followUpBeadId === void 0 && (value.status === "pending" || value.currentEffectId === void 0) && (value.status !== "observed" || value.lastRefusal === void 0);
+  if (value.disposition === void 0) return false;
+  const deferred = value.disposition === "deferred_by_controller" || value.disposition === "deferral_cascade";
+  if (deferred !== (value.followUpBeadId !== void 0)) return false;
+  return value.currentEffectId === void 0 && (value.disposition !== "deferred_by_controller" || value.lastRefusal !== void 0) && (value.disposition !== "deferral_cascade" || value.lastRefusal === void 0);
+}
+function targetPromiseIsCoherent(value) {
+  return settlementMetadataIsCoherent(value) && (value.status === "pending" || value.disposition === "unit_not_landed" || value.disposition === "handoff_boundary" || value.disposition === "no_landed_units" || value.disposition === "deferral_cascade");
+}
+function gatePlaceholderIsCoherent(value) {
+  return settlementMetadataIsCoherent(value) && (value.status === "pending" || value.disposition === "handoff_boundary" || value.disposition === "no_landed_units" || value.disposition === "deferral_cascade");
+}
+function resolutionRecordIsCoherent(value) {
+  if (!settlementMetadataIsCoherent(value)) return false;
+  if (value.status === "observed")
+    return value.sources !== void 0 && value.capacities !== void 0 && value.lastRefusal === void 0;
+  if (value.status === "pending")
+    return value.sources === void 0 && (value.currentEffectId === void 0 && value.lastRefusal === void 0 ? value.capacities === void 0 : value.capacities !== void 0);
+  return value.disposition === "deferred_by_controller" && value.lastRefusal !== void 0 && value.capacities !== void 0 && value.sources === void 0;
+}
+function destinationProbeRecordIsCoherent(value) {
+  if (!settlementMetadataIsCoherent(value)) return false;
+  if (value.status === "observed")
+    return value.identity !== void 0 && value.lastRefusal === void 0;
+  if (value.status === "pending") return value.identity === void 0;
+  if (value.identity !== void 0 || value.lastRefusal === void 0)
+    return false;
+  return value.disposition === "deferred_by_controller" ? value.followUpBeadId !== void 0 : value.disposition === "optional_alias_unmounted" && value.followUpBeadId === void 0 && value.lastRefusal.code === "optional_alias_unmounted";
+}
+function materialisationRecordIsCoherent(value) {
+  if (!settlementMetadataIsCoherent(value)) return false;
+  const named = value.artifactName !== void 0 && value.sidecarName !== void 0 && value.sidecarByteCount !== void 0 && value.sidecarSha256 !== void 0 && value.timestamp !== void 0;
+  if (value.lastRefusal !== void 0 && !named) return false;
+  if (value.status === "observed")
+    return named && value.observation !== void 0 && materialisationObservationMatches(value, value.observation) && value.lastRefusal === void 0;
+  if (value.status === "pending") return value.observation === void 0;
+  if (value.observation !== void 0) return false;
+  if (value.disposition === "deferred_by_controller")
+    return value.lastRefusal !== void 0;
+  return (value.disposition === "deferral_cascade" || value.disposition === "optional_alias_unmounted") && value.lastRefusal === void 0;
+}
+function targetRecordIsCoherent(value) {
+  if (!settlementMetadataIsCoherent(value)) return false;
+  if (value.status === "pending") return true;
+  if (value.status === "observed")
+    return value.resolution?.status === "observed" && value.materialisations.length > 0 && value.materialisations.every((item) => item.status === "observed");
+  return (value.disposition === "deferral_cascade" || value.disposition === "optional_alias_unmounted") && targetIsSettled(value);
+}
+function provenanceRecordIsCoherent(value) {
+  if (!settlementMetadataIsCoherent(value)) return false;
+  if (value.baseOid === void 0) return false;
+  const attemptBound = value.attemptIdempotencyKey !== void 0;
+  if (attemptBound !== (value.worktreePath !== void 0)) return false;
+  const successFields = value.commitOid !== void 0 || value.treeOid !== void 0;
+  const observedHeadPresent = Object.prototype.hasOwnProperty.call(
+    value,
+    "observedHeadOid"
+  );
+  const worktreeFields = value.expectedBaseOid !== void 0 || observedHeadPresent || value.worktreeCondition !== void 0;
+  const attemptedFields = value.attemptedCommitOid !== void 0 || value.attemptedTreeOid !== void 0;
+  if (value.status === "observed")
+    return attemptBound && value.commitOid !== void 0 && value.treeOid !== void 0 && !worktreeFields && !attemptedFields && value.advancedBaseOid === void 0 && value.lastRefusal === void 0;
+  if (successFields) return false;
+  if (value.lastRefusal === void 0)
+    return !worktreeFields && !attemptedFields && value.advancedBaseOid === void 0 && (value.currentEffectId === void 0 ? !attemptBound : attemptBound);
+  const code = value.lastRefusal.code;
+  const refusalFieldsValid = code === "provenance_worktree_refused" ? value.expectedBaseOid === value.baseOid && observedHeadPresent && value.worktreeCondition !== void 0 && !attemptedFields && value.advancedBaseOid === void 0 : attemptedFields && value.attemptedCommitOid !== void 0 && value.attemptedTreeOid !== void 0 && !worktreeFields && (code === "provenance_base_advanced" ? value.advancedBaseOid !== void 0 && value.lastRefusal.detailHash === provenanceBaseAdvancedDetailHash(
+    value.advancedBaseOid,
+    value.attemptedCommitOid,
+    value.attemptedTreeOid
+  ) : value.advancedBaseOid === void 0);
+  return attemptBound && refusalFieldsValid && (value.status !== "voided" || value.disposition === "deferred_by_controller");
+}
+function aggregateVerifyRecordIsCoherent(value) {
+  return settlementMetadataIsCoherent(value) && (value.status !== "voided" || value.disposition === "deferred_by_controller" || value.disposition === "deferral_cascade");
 }
 function commit(state, event, effects) {
   const eventIds = [...state.processedEventIds, event.eventId];
@@ -13659,6 +17979,67 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
       errors.push("queue contains a unit outside the current wave");
   }
   const oidLength = state.gitObjectFormat === "sha1" ? 40 : 64;
+  const knowledgeOids = [
+    state.pendingProvenanceCarry?.integrationOid,
+    state.gate?.currentIntegrationOid,
+    state.gate?.carriedProvenanceBaseOid,
+    state.gate?.provenance?.baseOid,
+    state.gate?.provenance?.advancedBaseOid,
+    state.gate?.provenance?.attemptedCommitOid,
+    state.gate?.provenance?.attemptedTreeOid,
+    state.gate?.provenance?.commitOid,
+    state.gate?.provenance?.treeOid,
+    state.gate?.provenance?.expectedBaseOid,
+    state.gate?.provenance?.observedHeadOid ?? void 0,
+    ...state.gate?.targets.flatMap((target) => [
+      target.resolution?.sourceOid,
+      ...(target.resolution?.sources ?? []).flatMap((source) => [
+        source.blobOid
+      ]),
+      ...target.materialisations.flatMap((item) => [
+        item.sourceOid,
+        item.source.blobOid
+      ])
+    ]) ?? [],
+    ...state.gate?.provenanceUnitAccounting.flatMap(
+      (item) => item.status === "committed" ? [item.provenanceCommitOid] : []
+    ) ?? [],
+    ...state.pendingProvenanceCarry === void 0 ? [] : projectionInputOids(
+      state.pendingProvenanceCarry.projectionInputSnapshot
+    ),
+    ...state.gate?.carriedProjectionInputSnapshot === void 0 ? [] : projectionInputOids(state.gate.carriedProjectionInputSnapshot),
+    ...state.gate?.provenance === void 0 ? [] : projectionInputOids(state.gate.provenance.projectionInputSnapshot)
+  ];
+  if (knowledgeOids.some(
+    (value) => value !== void 0 && value.length !== oidLength
+  ))
+    errors.push("knowledge gate has an OID incompatible with object format");
+  const pendingCarry = state.pendingProvenanceCarry;
+  if (pendingCarry !== void 0 && state.lastProvenanceCarryRefusal !== void 0)
+    errors.push("pending provenance carry contradicts a claim refusal");
+  if (pendingCarry !== void 0) {
+    const claimToken = deriveProvenanceCarryClaimKey(
+      state.controller.runId,
+      pendingCarry.exportId,
+      pendingCarry.predecessorRootBeadId
+    );
+    if (state.gate !== void 0 || state.wave.unitIds.length !== 0 || state.provenanceCarryClaim !== void 0 || !carryClaimIsBeforeFirstWave(state) || !projectionInputFits(pendingCarry.projectionInputSnapshot) || pendingCarry.projectionInputSnapshot.unitIds.length === 0 || pendingCarry.snapshotCommitment !== provenanceCarrySnapshotCommitment(
+      pendingCarry.projectionInputSnapshot
+    ) || pendingCarry.exportId !== deriveProvenanceCarryExportId({
+      finalRevision: pendingCarry.predecessorFinalRevision,
+      integrationBranch: state.integrationBranch,
+      predecessorRootAggregateCommitment: pendingCarry.predecessorRootAggregateCommitment,
+      predecessorRunId: pendingCarry.predecessorRunId,
+      predecessorWaveId: pendingCarry.predecessorWaveId,
+      repositoryIdentity: state.repositoryIdentity,
+      snapshotCommitment: pendingCarry.snapshotCommitment,
+      storeIdentity: state.storeIdentity
+    }) || pendingCarry.lineageAncestorDigests.length === 0 || new Set(pendingCarry.lineageAncestorDigests).size !== pendingCarry.lineageAncestorDigests.length || pendingCarry.lineageCommitment !== provenanceCarryLineageCommitment(pendingCarry.lineageAncestorDigests) || pendingCarry.lineageAncestorDigests.at(-1) !== provenanceCarryAncestorDigest(
+      pendingCarry.predecessorRootBeadId,
+      pendingCarry.predecessorRunId
+    ) || pendingCarry.claimRecordDigest !== carryClaimRecordDigest(state.controller.runId, pendingCarry, claimToken))
+      errors.push("pending provenance carry has invalid bindings");
+  }
   const checkOid = (unit, value) => {
     if (value !== void 0 && value.length !== oidLength)
       errors.push(
@@ -13839,6 +18220,9 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
     idempotency.add(effect2.idempotencyKey);
     if (effect2.unitId !== null && state.units[effect2.unitId] === void 0 && (closedEvidence?.[effect2.unitId] === void 0 || effect2.status !== "observed"))
       errors.push(`effect ${effect2.effectId} has unknown unit`);
+    const aggregateGateKind = effect2.kind === "materialisation_resolve" || effect2.kind === "destination_probe" || effect2.kind === "materialise" || effect2.kind === "provenance_commit" || effect2.kind === "verify" && effect2.unitId === null;
+    if (aggregateGateKind && effect2.gateEntryId === void 0 || !aggregateGateKind && effect2.gateEntryId !== void 0)
+      errors.push(`effect ${effect2.effectId} has invalid gate identity scope`);
     if (effect2.intentCommitment !== deriveIntentCommitment(effect2))
       errors.push(`effect ${effect2.effectId} has an invalid intent commitment`);
     if (effect2.status === "intended" && effect2.observationHash !== void 0)
@@ -13857,7 +18241,8 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
           state,
           effect2.unitId,
           effect2.kind,
-          effect2.slotTransition
+          effect2.slotTransition,
+          effect2.gateEntryId
         );
         if (effect2.paramsHash !== deriveParamsHash(effect2.kind, expectedParams))
           errors.push(`effect ${effect2.effectId} has an invalid params hash`);
@@ -14110,12 +18495,40 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
     )))
       errors.push(`reserved ${id} has no exact acquisition journal lineage`);
   }
-  const controllerUnresolved = state.effectJournal.filter(
-    (effect2) => effect2.unitId === null && (effect2.status === "intended" || effect2.status === "ambiguous")
+  const preGateUnresolved = state.effectJournal.filter(
+    (effect2) => effect2.unitId === null && effect2.gateEntryId === void 0 && (effect2.status === "intended" || effect2.status === "ambiguous")
+  );
+  const controllerUnresolved = preGateUnresolved.filter(
+    (effect2) => effect2.kind === "controller_acquire" || effect2.kind === "controller_release"
+  );
+  const carryUnresolved = preGateUnresolved.filter(
+    (effect2) => effect2.kind === "provenance_carry_claim"
+  );
+  const unrelatedPreGate = preGateUnresolved.filter(
+    (effect2) => effect2.kind !== "controller_acquire" && effect2.kind !== "controller_release" && effect2.kind !== "provenance_carry_claim"
   );
   const expectedControllerKind = state.controller.state === "acquire_intent" ? "controller_acquire" : state.controller.state === "release_intent" ? "controller_release" : void 0;
   if (expectedControllerKind === void 0 && controllerUnresolved.length !== 0 || expectedControllerKind !== void 0 && (controllerUnresolved.length !== 1 || controllerUnresolved[0]?.kind !== expectedControllerKind))
     errors.push("controller has an orphan or multiple unresolved effects");
+  const carry = state.provenanceCarryClaim;
+  const carryKey = carry === void 0 ? void 0 : deriveProvenanceCarryClaimKey(
+    state.controller.runId,
+    carry.exportId,
+    carry.predecessorRootBeadId
+  );
+  const carryExportId = carry === void 0 ? void 0 : deriveProvenanceCarryExportId({
+    finalRevision: carry.predecessorFinalRevision,
+    integrationBranch: state.integrationBranch,
+    predecessorRootAggregateCommitment: carry.predecessorRootAggregateCommitment,
+    predecessorRunId: carry.predecessorRunId,
+    predecessorWaveId: carry.predecessorWaveId,
+    repositoryIdentity: state.repositoryIdentity,
+    snapshotCommitment: carry.snapshotCommitment,
+    storeIdentity: state.storeIdentity
+  });
+  if (unrelatedPreGate.length !== 0 || carry === void 0 && carryUnresolved.length !== 0 || carry !== void 0 && (state.controller.state !== "acquired" || state.gate !== void 0 || state.wave.unitIds.length !== 0 || !carryClaimIsBeforeFirstWave(state) || carryUnresolved.length !== 1 || carryUnresolved[0]?.effectId !== carry.currentEffectId || carry.claimToken !== carryKey || carry.exportId !== carryExportId || carryUnresolved[0]?.idempotencyKey !== carry.claimToken))
+    errors.push("pre-gate carry has an orphan or invalid unresolved effect");
+  errors.push(...gateInvariantErrors(state));
   const qualificationQueueStates = /* @__PURE__ */ new Set([
     "candidate_committed",
     "verification_intent",
@@ -14209,7 +18622,11 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
       errors.push(`reviewer unit ${unit.id} lacks current reviewer converse`);
   if (state.currentReviewerUnitId !== void 0 && state.qualificationOwnerUnitId !== state.currentReviewerUnitId)
     errors.push("reviewer is not owned by qualification");
-  if (state.state === "blocked" && controllerUnresolved.every((entry) => entry.status !== "ambiguous") && !Object.values(state.units).some((unit) => unit.state === "blocked"))
+  if (state.state === "blocked" && [...controllerUnresolved, ...carryUnresolved].every(
+    (entry) => entry.status !== "ambiguous"
+  ) && !Object.values(state.units).some((unit) => unit.state === "blocked") && !state.effectJournal.some(
+    (entry) => entry.gateEntryId !== void 0 && entry.status === "ambiguous"
+  ))
     errors.push("blocked aggregate lacks ambiguous durable evidence");
   if (state.state === "active" && state.controller.state !== "acquired")
     errors.push("active aggregate lacks controller ownership");
@@ -14217,6 +18634,487 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
     errors.push("released aggregate lacks controller release readback");
   if (state.controller.state === "released" && state.state !== "released")
     errors.push("released controller has non-released aggregate");
+  return errors;
+}
+function gateInvariantErrors(state) {
+  const errors = [];
+  if (state.gate === void 0 !== (state.knowledgeContract === void 0)) {
+    errors.push("knowledge contract and gate must be present together");
+    return errors;
+  }
+  const gate = state.gate;
+  if (gate === void 0) return errors;
+  if (state.knowledgeContract === void 0 || state.harness === void 0 || !knowledgeContractRuntimeValid(state.knowledgeContract, state.harness))
+    errors.push("knowledge gate has an invalid runtime contract");
+  const settlementRecords = [
+    ...gate.targetPromises,
+    ...gate.targets,
+    ...gate.destinationProbes,
+    ...gate.targets.flatMap((target) => [
+      ...target.resolution === void 0 ? [] : [target.resolution],
+      ...target.materialisations
+    ]),
+    ...gate.provenancePromise === void 0 ? [] : [gate.provenancePromise],
+    ...gate.provenance === void 0 ? [] : [gate.provenance],
+    ...gate.aggregateVerifyPromise === void 0 ? [] : [gate.aggregateVerifyPromise],
+    ...gate.aggregateVerify === void 0 ? [] : [gate.aggregateVerify]
+  ];
+  if (settlementRecords.some((record3) => !settlementMetadataIsCoherent(record3)))
+    errors.push("knowledge gate has incoherent settlement metadata");
+  if (gate.targetPromises.some((record3) => !targetPromiseIsCoherent(record3)) || gate.targets.some((record3) => !targetRecordIsCoherent(record3)) || gate.destinationProbes.some(
+    (record3) => !destinationProbeRecordIsCoherent(record3)
+  ) || gate.targets.some(
+    (target) => target.resolution !== void 0 && !resolutionRecordIsCoherent(target.resolution) || target.materialisations.some(
+      (record3) => !materialisationRecordIsCoherent(record3)
+    )
+  ) || gate.provenancePromise !== void 0 && !gatePlaceholderIsCoherent(gate.provenancePromise) || gate.aggregateVerifyPromise !== void 0 && !gatePlaceholderIsCoherent(gate.aggregateVerifyPromise) || gate.provenance !== void 0 && !provenanceRecordIsCoherent(gate.provenance) || gate.aggregateVerify !== void 0 && !aggregateVerifyRecordIsCoherent(gate.aggregateVerify))
+    errors.push("knowledge gate has incoherent record-specific evidence");
+  if (gate.waveId !== state.wave.id)
+    errors.push("knowledge gate does not bind the current wave");
+  if (gate.carriedProjectionInputSnapshot !== void 0 && !projectionInputFits(gate.carriedProjectionInputSnapshot) || gate.provenance !== void 0 && !projectionInputFits(gate.provenance.projectionInputSnapshot))
+    errors.push("knowledge gate has an invalid provenance input snapshot");
+  if (gate.provenance === void 0 && gate.carriedProjectionInputSnapshot === void 0 !== (gate.carriedSnapshotCommitment === void 0) || gate.provenance !== void 0 && gate.carriedProjectionInputSnapshot !== void 0 || gate.carriedProjectionInputSnapshot !== void 0 && (gate.carriedSnapshotCommitment !== provenanceCarrySnapshotCommitment(
+    gate.carriedProjectionInputSnapshot
+  ) || gate.carriedProjectionInputSnapshot.unitIds.some(
+    (unitId) => gate.originalUnitIds.includes(unitId)
+  )))
+    errors.push("knowledge gate has an invalid carried snapshot commitment");
+  if (gate.provenance !== void 0) {
+    const snapshot = gate.provenance.projectionInputSnapshot;
+    const durableClosureEvidence2 = decodeClosedUnitEvidence(
+      state.closedUnitEvidence
+    );
+    const expectedCurrentIds = gate.originalUnitIds.filter(
+      (unitId) => durableClosureEvidence2?.[unitId]?.outcome === "landed"
+    ).sort(compareProtocolText);
+    const currentIds = snapshot.unitIds.filter(
+      (unitId) => gate.originalUnitIds.includes(unitId)
+    );
+    const carriedIds = snapshot.unitIds.filter(
+      (unitId) => !gate.originalUnitIds.includes(unitId)
+    );
+    const currentSlice = projectionInputSlice(snapshot, currentIds);
+    const expectedCurrent = currentProjectionInput(state, gate, currentIds);
+    const carriedSlice = projectionInputSlice(snapshot, carriedIds);
+    if (!sameStringArray(currentIds, expectedCurrentIds) || currentSlice === void 0 || expectedCurrent === void 0 || canonicalJson(currentSlice) !== canonicalJson(expectedCurrent))
+      errors.push("provenance snapshot does not bind current landed evidence");
+    if (gate.carriedSnapshotCommitment === void 0 ? carriedIds.length !== 0 : carriedSlice === void 0 || provenanceCarrySnapshotCommitment(carriedSlice) !== gate.carriedSnapshotCommitment)
+      errors.push("provenance snapshot does not bind carried evidence");
+  }
+  const durableClosureEvidence = decodeClosedUnitEvidence(
+    state.closedUnitEvidence
+  );
+  const handoffBoundary = state.completionBoundary === "branch-handoff" || state.completionBoundary === "pr-handoff";
+  const noLandedProjection = state.wave.unitIds.length === 0 && gate.provenanceUnitAccounting.length === 0 && gate.originalUnitIds.every(
+    (unitId) => durableClosureEvidence?.[unitId]?.outcome !== "landed"
+  ) && gate.carriedProjectionInputSnapshot === void 0 && gate.provenance === void 0;
+  if (gate.provenancePromise?.status === "voided") {
+    const valid = gate.provenancePromise.disposition === "handoff_boundary" && handoffBoundary && gate.provenancePromise.followUpBeadId === void 0 || gate.provenancePromise.disposition === "no_landed_units" && noLandedProjection && gate.provenancePromise.followUpBeadId === void 0;
+    if (!valid) errors.push("provenance promise has invalid void origin");
+  }
+  if (gate.aggregateVerifyPromise?.status === "voided") {
+    const valid = gate.aggregateVerifyPromise.disposition === "handoff_boundary" && handoffBoundary && gate.aggregateVerifyPromise.followUpBeadId === void 0 || gate.aggregateVerifyPromise.disposition === "no_landed_units" && noLandedProjection && gate.aggregateVerifyPromise.followUpBeadId === void 0 && gate.provenancePromise?.status === "voided" && gate.provenancePromise.disposition === "no_landed_units" || gate.aggregateVerifyPromise.disposition === "deferral_cascade" && gate.aggregateVerifyPromise.followUpBeadId !== void 0 && gate.provenance?.status === "voided" && gate.provenance.disposition === "deferred_by_controller" && gate.provenance.followUpBeadId === gate.aggregateVerifyPromise.followUpBeadId;
+    if (!valid) errors.push("aggregate verify promise has invalid void origin");
+  }
+  const landedOriginals = gate.originalUnitIds.map((unitId) => durableClosureEvidence?.[unitId]).filter(
+    (entry) => entry?.outcome === "landed"
+  ).sort(
+    (left, right) => left.terminalEffect.intentRevision - right.terminalEffect.intentRevision || compareProtocolText(left.unitId, right.unitId)
+  );
+  const expectedIntegrationOid = landedOriginals.at(-1)?.landedOid ?? gate.carriedProvenanceBaseOid;
+  if (gate.currentIntegrationOid !== expectedIntegrationOid)
+    errors.push("knowledge gate current integration OID is not authoritative");
+  if (state.wave.unitIds.some(
+    (unitId) => !gate.originalUnitIds.includes(unitId)
+  ) || gate.originalUnitIds.some(
+    (unitId) => state.units[unitId] !== void 0 !== state.wave.unitIds.includes(unitId) || state.units[unitId] === void 0 && durableClosureEvidence?.[unitId] === void 0
+  ))
+    errors.push("knowledge gate original membership is not durable");
+  if (gate.provenance !== void 0 && !unitProjectionStageSettled(state, gate))
+    errors.push("provenance entry preceded settled original unit stage");
+  if (new Set(gate.lineageAncestorDigests).size !== gate.lineageAncestorDigests.length || gate.lineageCommitment !== provenanceCarryLineageCommitment(gate.lineageAncestorDigests))
+    errors.push("knowledge gate has invalid provenance lineage");
+  const targets = gate.targets;
+  if (!gateTargetDefinitionsAreBound(gate))
+    errors.push("knowledge gate target definitions do not match commitment");
+  const ids = /* @__PURE__ */ new Set();
+  const entries = /* @__PURE__ */ new Set();
+  const probeKeys = /* @__PURE__ */ new Set();
+  const referencedProbes = /* @__PURE__ */ new Map();
+  for (const target of gate.targets)
+    for (const item of target.materialisations) {
+      const reference = {
+        alias: target.definition.target.destinationAlias,
+        stage: target.definition.scope,
+        subpath: target.definition.target.destinationSubpath
+      };
+      const previous = referencedProbes.get(item.destinationProbeGateEntryId);
+      if (previous !== void 0 && (previous.alias !== reference.alias || previous.stage !== reference.stage || previous.subpath !== reference.subpath))
+        errors.push(
+          `destination probe ${item.destinationProbeGateEntryId} has contradictory references`
+        );
+      referencedProbes.set(item.destinationProbeGateEntryId, reference);
+    }
+  const collisionWitnesses = {
+    gate: nameCollisionWitnesses(gate, "gate", true),
+    unit: nameCollisionWitnesses(gate, "unit", true)
+  };
+  if (!observedFinalNamesAreUnique(gate))
+    errors.push("observed materialisation final names collide");
+  for (const probe of gate.destinationProbes) {
+    const expected = destinationProbeGateEntryId(
+      state,
+      gate,
+      probe.stage,
+      probe.destinationAlias,
+      probe.destinationSubpath
+    );
+    if (probe.gateEntryId !== expected)
+      errors.push(
+        `destination probe ${probe.gateEntryId} has invalid identity`
+      );
+    const reference = referencedProbes.get(probe.gateEntryId);
+    if (reference === void 0 || reference.alias !== probe.destinationAlias || reference.stage !== probe.stage || reference.subpath !== probe.destinationSubpath)
+      errors.push(
+        `destination probe ${probe.gateEntryId} is not exactly referenced`
+      );
+    if (!stageResolutionsSettled(gate, probe.stage))
+      errors.push(
+        `destination probe ${probe.gateEntryId} preceded settled resolutions`
+      );
+    const key = `${probe.stage}\0${probe.destinationAlias}\0${probe.destinationSubpath}`;
+    if (probeKeys.has(key))
+      errors.push(`duplicate destination probe ${probe.gateEntryId}`);
+    probeKeys.add(key);
+    entries.add(probe.gateEntryId);
+    if (probe.status === "observed" && (probe.identity === void 0 || probe.lastRefusal !== void 0))
+      errors.push(
+        `observed destination probe ${probe.gateEntryId} is incomplete`
+      );
+    if (probe.status === "voided" && (probe.identity !== void 0 || probe.lastRefusal === void 0))
+      errors.push(
+        `voided destination probe ${probe.gateEntryId} is incoherent`
+      );
+    if (probe.status === "voided" && probe.disposition === "optional_alias_unmounted" && state.knowledgeContract?.aliases.find(
+      (alias) => alias.alias === probe.destinationAlias
+    )?.mountPolicy !== "optional")
+      errors.push(
+        `destination probe ${probe.gateEntryId} contradicts mount policy`
+      );
+    if (probe.status === "pending" && probe.lastRefusal !== void 0 && !hasLatestObservedGateAttempt(
+      state,
+      probe.gateEntryId,
+      "destination_probe"
+    ))
+      errors.push(
+        `destination probe ${probe.gateEntryId} lacks refusal lineage`
+      );
+  }
+  for (const [gateEntryId, reference] of referencedProbes)
+    if (stageResolutionsSettled(gate, reference.stage) && !gate.destinationProbes.some((probe) => probe.gateEntryId === gateEntryId))
+      errors.push("knowledge gate destination probe set is incomplete");
+  for (const promise of gate.targetPromises) {
+    const definition = promise.definition;
+    if (promise.status === "voided") {
+      const dispositionValid = promise.disposition === "handoff_boundary" && (state.completionBoundary === "branch-handoff" || state.completionBoundary === "pr-handoff") && promise.followUpBeadId === void 0 || promise.disposition === "unit_not_landed" && definition.scope === "unit" && definition.originUnitId !== null && durableClosureEvidence?.[definition.originUnitId]?.outcome !== "landed" && durableClosureEvidence?.[definition.originUnitId] !== void 0 && promise.followUpBeadId === void 0 || promise.disposition === "no_landed_units" && definition.scope === "gate" && state.wave.unitIds.length === 0 && gate.provenanceUnitAccounting.length === 0 && gate.provenancePromise?.status === "voided" && gate.provenancePromise.disposition === "no_landed_units" && promise.followUpBeadId === void 0 || promise.disposition === "deferral_cascade" && definition.scope === "gate" && promise.followUpBeadId !== void 0 && [
+        gate.provenance,
+        gate.provenancePromise,
+        gate.aggregateVerify,
+        gate.aggregateVerifyPromise
+      ].some(
+        (upstream) => upstream?.status === "voided" && upstream.followUpBeadId === promise.followUpBeadId && (upstream.disposition === "deferred_by_controller" || upstream.disposition === "deferral_cascade")
+      );
+      if (!dispositionValid)
+        errors.push(
+          `target promise ${definition.targetId} has invalid void origin`
+        );
+    }
+    if (definition.targetId !== deriveMaterialisationTargetId(
+      definition.scope,
+      definition.originUnitId,
+      definition.targetOrdinal,
+      definition.target
+    ))
+      errors.push(`target promise ${definition.targetId} has invalid identity`);
+    if (ids.has(definition.targetId))
+      errors.push(`duplicate target lineage ${definition.targetId}`);
+    ids.add(definition.targetId);
+  }
+  for (const target of targets) {
+    const definition = target.definition;
+    if (definition.targetId !== deriveMaterialisationTargetId(
+      definition.scope,
+      definition.originUnitId,
+      definition.targetOrdinal,
+      definition.target
+    ))
+      errors.push(`target ${definition.targetId} has invalid identity`);
+    if (ids.has(definition.targetId))
+      errors.push(`duplicate target lineage ${definition.targetId}`);
+    ids.add(definition.targetId);
+    if (definition.scope === "unit" !== (definition.originUnitId !== null))
+      errors.push(`target ${definition.targetId} has invalid origin scope`);
+    const resolution = target.resolution;
+    const originEvidence = definition.originUnitId === null ? void 0 : durableClosureEvidence?.[definition.originUnitId];
+    const authoritativeSourceOid = definition.scope === "unit" && definition.originUnitId !== null ? originEvidence?.outcome === "landed" ? originEvidence.landedOid : void 0 : gate.aggregateVerify?.status === "observed" && gate.provenance?.status === "observed" ? gate.provenance.commitOid : void 0;
+    if (authoritativeSourceOid === void 0 || resolution?.sourceOid !== authoritativeSourceOid)
+      errors.push(`target ${definition.targetId} lacks authoritative source`);
+    if (resolution === void 0)
+      errors.push(
+        `source-bound target ${definition.targetId} lacks resolution`
+      );
+    if (resolution !== void 0) {
+      const expected = resolutionFor(
+        state.controller.runId,
+        gate.waveId,
+        definition,
+        resolution.sourceOid
+      ).gateEntryId;
+      if (resolution.gateEntryId !== expected)
+        errors.push(
+          `resolution ${resolution.gateEntryId} has invalid identity`
+        );
+      if (entries.has(resolution.gateEntryId))
+        errors.push(`duplicate gate identity ${resolution.gateEntryId}`);
+      entries.add(resolution.gateEntryId);
+      if ((resolution.currentEffectId !== void 0 || resolution.lastRefusal !== void 0) && !resolutionCapacitiesBindLatestAttempt(state, gate, target))
+        errors.push(
+          `resolution ${resolution.gateEntryId} has invalid capacities`
+        );
+      if (resolution.status === "pending" && resolution.lastRefusal !== void 0 && !hasLatestObservedGateAttempt(
+        state,
+        resolution.gateEntryId,
+        "materialisation_resolve"
+      ))
+        errors.push(
+          `resolution ${resolution.gateEntryId} lacks refusal lineage`
+        );
+      if (resolution.status === "observed" && (resolution.sources === void 0 || resolution.lastRefusal !== void 0 || !resolutionSourcesFitRecordedCapacities(state, gate, target)))
+        errors.push(
+          `observed resolution ${resolution.gateEntryId} is incomplete`
+        );
+      if (resolution.status === "observed" && (resolution.sources?.length !== target.materialisations.length || resolution.sources.some(
+        (source, index) => canonicalJson(source) !== canonicalJson(
+          target.materialisations[index]?.source
+        )
+      )))
+        errors.push(
+          `resolution ${resolution.gateEntryId} does not bind every expanded output`
+        );
+    }
+    for (const item of target.materialisations) {
+      const expectedCollision = collisionWitnesses[definition.scope].get(
+        item.gateEntryId
+      );
+      if (item.targetId !== definition.targetId || item.sourceOid !== resolution?.sourceOid || item.originUnitId !== definition.originUnitId || canonicalJson(item.target) !== canonicalJson(definition.target))
+        errors.push(`materialisation ${item.gateEntryId} has invalid lineage`);
+      const expected = deriveGateEntryId(
+        state.controller.runId,
+        gate.waveId,
+        `${definition.scope}-materialise`,
+        {
+          blobOid: item.source.blobOid,
+          destinationProbeGateEntryId: item.destinationProbeGateEntryId,
+          path: item.source.path,
+          sourceOid: item.sourceOid,
+          targetId: item.targetId
+        }
+      );
+      if (item.gateEntryId !== expected)
+        errors.push(`materialisation ${item.gateEntryId} has invalid identity`);
+      const expectedProbeId = destinationProbeGateEntryId(
+        state,
+        gate,
+        definition.scope,
+        item.target.destinationAlias,
+        item.target.destinationSubpath
+      );
+      if (item.destinationProbeGateEntryId !== expectedProbeId)
+        errors.push(
+          `materialisation ${item.gateEntryId} has invalid probe identity`
+        );
+      if (entries.has(item.gateEntryId))
+        errors.push(`duplicate gate identity ${item.gateEntryId}`);
+      entries.add(item.gateEntryId);
+      const namedFields = [
+        item.artifactName,
+        item.sidecarName,
+        item.sidecarByteCount,
+        item.sidecarSha256,
+        item.timestamp
+      ];
+      if (namedFields.some((value) => value !== void 0) && namedFields.some((value) => value === void 0))
+        errors.push(`materialisation ${item.gateEntryId} has partial naming`);
+      if (item.timestamp !== void 0) {
+        try {
+          const artifactName = materialisationName(
+            item.source,
+            item.target.namingPolicy,
+            item.timestamp
+          );
+          const sidecar = sidecarFor(
+            state,
+            gate,
+            item,
+            artifactName,
+            item.timestamp
+          );
+          if (item.artifactName !== artifactName || item.sidecarName !== `${artifactName}.sce-provenance.json` || item.sidecarByteCount !== utf82.encode(sidecar.bytes).byteLength || item.sidecarSha256 !== sha256(sidecar.bytes))
+            errors.push(
+              `materialisation ${item.gateEntryId} has invalid planned bytes`
+            );
+        } catch {
+          errors.push(
+            `materialisation ${item.gateEntryId} has invalid planned bytes`
+          );
+        }
+      }
+      if (item.status === "pending" && item.lastRefusal !== void 0 && item.lastRefusal.code !== "output_name_collision" && !hasLatestObservedGateAttempt(state, item.gateEntryId, "materialise"))
+        errors.push(
+          `materialisation ${item.gateEntryId} lacks refusal lineage`
+        );
+      if (item.lastRefusal?.code === "output_name_collision" ? item.lastRefusal.conflictingGateEntryId !== expectedCollision : item.status === "pending" && stageNamesReady(gate, definition.scope) && expectedCollision !== void 0)
+        errors.push(
+          `materialisation ${item.gateEntryId} has invalid collision witness`
+        );
+      if (item.status === "observed" && (item.observation === void 0 || !materialisationObservationMatches(item, item.observation) || item.artifactName === void 0 || item.sidecarName === void 0 || item.sidecarByteCount === void 0 || item.sidecarSha256 === void 0 || item.timestamp === void 0 || item.lastRefusal !== void 0))
+        errors.push(
+          `observed materialisation ${item.gateEntryId} is incomplete`
+        );
+    }
+    if (target.status === "observed" && (resolution?.status !== "observed" || target.materialisations.some(
+      (item) => item.status !== "observed"
+    )) || target.status === "voided" && (resolution?.status === "pending" || target.materialisations.some((item) => item.status === "pending")))
+      errors.push(`target ${definition.targetId} has incoherent status`);
+    if (target.status === "voided") {
+      const followUp = target.followUpBeadId;
+      const matchingProbe = gate.destinationProbes.find(
+        (probe) => probe.stage === definition.scope && probe.destinationAlias === definition.target.destinationAlias && probe.destinationSubpath === definition.target.destinationSubpath
+      );
+      const alias = state.knowledgeContract?.aliases.find(
+        (item) => item.alias === definition.target.destinationAlias
+      );
+      const contextualDisposition = target.disposition === "optional_alias_unmounted" ? followUp === void 0 && alias?.mountPolicy === "optional" && matchingProbe?.status === "voided" && matchingProbe.disposition === "optional_alias_unmounted" && target.resolution?.status === "observed" && target.materialisations.every(
+        (item) => item.status === "voided" && item.disposition === "optional_alias_unmounted" && item.followUpBeadId === void 0 && item.lastRefusal === void 0
+      ) : target.disposition === "deferral_cascade" && followUp !== void 0 && (target.resolution?.status === "voided" && target.resolution.disposition === "deferred_by_controller" && target.resolution.followUpBeadId === followUp ? true : matchingProbe?.status === "voided" && matchingProbe.disposition === "deferred_by_controller" && matchingProbe.followUpBeadId === followUp ? true : target.materialisations.some(
+        (item) => item.status === "voided" && item.disposition === "deferred_by_controller" && item.followUpBeadId === followUp
+      ));
+      if (!contextualDisposition)
+        errors.push(`target ${definition.targetId} has invalid void origin`);
+    }
+    for (const item of target.materialisations) {
+      if (item.status !== "voided") continue;
+      const matchingProbe = gate.destinationProbes.find(
+        (probe) => probe.gateEntryId === item.destinationProbeGateEntryId
+      );
+      const contextualDisposition = item.disposition === "deferred_by_controller" ? item.followUpBeadId !== void 0 && item.lastRefusal !== void 0 : item.disposition === "optional_alias_unmounted" ? item.followUpBeadId === void 0 && item.lastRefusal === void 0 && matchingProbe?.status === "voided" && matchingProbe.disposition === "optional_alias_unmounted" && state.knowledgeContract?.aliases.find(
+        (alias) => alias.alias === item.target.destinationAlias
+      )?.mountPolicy === "optional" : item.disposition === "deferral_cascade" && item.followUpBeadId !== void 0 && item.lastRefusal === void 0 && (target.resolution?.status === "voided" && target.resolution.disposition === "deferred_by_controller" && target.resolution.followUpBeadId === item.followUpBeadId || matchingProbe?.status === "voided" && matchingProbe.disposition === "deferred_by_controller" && matchingProbe.followUpBeadId === item.followUpBeadId);
+      if (!contextualDisposition)
+        errors.push(
+          `materialisation ${item.gateEntryId} has invalid void origin`
+        );
+    }
+  }
+  const accountingIds = /* @__PURE__ */ new Set();
+  let accountingInput;
+  try {
+    accountingInput = gate.provenance?.projectionInputSnapshot ?? provenanceInput(state, gate);
+  } catch {
+    errors.push("knowledge gate has invalid provenance accounting input");
+  }
+  const closureEvidence = accountingInput === void 0 ? {} : decodeClosedUnitEvidence(accountingInput.closedUnitEvidence) ?? {};
+  for (const accounting of gate.provenanceUnitAccounting) {
+    if (accountingIds.has(accounting.unitId))
+      errors.push(`duplicate provenance accounting ${accounting.unitId}`);
+    accountingIds.add(accounting.unitId);
+    if (closureEvidence[accounting.unitId] === void 0 || unitClosureEvidenceCommitment(closureEvidence[accounting.unitId]) !== accounting.closureEvidenceCommitment)
+      errors.push(
+        `provenance accounting ${accounting.unitId} has invalid closure binding`
+      );
+    if (accounting.status === "committed" && accounting.provenanceCommitOid.length !== (state.gitObjectFormat === "sha1" ? 40 : 64))
+      errors.push(
+        `provenance accounting ${accounting.unitId} has invalid commit OID`
+      );
+    if (gate.provenance?.status === "observed" ? accounting.status !== "committed" || accounting.provenanceCommitOid !== gate.provenance.commitOid : accounting.status !== "uncommitted")
+      errors.push(
+        `provenance accounting ${accounting.unitId} contradicts provenance status`
+      );
+  }
+  if (accountingInput !== void 0 && !sameStringArray(
+    [...accountingIds].sort(compareProtocolText),
+    accountingInput.unitIds
+  ))
+    errors.push("knowledge gate provenance accounting membership is invalid");
+  const totals = sourceTotals(gate);
+  if (totals.items > LIMITS.materialisationOutputs || totals.bytes > LIMITS.materialisationWaveBytes)
+    errors.push("materialisation source totals exceed wave limits");
+  if (gateMaterialisations(gate, "unit").some(
+    (item) => item.currentEffectId !== void 0
+  ) && !stageNamesReady(gate, "unit"))
+    errors.push("unit publication preceded namespace preflight");
+  if (gate.provenance !== void 0 && gate.provenance.status !== "voided" && !stageMaterialisationsSettled(gate, "unit"))
+    errors.push("provenance preceded settled unit materialisations");
+  if (gate.provenance !== void 0) {
+    const expected = deriveGateEntryId(
+      state.controller.runId,
+      gate.waveId,
+      "provenance",
+      gate.provenance.projectionInputSnapshot
+    );
+    if (gate.provenance.gateEntryId !== expected)
+      errors.push("provenance entry has invalid identity");
+    const attemptKey = gate.provenance.attemptIdempotencyKey;
+    if (attemptKey !== void 0 && (state.knowledgeContract === void 0 || gate.provenance.worktreePath !== deriveProvenanceWorktreePath(
+      state.knowledgeContract.provenanceWorktreeRoot,
+      attemptKey
+    )))
+      errors.push("provenance worktree does not bind its attempt key");
+    if (gate.provenance.currentEffectId !== void 0 && !state.effectJournal.some(
+      (entry) => entry.effectId === gate.provenance.currentEffectId && entry.kind === "provenance_commit" && entry.gateEntryId === gate.provenance.gateEntryId && entry.idempotencyKey === attemptKey && (entry.status === "intended" || entry.status === "ambiguous")
+    ))
+      errors.push("provenance attempt key does not bind its journal intent");
+    if (gate.provenance.status === "observed" && (gate.provenance.commitOid === void 0 || gate.provenance.treeOid === void 0 || gate.provenance.timestamp === void 0 || gate.provenance.worktreePath === void 0 || gate.provenance.lastRefusal !== void 0))
+      errors.push("observed provenance entry is incomplete");
+    entries.add(gate.provenance.gateEntryId);
+    if (gate.provenancePromise !== void 0)
+      errors.push("provenance entry coexists with its promise");
+  } else if (gate.provenancePromise === void 0) {
+    errors.push("knowledge gate lacks provenance lineage");
+  }
+  if (gate.aggregateVerify !== void 0) {
+    const expected = deriveGateEntryId(
+      state.controller.runId,
+      gate.waveId,
+      "aggregate-verify",
+      { provenanceGateEntryId: gate.aggregateVerify.provenanceGateEntryId }
+    );
+    if (gate.aggregateVerify.gateEntryId !== expected)
+      errors.push("aggregate verify entry has invalid identity");
+    if (gate.aggregateVerify.status === "observed" && gate.aggregateVerify.lastRefusal !== void 0)
+      errors.push("observed aggregate verify retains refusal evidence");
+    entries.add(gate.aggregateVerify.gateEntryId);
+    if (gate.provenance?.status !== "observed")
+      errors.push("aggregate verify preceded provenance observation");
+    if (gate.aggregateVerifyPromise !== void 0)
+      errors.push("aggregate verify entry coexists with its promise");
+    if (gate.aggregateVerify.status === "voided" && gate.aggregateVerify.disposition === "deferral_cascade" && !(gate.aggregateVerify.followUpBeadId !== void 0 && gate.provenance?.status === "voided" && gate.provenance.disposition === "deferred_by_controller" && gate.provenance.followUpBeadId === gate.aggregateVerify.followUpBeadId))
+      errors.push("aggregate verify entry has invalid cascade origin");
+  } else if (gate.aggregateVerifyPromise === void 0) {
+    errors.push("knowledge gate lacks aggregate verify lineage");
+  }
+  if (gate.targets.some((target) => target.definition.scope === "gate") && gate.aggregateVerify?.status !== "observed")
+    errors.push("gate targets preceded aggregate verification");
+  if (gateMaterialisations(gate, "gate").some(
+    (item) => item.currentEffectId !== void 0
+  ) && !stageNamesReady(gate, "gate"))
+    errors.push("gate publication preceded namespace preflight");
+  for (const entry of state.effectJournal.filter(
+    (item) => item.gateEntryId !== void 0 && (item.status === "intended" || item.status === "ambiguous")
+  )) {
+    if (!entries.has(entry.gateEntryId) && gate.provenance?.gateEntryId !== entry.gateEntryId && gate.aggregateVerify?.gateEntryId !== entry.gateEntryId)
+      errors.push(`journal effect ${entry.effectId} has unknown gate entry`);
+  }
   return errors;
 }
 function illegal(unit, eventType) {
@@ -14246,7 +19144,7 @@ var identifier2 = () => Type.String({
 });
 var model = () => Type.String({ minLength: 1, maxLength: 256 });
 var hash2 = () => Type.String({ minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" });
-var absolutePath = () => Type.String({ minLength: 2, maxLength: 8192, pattern: "^/[^\\u0000]*$" });
+var absolutePath2 = () => Type.String({ minLength: 2, maxLength: 8192, pattern: "^/[^\\u0000]*$" });
 var HarnessCapabilitiesSchema = strictObject2({
   adapterVersion: Type.Literal(HARNESS_VERSION),
   family: identifier2(),
@@ -14301,7 +19199,7 @@ var HarnessLaunchRequestSchema = strictObject2({
   requestedModel: model(),
   role: Type.Union([Type.Literal("reviewer"), Type.Literal("worker")]),
   unitId: identifier2(),
-  worktreePath: absolutePath()
+  worktreePath: absolutePath2()
 });
 var HarnessSessionSchema = strictObject2({
   clientKey: identifier2(),
@@ -14314,7 +19212,7 @@ var HarnessSessionSchema = strictObject2({
   returnedModel: model(),
   role: Type.Union([Type.Literal("reviewer"), Type.Literal("worker")]),
   sessionId: identifier2(),
-  worktreePath: absolutePath()
+  worktreePath: absolutePath2()
 });
 var HarnessToolRequestBase = {
   effectId: identifier2(),
@@ -14376,7 +19274,7 @@ var HarnessToolRequestSchema = Type.Union([
       maxLength: 64,
       pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
     }),
-    worktreePath: absolutePath()
+    worktreePath: absolutePath2()
   })
 ]);
 var ToolAcknowledgementBase = {
@@ -14434,7 +19332,7 @@ var HarnessToolAcknowledgementSchema = Type.Union([
       maxLength: 64,
       pattern: "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
     }),
-    worktreePath: absolutePath()
+    worktreePath: absolutePath2()
   })
 ]);
 function verificationToolRequest(effect2, run2) {
@@ -15050,17 +19948,169 @@ function legalActions(stateInput) {
   const controllerActions = actionsForController(state);
   if (controllerActions !== void 0) return sortActions(controllerActions);
   if (state.controller.state !== "acquired") return [];
-  if (state.wave.unitIds.length === 0 && Object.keys(state.units).length > 0 && Object.values(state.units).every((unit) => unit.state === "planned"))
+  if (state.wave.unitIds.length === 0 && gateGreen(state) && Object.keys(state.units).length > 0 && Object.values(state.units).every((unit) => unit.state === "planned"))
     return [{ mode: "emit", type: "wave_planned" }];
   if (state.harness === void 0 && Object.values(state.units).some(
     (unit) => unit.state === "worktree_observed"
   ))
     return [{ mode: "emit", type: "harness_configured" }];
-  return sortActions(
-    Object.values(state.units).filter((unit) => state.wave.unitIds.includes(unit.id)).flatMap((unit) => actionsForUnit(state, unit)).filter(
+  return sortActions([
+    ...actionsForGate(state),
+    ...Object.values(state.units).filter((unit) => state.wave.unitIds.includes(unit.id)).flatMap((unit) => actionsForUnit(state, unit)).filter(
       (action) => (action.mode !== "emit" || action.effectKind === void 0 || effectAllowed2(state, action.effectKind) && (action.unitId === void 0 || !hasUnresolvedUnitEffect2(state, action.unitId))) && (action.mode !== "record" || pendingUnitEffect(state, action))
     )
+  ]);
+}
+function actionsForGate(state) {
+  const gate = state.gate;
+  if (gate === void 0) return [];
+  const unresolved = state.effectJournal.find(
+    (entry) => entry.gateEntryId !== void 0 && (entry.status === "intended" || entry.status === "ambiguous")
   );
+  if (unresolved?.gateEntryId !== void 0)
+    return observationsForEffect[unresolved.kind].map((type) => ({
+      effectId: unresolved.effectId,
+      effectKind: unresolved.kind,
+      gateEntryId: unresolved.gateEntryId,
+      mode: "record",
+      type
+    }));
+  const targets = gate.targets;
+  const resolution = targets.filter(
+    (target) => target.definition.scope === "unit" && state.wave.unitIds.length === 0 || target.definition.scope === "gate" && gate.aggregateVerify?.status === "observed"
+  ).map((target) => target.resolution).filter(
+    (entry) => entry !== void 0 && entry.status === "pending"
+  ).sort(
+    (left, right) => compareProtocolText(left.gateEntryId, right.gateEntryId)
+  )[0];
+  if (resolution !== void 0)
+    return [
+      {
+        effectKind: "materialisation_resolve",
+        gateEntryId: resolution.gateEntryId,
+        mode: "emit",
+        type: "materialisation_resolve_intent"
+      },
+      ...resolution.lastRefusal === void 0 ? [] : [
+        {
+          gateEntryId: resolution.gateEntryId,
+          mode: "record",
+          type: "gate_entry_deferred"
+        }
+      ]
+    ];
+  const probe = gate.destinationProbes.filter(
+    (entry) => entry.status === "pending" && (entry.stage === "unit" && state.wave.unitIds.length === 0 || entry.stage === "gate" && gate.aggregateVerify?.status === "observed")
+  ).sort(
+    (left, right) => compareProtocolText(left.stage, right.stage) || compareProtocolText(left.gateEntryId, right.gateEntryId)
+  )[0];
+  if (probe !== void 0)
+    return [
+      {
+        effectKind: "destination_probe",
+        gateEntryId: probe.gateEntryId,
+        mode: "emit",
+        type: "destination_probe_intent"
+      },
+      ...probe.lastRefusal === void 0 ? [] : [
+        {
+          gateEntryId: probe.gateEntryId,
+          mode: "record",
+          type: "gate_entry_deferred"
+        }
+      ]
+    ];
+  const materialisations = targets.flatMap((target) => target.materialisations).filter((entry) => entry.status === "pending").sort(
+    (left, right) => compareProtocolText(left.gateEntryId, right.gateEntryId)
+  );
+  const unnamed = materialisations.find(
+    (entry) => entry.timestamp === void 0
+  );
+  if (unnamed !== void 0)
+    return [
+      {
+        gateEntryId: unnamed.gateEntryId,
+        mode: "record",
+        type: "gate_clock_observed"
+      }
+    ];
+  const refused = materialisations.find(
+    (entry) => entry.lastRefusal !== void 0
+  );
+  if (refused !== void 0) {
+    const retry = refused.lastRefusal?.code === "output_name_collision" ? {
+      gateEntryId: refused.gateEntryId,
+      mode: "record",
+      type: "gate_clock_observed"
+    } : {
+      effectKind: "materialise",
+      gateEntryId: refused.gateEntryId,
+      mode: "emit",
+      type: "materialise_intent"
+    };
+    return [
+      retry,
+      {
+        gateEntryId: refused.gateEntryId,
+        mode: "record",
+        type: "gate_entry_deferred"
+      }
+    ];
+  }
+  const materialisation = materialisations[0];
+  if (materialisation !== void 0)
+    return [
+      {
+        effectKind: "materialise",
+        gateEntryId: materialisation.gateEntryId,
+        mode: "emit",
+        type: "materialise_intent"
+      }
+    ];
+  const provenance = gate.provenance;
+  if (provenance?.status === "pending") {
+    if (provenance.lastRefusal !== void 0)
+      return [
+        ...provenance.lastRefusal.code === "provenance_base_advanced" ? [
+          {
+            effectKind: "provenance_commit",
+            gateEntryId: provenance.gateEntryId,
+            mode: "emit",
+            type: "provenance_commit_intent"
+          }
+        ] : [],
+        {
+          gateEntryId: provenance.gateEntryId,
+          mode: "record",
+          type: "gate_entry_deferred"
+        }
+      ];
+    return [
+      {
+        ...provenance.timestamp === void 0 ? {} : { effectKind: "provenance_commit" },
+        gateEntryId: provenance.gateEntryId,
+        mode: provenance.timestamp === void 0 ? "record" : "emit",
+        type: provenance.timestamp === void 0 ? "gate_clock_observed" : "provenance_commit_intent"
+      }
+    ];
+  }
+  const verify = gate.aggregateVerify;
+  if (verify?.status === "pending")
+    return verify.lastRefusal === void 0 ? [
+      {
+        effectKind: "verify",
+        gateEntryId: verify.gateEntryId,
+        mode: "emit",
+        type: "verification_intent"
+      }
+    ] : [
+      {
+        gateEntryId: verify.gateEntryId,
+        mode: "record",
+        type: "gate_entry_deferred"
+      }
+    ];
+  return [];
 }
 var observationsForEffect = {
   controller_acquire: ["controller_acquired"],
@@ -15081,7 +20131,12 @@ var observationsForEffect = {
   timeout: ["timeout_observed"],
   park: ["park_observed"],
   cancel: ["cancel_observed"],
-  controller_release: ["controller_released"]
+  controller_release: ["controller_released"],
+  materialisation_resolve: ["materialisation_sources_observed"],
+  destination_probe: ["destination_probe_observed"],
+  materialise: ["materialise_observed"],
+  provenance_commit: ["provenance_commit_observed"],
+  provenance_carry_claim: ["provenance_carry_claim_observed"]
 };
 function ambiguityRecoveryActions(state) {
   return sortActions(
@@ -15093,7 +20148,8 @@ function ambiguityRecoveryActions(state) {
         effectKind: effect2.kind,
         mode: "record",
         type,
-        ...effect2.unitId === null ? {} : { unitId: effect2.unitId }
+        ...effect2.unitId === null ? {} : { unitId: effect2.unitId },
+        ...effect2.gateEntryId === void 0 ? {} : { gateEntryId: effect2.gateEntryId }
       }))
     )
   );
@@ -15127,6 +20183,18 @@ function actionsForController(state) {
     ] : [];
   }
   if (state.controller.state === "released") return [];
+  const carry = state.effectJournal.find(
+    (entry) => entry.kind === "provenance_carry_claim" && (entry.status === "intended" || entry.status === "ambiguous") && state.provenanceCarryClaim?.currentEffectId === entry.effectId
+  );
+  if (carry !== void 0)
+    return [
+      {
+        effectId: carry.effectId,
+        effectKind: carry.kind,
+        mode: "record",
+        type: "provenance_carry_claim_observed"
+      }
+    ];
   if (canReleaseController2(state))
     return [
       controllerAction(
@@ -15277,9 +20345,18 @@ function hasCurrentApproval2(unit) {
   return unit.reviewBaseOid === unit.baseOid && unit.reviewHeadOid === unit.candidateHead && unit.reviewTree === unit.candidateTree && unit.approvalResponseHash !== void 0;
 }
 function canReleaseController2(state) {
-  return state.controller.state === "acquired" && state.activeModifyingUnitIds.length === 0 && state.qualificationOwnerUnitId === void 0 && state.integrationOwnerUnitId === void 0 && state.currentReviewerUnitId === void 0 && Object.values(state.units).every((unit) => unit.state === "closed") && Object.values(state.reservations).every(
+  return state.controller.state === "acquired" && state.activeModifyingUnitIds.length === 0 && state.qualificationOwnerUnitId === void 0 && state.integrationOwnerUnitId === void 0 && state.currentReviewerUnitId === void 0 && state.provenanceCarryClaim === void 0 && state.pendingProvenanceCarry === void 0 && !state.effectJournal.some(
+    (entry) => entry.kind === "provenance_carry_claim" && (entry.status === "intended" || entry.status === "ambiguous")
+  ) && Object.values(state.units).every((unit) => unit.state === "closed") && Object.values(state.reservations).every(
     (reservation) => reservation.state === "released"
-  );
+  ) && gateGreen(state);
+}
+function gateGreen(state) {
+  const gate = state.gate;
+  if (gate === void 0) return true;
+  return gate.targetPromises.every((promise) => promise.status === "voided") && gate.targets.every(
+    (target) => target.status !== "pending" && target.resolution?.status !== "pending" && target.materialisations.every((item) => item.status !== "pending")
+  ) && (gate.provenancePromise?.status === "voided" || gate.provenancePromise === void 0 && gate.provenance !== void 0 && gate.provenance.status !== "pending") && (gate.aggregateVerifyPromise?.status === "voided" || gate.aggregateVerifyPromise === void 0 && gate.aggregateVerify !== void 0 && gate.aggregateVerify.status !== "pending");
 }
 function effectAllowed2(state, kind) {
   if (kind === "publish")
@@ -15354,7 +20431,7 @@ function strictObject3(properties) {
 }
 var text2 = (maxLength = MAX_TEXT_BYTES) => Type.String({ minLength: 1, maxLength, maxUtf8Bytes: maxLength });
 var optionalText = (maxLength = MAX_TEXT_BYTES) => Type.Optional(text2(maxLength));
-var absolutePath2 = () => Type.String({
+var absolutePath3 = () => Type.String({
   minLength: 1,
   maxLength: MAX_PATH_BYTES,
   maxUtf8Bytes: MAX_PATH_BYTES
@@ -15457,7 +20534,7 @@ var InspectionCommandSchema = Type.Union([
 ]);
 var SanitizedSubprocessRequestSchema = strictObject3({
   command: InspectionCommandSchema,
-  cwd: absolutePath2(),
+  cwd: absolutePath3(),
   maxOutputBytes: Type.Integer({ minimum: 1, maximum: 65536 }),
   timeoutMs: Type.Integer({ minimum: 1, maximum: 15e3 })
 });
@@ -15488,8 +20565,8 @@ var BdContextObservationSchema = strictObject3({
     Type.Literal("uninitialized")
   ]),
   bd_version: text2(32),
-  beads_dir: Type.Optional(absolutePath2()),
-  cwd_repo_root: absolutePath2(),
+  beads_dir: Type.Optional(absolutePath3()),
+  cwd_repo_root: absolutePath3(),
   database: Type.Optional(identifier3()),
   dolt_mode: Type.Optional(
     Type.Union([
@@ -15505,7 +20582,7 @@ var BdContextObservationSchema = strictObject3({
   is_redirected: Type.Optional(Type.Boolean()),
   is_worktree: Type.Optional(Type.Boolean()),
   project_id: Type.Optional(identifier3()),
-  repo_root: Type.Optional(absolutePath2()),
+  repo_root: Type.Optional(absolutePath3()),
   role: optionalText(80),
   schema_version: Type.Integer({
     minimum: 1,
@@ -15530,7 +20607,7 @@ var BdContextObservationSchema = strictObject3({
 });
 var BdDoltShowObservationSchema = strictObject3({
   backend: Type.Literal("dolt"),
-  data_dir: absolutePath2(),
+  data_dir: absolutePath3(),
   database: identifier3(),
   embedded: Type.Boolean(),
   schema_version: Type.Integer({
@@ -15569,7 +20646,7 @@ var BootstrapActionSchema = Type.Union([
 ]);
 var BdBootstrapRawSchema = strictObject3({
   action: BootstrapActionSchema,
-  beads_dir: Type.Optional(absolutePath2()),
+  beads_dir: Type.Optional(absolutePath3()),
   database: Type.Optional(identifier3()),
   has_existing: Type.Boolean(),
   reason: text2(1024),
@@ -15581,7 +20658,7 @@ var BdBootstrapRawSchema = strictObject3({
 });
 var BootstrapPlanSchema = strictObject3({
   action: BootstrapActionSchema,
-  beadsDir: Type.Optional(absolutePath2()),
+  beadsDir: Type.Optional(absolutePath3()),
   database: Type.Optional(identifier3())
 });
 var DoltObservationSchema = strictObject3({
@@ -15606,14 +20683,14 @@ var DoltObservationSchema = strictObject3({
   ])
 });
 var GitInspectionSchema = strictObject3({
-  commonDir: absolutePath2(),
+  commonDir: absolutePath3(),
   objectFormat: Type.Union([Type.Literal("sha1"), Type.Literal("sha256")]),
   providerId: Type.Optional(identifier3()),
   remoteUrls: Type.Array(text2(1024), { minItems: 0, maxItems: 16 }),
-  topLevel: absolutePath2()
+  topLevel: absolutePath3()
 });
 var BeadsIdentitySchema = strictObject3({
-  beadsDir: Type.Optional(absolutePath2()),
+  beadsDir: Type.Optional(absolutePath3()),
   contextSchemaVersion: Type.Literal(BD_CONTEXT_SCHEMA_VERSION),
   database: Type.Optional(identifier3()),
   mode: Type.Union([
@@ -15630,16 +20707,16 @@ var BeadsIdentitySchema = strictObject3({
   ]),
   rig: Type.Optional(identifier3()),
   server: Type.Optional(text2(320)),
-  storePath: Type.Optional(absolutePath2()),
+  storePath: Type.Optional(absolutePath3()),
   syncRef: Type.Optional(identifier3()),
   syncRemote: optionalText(1024),
   toolVersion: Type.Literal(BD_VERSION)
 });
 var GitIdentitySchema = strictObject3({
-  commonDir: absolutePath2(),
+  commonDir: absolutePath3(),
   identity: text2(1024),
   objectFormat: Type.Union([Type.Literal("sha1"), Type.Literal("sha256")]),
-  topLevel: absolutePath2()
+  topLevel: absolutePath3()
 });
 var RefusalCodeSchema = Type.Union([
   Type.Literal("PF_BD_UNAVAILABLE"),
@@ -16783,6 +21860,1037 @@ function canonicalGitCommonDir(path2) {
   }
 }
 
+// src/adapters/materialise/index.ts
+import { spawn as spawn2 } from "node:child_process";
+import { createHash as createHash2 } from "node:crypto";
+import { constants } from "node:fs";
+import { lstat, open, realpath, stat } from "node:fs/promises";
+import { isAbsolute as isAbsolute4, join as join2, normalize as normalize4, relative as relative2, resolve as resolve4 } from "node:path";
+async function readNoFollow(root, name, maximumBytes) {
+  try {
+    const first = await lstat(join2(root, name), { bigint: true });
+    if (!first.isFile() || first.isSymbolicLink() || first.size > BigInt(maximumBytes))
+      return { status: "ambiguous" };
+    const handle = await open(
+      join2(root, name),
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)
+    );
+    try {
+      const second = await handle.stat({ bigint: true });
+      if (!second.isFile() || first.dev !== second.dev || first.ino !== second.ino || second.size > BigInt(maximumBytes))
+        return { status: "ambiguous" };
+      return {
+        bytes: await handle.readFile(),
+        device: String(second.dev),
+        inode: String(second.ino),
+        nlink: second.nlink,
+        status: "file"
+      };
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    return error.code === "ENOENT" ? { status: "absent" } : { status: "ambiguous" };
+  }
+}
+function hashBytes(value) {
+  return createHash2("sha256").update(value).digest("hex");
+}
+var nodeMaterialisationProcess = {
+  run: async (executable, argv, options) => await new Promise((resolveResult) => {
+    let settled = false;
+    const finish = (result2) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveResult(result2);
+    };
+    const child = spawn2(executable, argv, {
+      cwd: options.cwd,
+      env: options.env,
+      shell: false,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    const stdout = [];
+    const stderr = [];
+    let outputBytes = 0;
+    let exceeded = false;
+    const timer = setTimeout(() => child.kill("SIGKILL"), 3e4);
+    const collect = (chunks, chunk) => {
+      outputBytes += chunk.byteLength;
+      if (outputBytes > options.maxOutputBytes) {
+        exceeded = true;
+        child.kill("SIGKILL");
+        return;
+      }
+      chunks.push(chunk);
+    };
+    child.stdout.on("data", (chunk) => collect(stdout, chunk));
+    child.stderr.on("data", (chunk) => collect(stderr, chunk));
+    child.on(
+      "error",
+      () => finish({
+        code: null,
+        signal: null,
+        stderr: Buffer.alloc(0),
+        stdout: Buffer.alloc(0)
+      })
+    );
+    child.on(
+      "close",
+      (code, signal) => finish({
+        code,
+        signal,
+        stderr: exceeded ? Buffer.alloc(0) : Buffer.concat(stderr),
+        stdout: exceeded ? Buffer.alloc(0) : Buffer.concat(stdout)
+      })
+    );
+    if (options.input === void 0) child.stdin.end();
+    else child.stdin.end(options.input);
+  }),
+  runTree: async (executable, argv, options, sourcePattern) => await new Promise((resolveResult) => {
+    let settled = false;
+    let parsingValid = true;
+    let retainedMatches = 0;
+    let unsafeMatchedPathHash;
+    let header = [];
+    let path2 = [];
+    let pathLength = 0;
+    let inPath = false;
+    let pathHash = createHash2("sha256");
+    const pattern = Buffer.from(sourcePattern, "ascii");
+    let matcherState = globInitialState(pattern);
+    const retained = [];
+    const stderr = [];
+    let stderrBytes = 0;
+    const finish = (result2) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveResult(result2);
+    };
+    const child = spawn2(executable, argv, {
+      cwd: options.cwd,
+      env: options.env,
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    const timer = setTimeout(() => child.kill("SIGKILL"), 3e4);
+    child.stdout.on("data", (chunk) => {
+      if (!parsingValid) return;
+      for (const byte of chunk) {
+        if (!inPath) {
+          if (byte === 0 || header.length > 255) {
+            parsingValid = false;
+            child.kill("SIGKILL");
+            return;
+          }
+          if (byte === 9) {
+            if (header.length === 0) {
+              parsingValid = false;
+              child.kill("SIGKILL");
+              return;
+            }
+            inPath = true;
+          } else header.push(byte);
+          continue;
+        }
+        if (byte !== 0) {
+          pathLength += 1;
+          pathHash.update(Buffer.from([byte]));
+          matcherState = globAdvanceState(pattern, matcherState, byte);
+          if (path2.length < LIMITS.materialisationPathBytes) path2.push(byte);
+          continue;
+        }
+        const matched = globStateAccepts(pattern, matcherState);
+        const digest = pathHash.digest("hex");
+        if (matched) {
+          retainedMatches += 1;
+          if (pathLength > LIMITS.materialisationPathBytes) {
+            unsafeMatchedPathHash ??= digest;
+          } else if (retained.length <= LIMITS.materialisationMatches) {
+            retained.push(
+              Buffer.concat([
+                Buffer.from(header),
+                Buffer.from([9]),
+                Buffer.from(path2),
+                Buffer.from([0])
+              ])
+            );
+          }
+        }
+        header = [];
+        path2 = [];
+        pathLength = 0;
+        inPath = false;
+        pathHash = createHash2("sha256");
+        matcherState = globInitialState(pattern);
+        if (!parsingValid) {
+          parsingValid = false;
+          child.kill("SIGKILL");
+          return;
+        }
+      }
+    });
+    child.stderr.on("data", (chunk) => {
+      stderrBytes += chunk.byteLength;
+      if (stderrBytes > options.maxOutputBytes) {
+        parsingValid = false;
+        child.kill("SIGKILL");
+      } else stderr.push(chunk);
+    });
+    child.on(
+      "error",
+      () => finish({
+        code: null,
+        parsingValid: false,
+        retainedMatches,
+        signal: null,
+        stderr: Buffer.alloc(0),
+        stdout: Buffer.alloc(0)
+      })
+    );
+    child.on(
+      "close",
+      (code, signal) => finish({
+        code,
+        parsingValid: parsingValid && !inPath && header.length === 0 && pathLength === 0,
+        retainedMatches,
+        signal,
+        stderr: Buffer.concat(stderr),
+        stdout: Buffer.concat(retained),
+        ...unsafeMatchedPathHash === void 0 ? {} : { unsafeMatchedPathHash }
+      })
+    );
+  })
+};
+function globClosure(pattern, positions) {
+  const closed = new Set(positions);
+  const pending = [...positions];
+  for (let index = 0; index < pending.length; index += 1) {
+    const position = pending[index];
+    if (pattern[position] === 42 && !closed.has(position + 1)) {
+      closed.add(position + 1);
+      pending.push(position + 1);
+    }
+  }
+  return closed;
+}
+function globInitialState(pattern) {
+  return globClosure(pattern, /* @__PURE__ */ new Set([0]));
+}
+function globAdvanceState(pattern, positions, byte) {
+  const advanced = /* @__PURE__ */ new Set();
+  for (const position of globClosure(pattern, positions)) {
+    const token = pattern[position];
+    if (token === 42) {
+      if (byte !== 47) advanced.add(position);
+    } else if (token === byte || token === 63 && byte !== 47) {
+      advanced.add(position + 1);
+    }
+  }
+  return globClosure(pattern, advanced);
+}
+function globStateAccepts(pattern, positions) {
+  return globClosure(pattern, positions).has(pattern.byteLength);
+}
+function refusal(code, facts) {
+  return {
+    refusal: {
+      code,
+      detailHash: sha256(
+        canonicalJson({ domain: "sce.materialisation-refusal.v1", facts })
+      )
+    },
+    status: "refused"
+  };
+}
+function ambiguous(facts) {
+  return {
+    observationHash: sha256(
+      canonicalJson({ domain: "sce.materialisation-ambiguous.v1", facts })
+    ),
+    status: "ambiguous"
+  };
+}
+function exactOid2(value) {
+  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(value);
+}
+function parseTree(data) {
+  const entries = [];
+  let start = 0;
+  while (start < data.byteLength) {
+    const end = data.indexOf(0, start);
+    if (end < 0) return { valid: false };
+    if (end === start) {
+      start += 1;
+      continue;
+    }
+    const record3 = data.subarray(start, end);
+    const tab = record3.indexOf(9);
+    if (tab < 0) return { valid: false };
+    const headerBytes = record3.subarray(0, tab);
+    if ([...headerBytes].some((byte) => byte > 127)) return { valid: false };
+    const raw = headerBytes.toString("ascii");
+    const match = /^([0-7]{6}) ([a-z]+) ([0-9a-f]{40}|[0-9a-f]{64})$/u.exec(
+      raw
+    );
+    if (match === null) return { valid: false };
+    const path2 = record3.subarray(tab + 1);
+    if (path2.byteLength === 0) return { valid: false };
+    entries.push({
+      blobOid: match[3],
+      mode: match[1],
+      path: path2,
+      type: match[2]
+    });
+    start = end + 1;
+  }
+  return { entries, valid: true };
+}
+function matchesPatternBytes(pattern, path2) {
+  const wanted = pattern.split("/").map((part) => Buffer.from(part, "ascii"));
+  const actual = [];
+  let start = 0;
+  for (let index = 0; index <= path2.byteLength; index += 1) {
+    if (index === path2.byteLength || path2[index] === 47) {
+      actual.push(path2.subarray(start, index));
+      start = index + 1;
+    }
+  }
+  if (wanted.length !== actual.length) return false;
+  return wanted.every((segment, index) => {
+    const value = actual[index];
+    const memo = /* @__PURE__ */ new Map();
+    const match = (patternOffset, valueOffset) => {
+      const key = `${patternOffset}:${valueOffset}`;
+      const cached = memo.get(key);
+      if (cached !== void 0) return cached;
+      let result2;
+      if (patternOffset === segment.byteLength)
+        result2 = valueOffset === value.byteLength;
+      else if (segment[patternOffset] === 42)
+        result2 = match(patternOffset + 1, valueOffset) || valueOffset < value.byteLength && match(patternOffset, valueOffset + 1);
+      else
+        result2 = valueOffset < value.byteLength && (segment[patternOffset] === 63 || segment[patternOffset] === value[valueOffset]) && match(patternOffset + 1, valueOffset + 1);
+      memo.set(key, result2);
+      return result2;
+    };
+    return match(0, 0);
+  });
+}
+async function readGit(processPort, cwd, argv, maxOutputBytes) {
+  return await processPort.run("/usr/bin/git", argv, {
+    cwd,
+    env: {
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_ASKPASS: "/usr/bin/false",
+      GIT_NO_LAZY_FETCH: "1",
+      GIT_NO_REPLACE_OBJECTS: "1",
+      GIT_OPTIONAL_LOCKS: "0",
+      GIT_SSH_COMMAND: "/usr/bin/false",
+      GIT_TERMINAL_PROMPT: "0",
+      LANG: "C",
+      LC_ALL: "C",
+      PATH: "/usr/bin:/bin",
+      SSH_ASKPASS: "/usr/bin/false",
+      TMPDIR: "/tmp"
+    },
+    maxOutputBytes
+  });
+}
+async function readGitObjectInfo(processPort, cwd, oid3) {
+  const result2 = await processPort.run(
+    "/usr/bin/git",
+    [
+      "--no-replace-objects",
+      "cat-file",
+      "--batch-check=%(objectname) %(objecttype) %(objectsize)"
+    ],
+    {
+      cwd,
+      env: {
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_ASKPASS: "/usr/bin/false",
+        GIT_NO_LAZY_FETCH: "1",
+        GIT_NO_REPLACE_OBJECTS: "1",
+        GIT_OPTIONAL_LOCKS: "0",
+        GIT_SSH_COMMAND: "/usr/bin/false",
+        GIT_TERMINAL_PROMPT: "0",
+        LANG: "C",
+        LC_ALL: "C",
+        PATH: "/usr/bin:/bin",
+        SSH_ASKPASS: "/usr/bin/false",
+        TMPDIR: "/tmp"
+      },
+      input: Buffer.from(`${oid3}
+`, "ascii"),
+      maxOutputBytes: 256
+    }
+  );
+  if (result2.code !== 0 || result2.signal !== null || result2.stderr.byteLength !== 0)
+    return { status: "ambiguous" };
+  const output = result2.stdout.toString("ascii");
+  if (output === `${oid3} missing
+`) return { status: "missing" };
+  const match = /^([0-9a-f]{40}|[0-9a-f]{64}) ([a-z][a-z0-9_-]*) (0|[1-9][0-9]*)\n$/u.exec(
+    output
+  );
+  if (match === null || match[1] !== oid3) return { status: "ambiguous" };
+  const byteCount = Number(match[3]);
+  return Number.isSafeInteger(byteCount) ? { byteCount, objectType: match[2], status: "observed" } : { status: "ambiguous" };
+}
+async function resolveSources(cwd, effect2, processPort, objectFormat) {
+  if (!await objectFormatMatches(cwd, processPort, objectFormat))
+    return ambiguous({ operation: "object-format" });
+  const sourceInfo = await readGitObjectInfo(
+    processPort,
+    cwd,
+    effect2.params.sourceOid
+  );
+  if (sourceInfo.status === "missing")
+    return refusal("source_absent", { sourceOid: effect2.params.sourceOid });
+  if (sourceInfo.status === "ambiguous")
+    return ambiguous({
+      operation: "source-object",
+      sourceOid: effect2.params.sourceOid
+    });
+  if (sourceInfo.objectType !== "commit")
+    return refusal("non_blob", {
+      objectType: sourceInfo.objectType,
+      sourceOid: effect2.params.sourceOid
+    });
+  const treeArgv = [
+    "--no-replace-objects",
+    "ls-tree",
+    "-rz",
+    "-r",
+    "--full-tree",
+    effect2.params.sourceOid
+  ];
+  const tree = processPort.runTree === void 0 ? await readGit(processPort, cwd, treeArgv, 4 * 1024 * 1024) : await processPort.runTree(
+    "/usr/bin/git",
+    treeArgv,
+    {
+      cwd,
+      env: {
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_ASKPASS: "/usr/bin/false",
+        GIT_NO_LAZY_FETCH: "1",
+        GIT_NO_REPLACE_OBJECTS: "1",
+        GIT_OPTIONAL_LOCKS: "0",
+        GIT_SSH_COMMAND: "/usr/bin/false",
+        GIT_TERMINAL_PROMPT: "0",
+        LANG: "C",
+        LC_ALL: "C",
+        PATH: "/usr/bin:/bin",
+        SSH_ASKPASS: "/usr/bin/false",
+        TMPDIR: "/tmp"
+      },
+      maxOutputBytes: 8192
+    },
+    effect2.params.sourcePattern
+  );
+  if (tree.code !== 0 || tree.signal !== null || tree.stderr.byteLength !== 0 || "parsingValid" in tree && !tree.parsingValid)
+    return ambiguous({
+      operation: "ls-tree",
+      sourceOid: effect2.params.sourceOid
+    });
+  const unsafeMatchedPathHash = tree.unsafeMatchedPathHash;
+  if (unsafeMatchedPathHash !== void 0)
+    return refusal("unsafe_path", { pathHash: unsafeMatchedPathHash });
+  const parsed = parseTree(tree.stdout);
+  if (!parsed.valid) return ambiguous({ operation: "parse-tree" });
+  const retainedMatches = tree.retainedMatches;
+  const matched = retainedMatches !== void 0 ? parsed.entries : parsed.entries.filter(
+    (entry) => matchesPatternBytes(effect2.params.sourcePattern, entry.path)
+  );
+  const matchCount = retainedMatches ?? matched.length;
+  if (matchCount === 0)
+    return refusal("zero_matches", { pattern: effect2.params.sourcePattern });
+  if (matchCount > LIMITS.materialisationMatches || matchCount > effect2.params.remainingItemCapacity)
+    return refusal(
+      matchCount > LIMITS.materialisationMatches ? "too_many_matches" : "wave_item_limit",
+      { matchCount }
+    );
+  if (matched.some(
+    (entry) => entry.type !== "blob" || entry.mode !== "100644" && entry.mode !== "100755"
+  ))
+    return refusal("non_blob", {
+      pathHashes: matched.filter(
+        (entry) => entry.type !== "blob" || entry.mode !== "100644" && entry.mode !== "100755"
+      ).map((entry) => hashBytes(entry.path))
+    });
+  const ordered = [...matched].sort(
+    (left, right) => left.path.compare(right.path)
+  );
+  const sources = [];
+  let total = 0;
+  for (const entry of ordered) {
+    let sourcePath;
+    try {
+      sourcePath = new TextDecoder("utf-8", { fatal: true }).decode(entry.path);
+    } catch {
+      return refusal("unsafe_path", { pathHash: hashBytes(entry.path) });
+    }
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/u.test(
+      sourcePath
+    ) || Buffer.byteLength(sourcePath) > LIMITS.materialisationPathBytes || !exactOid2(entry.blobOid))
+      return refusal("unsafe_path", { pathHash: hashBytes(entry.path) });
+    const blobInfo = await readGitObjectInfo(processPort, cwd, entry.blobOid);
+    if (blobInfo.status === "missing")
+      return refusal("source_absent", { blobOid: entry.blobOid });
+    if (blobInfo.status === "ambiguous")
+      return ambiguous({ blobOid: entry.blobOid, operation: "blob-object" });
+    if (blobInfo.objectType !== "blob")
+      return refusal("non_blob", {
+        blobOid: entry.blobOid,
+        objectType: blobInfo.objectType
+      });
+    if (blobInfo.byteCount > LIMITS.materialisationBlobBytes)
+      return refusal("blob_too_large", { blobOid: entry.blobOid });
+    const blob = await readGit(
+      processPort,
+      cwd,
+      ["--no-replace-objects", "cat-file", "blob", entry.blobOid],
+      LIMITS.materialisationBlobBytes + 1
+    );
+    if (blob.code !== 0 || blob.signal !== null || blob.stderr.byteLength !== 0 || blob.stdout.byteLength !== blobInfo.byteCount)
+      return ambiguous({ blobOid: entry.blobOid, operation: "cat-file" });
+    total += blob.stdout.byteLength;
+    if (total > effect2.params.remainingSourceByteCapacity)
+      return refusal("wave_byte_limit", { byteCount: total });
+    sources.push({
+      blobOid: entry.blobOid,
+      byteCount: blob.stdout.byteLength,
+      path: sourcePath,
+      sha256: hashBytes(blob.stdout)
+    });
+  }
+  const expansionBinding = {
+    capacities: {
+      remainingAggregateEnvelopeByteCapacity: effect2.params.remainingAggregateEnvelopeByteCapacity,
+      remainingItemCapacity: effect2.params.remainingItemCapacity,
+      remainingProjectionSnapshotByteCapacity: effect2.params.remainingProjectionSnapshotByteCapacity,
+      remainingSourceByteCapacity: effect2.params.remainingSourceByteCapacity
+    },
+    destinationProbeGateEntryId: effect2.params.destinationProbeGateEntryId,
+    domainScope: effect2.params.domainScope,
+    driver: effect2.params.driver,
+    executorTool: effect2.params.executorTool,
+    originUnitId: effect2.params.originUnitId,
+    resolutionGateEntryId: effect2.params.gateEntryId,
+    runId: effect2.params.runId,
+    sourceOid: effect2.params.sourceOid,
+    stage: effect2.params.stage,
+    target: effect2.params.target,
+    targetId: effect2.params.targetId,
+    targetOrdinal: effect2.params.targetOrdinal,
+    waveId: effect2.params.waveId
+  };
+  const projectionEvidenceBytes = materialisationProjectionExpansionCost(
+    sources,
+    expansionBinding
+  );
+  const aggregateEvidenceBytes = materialisationAggregateExpansionCost(
+    sources,
+    expansionBinding
+  );
+  if (projectionEvidenceBytes > effect2.params.remainingProjectionSnapshotByteCapacity || aggregateEvidenceBytes > effect2.params.remainingAggregateEnvelopeByteCapacity)
+    return refusal("evidence_budget_exceeded", {
+      aggregateEvidenceBytes,
+      gateEntryId: effect2.gateEntryId,
+      projectionEvidenceBytes
+    });
+  return { sources, status: "observed" };
+}
+async function objectFormatMatches(cwd, processPort, expected) {
+  const result2 = await readGit(
+    processPort,
+    cwd,
+    ["--no-replace-objects", "rev-parse", "--show-object-format"],
+    128
+  );
+  return result2.code === 0 && result2.signal === null && result2.stderr.byteLength === 0 && result2.stdout.toString("ascii") === `${expected}
+`;
+}
+var HELPER_SOURCE = String.raw`
+const fs = require("node:fs");
+const crypto = require("node:crypto");
+const path = require("node:path");
+const chunks = [];
+process.stdin.on("data", chunk => chunks.push(chunk));
+process.stdin.on("end", () => {
+  const input = Buffer.concat(chunks);
+  let offset = 0;
+  const u32 = () => { const value = input.readUInt32BE(offset); offset += 4; return value; };
+  const take = length => { const value = input.subarray(offset, offset + length); offset += length; return value; };
+  const respond = value => process.stdout.write(JSON.stringify(value));
+  const fail = (status, code) => { respond({ status, code }); process.exit(0); };
+  try {
+    const metadata = JSON.parse(take(u32()).toString("utf8"));
+    const sidecar = take(u32());
+    const artifact = take(u32());
+    if (offset !== input.length) return fail("ambiguous", "bad-frame");
+    const basename = value => typeof value === "string" && path.basename(value) === value && value !== "." && value !== "..";
+    for (const value of [metadata.artifactName, metadata.sidecarName, metadata.artifactTemp, metadata.sidecarTemp])
+      if (!basename(value)) return fail("refused", "bad-name");
+    const identity = () => {
+      const value = fs.statSync(".", { bigint: true });
+      return String(value.dev) === metadata.dev && String(value.ino) === metadata.ino && fs.realpathSync(".") === metadata.realpath;
+    };
+    if (!identity()) return fail("refused", "identity");
+    const digest = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
+    const inspect = (name, maximumBytes) => {
+      try {
+        const first = fs.lstatSync(name, { bigint: true });
+        if (!first.isFile() || first.isSymbolicLink() || first.size > BigInt(maximumBytes)) return { state: "special" };
+        const fd = fs.openSync(name, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+        try {
+          const second = fs.fstatSync(fd, { bigint: true });
+          if (!second.isFile() || first.dev !== second.dev || first.ino !== second.ino || second.size > BigInt(maximumBytes)) return { state: "special" };
+          const bytes = fs.readFileSync(fd);
+          return { state: "file", bytes, dev: second.dev, ino: second.ino, nlink: second.nlink };
+        } finally { fs.closeSync(fd); }
+      } catch (error) {
+        if (error && error.code === "ENOENT") return { state: "absent" };
+        throw error;
+      }
+    };
+    const matches = (found, bytes) => found.state === "file" && found.bytes.length === bytes.length && digest(found.bytes) === digest(bytes);
+    const inspectPair = (finalName, tempName, bytes) => {
+      const final = inspect(finalName, bytes.length);
+      const temp = inspect(tempName, bytes.length);
+      if (final.state === "special") return { status: "ambiguous", code: "special-final" };
+      if (temp.state === "special") return { status: "ambiguous", code: "special-temp" };
+      if (final.state === "file") {
+        if (!matches(final, bytes)) return { status: "ambiguous", code: "different-final" };
+        if (temp.state === "absent") return { status: "already_present", final, temp };
+        if (!matches(temp, bytes) || final.dev !== temp.dev || final.ino !== temp.ino || final.nlink !== 2n || temp.nlink !== 2n)
+          return { status: "ambiguous", code: "foreign-linked-temp" };
+        return { status: "linked_crash", final, temp };
+      }
+      if (temp.state === "file" && temp.nlink !== 1n)
+        return { status: "ambiguous", code: "foreign-temp-link" };
+      return { status: "ready", final, temp };
+    };
+    const sidecarPreflight = inspectPair(metadata.sidecarName, metadata.sidecarTemp, sidecar);
+    const artifactPreflight = inspectPair(metadata.artifactName, metadata.artifactTemp, artifact);
+    for (const checked of [sidecarPreflight, artifactPreflight])
+      if (checked.status === "ambiguous") return fail("ambiguous", checked.code);
+    const fsyncDirectory = () => {
+      const directory = fs.openSync(".", fs.constants.O_RDONLY);
+      try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
+    };
+    const publish = (finalName, tempName, bytes, preflight) => {
+      if (preflight.status === "already_present") return { status: "already_present" };
+      if (preflight.status === "linked_crash") {
+        fs.unlinkSync(tempName);
+        fsyncDirectory();
+        if (!identity()) return { status: "ambiguous", code: "identity-drift" };
+        const final = inspect(finalName, bytes.length);
+        if (!matches(final, bytes) || final.nlink !== 1n)
+          return { status: "ambiguous", code: "crash-cleanup-readback" };
+        return { status: "already_present" };
+      }
+      let temp = preflight.temp;
+      if (temp.state === "file" && !matches(temp, bytes)) { fs.unlinkSync(tempName); temp = { state: "absent" }; }
+      if (temp.state === "absent") {
+        let fd;
+        try { fd = fs.openSync(tempName, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | (fs.constants.O_NOFOLLOW || 0), 0o600); }
+        catch (error) { return error && error.code === "EEXIST" ? { status: "ambiguous", code: "temp-race" } : { status: "ambiguous", code: "temp-create" }; }
+        try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        temp = inspect(tempName, bytes.length);
+        if (temp.state !== "file" || temp.nlink !== 1n || !matches(temp, bytes)) return { status: "ambiguous", code: "temp-readback" };
+      }
+      if (!identity()) return { status: "ambiguous", code: "identity-drift" };
+      let final;
+      try { fs.linkSync(tempName, finalName); }
+      catch (error) {
+        if (error && error.code === "EEXIST") {
+          final = inspect(finalName, bytes.length);
+          if (!matches(final, bytes)) return { status: "ambiguous", code: "eexist-different" };
+          const ownTemp = inspect(tempName, bytes.length);
+          if (ownTemp.state !== "file" || ownTemp.nlink !== 1n || !matches(ownTemp, bytes))
+            return { status: "ambiguous", code: "eexist-temp" };
+          fs.unlinkSync(tempName);
+          fsyncDirectory();
+          if (!identity()) return { status: "ambiguous", code: "identity-drift" };
+          final = inspect(finalName, bytes.length);
+          if (!matches(final, bytes)) return { status: "ambiguous", code: "eexist-readback" };
+          return { status: "already_present" };
+        } else if (error && ["EXDEV", "ENOTSUP", "EOPNOTSUPP", "EPERM"].includes(error.code)) {
+          final = inspect(finalName, bytes.length);
+          if (final.state !== "absent") return { status: "ambiguous", code: "unsupported-uncertain" };
+          if (inspect(tempName, bytes.length).state === "file") fs.unlinkSync(tempName);
+          return { status: "refused", code: "hard-links-unsupported" };
+        } else return { status: "ambiguous", code: "link" };
+      }
+      final = inspect(finalName, bytes.length);
+      temp = inspect(tempName, bytes.length);
+      if (final.state !== "file" || temp.state !== "file" || final.dev !== temp.dev || final.ino !== temp.ino || final.nlink !== 2n || temp.nlink !== 2n || !matches(final, bytes) || !matches(temp, bytes))
+        return { status: "ambiguous", code: "final-readback" };
+      const publishedDev = final.dev;
+      const publishedIno = final.ino;
+      fsyncDirectory();
+      fs.unlinkSync(tempName);
+      fsyncDirectory();
+      final = inspect(finalName, bytes.length);
+      if (!matches(final, bytes) || final.dev !== publishedDev || final.ino !== publishedIno || final.nlink !== 1n)
+        return { status: "ambiguous", code: "unlink-readback" };
+      if (!identity()) return { status: "ambiguous", code: "identity-drift" };
+      return { status: "published" };
+    };
+    const sidecarResult = publish(metadata.sidecarName, metadata.sidecarTemp, sidecar, sidecarPreflight);
+    if (sidecarResult.status === "ambiguous") return fail("ambiguous", sidecarResult.code);
+    if (sidecarResult.status === "refused")
+      return artifactPreflight.status === "already_present" || artifactPreflight.status === "linked_crash"
+        ? fail("ambiguous", "unsupported-with-existing-final")
+        : fail("refused", sidecarResult.code);
+    const artifactResult = publish(metadata.artifactName, metadata.artifactTemp, artifact, artifactPreflight);
+    if (artifactResult.status === "ambiguous") return fail("ambiguous", artifactResult.code);
+    if (artifactResult.status === "refused") return fail("ambiguous", "partial-unsupported");
+    const finalArtifact = inspect(metadata.artifactName, artifact.length);
+    const finalSidecar = inspect(metadata.sidecarName, sidecar.length);
+    const finalArtifactTemp = inspect(metadata.artifactTemp, artifact.length);
+    const finalSidecarTemp = inspect(metadata.sidecarTemp, sidecar.length);
+    if (!matches(finalArtifact, artifact) || !matches(finalSidecar, sidecar) || finalArtifactTemp.state !== "absent" || finalSidecarTemp.state !== "absent")
+      return fail("ambiguous", "final-readback");
+    if (!identity()) return fail("ambiguous", "identity-drift");
+    respond({ status: "observed", artifactStatus: artifactResult.status, sidecarStatus: sidecarResult.status });
+  } catch { fail("ambiguous", "helper-exception"); }
+});
+`;
+function frame(metadata, sidecar, artifact) {
+  const header = Buffer.from(canonicalJson(metadata), "utf8");
+  const length = (value) => {
+    const output = Buffer.alloc(4);
+    output.writeUInt32BE(value);
+    return output;
+  };
+  return Buffer.concat([
+    length(header.byteLength),
+    header,
+    length(sidecar.byteLength),
+    sidecar,
+    length(artifact.byteLength),
+    artifact
+  ]);
+}
+async function admittedDestination(destination, destinationSubpath) {
+  const root = destination.canonicalRoot;
+  if (!isAbsolute4(root) || normalize4(resolve4(root)) !== root || root === "/")
+    return { reason: "invalid_destination", status: "refused" };
+  try {
+    let rootLink;
+    try {
+      rootLink = await lstat(root, { bigint: true });
+    } catch (error) {
+      return error.code === "ENOENT" ? { reason: "alias_unmounted", status: "refused" } : { status: "ambiguous" };
+    }
+    if (!rootLink.isDirectory() || rootLink.isSymbolicLink())
+      return { reason: "invalid_destination", status: "refused" };
+    if (await realpath(root) !== root)
+      return { reason: "invalid_destination", status: "refused" };
+    let marker;
+    try {
+      marker = await lstat(join2(root, destination.markerFile), {
+        bigint: true
+      });
+    } catch (error) {
+      return error.code === "ENOENT" ? { reason: "alias_unmounted", status: "refused" } : { status: "ambiguous" };
+    }
+    if (!marker.isFile() || marker.isSymbolicLink())
+      return { reason: "invalid_destination", status: "refused" };
+    let current = root;
+    for (const segment of destinationSubpath.split("/")) {
+      current = join2(current, segment);
+      let component;
+      try {
+        component = await lstat(current, { bigint: true });
+      } catch (error) {
+        return error.code === "ENOENT" ? { reason: "invalid_destination", status: "refused" } : { status: "ambiguous" };
+      }
+      if (!component.isDirectory() || component.isSymbolicLink())
+        return { reason: "invalid_destination", status: "refused" };
+      const suffix = relative2(root, current);
+      if (suffix.startsWith("../") || isAbsolute4(suffix))
+        return { reason: "invalid_destination", status: "refused" };
+    }
+    const canonical2 = await realpath(current);
+    if (canonical2 !== current)
+      return { reason: "invalid_destination", status: "refused" };
+    const identity2 = await stat(current, { bigint: true });
+    return {
+      identity: {
+        canonicalPath: current,
+        device: String(identity2.dev),
+        inode: String(identity2.ino)
+      },
+      status: "observed"
+    };
+  } catch (error) {
+    return { status: "ambiguous" };
+  }
+}
+function sameDestinationIdentity2(left, right) {
+  return left.canonicalPath === right.canonicalPath && left.device === right.device && left.inode === right.inode;
+}
+async function probeDestination(effect2) {
+  const result2 = await admittedDestination(
+    effect2.params.destination,
+    effect2.params.destinationSubpath
+  );
+  if (result2.status === "refused")
+    return refusal(
+      result2.reason === "alias_unmounted" ? effect2.params.destination.mountPolicy === "optional" ? "optional_alias_unmounted" : "required_alias_unmounted" : "invalid_destination",
+      {
+        alias: effect2.params.destination.alias,
+        mountPolicy: effect2.params.destination.mountPolicy,
+        reason: result2.reason
+      }
+    );
+  if (result2.status === "ambiguous")
+    return ambiguous({
+      alias: effect2.params.destination.alias,
+      operation: "containment"
+    });
+  if (effect2.params.expectedPriorIdentity !== void 0 && !sameDestinationIdentity2(
+    result2.identity,
+    effect2.params.expectedPriorIdentity
+  ))
+    return ambiguous({
+      alias: effect2.params.destination.alias,
+      operation: "destination-identity-mismatch"
+    });
+  return { identity: result2.identity, status: "observed" };
+}
+async function materialiseBytes(cwd, effect2, processPort, objectFormat) {
+  if (!await objectFormatMatches(cwd, processPort, objectFormat))
+    return ambiguous({ operation: "object-format" });
+  const blobInfo = await readGitObjectInfo(
+    processPort,
+    cwd,
+    effect2.params.source.blobOid
+  );
+  if (blobInfo.status === "missing")
+    return refusal("source_absent", { blobOid: effect2.params.source.blobOid });
+  if (blobInfo.status !== "observed" || blobInfo.objectType !== "blob" || blobInfo.byteCount !== effect2.params.source.byteCount)
+    return ambiguous({
+      blobOid: effect2.params.source.blobOid,
+      operation: "source-object"
+    });
+  const blob = await readGit(
+    processPort,
+    cwd,
+    ["--no-replace-objects", "cat-file", "blob", effect2.params.source.blobOid],
+    LIMITS.materialisationBlobBytes + 1
+  );
+  if (blob.code !== 0 || blob.signal !== null || blob.stderr.byteLength !== 0)
+    return ambiguous({
+      blobOid: effect2.params.source.blobOid,
+      operation: "cat-file"
+    });
+  if (blob.stdout.byteLength !== effect2.params.source.byteCount || hashBytes(blob.stdout) !== effect2.params.source.sha256)
+    return ambiguous({
+      blobOid: effect2.params.source.blobOid,
+      operation: "source-changed"
+    });
+  const sidecar = Buffer.from(effect2.params.sidecarBytes, "utf8");
+  let sidecarValue;
+  try {
+    sidecarValue = JSON.parse(effect2.params.sidecarBytes.slice(0, -1));
+  } catch {
+    return ambiguous({ operation: "sidecar-canonical-json" });
+  }
+  const parsedSidecar = validate(MaterialisationSidecarSchema, sidecarValue);
+  if (sidecar.byteLength !== effect2.params.sidecarByteCount || hashBytes(sidecar) !== effect2.params.sidecarSha256 || !effect2.params.sidecarBytes.endsWith("\n") || effect2.params.sidecarBytes.endsWith("\n\n") || !parsedSidecar.ok || parsedSidecar.value === void 0 || `${canonicalJson(parsedSidecar.value)}
+` !== effect2.params.sidecarBytes)
+    return ambiguous({ operation: "sidecar-binding" });
+  if (effect2.params.namespaceControl !== "exclusive")
+    return ambiguous({ operation: "namespace-control" });
+  const destination = await admittedDestination(
+    effect2.params.destination,
+    effect2.params.destinationSubpath
+  );
+  if (destination.status === "refused")
+    return ambiguous({
+      alias: effect2.params.destination.alias,
+      operation: "destination-drift",
+      reason: destination.reason
+    });
+  if (destination.status === "ambiguous")
+    return ambiguous({
+      alias: effect2.params.destination.alias,
+      operation: "containment"
+    });
+  if (!sameDestinationIdentity2(
+    destination.identity,
+    effect2.params.destinationIdentity
+  ))
+    return ambiguous({
+      alias: effect2.params.destination.alias,
+      operation: "destination-identity-mismatch",
+      observed: destination.identity
+    });
+  const metadata = {
+    artifactName: effect2.params.artifactName,
+    artifactTemp: `.${effect2.params.artifactName}.sce-tmp`,
+    dev: destination.identity.device,
+    ino: destination.identity.inode,
+    realpath: destination.identity.canonicalPath,
+    sidecarName: effect2.params.sidecarName,
+    sidecarTemp: `.${effect2.params.sidecarName}.sce-tmp`
+  };
+  const result2 = await processPort.run(
+    process.execPath,
+    ["-e", HELPER_SOURCE],
+    {
+      cwd: destination.identity.canonicalPath,
+      env: { LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin", TMPDIR: "/tmp" },
+      input: frame(metadata, sidecar, blob.stdout),
+      maxOutputBytes: 8192
+    }
+  );
+  if (result2.code !== 0 || result2.signal !== null || result2.stderr.byteLength !== 0)
+    return ambiguous({ operation: "helper-process" });
+  let parsed;
+  try {
+    parsed = JSON.parse(result2.stdout.toString("utf8"));
+  } catch {
+    return ambiguous({ operation: "helper-output" });
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed))
+    return ambiguous({ operation: "helper-shape" });
+  const value = parsed;
+  if (value.status === "refused" && value.code === "hard-links-unsupported" && Object.keys(value).sort().join(",") === "code,status")
+    return refusal("hard_links_unsupported", {
+      alias: effect2.params.destination.alias
+    });
+  if (value.status !== "observed" || !["already_present", "published"].includes(String(value.artifactStatus)) || !["already_present", "published"].includes(String(value.sidecarStatus)) || Object.keys(value).sort().join(",") !== "artifactStatus,sidecarStatus,status")
+    return ambiguous({
+      operation: "helper-result",
+      outputHash: hashBytes(result2.stdout)
+    });
+  return {
+    observation: {
+      artifactByteCount: blob.stdout.byteLength,
+      artifactSha256: effect2.params.source.sha256,
+      artifactStatus: value.artifactStatus,
+      sidecarByteCount: sidecar.byteLength,
+      sidecarSha256: effect2.params.sidecarSha256,
+      sidecarStatus: value.sidecarStatus
+    },
+    status: "observed"
+  };
+}
+async function discoverMaterialisation(cwd, effect2, processPort, objectFormat) {
+  if (!await objectFormatMatches(cwd, processPort, objectFormat))
+    return ambiguous({ operation: "object-format" });
+  const blobInfo = await readGitObjectInfo(
+    processPort,
+    cwd,
+    effect2.params.source.blobOid
+  );
+  if (blobInfo.status === "missing")
+    return refusal("source_absent", { blobOid: effect2.params.source.blobOid });
+  if (blobInfo.status !== "observed" || blobInfo.objectType !== "blob" || blobInfo.byteCount !== effect2.params.source.byteCount)
+    return ambiguous({ operation: "source-readback" });
+  const blob = await readGit(
+    processPort,
+    cwd,
+    ["--no-replace-objects", "cat-file", "blob", effect2.params.source.blobOid],
+    LIMITS.materialisationBlobBytes + 1
+  );
+  if (blob.code !== 0 || blob.signal !== null || blob.stderr.byteLength !== 0 || blob.stdout.byteLength !== effect2.params.source.byteCount || hashBytes(blob.stdout) !== effect2.params.source.sha256)
+    return ambiguous({ operation: "source-readback" });
+  const sidecar = Buffer.from(effect2.params.sidecarBytes, "utf8");
+  let sidecarValue;
+  try {
+    sidecarValue = JSON.parse(effect2.params.sidecarBytes.slice(0, -1));
+  } catch {
+    return ambiguous({ operation: "sidecar-canonical-json" });
+  }
+  const parsedSidecar = validate(MaterialisationSidecarSchema, sidecarValue);
+  if (sidecar.byteLength !== effect2.params.sidecarByteCount || hashBytes(sidecar) !== effect2.params.sidecarSha256 || !effect2.params.sidecarBytes.endsWith("\n") || !parsedSidecar.ok || parsedSidecar.value === void 0 || `${canonicalJson(parsedSidecar.value)}
+` !== effect2.params.sidecarBytes)
+    return ambiguous({ operation: "sidecar-binding" });
+  const destination = await admittedDestination(
+    effect2.params.destination,
+    effect2.params.destinationSubpath
+  );
+  if (destination.status !== "observed" || !sameDestinationIdentity2(
+    destination.identity,
+    effect2.params.destinationIdentity
+  ))
+    return ambiguous({ operation: "destination-drift" });
+  const [artifact, sidecarFile, artifactTemp, sidecarTemp] = await Promise.all([
+    readNoFollow(
+      destination.identity.canonicalPath,
+      effect2.params.artifactName,
+      effect2.params.source.byteCount
+    ),
+    readNoFollow(
+      destination.identity.canonicalPath,
+      effect2.params.sidecarName,
+      effect2.params.sidecarByteCount
+    ),
+    readNoFollow(
+      destination.identity.canonicalPath,
+      `.${effect2.params.artifactName}.sce-tmp`,
+      effect2.params.source.byteCount
+    ),
+    readNoFollow(
+      destination.identity.canonicalPath,
+      `.${effect2.params.sidecarName}.sce-tmp`,
+      effect2.params.sidecarByteCount
+    )
+  ]);
+  const classifyPair = (final, temp, expected) => {
+    if (final.status === "ambiguous" || temp.status === "ambiguous")
+      return "ambiguous";
+    if (final.status === "absent") {
+      if (temp.status === "absent") return "absent";
+      return temp.nlink === 1n ? "recoverable" : "ambiguous";
+    }
+    if (!final.bytes.equals(expected)) return "ambiguous";
+    if (temp.status === "absent") return "final";
+    return temp.bytes.equals(expected) && final.device === temp.device && final.inode === temp.inode && final.nlink === 2n && temp.nlink === 2n ? "recoverable" : "ambiguous";
+  };
+  const artifactState = classifyPair(artifact, artifactTemp, blob.stdout);
+  const sidecarState = classifyPair(sidecarFile, sidecarTemp, sidecar);
+  if (artifactState === "ambiguous" || sidecarState === "ambiguous")
+    return ambiguous({ operation: "final-readback" });
+  if (artifactState !== "final" || sidecarState !== "final")
+    return { status: "absent" };
+  if (artifact.status !== "file" || sidecarFile.status !== "file")
+    return ambiguous({ operation: "final-state" });
+  return {
+    observation: {
+      artifactByteCount: artifact.bytes.byteLength,
+      artifactSha256: hashBytes(artifact.bytes),
+      artifactStatus: "already_present",
+      sidecarByteCount: sidecarFile.bytes.byteLength,
+      sidecarSha256: hashBytes(sidecarFile.bytes),
+      sidecarStatus: "already_present"
+    },
+    status: "observed"
+  };
+}
+function createMaterialisationAdapter(repositoryCwd, objectFormat, processPort = nodeMaterialisationProcess) {
+  return {
+    discoverMaterialise: async (effect2) => await discoverMaterialisation(
+      repositoryCwd,
+      effect2,
+      processPort,
+      objectFormat
+    ),
+    materialise: async (effect2) => await materialiseBytes(repositoryCwd, effect2, processPort, objectFormat),
+    probe: async (effect2) => await probeDestination(effect2),
+    resolve: async (effect2) => await resolveSources(repositoryCwd, effect2, processPort, objectFormat)
+  };
+}
+
 // src/fencing/schemas.ts
 var FENCING_SCHEMA_VERSION = 1;
 var MERGE_SLOT_LABEL = "gt:slot";
@@ -17137,7 +23245,7 @@ function validateMutationBatch(input) {
 import {
   chmodSync,
   closeSync,
-  constants,
+  constants as constants2,
   fstatSync,
   lstatSync,
   mkdirSync,
@@ -17148,7 +23256,7 @@ import {
   unlinkSync,
   writeFileSync
 } from "node:fs";
-import { join as join2 } from "node:path";
+import { join as join3 } from "node:path";
 import { createConnection, createServer } from "node:net";
 var LOCK_DIRECTORY = ".sce-op";
 var SOCKET_NAME = "l";
@@ -17159,12 +23267,12 @@ var utf86 = new TextEncoder();
 function ownerMatches(uid) {
   return typeof process.getuid !== "function" || uid === process.getuid();
 }
-function identity(stat2) {
+function identity(stat3) {
   return {
-    dev: stat2.dev,
-    ino: stat2.ino,
-    mode: stat2.mode & 511,
-    uid: stat2.uid
+    dev: stat3.dev,
+    ino: stat3.ino,
+    mode: stat3.mode & 511,
+    uid: stat3.uid
   };
 }
 function sameIdentity(left, right) {
@@ -17175,18 +23283,18 @@ function absentError(error) {
 }
 function strictDirectory(path2, expectedMode) {
   try {
-    const stat2 = lstatSync(path2);
-    return stat2.isDirectory() && !stat2.isSymbolicLink() && ownerMatches(stat2.uid) && (expectedMode === void 0 || (stat2.mode & 511) === expectedMode);
+    const stat3 = lstatSync(path2);
+    return stat3.isDirectory() && !stat3.isSymbolicLink() && ownerMatches(stat3.uid) && (expectedMode === void 0 || (stat3.mode & 511) === expectedMode);
   } catch {
     return false;
   }
 }
 function captureSocket(path2) {
   try {
-    const stat2 = lstatSync(path2);
-    if (!stat2.isSocket() || stat2.isSymbolicLink() || !ownerMatches(stat2.uid) || (stat2.mode & 511) !== 384)
+    const stat3 = lstatSync(path2);
+    if (!stat3.isSocket() || stat3.isSymbolicLink() || !ownerMatches(stat3.uid) || (stat3.mode & 511) !== 384)
       return { kind: "invalid" };
-    return { kind: "valid", value: { identity: identity(stat2) } };
+    return { kind: "valid", value: { identity: identity(stat3) } };
   } catch (error) {
     return absentError(error) ? { kind: "absent" } : { kind: "invalid" };
   }
@@ -17198,9 +23306,9 @@ function captureState(path2) {
   let descriptor;
   try {
     const before = lstatSync(path2);
-    if (!before.isFile() || before.isSymbolicLink() || !ownerMatches(before.uid) || (before.mode & 511) !== 384 || constants.O_NOFOLLOW === void 0)
+    if (!before.isFile() || before.isSymbolicLink() || !ownerMatches(before.uid) || (before.mode & 511) !== 384 || constants2.O_NOFOLLOW === void 0)
       return { kind: "invalid" };
-    descriptor = openSync(path2, constants.O_RDONLY | constants.O_NOFOLLOW);
+    descriptor = openSync(path2, constants2.O_RDONLY | constants2.O_NOFOLLOW);
     const opened = fstatSync(descriptor);
     if (!opened.isFile() || !ownerMatches(opened.uid) || (opened.mode & 511) !== 384 || opened.dev !== before.dev || opened.ino !== before.ino || opened.size > STATE_MAX_BYTES)
       return { kind: "invalid" };
@@ -17227,10 +23335,10 @@ function captureState(path2) {
 function writeState(path2, state) {
   let descriptor;
   try {
-    if (constants.O_NOFOLLOW === void 0) return { kind: "invalid" };
+    if (constants2.O_NOFOLLOW === void 0) return { kind: "invalid" };
     descriptor = openSync(
       path2,
-      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | constants2.O_NOFOLLOW,
       384
     );
     writeFileSync(descriptor, stateSource(state), "utf8");
@@ -17245,7 +23353,7 @@ function paths(commonDir) {
   try {
     if (realpathSync2(commonDir) !== commonDir || !strictDirectory(commonDir))
       return void 0;
-    const directory = join2(commonDir, LOCK_DIRECTORY);
+    const directory = join3(commonDir, LOCK_DIRECTORY);
     try {
       mkdirSync(directory, { mode: 448 });
     } catch (error) {
@@ -17255,44 +23363,44 @@ function paths(commonDir) {
     if (statSync(commonDir).dev !== statSync(directory).dev) return void 0;
     return {
       directory,
-      socket: join2(directory, SOCKET_NAME),
-      state: join2(directory, STATE_NAME)
+      socket: join3(directory, SOCKET_NAME),
+      state: join3(directory, STATE_NAME)
     };
   } catch {
     return void 0;
   }
 }
 function listen(socket) {
-  return new Promise((resolve8) => {
+  return new Promise((resolve9) => {
     const server = createServer((connection) => connection.destroy());
     const fail3 = (error) => {
-      resolve8({ code: error.code ?? "UNKNOWN" });
+      resolve9({ code: error.code ?? "UNKNOWN" });
     };
     server.once("error", fail3);
     server.listen(socket, () => {
       server.removeListener("error", fail3);
-      resolve8({ server });
+      resolve9({ server });
     });
   });
 }
 function socketIsLive(socketPath) {
-  return new Promise((resolve8) => {
+  return new Promise((resolve9) => {
     const socket = createConnection(socketPath);
     socket.once("connect", () => {
       socket.destroy();
-      resolve8(true);
+      resolve9(true);
     });
     socket.once("error", (error) => {
       socket.destroy();
       if (error.code === "ECONNREFUSED" || error.code === "ENOENT")
-        resolve8(false);
-      else resolve8(void 0);
+        resolve9(false);
+      else resolve9(void 0);
     });
   });
 }
 async function closeServer(server) {
-  return new Promise((resolve8) => {
-    server.close((error) => resolve8(error === void 0));
+  return new Promise((resolve9) => {
+    server.close((error) => resolve9(error === void 0));
   });
 }
 function removeSocket(path2, expected) {
@@ -17610,10 +23718,6 @@ function loadOutcome(status) {
 function batchFor(before, nextRun) {
   const nextBase = makeRootProjection(nextRun);
   const changedIds = Object.keys(nextRun.units).filter((unitId) => !same2(before.run.units[unitId], nextRun.units[unitId])).sort();
-  if (Object.keys(before.run.units).some(
-    (unitId) => nextRun.units[unitId] === void 0
-  ))
-    return void 0;
   const changedRows = changedIds.map((unitId) => {
     const prior = before.childRows.find((row) => row.unitId === unitId);
     const child = makeChildProjection(nextBase, unitId);
@@ -17684,12 +23788,19 @@ function ambiguousEvent(run2, entry, observationHash3) {
   return {
     effectId: entry.effectId,
     effectKind: entry.kind,
-    eventId: `recover-${entry.effectId}`,
+    eventId: recoveryEventId(`ambiguous-${entry.effectId}`),
     expectedRevision: run2.revision,
     ...observationHash3 === void 0 ? {} : { observationHash: observationHash3 },
     type: "effect_ambiguous",
-    unitId: entry.unitId
+    unitId: entry.unitId,
+    ...entry.gateEntryId === void 0 ? {} : { gateEntryId: entry.gateEntryId }
   };
+}
+function recoveryEventId(effectId) {
+  const legacy = `recover-${effectId}`;
+  return legacy.length <= 160 ? legacy : `recover-${sha256(
+    canonicalJson({ domain: "sce.recovery-event.v1", effectId })
+  )}`;
 }
 function observationFor(run2, entry, event) {
   const parsed = validate(ProtocolEventSchema, event);
@@ -17739,10 +23850,14 @@ function createRecoveryRunner(options) {
       };
     if (parsed.value.affectedRowCount !== batch.changedRows.length + 1 || !same2(parsed.value.root, batch.next.root) || !same2(parsed.value.children, batch.next.children) || !same2(parsed.value.checkpoint, batch.checkpoint))
       return { status: "quarantined" };
-    const read = validReadback(
-      { children: parsed.value.children, root: parsed.value.root },
-      before.scope
-    );
+    let authoritative;
+    try {
+      authoritative = await options.store.load();
+    } catch {
+      return { status: "quarantined" };
+    }
+    if (authoritative.status !== "observed") return { status: "quarantined" };
+    const read = validReadback(authoritative.value, before.scope);
     return read === void 0 || !same2(read, reduction.nextState) ? { status: "quarantined" } : read;
   }
   async function persistEvent(beforeRoot, run2, event, preOwnership = false) {
@@ -17921,6 +24036,23 @@ function createRecoveryRunner(options) {
       const root = loaded.root;
       const reconciled = requested !== void 0 && isHarnessAcknowledgementRequest(requested) ? run2 : await reconcile2(root, run2);
       if (!isRun(reconciled)) return reconciled;
+      let dedicatedCarryPlan = false;
+      if (requested !== void 0 && isProvenanceCarryClaimRequest(requested)) {
+        if (options.prepareProvenanceCarryClaim === void 0)
+          return { status: "blocked" };
+        let planned;
+        try {
+          planned = await options.prepareProvenanceCarryClaim({
+            predecessorRootBeadId: requested.provenanceCarryClaim.predecessorRootBeadId,
+            run: reconciled
+          });
+        } catch {
+          return { status: "unavailable" };
+        }
+        if (planned.status !== "planned") return { status: planned.status };
+        requested = planned.event;
+        dedicatedCarryPlan = true;
+      }
       if (requested === void 0)
         return {
           status: initialized ? "reconciled" : "idle",
@@ -17971,6 +24103,10 @@ function createRecoveryRunner(options) {
       }
       const event = validate(ProtocolEventSchema, requested);
       if (!event.ok || event.value === void 0) return { status: "corrupt" };
+      if ((event.value.type === "provenance_carry_claim_intent" || event.value.type === "provenance_carry_claim_observed") && !dedicatedCarryPlan)
+        return { status: "blocked" };
+      if (options.validateEvent?.(event.value, reconciled) === false)
+        return { status: "blocked" };
       if (event.value.expectedRevision !== reconciled.revision)
         return { status: "stale" };
       const prepared = await preparedControllerEvent(
@@ -18062,6 +24198,9 @@ function createRecoveryRunner(options) {
 function isHarnessAcknowledgementRequest(value) {
   return value !== null && typeof value === "object" && "harnessAcknowledgement" in value && Object.keys(value).length === 1;
 }
+function isProvenanceCarryClaimRequest(value) {
+  return value !== null && typeof value === "object" && "provenanceCarryClaim" in value && Object.keys(value).length === 1 && value.provenanceCarryClaim !== null && typeof value.provenanceCarryClaim === "object" && Object.keys(value.provenanceCarryClaim).length === 1 && typeof value.provenanceCarryClaim.predecessorRootBeadId === "string";
+}
 function observationHash2(value) {
   return sha256(
     canonicalJson({ domain: "sce.recovery.observation.v1", value })
@@ -18069,7 +24208,103 @@ function observationHash2(value) {
 }
 
 // src/commands/production-recovery.ts
-function ambiguous() {
+function planProvenanceCarryFromProjection(predecessorRootIssueId, currentRootIssueId, currentRun, predecessor) {
+  const refuse = (reason) => ({
+    evidenceDigest: sha256(
+      canonicalJson({
+        domain: "sce.provenance-carry-predecessor-refusal.v1",
+        predecessorRootIssueId,
+        reason
+      })
+    ),
+    reason,
+    status: "refused"
+  });
+  if (predecessorRootIssueId === currentRootIssueId)
+    return refuse("lineage_invalid");
+  const run2 = predecessor.run;
+  if (run2.storeIdentity !== currentRun.storeIdentity || run2.repositoryIdentity !== currentRun.repositoryIdentity || run2.integrationBranch !== currentRun.integrationBranch || run2.gitObjectFormat !== currentRun.gitObjectFormat)
+    return refuse("scope_mismatch");
+  if (run2.state !== "released" || run2.controller.state !== "released")
+    return refuse("not_released");
+  if (run2.effectJournal.some((entry) => entry.status !== "observed"))
+    return refuse("effects_unsettled");
+  const provenance = run2.gate?.provenance;
+  if (provenance?.status !== "voided" || provenance.disposition !== "deferred_by_controller")
+    return refuse("provenance_not_deferred");
+  const snapshot = validate(
+    ProvenanceInputSchema,
+    provenance.projectionInputSnapshot
+  );
+  if (!snapshot.ok || snapshot.value === void 0 || snapshot.value.unitIds.length === 0 || !projectionInputIsValid(snapshot.value) || Buffer.byteLength(
+    canonicalJson(snapshot.value),
+    "utf8"
+  ) > 65536 || snapshot.value.targetEvidence.reduce(
+    (total, target) => total + target.materialisations.length,
+    0
+  ) > LIMITS.materialisationOutputs)
+    return refuse("snapshot_invalid");
+  const ancestors = run2.gate?.lineageAncestorDigests ?? [];
+  if (new Set(ancestors).size !== ancestors.length || run2.gate?.lineageCommitment !== provenanceCarryLineageCommitment(ancestors))
+    return refuse("lineage_invalid");
+  if (ancestors.length >= 128) return refuse("lineage_limit_exceeded");
+  const currentAncestor = provenanceCarryAncestorDigest(
+    currentRootIssueId,
+    currentRun.controller.runId
+  );
+  const predecessorAncestor = provenanceCarryAncestorDigest(
+    predecessorRootIssueId,
+    run2.controller.runId
+  );
+  if (ancestors.includes(currentAncestor) || ancestors.includes(predecessorAncestor) || run2.controller.runId === currentRun.controller.runId)
+    return refuse("lineage_invalid");
+  const lineageAncestorDigests = [...ancestors, predecessorAncestor];
+  const snapshotCommitment = provenanceCarrySnapshotCommitment(snapshot.value);
+  const integrationOid = provenance.advancedBaseOid ?? provenance.baseOid ?? run2.gate?.currentIntegrationOid;
+  if (integrationOid === void 0) return refuse("projection_invalid");
+  const exportId = deriveProvenanceCarryExportId({
+    finalRevision: run2.revision,
+    integrationBranch: run2.integrationBranch,
+    predecessorRootAggregateCommitment: predecessor.aggregateCommitment,
+    predecessorRunId: run2.controller.runId,
+    predecessorWaveId: run2.gate.waveId,
+    repositoryIdentity: run2.repositoryIdentity,
+    snapshotCommitment,
+    storeIdentity: run2.storeIdentity
+  });
+  const plan = {
+    exportId,
+    predecessorFinalRevision: run2.revision,
+    predecessorJournalCheckpointCommitment: run2.journalCheckpoint.commitment,
+    predecessorRootAggregateCommitment: predecessor.aggregateCommitment,
+    predecessorRunId: run2.controller.runId,
+    predecessorWaveId: run2.gate.waveId,
+    snapshotCommitment
+  };
+  return {
+    status: "planned",
+    value: {
+      plan,
+      carry: {
+        exportId,
+        integrationOid,
+        lineageAncestorDigests,
+        lineageCommitment: provenanceCarryLineageCommitment(
+          lineageAncestorDigests
+        ),
+        predecessorFinalRevision: run2.revision,
+        predecessorJournalCheckpointCommitment: run2.journalCheckpoint.commitment,
+        predecessorRootAggregateCommitment: predecessor.aggregateCommitment,
+        predecessorRootBeadId: predecessorRootIssueId,
+        predecessorRunId: run2.controller.runId,
+        predecessorWaveId: run2.gate.waveId,
+        projectionInputSnapshot: snapshot.value,
+        snapshotCommitment
+      }
+    }
+  };
+}
+function ambiguous2() {
   return { status: "ambiguous" };
 }
 function unavailable() {
@@ -18085,23 +24320,26 @@ function eventBase2(effect2, run2) {
   return {
     effectId: effect2.effectId,
     effectKind: effect2.kind,
-    eventId: `recover-${effect2.effectId}`,
+    eventId: recoveryEventId(effect2.effectId),
     expectedRevision: run2.revision,
     observationHash: observationHash2({
       effectId: effect2.effectId,
       kind: effect2.kind,
       paramsHash: effect2.paramsHash
     }),
-    unitId: effect2.unitId
+    unitId: effect2.unitId,
+    ...effect2.gateEntryId === void 0 ? {} : { gateEntryId: effect2.gateEntryId }
   };
 }
 function observed(effect2, run2) {
   const base = eventBase2(effect2, run2);
+  const { unitId: omittedControllerUnitId, ...controllerBase } = base;
+  void omittedControllerUnitId;
   switch (effect2.kind) {
     case "controller_acquire":
       return {
         observation: {
-          ...base,
+          ...controllerBase,
           controllerFencingToken: effect2.params.controllerFencingToken,
           holder: effect2.params.holder,
           type: "controller_acquired"
@@ -18110,7 +24348,10 @@ function observed(effect2, run2) {
       };
     case "controller_release":
       return {
-        observation: { ...base, type: "controller_released" },
+        observation: {
+          ...controllerBase,
+          type: "controller_released"
+        },
         status: "observed"
       };
     case "branch_create":
@@ -18160,6 +24401,65 @@ function observed(effect2, run2) {
       return void 0;
   }
 }
+function carryObservation(effect2, run2, result2) {
+  const { unitId: omittedUnitId, ...base } = eventBase2(effect2, run2);
+  void omittedUnitId;
+  return {
+    observation: {
+      ...base,
+      observationHash: observationHash2(result2),
+      result: result2,
+      type: "provenance_carry_claim_observed"
+    },
+    status: "observed"
+  };
+}
+async function materialisationResult(effect2, run2, adapter) {
+  const result2 = effect2.kind === "materialisation_resolve" ? await adapter.resolve(effect2) : effect2.kind === "destination_probe" ? await adapter.probe(effect2) : await adapter.materialise(effect2);
+  if (result2.status === "ambiguous")
+    return {
+      status: "ambiguous",
+      ...result2.observationHash === void 0 ? {} : { observationHash: result2.observationHash }
+    };
+  const base = {
+    ...eventBase2(effect2, run2),
+    observationHash: observationHash2(result2)
+  };
+  return {
+    observation: effect2.kind === "materialisation_resolve" ? {
+      ...base,
+      result: result2,
+      type: "materialisation_sources_observed"
+    } : effect2.kind === "destination_probe" ? {
+      ...base,
+      result: result2,
+      type: "destination_probe_observed"
+    } : {
+      ...base,
+      result: result2,
+      type: "materialise_observed"
+    },
+    status: "observed"
+  };
+}
+async function discoveredMaterialisationResult(effect2, run2, adapter) {
+  const result2 = await adapter.discoverMaterialise(effect2);
+  if (result2.status === "absent") return { status: "absent" };
+  if (result2.status === "ambiguous")
+    return {
+      status: "ambiguous",
+      ...result2.observationHash === void 0 ? {} : { observationHash: result2.observationHash }
+    };
+  return {
+    observation: {
+      ...eventBase2(effect2, run2),
+      observationHash: observationHash2(result2),
+      result: result2,
+      type: "materialise_observed"
+    },
+    status: "observed"
+  };
+}
 function controllerTransition(effect2) {
   return effect2.kind === "controller_acquire" || effect2.kind === "controller_release" ? effect2.params.slotTransition : void 0;
 }
@@ -18179,10 +24479,10 @@ function candidateInput(effect2, run2) {
 }
 async function candidateObserved(effect2, run2, git) {
   const input = candidateInput(effect2, run2);
-  if (input === void 0) return ambiguous();
+  if (input === void 0) return ambiguous2();
   const result2 = await observeCandidate(git.runner, git.repository, input);
   if (result2.state !== "observed" || result2.snapshot === void 0)
-    return ambiguous();
+    return ambiguous2();
   return {
     observation: {
       ...eventBase2(effect2, run2),
@@ -18195,21 +24495,22 @@ async function candidateObserved(effect2, run2, git) {
   };
 }
 async function verificationRequest(effect2, run2, git) {
+  if (effect2.unitId === null) return ambiguous2();
   const unit = run2.units[effect2.unitId];
   if (unit === void 0 || unit.branchRef === void 0 || unit.worktreePath !== effect2.params.worktreePath || unit.candidateHead !== effect2.params.candidate.headOid || unit.candidateTree !== effect2.params.candidate.treeOid || unit.baseOid !== effect2.params.candidate.baseOid)
-    return ambiguous();
+    return ambiguous2();
   const entry = run2.effectJournal.find(
     (candidate) => candidate.effectId === effect2.effectId && candidate.unitId === effect2.unitId && candidate.kind === "verify"
   );
-  if (entry?.status !== "intended") return ambiguous();
+  if (entry?.status !== "intended") return ambiguous2();
   const binding = await verifyCandidateWorktree(git.runner, git.repository, {
     branch: unit.branchRef,
     head: effect2.params.candidate.headOid,
     path: effect2.params.worktreePath,
     tree: effect2.params.candidate.treeOid
   });
-  const requested = binding.state === "observed" ? verificationToolRequest(effect2, run2) : ambiguous();
-  return requested.status === "tool_request" ? { ...requested, delivery: "mark_ambiguous" } : ambiguous();
+  const requested = binding.state === "observed" ? verificationToolRequest(effect2, run2) : ambiguous2();
+  return requested.status === "tool_request" ? { ...requested, delivery: "mark_ambiguous" } : ambiguous2();
 }
 function canPublish(effect2) {
   return effect2.params.completionBoundary !== "pr-handoff" && effect2.params.authorityProfile !== "local-change-only";
@@ -18234,44 +24535,71 @@ function localIntegrationRef(branch) {
 }
 function createProductionRecoveryEffectAdapter(options) {
   const git = options.git;
+  const materialisation = options.materialisation ?? createMaterialisationAdapter(
+    git.repository.cwd,
+    git.repository.objectFormat
+  );
   const harness = options.harness === void 0 ? void 0 : createHarnessRecoveryEffectAdapter(
     options.harness.support,
     options.harness.port
   );
   async function discover(effect2, run2) {
+    if (effect2.kind === "provenance_carry_claim") {
+      if (options.carry === void 0) return unavailable();
+      try {
+        const result2 = await options.carry.reconcileProvenanceCarryClaim(
+          effect2,
+          run2
+        );
+        return result2.status === "observed" ? carryObservation(effect2, run2, result2.result) : result2;
+      } catch {
+        return ambiguous2();
+      }
+    }
+    if (effect2.kind === "materialisation_resolve" || effect2.kind === "destination_probe" || effect2.kind === "materialise") {
+      if (!gitMatchesRun(git.repository, run2) || effect2.params.repositoryIdentity !== git.repository.identity || (await verifyRepository(git.runner, git.repository)).state !== "observed")
+        return ambiguous2();
+      try {
+        return effect2.kind === "materialise" ? await discoveredMaterialisationResult(effect2, run2, materialisation) : await materialisationResult(effect2, run2, materialisation);
+      } catch {
+        return ambiguous2();
+      }
+    }
+    if (effect2.kind === "provenance_commit") return unavailable();
     if (effect2.kind === "verify") {
-      if (!gitMatchesRun(git.repository, run2)) return ambiguous();
+      if (effect2.unitId === null) return unavailable();
+      if (!gitMatchesRun(git.repository, run2)) return ambiguous2();
       try {
         return await verificationRequest(effect2, run2, git);
       } catch {
-        return ambiguous();
+        return ambiguous2();
       }
     }
     if (harness?.canReconcile?.(effect2))
       return await harness.reconcile(effect2, run2);
     if (effect2.kind === "candidate_collect") {
-      if (!gitMatchesRun(git.repository, run2)) return ambiguous();
+      if (!gitMatchesRun(git.repository, run2)) return ambiguous2();
       try {
         return await candidateObserved(effect2, run2, git);
       } catch {
-        return ambiguous();
+        return ambiguous2();
       }
     }
     const done = observed(effect2, run2);
-    if (done === void 0) return ambiguous();
+    if (done === void 0) return ambiguous2();
     if (effect2.kind !== "controller_acquire" && effect2.kind !== "controller_release" && !gitMatchesRun(git.repository, run2) || (effect2.kind === "controller_acquire" || effect2.kind === "controller_release") && !transitionMatchesRun(effect2, run2))
-      return ambiguous();
+      return ambiguous2();
     try {
       switch (effect2.kind) {
         case "controller_acquire":
         case "controller_release": {
           const transition = controllerTransition(effect2);
           if (transition === void 0 || options.topology === void 0)
-            return ambiguous();
+            return ambiguous2();
           const result2 = await options.topology.reconcileControllerTransition(transition);
           if (result2.status === "observed") return done;
           if (result2.status === "absent") return { status: "absent" };
-          return result2.status === "unavailable" ? unavailable() : ambiguous();
+          return result2.status === "unavailable" ? unavailable() : ambiguous2();
         }
         case "branch_create":
           return discovered(
@@ -18283,7 +24611,7 @@ function createProductionRecoveryEffectAdapter(options) {
           );
         case "worktree_create": {
           const base = worktreeBase(effect2, run2);
-          if (base === void 0) return ambiguous();
+          if (base === void 0) return ambiguous2();
           return discovered(
             done,
             await discoverWorktree(git.runner, git.repository, {
@@ -18296,7 +24624,7 @@ function createProductionRecoveryEffectAdapter(options) {
         case "publish": {
           const configuredRemote = remote(options);
           if (configuredRemote === void 0 || !canPublish(effect2))
-            return ambiguous();
+            return ambiguous2();
           return discovered(
             done,
             await discoverPublication(git.runner, git.repository, {
@@ -18320,7 +24648,7 @@ function createProductionRecoveryEffectAdapter(options) {
             );
           const configuredRemote = remote(options);
           if (effect2.params.integrationProfile !== "remote-ff" || configuredRemote === void 0)
-            return ambiguous();
+            return ambiguous2();
           return discovered(
             done,
             await discoverRemoteIntegration(git.runner, git.repository, {
@@ -18332,35 +24660,58 @@ function createProductionRecoveryEffectAdapter(options) {
           );
         }
         default:
-          return ambiguous();
+          return ambiguous2();
       }
     } catch {
-      return ambiguous();
+      return ambiguous2();
     }
   }
   async function execute2(effect2, run2) {
+    if (effect2.kind === "provenance_carry_claim") {
+      if (options.carry === void 0) return unavailable();
+      try {
+        const result2 = await options.carry.executeProvenanceCarryClaim(
+          effect2,
+          run2
+        );
+        return result2.status === "observed" ? carryObservation(effect2, run2, result2.result) : result2;
+      } catch {
+        return ambiguous2();
+      }
+    }
+    if (effect2.kind === "materialisation_resolve" || effect2.kind === "destination_probe" || effect2.kind === "materialise") {
+      if (!gitMatchesRun(git.repository, run2) || effect2.params.repositoryIdentity !== git.repository.identity || (await verifyRepository(git.runner, git.repository)).state !== "observed")
+        return ambiguous2();
+      try {
+        return await materialisationResult(effect2, run2, materialisation);
+      } catch {
+        return ambiguous2();
+      }
+    }
+    if (effect2.kind === "provenance_commit") return unavailable();
     if (effect2.kind === "verify") {
-      if (!gitMatchesRun(git.repository, run2)) return ambiguous();
+      if (effect2.unitId === null) return unavailable();
+      if (!gitMatchesRun(git.repository, run2)) return ambiguous2();
       try {
         return await verificationRequest(effect2, run2, git);
       } catch {
-        return ambiguous();
+        return ambiguous2();
       }
     }
     if (harness?.canExecute?.(effect2))
       return await harness.execute(effect2, run2);
     if (effect2.kind === "candidate_collect") {
-      if (!gitMatchesRun(git.repository, run2)) return ambiguous();
+      if (!gitMatchesRun(git.repository, run2)) return ambiguous2();
       try {
         return await candidateObserved(effect2, run2, git);
       } catch {
-        return ambiguous();
+        return ambiguous2();
       }
     }
     const done = observed(effect2, run2);
-    if (done === void 0) return ambiguous();
+    if (done === void 0) return ambiguous2();
     if (effect2.kind !== "controller_acquire" && effect2.kind !== "controller_release" && !gitMatchesRun(git.repository, run2) || (effect2.kind === "controller_acquire" || effect2.kind === "controller_release") && !transitionMatchesRun(effect2, run2))
-      return ambiguous();
+      return ambiguous2();
     try {
       switch (effect2.kind) {
         case "controller_acquire":
@@ -18368,9 +24719,9 @@ function createProductionRecoveryEffectAdapter(options) {
           const transition = controllerTransition(effect2);
           const executor = options.topology?.executeControllerTransition;
           if (transition === void 0 || executor === void 0)
-            return ambiguous();
+            return ambiguous2();
           const result2 = await executor(transition);
-          return result2.status === "observed" ? done : result2.status === "unavailable" ? unavailable() : ambiguous();
+          return result2.status === "observed" ? done : result2.status === "unavailable" ? unavailable() : ambiguous2();
         }
         case "branch_create":
           return executed(
@@ -18382,7 +24733,7 @@ function createProductionRecoveryEffectAdapter(options) {
           );
         case "worktree_create": {
           const base = worktreeBase(effect2, run2);
-          if (base === void 0) return ambiguous();
+          if (base === void 0) return ambiguous2();
           return executed(
             done,
             await ensureWorktree(git.runner, git.repository, {
@@ -18395,7 +24746,7 @@ function createProductionRecoveryEffectAdapter(options) {
         case "publish": {
           const configuredRemote = remote(options);
           if (configuredRemote === void 0 || !canPublish(effect2))
-            return ambiguous();
+            return ambiguous2();
           return executed(
             done,
             await publishCandidate(git.runner, git.repository, {
@@ -18419,7 +24770,7 @@ function createProductionRecoveryEffectAdapter(options) {
             );
           const configuredRemote = remote(options);
           if (effect2.params.integrationProfile !== "remote-ff" || configuredRemote === void 0)
-            return ambiguous();
+            return ambiguous2();
           return executed(
             done,
             await integrateRemoteFastForward(git.runner, git.repository, {
@@ -18431,28 +24782,29 @@ function createProductionRecoveryEffectAdapter(options) {
           );
         }
         default:
-          return ambiguous();
+          return ambiguous2();
       }
     } catch {
-      return ambiguous();
+      return ambiguous2();
     }
   }
   return {
-    canExecute: (effect2) => effect2.kind === "verify" || (harness?.canExecute?.(effect2) ?? false),
-    canReconcile: (effect2) => effect2.kind === "verify" || (harness?.canReconcile?.(effect2) ?? false),
+    canExecute: (effect2) => effect2.kind === "verify" || effect2.kind === "materialisation_resolve" || effect2.kind === "destination_probe" || effect2.kind === "materialise" || effect2.kind === "provenance_commit" || effect2.kind === "provenance_carry_claim" && options.carry !== void 0 || (harness?.canExecute?.(effect2) ?? false),
+    canReconcile: (effect2) => effect2.kind === "verify" || effect2.kind === "materialisation_resolve" || effect2.kind === "destination_probe" || effect2.kind === "materialise" || effect2.kind === "provenance_commit" || effect2.kind === "provenance_carry_claim" && options.carry !== void 0 || (harness?.canReconcile?.(effect2) ?? false),
     acknowledge: async (acknowledgement, run2) => {
       const verified = acknowledgeVerificationTool(acknowledgement, run2);
       if (verified !== void 0) {
         if (verified.status !== "observed") return verified;
         const observation = verified.observation;
-        if (!("effectId" in observation)) return ambiguous();
+        if (!("effectId" in observation)) return ambiguous2();
         const entry = run2.effectJournal.find(
           (candidate) => candidate.effectId === observation.effectId
         );
         const effect2 = entry === void 0 ? void 0 : rehydrateEffect(run2, entry);
         if (effect2?.kind !== "verify" || !gitMatchesRun(git.repository, run2))
-          return ambiguous();
+          return ambiguous2();
         try {
+          if (effect2.unitId === null) return ambiguous2();
           const binding = await verifyCandidateWorktree(
             git.runner,
             git.repository,
@@ -18463,23 +24815,95 @@ function createProductionRecoveryEffectAdapter(options) {
               tree: effect2.params.candidate.treeOid
             }
           );
-          return binding.state === "observed" ? verified : ambiguous();
+          return binding.state === "observed" ? verified : ambiguous2();
         } catch {
-          return ambiguous();
+          return ambiguous2();
         }
       }
-      return harness?.acknowledge === void 0 ? ambiguous() : await harness.acknowledge(acknowledgement, run2);
+      return harness?.acknowledge === void 0 ? ambiguous2() : await harness.acknowledge(acknowledgement, run2);
     },
     execute: execute2,
     reconcile: discover
   };
 }
 function createProductionRecoveryRunner(options) {
-  const { git, topology, harness, ...recovery } = options;
+  const { git, topology, harness, knowledgeContract, carry, ...recovery } = options;
+  const authoritativeIntegrationOid = async (run2) => {
+    const verified = await verifyRepository(git.runner, git.repository);
+    if (verified.state !== "observed") return void 0;
+    const argv = run2.integrationProfile === "local-ff" ? [
+      "for-each-ref",
+      "--format=%(objectname)",
+      `refs/heads/${run2.integrationBranch}`
+    ] : git.remote === void 0 ? void 0 : [
+      "ls-remote",
+      "--refs",
+      "--exit-code",
+      git.remote,
+      `refs/heads/${run2.integrationBranch}`
+    ];
+    if (argv === void 0) return void 0;
+    let result2;
+    try {
+      result2 = await git.runner({ argv, cwd: git.repository.cwd });
+    } catch {
+      return void 0;
+    }
+    if (result2.exitCode !== 0 || result2.signal !== null) return void 0;
+    const match = run2.integrationProfile === "local-ff" ? /^([0-9a-f]+)\n$/u.exec(result2.stdout) : new RegExp(
+      `^([0-9a-f]+)\\t${`refs/heads/${run2.integrationBranch}`.replace(
+        /[.*+?^${}()|[\]\\]/gu,
+        "\\$&"
+      )}\\n$`,
+      "u"
+    ).exec(result2.stdout);
+    const oid3 = match?.[1];
+    return oid3?.length === (run2.gitObjectFormat === "sha1" ? 40 : 64) ? oid3 : void 0;
+  };
+  const carryWithGit = carry === void 0 ? void 0 : {
+    prepareProvenanceCarryClaim: async (predecessorRootIssueId, run2) => await carry.prepareProvenanceCarryClaim(
+      predecessorRootIssueId,
+      run2
+    ),
+    executeProvenanceCarryClaim: async (effect2, run2) => {
+      const result2 = await carry.executeProvenanceCarryClaim(effect2, run2);
+      if (result2.status !== "observed" || result2.result.status !== "imported")
+        return result2;
+      const integrationOid = await authoritativeIntegrationOid(run2);
+      return integrationOid === void 0 ? { status: "unavailable" } : {
+        result: {
+          ...result2.result,
+          carry: { ...result2.result.carry, integrationOid }
+        },
+        status: "observed"
+      };
+    },
+    reconcileProvenanceCarryClaim: async (effect2, run2) => {
+      const result2 = await carry.reconcileProvenanceCarryClaim(
+        effect2,
+        run2
+      );
+      if (result2.status !== "observed" || result2.result.status !== "imported")
+        return result2;
+      const integrationOid = await authoritativeIntegrationOid(run2);
+      return integrationOid === void 0 ? { status: "unavailable" } : {
+        result: {
+          ...result2.result,
+          carry: { ...result2.result.carry, integrationOid }
+        },
+        status: "observed"
+      };
+    }
+  };
+  const contractMatches = (value) => knowledgeContract === void 0 === (value === void 0) && (knowledgeContract === void 0 || value === void 0 || canonicalJson(knowledgeContract) === canonicalJson(value));
+  const contractMayBeFrozenByFirstWave = (run2) => {
+    return knowledgeContract !== void 0 && canFreezeKnowledgeContractAtFirstWave(run2);
+  };
   return createRecoveryRunner({
     ...recovery,
     adapter: createProductionRecoveryEffectAdapter({
       git,
+      ...carryWithGit === void 0 ? {} : { carry: carryWithGit },
       ...harness === void 0 ? {} : { harness },
       ...topology === void 0 ? {} : { topology }
     }),
@@ -18490,7 +24914,44 @@ function createProductionRecoveryRunner(options) {
         scope: input.scope
       })
     },
-    validateLoadedRun: ({ proof, run: run2 }) => run2.repositoryIdentity === git.repository.identity && run2.gitObjectFormat === git.repository.objectFormat && run2.storeIdentity === proof.scope.beadsStoreIdentity && run2.repositoryIdentity === proof.scope.gitRepositoryIdentity && run2.integrationBranch === proof.scope.integrationBranch && run2.controller.holder === proof.holder ? { status: "ok" } : { status: "unavailable" },
+    ...carry === void 0 ? {} : {
+      prepareProvenanceCarryClaim: async ({
+        predecessorRootBeadId,
+        run: run2
+      }) => {
+        const planned = await carry.prepareProvenanceCarryClaim(
+          predecessorRootBeadId,
+          run2
+        );
+        if (planned.status !== "planned") return planned;
+        const idempotencyKey2 = deriveProvenanceCarryClaimKey(
+          run2.controller.runId,
+          planned.plan.exportId,
+          predecessorRootBeadId
+        );
+        const keyDigest = idempotencyKey2.slice("carry-claim:".length);
+        return {
+          event: {
+            claimToken: idempotencyKey2,
+            eventId: `carry-claim-${keyDigest}`,
+            expectedRevision: run2.revision,
+            exportId: planned.plan.exportId,
+            idempotencyKey: idempotencyKey2,
+            predecessorFinalRevision: planned.plan.predecessorFinalRevision,
+            predecessorJournalCheckpointCommitment: planned.plan.predecessorJournalCheckpointCommitment,
+            predecessorRootAggregateCommitment: planned.plan.predecessorRootAggregateCommitment,
+            predecessorRootBeadId,
+            predecessorRunId: planned.plan.predecessorRunId,
+            predecessorWaveId: planned.plan.predecessorWaveId,
+            snapshotCommitment: planned.plan.snapshotCommitment,
+            type: "provenance_carry_claim_intent"
+          },
+          status: "planned"
+        };
+      }
+    },
+    validateLoadedRun: ({ proof, run: run2 }) => run2.repositoryIdentity === git.repository.identity && run2.gitObjectFormat === git.repository.objectFormat && run2.storeIdentity === proof.scope.beadsStoreIdentity && run2.repositoryIdentity === proof.scope.gitRepositoryIdentity && run2.integrationBranch === proof.scope.integrationBranch && run2.controller.holder === proof.holder && (contractMatches(run2.knowledgeContract) || contractMayBeFrozenByFirstWave(run2)) ? { status: "ok" } : { status: "unavailable" },
+    validateEvent: (event) => event.type !== "wave_planned" || contractMatches(event.knowledgeContract),
     proveTopology: async () => {
       let proof;
       try {
@@ -18500,7 +24961,7 @@ function createProductionRecoveryRunner(options) {
       }
       if (proof === void 0 || proof.commonDir !== git.repository.commonDir || proof.scope.gitRepositoryIdentity !== git.repository.identity)
         return void 0;
-      if (recovery.initialRun !== void 0 && (recovery.initialRun.controller.holder !== proof.holder || recovery.initialRun.repositoryIdentity !== proof.scope.gitRepositoryIdentity || recovery.initialRun.gitObjectFormat !== git.repository.objectFormat || recovery.initialRun.storeIdentity !== proof.scope.beadsStoreIdentity || recovery.initialRun.integrationBranch !== proof.scope.integrationBranch))
+      if (recovery.initialRun !== void 0 && (recovery.initialRun.controller.holder !== proof.holder || recovery.initialRun.repositoryIdentity !== proof.scope.gitRepositoryIdentity || recovery.initialRun.gitObjectFormat !== git.repository.objectFormat || recovery.initialRun.storeIdentity !== proof.scope.beadsStoreIdentity || recovery.initialRun.integrationBranch !== proof.scope.integrationBranch || !contractMatches(recovery.initialRun.knowledgeContract)))
         return void 0;
       const verified = await verifyRepository(git.runner, git.repository);
       return verified.state === "observed" ? proof : void 0;
@@ -18509,10 +24970,10 @@ function createProductionRecoveryRunner(options) {
 }
 function discovered(observedResult, result2) {
   const classification = classifyDiscovery(result2);
-  return classification === "observed" ? observedResult : classification === "absent" ? { status: "absent" } : ambiguous();
+  return classification === "observed" ? observedResult : classification === "absent" ? { status: "absent" } : ambiguous2();
 }
 function executed(observedResult, result2) {
-  return result2.state === "observed" ? observedResult : ambiguous();
+  return result2.state === "observed" ? observedResult : ambiguous2();
 }
 
 // src/commands/index.ts
@@ -18533,6 +24994,7 @@ var commandNames = [
   "publish",
   "integrate",
   "gate-wave",
+  "claim-provenance-carry",
   "resume",
   "status",
   "release-controller",
@@ -18628,6 +25090,16 @@ var RecoveryEventPayloadSchema = strictObject5({
 var RecoveryAcknowledgementPayloadSchema = strictObject5({
   harnessAcknowledgement: JsonObjectSchema
 });
+var ProvenanceCarryClaimOptionsSchema = strictObject5({
+  json: Type.Boolean(),
+  request: strictObject5({
+    predecessorRootBeadId: Type.String({
+      minLength: 1,
+      maxLength: 160,
+      pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    })
+  })
+});
 var RecoveryOptionsSchema = strictObject5({
   ...RequestMetadataSchema,
   request: Type.Optional(
@@ -18705,10 +25177,17 @@ var UnavailableCommandSchema = strictObject5({
   schema: Type.Literal("sce.command.request"),
   version: Type.Literal(1)
 });
+var ProvenanceCarryClaimCommandSchema = strictObject5({
+  command: Type.Literal("claim-provenance-carry"),
+  options: ProvenanceCarryClaimOptionsSchema,
+  schema: Type.Literal("sce.command.request"),
+  version: Type.Literal(1)
+});
 var CommandRequestSchema = Type.Union([
   StateCommandSchema,
   HarnessPacketCommandSchema,
   FeedbackCommandSchema,
+  ProvenanceCarryClaimCommandSchema,
   UnavailableCommandSchema
 ]);
 var CommandRunnerResultSchema = Type.Union([
@@ -18860,6 +25339,15 @@ var commandEvent = {
   "review-record": ["review_collected"],
   publish: ["publish_intent"],
   integrate: ["integrate_intent"],
+  "gate-wave": [
+    "materialisation_resolve_intent",
+    "destination_probe_intent",
+    "gate_clock_observed",
+    "materialise_intent",
+    "provenance_commit_intent",
+    "gate_entry_deferred",
+    "verification_intent"
+  ],
   "release-controller": ["controller_release_intent"]
 };
 function createRecoveryCommandRunner(runner) {
@@ -18874,6 +25362,21 @@ function createRecoveryCommandRunner(runner) {
       return await stateResult(request.command, outcome2.run);
     }
     if (request.command === "feedback") return unavailable2();
+    if (request.command === "claim-provenance-carry") {
+      const outcome2 = await runner({
+        provenanceCarryClaim: {
+          predecessorRootBeadId: request.options.request.predecessorRootBeadId
+        }
+      });
+      if (!("revision" in outcome2) || outcome2.revision < 0)
+        return outcome2.status === "unavailable" ? unavailable2() : recoveryBlocked();
+      return {
+        result: { revision: outcome2.revision, state: outcome2.run.state },
+        schema: "sce.command.result",
+        status: "ok",
+        version: 1
+      };
+    }
     const payload = request.options.request;
     const event = payload !== void 0 && "event" in payload ? payload.event : void 0;
     const acknowledgement = payload !== void 0 && "harnessAcknowledgement" in payload ? payload.harnessAcknowledgement : void 0;
@@ -18967,7 +25470,7 @@ function isJsonObject(value) {
 
 // src/controller-config.ts
 import { readFile } from "node:fs/promises";
-import { isAbsolute as isAbsolute7, normalize as normalize4, resolve as resolve4 } from "node:path";
+import { isAbsolute as isAbsolute8, normalize as normalize5, relative as relative3, resolve as resolve5 } from "node:path";
 
 // src/adapters/beads-embedded/schemas.ts
 var PINNED_BD_ISSUE_BASE_KEYS = [
@@ -19186,10 +25689,10 @@ function validateSlotTransitionIntent(input, prefix, scope, mode, expectedHolder
 }
 
 // src/adapters/beads-embedded/pinned-bd-process.ts
-import { spawn as spawn2 } from "node:child_process";
-import { createHash as createHash2 } from "node:crypto";
+import { spawn as spawn3 } from "node:child_process";
+import { createHash as createHash3 } from "node:crypto";
 import { closeSync as closeSync2, openSync as openSync2, readSync, realpathSync as realpathSync3, statSync as statSync2 } from "node:fs";
-import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute4 } from "node:path";
+import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute5 } from "node:path";
 var MAX_OUTPUT_BYTES = 65536;
 var PINNED_BD_VERSION = "1.1.0";
 var PINNED_DOLT_VERSION = "2.2.1";
@@ -19205,7 +25708,7 @@ function executableDigest(path2, size) {
   let descriptor;
   try {
     descriptor = openSync2(path2, "r");
-    const hash4 = createHash2("sha256").update(`${size}:`);
+    const hash4 = createHash3("sha256").update(`${size}:`);
     const sample = Math.min(size, EXECUTABLE_SAMPLE_BYTES);
     const first = Buffer.alloc(sample);
     if (sample > 0)
@@ -19680,6 +26183,19 @@ var PinnedBdEmbeddedProcess = class {
           kind: "load",
           value: this.projections.load === void 0 ? { status: "unavailable" } : await this.projections.load()
         };
+      case "carry_read":
+        return this.projections.readCarry === void 0 ? { kind: "carry_read", value: { status: "unavailable" } } : await this.projections.readCarry(request.predecessorRootIssueId);
+      case "carry_claim":
+        return this.projections.claimCarry === void 0 ? { kind: "carry_claim", value: { status: "unavailable" } } : await this.projections.claimCarry(request);
+      case "carry_discover": {
+        const value = await this.projections.discoverCarry?.(request);
+        if (value === void 0)
+          throw new Error("carry checkpoint discovery failed");
+        return {
+          kind: "carry_discover",
+          value: request.point === "after_push" && this.remote !== void 0 ? await this.proveRemoteCarryCheckpoint(request, value) : await this.proveCarryCheckpoint(request, value)
+        };
+      }
       case "slot": {
         if (request.source === "remote") {
           if (request.action !== "check" || this.remote === void 0)
@@ -19926,6 +26442,67 @@ var PinnedBdEmbeddedProcess = class {
    */
   exactSlotDelta(source, intent2) {
     return isPinnedSlotTransitionDelta(source, this.prefix, intent2);
+  }
+  async proveCarryCheckpoint(request, discovery) {
+    if (discovery.status !== "observed" || this.projections.discoverCarry === void 0 || this.projections.matchesCarryDelta === void 0)
+      return discovery.status === "observed" ? { status: "ambiguous" } : discovery;
+    const currentHead = await this.doltHead(this.databaseDirectory);
+    const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+    if (currentHead === void 0 || workingSet === void 0)
+      return { status: "ambiguous" };
+    if (workingSet === "pending") {
+      const before = await this.projections.discoverCarry(request, currentHead);
+      const diff = await this.runDolt(this.databaseDirectory, [
+        "diff",
+        "--data",
+        "-r",
+        "json",
+        currentHead
+      ]);
+      const proven = before?.status === "absent" && diff !== void 0 && diff.code === 0 && !diff.exceeded && this.projections.matchesCarryDelta(request.intent, diff.stdout) ? { ...discovery, baseHead: currentHead, head: currentHead } : { status: "ambiguous" };
+      return this.bindRemoteCheckpointBaseline(proven);
+    }
+    if (workingSet !== "clean") return { status: "ambiguous" };
+    const committed = await this.proveCommittedCarryCheckpoint(
+      request,
+      discovery,
+      currentHead
+    );
+    return this.bindRemoteCheckpointBaseline(committed);
+  }
+  async proveCommittedCarryCheckpoint(request, discovery, currentHead) {
+    if (discovery.status !== "observed" || discovery.head !== currentHead || this.projections.discoverCarry === void 0 || this.projections.matchesCarryDelta === void 0)
+      return { status: "ambiguous" };
+    const parents = await this.directParents(currentHead);
+    const parent = parents?.length === 1 ? parents[0] : void 0;
+    if (parent === void 0) return { status: "ambiguous" };
+    const before = await this.projections.discoverCarry(request, parent);
+    const diff = await this.runDolt(this.databaseDirectory, [
+      "diff",
+      "--data",
+      "-r",
+      "json",
+      parent,
+      currentHead
+    ]);
+    return before?.status === "absent" && diff !== void 0 && diff.code === 0 && !diff.exceeded && this.projections.matchesCarryDelta(request.intent, diff.stdout) ? { ...discovery, baseHead: parent, head: currentHead } : { status: "ambiguous" };
+  }
+  async proveRemoteCarryCheckpoint(request, local) {
+    if (local.status !== "observed" || this.remote === void 0 || this.projections.discoverCarry === void 0)
+      return { status: "ambiguous" };
+    const localHead = await this.doltHead(this.databaseDirectory);
+    const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+    const remoteRef = await this.fetchRemoteMain(this.remote);
+    const remoteHead = remoteRef === void 0 ? void 0 : await this.doltRefHead(remoteRef);
+    const remote2 = remoteRef === void 0 ? void 0 : await this.projections.discoverCarry(request, remoteRef);
+    if (localHead === void 0 || workingSet !== "clean" || remoteHead === void 0 || remote2 === void 0 || localHead !== remoteHead)
+      return { status: "ambiguous" };
+    const proven = await this.proveCommittedCarryCheckpoint(
+      request,
+      remote2,
+      remoteHead
+    );
+    return proven.status === "observed" && proven.baseHead !== void 0 && local.rootCommitment === proven.rootCommitment ? { ...local, baseHead: proven.baseHead, head: localHead, remoteHead } : { status: "ambiguous" };
   }
   /**
    * Selected projection readback alone cannot authorize a commit: another
@@ -20279,12 +26856,12 @@ var PinnedBdEmbeddedProcess = class {
     return this.runOnce(operational.path, argv);
   }
   async runOnce(executable, argv) {
-    return new Promise((resolve8) => {
+    return new Promise((resolve9) => {
       let stdout = "";
       let bytes2 = 0;
       let exceeded = false;
       let settled = false;
-      const child = spawn2(executable, argv, {
+      const child = spawn3(executable, argv, {
         cwd: this.cwd,
         env: {
           LANG: "C",
@@ -20309,14 +26886,14 @@ var PinnedBdEmbeddedProcess = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve8(void 0);
+          resolve9(void 0);
         }
       });
       child.once("close", (code) => {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve8({ code, exceeded, stdout });
+          resolve9({ code, exceeded, stdout });
         }
       });
     });
@@ -20413,21 +26990,21 @@ var PinnedBdEmbeddedProcess = class {
     return this.runDoltOnce(operational.path, cwd, argv);
   }
   executable(value) {
-    if (!isAbsolute4(value) || value.length > 4096 || value.includes("\0"))
+    if (!isAbsolute5(value) || value.length > 4096 || value.includes("\0"))
       return void 0;
     try {
       const path2 = realpathSync3.native(value);
-      const stat2 = statSync2(path2, { throwIfNoEntry: false });
-      const digest = stat2 === void 0 ? void 0 : executableDigest(path2, stat2.size);
-      return stat2 === void 0 || !stat2.isFile() || digest === void 0 ? void 0 : {
-        ctimeMs: stat2.ctimeMs,
-        dev: stat2.dev,
+      const stat3 = statSync2(path2, { throwIfNoEntry: false });
+      const digest = stat3 === void 0 ? void 0 : executableDigest(path2, stat3.size);
+      return stat3 === void 0 || !stat3.isFile() || digest === void 0 ? void 0 : {
+        ctimeMs: stat3.ctimeMs,
+        dev: stat3.dev,
         digest,
-        ino: stat2.ino,
-        mtimeMs: stat2.mtimeMs,
-        mode: stat2.mode,
+        ino: stat3.ino,
+        mtimeMs: stat3.mtimeMs,
+        mode: stat3.mode,
         path: path2,
-        size: stat2.size
+        size: stat3.size
       };
     } catch {
       return void 0;
@@ -20441,12 +27018,12 @@ var PinnedBdEmbeddedProcess = class {
     }
   }
   async runDoltOnce(executable, cwd, argv) {
-    return new Promise((resolve8) => {
+    return new Promise((resolve9) => {
       let stdout = "";
       let bytes2 = 0;
       let exceeded = false;
       let settled = false;
-      const child = spawn2(executable, argv, {
+      const child = spawn3(executable, argv, {
         cwd,
         env: {
           LANG: "C",
@@ -20471,14 +27048,14 @@ var PinnedBdEmbeddedProcess = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve8(void 0);
+          resolve9(void 0);
         }
       });
       child.once("close", (code) => {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve8({ code, exceeded, stdout });
+          resolve9({ code, exceeded, stdout });
         }
       });
     });
@@ -20486,10 +27063,10 @@ var PinnedBdEmbeddedProcess = class {
 };
 
 // src/adapters/beads-embedded/dolt-projections.ts
-import { spawn as spawn3 } from "node:child_process";
-import { createHash as createHash3 } from "node:crypto";
+import { spawn as spawn4 } from "node:child_process";
+import { createHash as createHash4 } from "node:crypto";
 import { closeSync as closeSync3, openSync as openSync3, readSync as readSync2, realpathSync as realpathSync4, statSync as statSync3 } from "node:fs";
-import { dirname as dirname3, isAbsolute as isAbsolute5 } from "node:path";
+import { dirname as dirname3, isAbsolute as isAbsolute6 } from "node:path";
 var MAX_OUTPUT_BYTES2 = 262144;
 var TIMEOUT_MS = 15e3;
 var PINNED_DOLT_VERSION2 = "2.2.1";
@@ -20502,7 +27079,7 @@ function executableDigest2(path2, size) {
   let descriptor;
   try {
     descriptor = openSync3(path2, "r");
-    const hash4 = createHash3("sha256").update(`${size}:`);
+    const hash4 = createHash4("sha256").update(`${size}:`);
     const sample = Math.min(size, EXECUTABLE_SAMPLE_BYTES2);
     const first = Buffer.alloc(sample);
     if (sample > 0)
@@ -20525,7 +27102,11 @@ function executableDigest2(path2, size) {
 }
 var PROJECTION_INITIALIZATION_AUTHORITY = "sce.embedded.projection.initialize.v1";
 function same4(left, right) {
-  return canonicalJson(left) === canonicalJson(right);
+  try {
+    return canonicalJson(left) === canonicalJson(right);
+  } catch {
+    return false;
+  }
 }
 function compareCodeUnits2(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -20700,6 +27281,156 @@ var DoltProjectionPersistence = class {
           (a, b) => compareCodeUnits2(a.unitId, b.unitId)
         ),
         root: parsedRoot.value
+      }
+    };
+  }
+  async readCarry(predecessorRootIssueId) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u.test(predecessorRootIssueId))
+      return { kind: "carry_read", value: { status: "unavailable" } };
+    const source = await this.sql(
+      this.carrySelectStatement(predecessorRootIssueId)
+    );
+    const rows = source === void 0 ? void 0 : parseRows(source);
+    if (rows === void 0)
+      return { kind: "carry_read", value: { status: "unavailable" } };
+    if (rows.length === 0)
+      return { kind: "carry_read", value: { status: "not_found" } };
+    if (rows.length !== 1 || rows[0]?.id !== predecessorRootIssueId || Object.keys(rows[0]).length !== 5)
+      return { kind: "carry_read", value: { status: "unavailable" } };
+    const row = rows[0];
+    const envelope = object3(row.sce);
+    const root = validateRootProjection(envelope?.projection);
+    const envelopeValid = envelope !== void 0 && Object.keys(envelope).length === 2 && typeof envelope.commitment === "string" && Object.prototype.hasOwnProperty.call(envelope, "projection") && root.ok && root.value.aggregateCommitment === envelope.commitment;
+    const claims = row.claims_present === 0 && row.claims === null && row.claims_type === null ? {} : row.claims_present === 1 && row.claims_type === "OBJECT" ? row.claims : void 0;
+    return {
+      kind: "carry_read",
+      value: {
+        claims,
+        root: envelopeValid ? root.value : void 0,
+        status: "observed"
+      }
+    };
+  }
+  carrySelectStatement(predecessorRootIssueId) {
+    return `SELECT id, JSON_EXTRACT(metadata,'$.sce') AS sce, JSON_EXTRACT(metadata,'$.sce_carry_claims') AS claims, JSON_CONTAINS_PATH(metadata,'one','$.sce_carry_claims') AS claims_present, JSON_TYPE(JSON_EXTRACT(metadata,'$.sce_carry_claims')) AS claims_type FROM issues WHERE id=${stringLiteral(predecessorRootIssueId)}`;
+  }
+  async discoverCarry(request, ref) {
+    const intent2 = request.intent;
+    if (!this.validCarryCheckpointIntent(intent2) || ref !== void 0 && !(/^[A-Za-z0-9._-]{1,80}\/main$/u.test(ref) || /^[0-9a-z]{20,64}$/u.test(ref)))
+      return void 0;
+    const statement = this.carrySelectStatement(intent2.predecessorRootIssueId);
+    const source = await this.sql(
+      ref === void 0 ? statement : statement.replace(" FROM issues", ` FROM issues AS OF '${ref}'`)
+    );
+    const rows = source === void 0 ? void 0 : parseRows(source);
+    const currentHead = await this.head(ref);
+    if (rows === void 0 || rows.length !== 1 || rows[0]?.id !== intent2.predecessorRootIssueId || Object.keys(rows[0]).length !== 5 || currentHead === void 0)
+      return void 0;
+    const row = rows[0];
+    const envelope = object3(row.sce);
+    const root = validateRootProjection(envelope?.projection);
+    if (envelope === void 0 || Object.keys(envelope).length !== 2 || envelope.commitment !== intent2.expectedAggregateCommitment || !Object.prototype.hasOwnProperty.call(envelope, "projection") || !root.ok || root.value.aggregateCommitment !== intent2.expectedAggregateCommitment)
+      return { head: currentHead, status: "ambiguous" };
+    const claims = row.claims_present === 0 && row.claims === null && row.claims_type === null ? {} : row.claims_present === 1 && row.claims_type === "OBJECT" ? object3(row.claims) : void 0;
+    if (claims === void 0) return { head: currentHead, status: "ambiguous" };
+    if (Object.keys(claims).length === 0)
+      return { head: currentHead, status: "absent" };
+    const singleton = { [intent2.exportDigest]: intent2.record };
+    return Object.keys(claims).length === 1 && same4(claims, singleton) ? {
+      head: currentHead,
+      rootCommitment: root.value.aggregateCommitment,
+      status: "observed"
+    } : { head: currentHead, status: "ambiguous" };
+  }
+  matchesCarryDelta(intent2, source) {
+    if (!this.validCarryCheckpointIntent(intent2)) return false;
+    let parsed;
+    try {
+      parsed = JSON.parse(source);
+    } catch {
+      return false;
+    }
+    const tables = object3(parsed)?.tables;
+    const table = Array.isArray(tables) ? object3(tables[0]) : void 0;
+    const changes = table?.data_diff;
+    if (!Array.isArray(tables) || tables.length !== 1 || table?.name !== "issues" || !Array.isArray(changes) || changes.length !== 1)
+      return false;
+    const delta = object3(changes[0]);
+    const before = object3(delta?.from_row);
+    const after = object3(delta?.to_row);
+    if (delta === void 0 || Object.keys(delta).length !== 2 || before === void 0 || after === void 0 || before.id !== intent2.predecessorRootIssueId || after.id !== before.id || !isPinnedBdIssueRow(before) || !isPinnedBdIssueRow(after) || Object.keys(before).length !== Object.keys(after).length || Object.keys(before).some(
+      (key) => !Object.prototype.hasOwnProperty.call(after, key)
+    ))
+      return false;
+    for (const key of Object.keys(before)) {
+      if (key !== "metadata" && key !== "updated_at" && !same4(before[key], after[key]))
+        return false;
+    }
+    const beforeMetadata = object3(before.metadata);
+    const afterMetadata = object3(after.metadata);
+    if (beforeMetadata === void 0 || afterMetadata === void 0)
+      return false;
+    const beforeClaims = beforeMetadata.sce_carry_claims;
+    if (!(beforeClaims === void 0 || object3(beforeClaims) !== void 0 && Object.keys(object3(beforeClaims)).length === 0) || !same4(afterMetadata.sce_carry_claims, {
+      [intent2.exportDigest]: intent2.record
+    }))
+      return false;
+    const siblingKeys = /* @__PURE__ */ new Set([
+      ...Object.keys(beforeMetadata),
+      ...Object.keys(afterMetadata)
+    ]);
+    for (const key of siblingKeys) {
+      if (key !== "sce_carry_claims" && !same4(beforeMetadata[key], afterMetadata[key]))
+        return false;
+    }
+    const sce = object3(beforeMetadata.sce);
+    return sce?.commitment === intent2.expectedAggregateCommitment && same4(beforeMetadata.sce, afterMetadata.sce);
+  }
+  validCarryCheckpointIntent(intent2) {
+    const record3 = validate(
+      ProvenanceCarryClaimRecordSchema,
+      intent2.record
+    );
+    return /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u.test(
+      intent2.predecessorRootIssueId
+    ) && /^[0-9a-f]{64}$/u.test(intent2.exportDigest) && /^[0-9a-f]{64}$/u.test(intent2.expectedAggregateCommitment) && record3.ok && record3.value !== void 0 && record3.value.predecessorRootBeadId === intent2.predecessorRootIssueId && record3.value.exportId === `sce:carry:${intent2.exportDigest}`;
+  }
+  async claimCarry(request) {
+    const parsedRecord = validate(
+      ProvenanceCarryClaimRecordSchema,
+      request.record
+    );
+    const slotPrefix = request.slot.slotId.endsWith("-merge-slot") ? request.slot.slotId.slice(0, -"-merge-slot".length) : "";
+    if (!parsedRecord.ok || parsedRecord.value === void 0 || !/^[0-9a-f]{64}$/u.test(request.exportDigest) || request.record.exportId !== `sce:carry:${request.exportDigest}` || request.record.predecessorRootBeadId !== request.predecessorRootIssueId || !/^[0-9a-f]{64}$/u.test(request.expectedAggregateCommitment) || !validateMergeSlotObservation(
+      request.slot,
+      slotPrefix,
+      request.slot.scope
+    ).ok || request.slot.status !== "acquired" || request.slot.holder === void 0)
+      return { kind: "carry_claim", value: { status: "unavailable" } };
+    const singleton = { [request.exportDigest]: request.record };
+    const slot = request.slot;
+    const slotHolder = slot.holder;
+    const acquiredSlotPredicate = ` AND (SELECT COUNT(*) FROM issues WHERE id=${stringLiteral(slot.slotId)} AND title=${stringLiteral(slot.title)} AND status='in_progress' AND external_ref=${stringLiteral(`sce-scope:v1:${slot.scopeCommitment}`)} AND design=${stringLiteral(canonicalJson(slot.scope))} AND JSON_TYPE(metadata)='OBJECT' AND JSON_LENGTH(metadata)=1 AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.holder'))=${stringLiteral(slotHolder)})=1 AND (SELECT COUNT(*) FROM labels WHERE issue_id=${stringLiteral(slot.slotId)})=1 AND (SELECT COUNT(*) FROM labels WHERE issue_id=${stringLiteral(slot.slotId)} AND label=${stringLiteral(slot.label)})=1`;
+    const readback = `SELECT @sce_affected AS affected, r.id AS root_id, JSON_EXTRACT(r.metadata,'$.sce') AS root_sce, JSON_EXTRACT(r.metadata,'$.sce_carry_claims') AS claims, s.id AS slot_id, s.title AS slot_title, s.status AS slot_status, s.external_ref AS slot_external_ref, s.design AS slot_design, s.metadata AS slot_metadata, (SELECT COUNT(*) FROM labels WHERE issue_id=s.id) AS label_count, (SELECT COUNT(*) FROM labels WHERE issue_id=s.id AND label=${stringLiteral(slot.label)}) AS matching_label_count FROM issues r JOIN issues s ON s.id=${stringLiteral(slot.slotId)} WHERE r.id=${stringLiteral(request.predecessorRootIssueId)}`;
+    const output = await this.sql(
+      `START TRANSACTION; UPDATE issues SET metadata=JSON_SET(metadata,'$.sce_carry_claims',${jsonLiteral(singleton)}) WHERE id=${stringLiteral(request.predecessorRootIssueId)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.sce.commitment'))=${stringLiteral(request.expectedAggregateCommitment)} AND (JSON_EXTRACT(metadata,'$.sce_carry_claims') IS NULL OR (JSON_TYPE(JSON_EXTRACT(metadata,'$.sce_carry_claims'))='OBJECT' AND JSON_LENGTH(JSON_EXTRACT(metadata,'$.sce_carry_claims'))=0))${acquiredSlotPredicate}; SET @sce_affected=ROW_COUNT(); ${readback} FOR UPDATE; COMMIT; ${readback}`
+    );
+    if (output === void 0)
+      return { kind: "carry_claim", value: { status: "unavailable" } };
+    const rows = parseRows(output);
+    const row = rows?.length === 1 ? rows[0] : void 0;
+    if (row?.affected !== 1)
+      return { kind: "carry_claim", value: { status: "stale" } };
+    const rootEnvelope = object3(row.root_sce);
+    const root = validateRootProjection(rootEnvelope?.projection);
+    if (Object.keys(row).length !== 12 || row.root_id !== request.predecessorRootIssueId || !root.ok || root.value.aggregateCommitment !== request.expectedAggregateCommitment || rootEnvelope?.commitment !== request.expectedAggregateCommitment || !same4(row.claims, singleton) || row.slot_id !== slot.slotId || row.slot_title !== slot.title || row.slot_status !== "in_progress" || row.slot_external_ref !== `sce-scope:v1:${slot.scopeCommitment}` || row.slot_design !== canonicalJson(slot.scope) || !same4(row.slot_metadata, { holder: slotHolder }) || row.label_count !== 1 || row.matching_label_count !== 1)
+      return { kind: "carry_claim", value: { status: "unavailable" } };
+    return {
+      kind: "carry_claim",
+      value: {
+        claims: row.claims,
+        root: rootEnvelope?.projection,
+        status: "observed"
       }
     };
   }
@@ -20987,11 +27718,11 @@ var DoltProjectionPersistence = class {
       this.rejectedExecutable = operational ?? executable;
       return void 0;
     }
-    return new Promise((resolve8) => {
+    return new Promise((resolve9) => {
       let output = "";
       let bytes2 = 0;
       let settled = false;
-      const child = spawn3(
+      const child = spawn4(
         operational.path,
         ["sql", "-r", "json", "-q", query],
         {
@@ -21018,14 +27749,14 @@ var DoltProjectionPersistence = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve8(void 0);
+          resolve9(void 0);
         }
       });
       child.once("close", (code) => {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve8(code === 0 && bytes2 <= MAX_OUTPUT_BYTES2 ? output : void 0);
+          resolve9(code === 0 && bytes2 <= MAX_OUTPUT_BYTES2 ? output : void 0);
         }
       });
     });
@@ -21036,21 +27767,21 @@ var DoltProjectionPersistence = class {
     return typeof value === "number" && Number.isSafeInteger(value) ? value : void 0;
   }
   executable() {
-    if (!isAbsolute5(this.doltExecutable) || this.doltExecutable.includes("\0"))
+    if (!isAbsolute6(this.doltExecutable) || this.doltExecutable.includes("\0"))
       return void 0;
     try {
       const path2 = realpathSync4.native(this.doltExecutable);
-      const stat2 = statSync3(path2, { throwIfNoEntry: false });
-      const digest = stat2 === void 0 ? void 0 : executableDigest2(path2, stat2.size);
-      return stat2 === void 0 || !stat2.isFile() || digest === void 0 ? void 0 : {
-        ctimeMs: stat2.ctimeMs,
-        dev: stat2.dev,
+      const stat3 = statSync3(path2, { throwIfNoEntry: false });
+      const digest = stat3 === void 0 ? void 0 : executableDigest2(path2, stat3.size);
+      return stat3 === void 0 || !stat3.isFile() || digest === void 0 ? void 0 : {
+        ctimeMs: stat3.ctimeMs,
+        dev: stat3.dev,
         digest,
-        ino: stat2.ino,
-        mtimeMs: stat2.mtimeMs,
-        mode: stat2.mode,
+        ino: stat3.ino,
+        mtimeMs: stat3.mtimeMs,
+        mode: stat3.mode,
         path: path2,
-        size: stat2.size
+        size: stat3.size
       };
     } catch {
       return void 0;
@@ -21061,10 +27792,10 @@ var DoltProjectionPersistence = class {
       this.versionCheck = void 0;
       this.versionExecutable = executable;
     }
-    this.versionCheck ??= new Promise((resolve8) => {
+    this.versionCheck ??= new Promise((resolve9) => {
       let output = "";
       let settled = false;
-      const child = spawn3(executable.path, ["version"], {
+      const child = spawn4(executable.path, ["version"], {
         cwd: this.directory,
         env: {
           DARWIN_USER_TEMP_DIR: process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
@@ -21087,14 +27818,14 @@ var DoltProjectionPersistence = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve8(false);
+          resolve9(false);
         }
       });
       child.once("close", (code) => {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve8(
+          resolve9(
             code === 0 && output.split("\n", 1)[0] === `dolt version ${PINNED_DOLT_VERSION2}`
           );
         }
@@ -21148,6 +27879,7 @@ var EmbeddedBeadsAdapter = class {
   mode;
   prefix;
   process;
+  rootIssueId;
   scope;
   usable;
   constructor(options) {
@@ -21155,6 +27887,7 @@ var EmbeddedBeadsAdapter = class {
     this.mode = options.mode;
     this.prefix = options.prefix;
     this.process = options.process;
+    this.rootIssueId = options.rootIssueId;
     this.scope = options.scope;
     this.usable = checkedPreflight(
       options.preflight,
@@ -21490,6 +28223,136 @@ var EmbeddedBeadsAdapter = class {
    * passed through; malformed, partial, and transport failures remain tagged
    * failures and can never drive bootstrap.
    */
+  async prepareProvenanceCarryClaim(predecessorRootIssueId, currentRun) {
+    const inspected = await this.inspectCarryPredecessor(
+      predecessorRootIssueId,
+      currentRun
+    );
+    return inspected.status === "planned" ? { plan: inspected.value.plan, status: "planned" } : { status: inspected.status };
+  }
+  async reconcileProvenanceCarryClaim(effect2, run2) {
+    const inspected = await this.inspectCarryPredecessor(
+      effect2.params.predecessorRootBeadId,
+      run2
+    );
+    if (inspected.status !== "planned")
+      return inspected.status === "unavailable" ? { status: "unavailable" } : {
+        result: this.predecessorRefusal(
+          effect2.params.predecessorRootBeadId,
+          inspected.reason
+        ),
+        status: "observed"
+      };
+    if (!this.carryPlanMatchesEffect(inspected.value, effect2, run2))
+      return { status: "ambiguous" };
+    const classified = this.classifyCarryClaims(
+      inspected.claims,
+      inspected.value,
+      effect2,
+      false
+    );
+    if (classified.status === "observed" && classified.result.status === "already_claimed")
+      return await this.competitorCarryIsDurable(inspected.claims, effect2) ? classified : { status: "ambiguous" };
+    if (classified.status !== "observed" || classified.result.status !== "imported")
+      return classified;
+    const durable = await this.reconcileDurableCarryCheckpoint(
+      this.carryCheckpointIntent(effect2)
+    );
+    if (durable.code !== "applied")
+      return {
+        status: durable.code === "unavailable" ? "unavailable" : "ambiguous"
+      };
+    const reread = await this.inspectCarryPredecessor(
+      effect2.params.predecessorRootBeadId,
+      run2
+    );
+    if (reread.status !== "planned" || !this.carryPlanMatchesEffect(reread.value, effect2, run2))
+      return { status: "ambiguous" };
+    const readback = this.classifyCarryClaims(
+      reread.claims,
+      reread.value,
+      effect2,
+      true
+    );
+    return readback.status === "absent" ? { status: "ambiguous" } : readback;
+  }
+  async executeProvenanceCarryClaim(effect2, run2) {
+    const inspected = await this.inspectCarryPredecessor(
+      effect2.params.predecessorRootBeadId,
+      run2
+    );
+    if (inspected.status !== "planned")
+      return inspected.status === "unavailable" ? { status: "unavailable" } : {
+        result: this.predecessorRefusal(
+          effect2.params.predecessorRootBeadId,
+          inspected.reason
+        ),
+        status: "observed"
+      };
+    if (!this.carryPlanMatchesEffect(inspected.value, effect2, run2))
+      return { status: "ambiguous" };
+    const existing = this.classifyCarryClaims(
+      inspected.claims,
+      inspected.value,
+      effect2,
+      false
+    );
+    if (existing.status === "observed")
+      return existing.result.status === "already_claimed" && !await this.competitorCarryIsDurable(inspected.claims, effect2) ? { status: "ambiguous" } : existing;
+    if (existing.status !== "absent") return { status: "ambiguous" };
+    const baseline = this.checkpointBaseline(await this.state());
+    const slot = await this.slot("check");
+    if (baseline === void 0 || slot?.status !== "acquired" || slot.holder !== this.holder)
+      return { status: "ambiguous" };
+    const record3 = this.carryClaimRecord(effect2);
+    const checkpointIntent = this.carryCheckpointIntent(effect2);
+    const response = await this.call({
+      exportDigest: checkpointIntent.exportDigest,
+      expectedAggregateCommitment: effect2.params.predecessorRootAggregateCommitment,
+      kind: "carry_claim",
+      predecessorRootIssueId: effect2.params.predecessorRootBeadId,
+      record: record3,
+      slot
+    });
+    if (response?.kind !== "carry_claim")
+      return { status: "unavailable" };
+    if (response.value.status === "unavailable")
+      return { status: "unavailable" };
+    if (response.value.status === "stale") {
+      const raced = await this.inspectCarryPredecessor(
+        effect2.params.predecessorRootBeadId,
+        run2
+      );
+      if (raced.status !== "planned" || !this.carryPlanMatchesEffect(raced.value, effect2, run2))
+        return { status: "ambiguous" };
+      const classified = this.classifyCarryClaims(
+        raced.claims,
+        raced.value,
+        effect2,
+        true
+      );
+      if (classified.status === "observed" && classified.result.status === "already_claimed" && !await this.competitorCarryIsDurable(raced.claims, effect2))
+        return { status: "ambiguous" };
+      return classified.status === "absent" ? { status: "ambiguous" } : classified;
+    }
+    const durable = await this.durableCarryCheckpoint(
+      checkpointIntent,
+      baseline
+    );
+    if (durable.code !== "applied") return { status: "ambiguous" };
+    const reread = await this.inspectCarryPredecessor(
+      effect2.params.predecessorRootBeadId,
+      run2
+    );
+    if (reread.status !== "planned") return { status: "ambiguous" };
+    const readback = this.classifyCarryClaims(
+      reread.claims,
+      reread.value,
+      effect2,
+      true
+    );
+    return readback.status === "absent" ? { status: "ambiguous" } : readback;
+  }
   async load() {
     if (!this.usable) return { status: "quarantined" };
     const response = await this.call({ kind: "load" });
@@ -21899,6 +28762,47 @@ var EmbeddedBeadsAdapter = class {
     return state !== void 0 && state.reachable && state.workingSet === "clean" && state.head !== void 0 && state.remoteHead === state.head && remote2 !== void 0 && same5(remote2, local) && final !== void 0 && final.reachable && final.workingSet === "clean" && final.head === state.head && final.remoteHead === state.head ? result("applied") : result("ambiguous");
   }
   /** Commit state and sync it without force; discovery brackets commit/push. */
+  async durableCarryCheckpoint(intent2, baseline) {
+    const discover = async (point) => {
+      const response = await this.call({
+        kind: "carry_discover",
+        point,
+        intent: intent2
+      });
+      return response?.kind === "carry_discover" ? response.value : { status: "ambiguous" };
+    };
+    let current = await this.state();
+    if (current === void 0 || !current.reachable || current.workingSet === "unknown")
+      return result("ambiguous");
+    if (current.workingSet === "pending") {
+      const beforeCommit = await discover("before_commit");
+      if (beforeCommit.status !== "observed" || !this.matchesCheckpointBaseline(beforeCommit, baseline))
+        return result("ambiguous");
+      const commit2 = await this.call({ kind: "commit" });
+      if (commit2?.kind !== "commit" || commit2.value !== "applied")
+        return result(
+          commit2?.kind === "commit" && commit2.value === "unavailable" ? "unavailable" : "ambiguous"
+        );
+      const afterCommit = await discover("after_commit");
+      if (afterCommit.status !== "observed" || !this.matchesCheckpointBaseline(afterCommit, baseline))
+        return result("ambiguous");
+      current = await this.state();
+    }
+    if (current === void 0 || !current.reachable || current.workingSet !== "clean" || !head2(current.head))
+      return result("ambiguous");
+    if (this.mode === "local-only") return result("applied");
+    const beforePush = await discover("before_push");
+    if (beforePush.status !== "observed" || !this.matchesCheckpointBaseline(beforePush, baseline))
+      return result("ambiguous");
+    const push = await this.call({ kind: "push" });
+    if (push?.kind !== "push") return result("ambiguous");
+    if (push.value === "conflict") return result("conflict");
+    if (push.value !== "applied") return result(push.value);
+    const afterPush = await discover("after_push");
+    const final = await this.state();
+    return afterPush.status === "observed" && afterPush.baseHead === baseline.head && final !== void 0 && final.reachable && final.workingSet === "clean" && head2(final.head) && final.remoteHead === final.head && afterPush.head === final.head && afterPush.remoteHead === final.head ? result("applied") : result("ambiguous");
+  }
+  /** Commit state and sync it without force; discovery brackets commit/push. */
   async durableCheckpoint(batch, baseline) {
     const initial = await this.state();
     if (initial === void 0 || !initial.reachable)
@@ -22030,6 +28934,224 @@ var EmbeddedBeadsAdapter = class {
       this.holder
     );
   }
+  async inspectCarryPredecessor(predecessorRootIssueId, currentRun) {
+    if (!this.usable || this.rootIssueId === void 0 || !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u.test(predecessorRootIssueId))
+      return { status: "unavailable" };
+    const response = await this.call({
+      kind: "carry_read",
+      predecessorRootIssueId
+    });
+    if (response?.kind !== "carry_read") return { status: "unavailable" };
+    if (response.value.status !== "observed")
+      return response.value.status === "not_found" ? { reason: "not_found", status: "blocked" } : { status: "unavailable" };
+    const root = validateRootProjection(response.value.root);
+    if (!root.ok) return { reason: "projection_invalid", status: "blocked" };
+    const planned = planProvenanceCarryFromProjection(
+      predecessorRootIssueId,
+      this.rootIssueId,
+      currentRun,
+      root.value
+    );
+    if (planned.status !== "planned")
+      return { reason: planned.reason, status: "blocked" };
+    if (!this.validCarryClaimsBoundary(response.value.claims))
+      return { reason: "projection_invalid", status: "blocked" };
+    return {
+      claims: response.value.claims,
+      status: "planned",
+      value: planned.value
+    };
+  }
+  validCarryClaimsBoundary(value) {
+    const claims = object4(value);
+    if (claims === void 0 || Object.keys(claims).length > 1) return false;
+    const entry = Object.entries(claims)[0];
+    if (entry === void 0) return true;
+    const [digest, record3] = entry;
+    const parsed = validate(
+      ProvenanceCarryClaimRecordSchema,
+      record3
+    );
+    return /^[0-9a-f]{64}$/u.test(digest) && parsed.ok && parsed.value !== void 0 && parsed.value.exportId === `sce:carry:${digest}` && Buffer.byteLength(canonicalJson(parsed.value)) <= 4096;
+  }
+  carryPlanMatchesEffect(value, effect2, run2) {
+    const plan = value.plan;
+    return plan.exportId === effect2.params.exportId && plan.predecessorFinalRevision === effect2.params.predecessorFinalRevision && plan.predecessorJournalCheckpointCommitment === effect2.params.predecessorJournalCheckpointCommitment && plan.predecessorRootAggregateCommitment === effect2.params.predecessorRootAggregateCommitment && plan.predecessorRunId === effect2.params.predecessorRunId && plan.predecessorWaveId === effect2.params.predecessorWaveId && plan.snapshotCommitment === effect2.params.snapshotCommitment && effect2.params.claimToken === effect2.idempotencyKey && effect2.params.currentRunId === run2.controller.runId && run2.controller.state === "acquired" && run2.controller.holder === this.holder && this.holder === `${run2.controller.runId}/${run2.controller.incarnationId}` && effect2.params.storeIdentity === run2.storeIdentity && effect2.params.storeIdentity === this.scope.beadsStoreIdentity && effect2.params.repositoryIdentity === run2.repositoryIdentity && effect2.params.repositoryIdentity === this.scope.gitRepositoryIdentity && effect2.params.integrationBranch === run2.integrationBranch && effect2.params.integrationBranch === this.scope.integrationBranch;
+  }
+  carryClaimRecord(effect2) {
+    return {
+      claimRevision: 1,
+      claimantRunId: effect2.params.currentRunId,
+      claimToken: effect2.params.claimToken,
+      exportId: effect2.params.exportId,
+      predecessorRootBeadId: effect2.params.predecessorRootBeadId,
+      predecessorRunId: effect2.params.predecessorRunId,
+      predecessorWaveId: effect2.params.predecessorWaveId,
+      schema: "sce.provenance-carry-claim",
+      snapshotCommitment: effect2.params.snapshotCommitment,
+      version: 1
+    };
+  }
+  carryCheckpointIntent(effect2) {
+    return {
+      expectedAggregateCommitment: effect2.params.predecessorRootAggregateCommitment,
+      exportDigest: effect2.params.exportId.slice("sce:carry:".length),
+      predecessorRootIssueId: effect2.params.predecessorRootBeadId,
+      record: this.carryClaimRecord(effect2)
+    };
+  }
+  /**
+   * Proves and finishes only this journaled carry claim after a lost process
+   * result. A local singleton is not durable evidence: it may still be an
+   * uncommitted Dolt working-set change or a commit that has not reached the
+   * configured git-sync remote.
+   */
+  async reconcileDurableCarryCheckpoint(intent2) {
+    const slot = await this.slot("check");
+    if (slot?.status !== "acquired" || slot.actor !== this.holder || slot.holder !== this.holder)
+      return result("ambiguous");
+    const current = await this.state();
+    if (current === void 0 || !current.reachable || current.workingSet === "unknown" || !head2(current.head))
+      return result("ambiguous");
+    if (current.workingSet === "pending") {
+      const baseline = this.checkpointBaseline(current);
+      return baseline === void 0 ? result("ambiguous") : this.durableCarryCheckpoint(intent2, baseline);
+    }
+    if (current.workingSet !== "clean") return result("ambiguous");
+    const discover = async (point) => {
+      const response = await this.call({
+        kind: "carry_discover",
+        point,
+        intent: intent2
+      });
+      return response?.kind === "carry_discover" ? response.value : { status: "ambiguous" };
+    };
+    if (this.mode === "local-only") {
+      const committed = await discover("after_commit");
+      const final2 = await this.state();
+      return committed.status === "observed" && head2(committed.baseHead) && committed.head === current.head && final2 !== void 0 && final2.reachable && final2.workingSet === "clean" && final2.head === current.head ? result("applied") : result("ambiguous");
+    }
+    if (!head2(current.remoteHead)) return result("ambiguous");
+    if (current.head !== current.remoteHead) {
+      const local = await discover("before_push");
+      if (local.status !== "observed" || !head2(local.baseHead) || local.head !== current.head || local.remoteHead !== current.remoteHead)
+        return result("ambiguous");
+      return this.durableCarryCheckpoint(intent2, {
+        head: local.baseHead,
+        remoteHead: current.remoteHead
+      });
+    }
+    const pushed = await discover("after_push");
+    const final = await this.state();
+    return pushed.status === "observed" && head2(pushed.baseHead) && pushed.head === current.head && pushed.remoteHead === current.head && final !== void 0 && final.reachable && final.workingSet === "clean" && final.head === current.head && final.remoteHead === current.head ? result("applied") : result("ambiguous");
+  }
+  /** A competing claim is evidence only after its exact sibling-only delta is durable. */
+  async competitorCarryIsDurable(claimsValue, effect2) {
+    const claims = object4(claimsValue);
+    const candidate = claims === void 0 ? void 0 : Object.values(claims)[0];
+    const parsed = validate(
+      ProvenanceCarryClaimRecordSchema,
+      candidate
+    );
+    if (!parsed.ok || parsed.value === void 0) return false;
+    const current = await this.state();
+    if (current === void 0 || !current.reachable || current.workingSet !== "clean" || !head2(current.head) || this.mode === "git-sync" && current.remoteHead !== current.head)
+      return false;
+    const intent2 = {
+      ...this.carryCheckpointIntent(effect2),
+      record: parsed.value
+    };
+    const point = this.mode === "local-only" ? "after_commit" : "after_push";
+    const response = await this.call({ kind: "carry_discover", point, intent: intent2 });
+    const discovery = response?.kind === "carry_discover" ? response.value : void 0;
+    return discovery?.status === "observed" && head2(discovery.baseHead) && discovery.baseHead !== current.head && discovery.head === current.head && (this.mode === "local-only" || discovery.remoteHead === current.head);
+  }
+  carryClaimRecordDigest(record3) {
+    return sha256(
+      canonicalJson({
+        claimRecord: record3,
+        domain: "sce.provenance-carry-claim-record.v1"
+      })
+    );
+  }
+  predecessorRefusal(predecessorRootBeadId, reason) {
+    return {
+      evidenceDigest: sha256(
+        canonicalJson({
+          domain: "sce.provenance-carry-predecessor-refusal.v1",
+          predecessorRootBeadId,
+          reason
+        })
+      ),
+      predecessorRootBeadId,
+      reason,
+      status: "predecessor_refused"
+    };
+  }
+  classifyCarryClaims(value, planned, effect2, requireClaim) {
+    const claims = object4(value);
+    if (claims === void 0 || Object.keys(claims).length > 1)
+      return {
+        result: this.predecessorRefusal(
+          effect2.params.predecessorRootBeadId,
+          "projection_invalid"
+        ),
+        status: "observed"
+      };
+    const entry = Object.entries(claims)[0];
+    if (entry === void 0)
+      return { status: requireClaim ? "ambiguous" : "absent" };
+    const [digest, candidate] = entry;
+    const parsed = validate(
+      ProvenanceCarryClaimRecordSchema,
+      candidate
+    );
+    if (digest !== effect2.params.exportId.slice("sce:carry:".length) || !parsed.ok || parsed.value === void 0 || parsed.value.exportId !== effect2.params.exportId || Buffer.byteLength(canonicalJson(parsed.value)) > 4096)
+      return {
+        result: this.predecessorRefusal(
+          effect2.params.predecessorRootBeadId,
+          "projection_invalid"
+        ),
+        status: "observed"
+      };
+    const expected = this.carryClaimRecord(effect2);
+    const claimRecordDigest = this.carryClaimRecordDigest(parsed.value);
+    const candidateClaimToken = deriveProvenanceCarryClaimKey(
+      parsed.value.claimantRunId,
+      effect2.params.exportId,
+      effect2.params.predecessorRootBeadId
+    );
+    if (parsed.value.exportId !== effect2.params.exportId || parsed.value.predecessorRootBeadId !== effect2.params.predecessorRootBeadId || parsed.value.predecessorRunId !== effect2.params.predecessorRunId || parsed.value.predecessorWaveId !== effect2.params.predecessorWaveId || parsed.value.snapshotCommitment !== effect2.params.snapshotCommitment || parsed.value.claimToken !== candidateClaimToken)
+      return {
+        result: this.predecessorRefusal(
+          effect2.params.predecessorRootBeadId,
+          "projection_invalid"
+        ),
+        status: "observed"
+      };
+    if (!same5(parsed.value, expected))
+      return {
+        result: {
+          claimRecordDigest,
+          claimRevision: 1,
+          claimantRunId: parsed.value.claimantRunId,
+          exportId: parsed.value.exportId,
+          status: "already_claimed"
+        },
+        status: "observed"
+      };
+    return {
+      result: {
+        carry: {
+          ...planned.carry,
+          claimRecordDigest,
+          claimRevision: 1
+        },
+        status: "imported"
+      },
+      status: "observed"
+    };
+  }
   async slot(action, source) {
     const response = await this.call({
       kind: "slot",
@@ -22079,10 +29201,10 @@ var EmbeddedBeadsAdapter = class {
 };
 
 // src/adapters/beads-server/index.ts
-import { spawn as spawn4 } from "node:child_process";
-import { createHash as createHash4 } from "node:crypto";
-import { open, realpath, stat } from "node:fs/promises";
-import { dirname as dirname4, isAbsolute as isAbsolute6, join as join3 } from "node:path";
+import { spawn as spawn5 } from "node:child_process";
+import { createHash as createHash5 } from "node:crypto";
+import { open as open2, realpath as realpath2, stat as stat2 } from "node:fs/promises";
+import { dirname as dirname4, isAbsolute as isAbsolute7, join as join4 } from "node:path";
 var MAX_ENDPOINT_BYTES = 320;
 var MAX_SCHEMA_BYTES = 160;
 var MAX_FINGERPRINT_BYTES = 160;
@@ -22106,27 +29228,27 @@ function doltSqlTransportBinding(transport) {
 function executeDoltSqlProgram(transport, query) {
   return doltSqlTransportOperations.get(transport)?.executeProgram(query) ?? Promise.resolve({ status: "refused" });
 }
-function executeDoltSqlTransaction(transport, statement, expectedRows) {
-  return doltSqlTransportOperations.get(transport)?.executeTransaction(statement, expectedRows) ?? Promise.resolve({ status: "refused" });
+function executeDoltSqlTransaction(transport, statement, expectedRows, readback) {
+  return doltSqlTransportOperations.get(transport)?.executeTransaction(statement, expectedRows, readback) ?? Promise.resolve({ status: "refused" });
 }
 function probeDoltSqlWorkerWrite(transport) {
   return doltSqlTransportOperations.get(transport)?.probeWorkerWrite() ?? Promise.resolve("refused");
 }
 async function executableSnapshot(executable) {
   try {
-    const canonical2 = await realpath(executable);
-    const information = await stat(canonical2);
+    const canonical2 = await realpath2(executable);
+    const information = await stat2(canonical2);
     if (!information.isFile() || (information.mode & 73) === 0)
       return void 0;
     const sampleSize = Math.min(information.size, EXECUTABLE_SAMPLE_BYTES3);
-    const handle = await open(canonical2, "r");
+    const handle = await open2(canonical2, "r");
     try {
       const first = Buffer.alloc(sampleSize);
       const firstRead = await handle.read(first, 0, sampleSize, 0);
       const lastOffset = Math.max(0, information.size - sampleSize);
       const last = Buffer.alloc(sampleSize);
       const lastRead = await handle.read(last, 0, sampleSize, lastOffset);
-      const digest = createHash4("sha256").update("first\0").update(first.subarray(0, firstRead.bytesRead)).update("last\0").update(last.subarray(0, lastRead.bytesRead)).digest("hex");
+      const digest = createHash5("sha256").update("first\0").update(first.subarray(0, firstRead.bytesRead)).update("last\0").update(last.subarray(0, lastRead.bytesRead)).digest("hex");
       return {
         canonical: canonical2,
         fingerprint: [
@@ -22179,7 +29301,7 @@ var DoltSqlTransport = class {
   #executableSnapshot;
   #verifiedExecutable;
   constructor(input) {
-    if (!validIdentifier(input.user) || input.executable !== void 0 && !isAbsolute6(input.executable) || input.process === void 0 && input.executable === void 0 || input.identity.transportSecurity === "loopback_plaintext" && !loopbackEndpoint(input.identity.endpoint) || input.identity.topology === "external_server" && input.identity.transportSecurity !== "tls" && input.identity.transportSecurity !== "loopback_plaintext" || input.password !== void 0 && (!safeText(input.password, 4096) || containsSecretShape(input.password)))
+    if (!validIdentifier(input.user) || input.executable !== void 0 && !isAbsolute7(input.executable) || input.process === void 0 && input.executable === void 0 || input.identity.transportSecurity === "loopback_plaintext" && !loopbackEndpoint(input.identity.endpoint) || input.identity.topology === "external_server" && input.identity.transportSecurity !== "tls" && input.identity.transportSecurity !== "loopback_plaintext" || input.password !== void 0 && (!safeText(input.password, 4096) || containsSecretShape(input.password)))
       throw new Error("invalid Dolt SQL transport configuration");
     const role = input.role ?? (input.user === "worker" ? "worker" : "writer");
     const credentialReference = input.credentialReference ?? (role === "worker" ? input.identity.workerCredentialReference : input.identity.credentialReference);
@@ -22203,7 +29325,7 @@ var DoltSqlTransport = class {
         }),
         executeRead: (query) => this.#executeRead(query),
         executeProgram: (query) => this.#executeProgram(query),
-        executeTransaction: (statement, expectedRows) => this.#executeTransaction(statement, expectedRows),
+        executeTransaction: (statement, expectedRows, readback) => this.#executeTransaction(statement, expectedRows, readback),
         probeWorkerWrite: () => this.#probeWorkerWrite()
       })
     );
@@ -22237,8 +29359,8 @@ var DoltSqlTransport = class {
       return { status: "refused" };
     }
   }
-  async #executeTransaction(statement, expectedRows) {
-    if (!safeText(statement, DOLT_SQL_MAX_STATEMENT_BYTES) || !Number.isSafeInteger(expectedRows) || expectedRows < 1 || this.#process !== runDoltSql)
+  async #executeTransaction(statement, expectedRows, readback) {
+    if (!safeText(statement, DOLT_SQL_MAX_STATEMENT_BYTES) || !Number.isSafeInteger(expectedRows) || expectedRows < 1 || readback !== void 0 && (!closedReadSql(readback.query) || !safeText(readback.query, DOLT_SQL_MAX_STATEMENT_BYTES) || canonicalJson(readback.expectedRows).length > DOLT_SQL_MAX_OUTPUT_BYTES) || this.#process !== runDoltSql)
       return { status: "refused" };
     const [host, port] = this.#endpointParts();
     const executable = await this.#verifiedDoltExecutable();
@@ -22265,6 +29387,7 @@ var DoltSqlTransport = class {
       executable,
       expectedRows,
       password: this.#password,
+      ...readback === void 0 ? {} : { readback },
       statement
     });
   }
@@ -22406,8 +29529,8 @@ var DoltSqlTransport = class {
   }
 };
 async function runDoltSql(request) {
-  return new Promise((resolve8) => {
-    const child = spawn4(request.executable, request.argv, {
+  return new Promise((resolve9) => {
+    const child = spawn5(request.executable, request.argv, {
       env: request.env,
       stdio: ["ignore", "pipe", "pipe"]
     });
@@ -22453,7 +29576,7 @@ async function runDoltSql(request) {
     child.once("close", (code) => {
       clearTimeout(timer);
       if (killTimer !== void 0) clearTimeout(killTimer);
-      resolve8({
+      resolve9({
         exitCode: capped || timedOut || failed ? void 0 : code ?? void 0,
         output,
         stderr,
@@ -22463,8 +29586,8 @@ async function runDoltSql(request) {
   });
 }
 async function runDoltSqlTransaction(input) {
-  return new Promise((resolve8) => {
-    const child = spawn4(input.executable, input.argv, {
+  return new Promise((resolve9) => {
+    const child = spawn5(input.executable, input.argv, {
       env: {
         DOLT_CLI_PASSWORD: input.password ?? "",
         PATH: `${dirname4(input.executable)}:/usr/bin:/bin`
@@ -22478,6 +29601,8 @@ async function runDoltSqlTransaction(input) {
     let postCommitClean = false;
     let postCommitHead;
     let rowCountPhaseObserved = false;
+    let readbackMatched = input.readback === void 0;
+    let readbackPending = false;
     let closing = false;
     let stdinClosed = false;
     let outputBytes = 0;
@@ -22571,6 +29696,12 @@ async function runDoltSqlTransaction(input) {
         terminate({ status: "refused" });
         return;
       }
+      if (readbackPending) {
+        readbackPending = false;
+        readbackMatched = exact(rows, input.readback?.expectedRows);
+        sendFinal(readbackMatched);
+        return;
+      }
       if (rows.length === 1 && rows[0]?.committed_head !== void 0) {
         const head3 = rows[0].committed_head;
         if (typeof head3 !== "string" || !/^[0-9a-z]{20,64}$/u.test(head3)) {
@@ -22604,7 +29735,13 @@ async function runDoltSqlTransaction(input) {
       rowCount = parsed;
       observeTestPhase("after_rowcount_before_commit");
       if (closing) return;
-      sendFinal(parsed === input.expectedRows);
+      if (parsed !== input.expectedRows || input.readback === void 0) {
+        sendFinal(parsed === input.expectedRows);
+        return;
+      }
+      readbackPending = true;
+      if (!writeStdin(`${input.readback.query};
+`)) return;
     };
     child.stdout.on("data", (chunk) => {
       if (result2 !== void 0) return;
@@ -22622,12 +29759,12 @@ async function runDoltSqlTransaction(input) {
     child.once("close", (code) => {
       clearTimeout(timer);
       if (killTimer !== void 0) clearTimeout(killTimer);
-      if (result2 !== void 0) return resolve8(result2);
-      if (code !== 0 || !finalSent || rowCount === void 0)
-        return resolve8({ status: "unavailable" });
+      if (result2 !== void 0) return resolve9(result2);
+      if (code !== 0 || !finalSent || rowCount === void 0 || rowCount === input.expectedRows && !readbackMatched)
+        return resolve9({ status: "unavailable" });
       if (rowCount !== input.expectedRows)
-        return resolve8({ status: "ok", rows: rowCount });
-      return resolve8(
+        return resolve9({ status: "ok", rows: rowCount });
+      return resolve9(
         postCommitClean && postCommitHead !== void 0 ? { status: "ok", rows: rowCount, committedHead: postCommitHead } : { status: "unavailable" }
       );
     });
@@ -22648,7 +29785,7 @@ var PinnedBdServerProcess = class {
   #executableSnapshot;
   #verifiedExecutable;
   constructor(input) {
-    if (!isAbsolute6(input.executable) || !isAbsolute6(input.workspace))
+    if (!isAbsolute7(input.executable) || !isAbsolute7(input.workspace))
       throw new Error("invalid pinned bd process configuration");
     this.#credentialEnvironment = input.credentialEnvironment;
     this.#executable = input.executable;
@@ -22772,8 +29909,8 @@ var PinnedBdServerProcess = class {
   async #canonicalWorkspace() {
     if (this.#process !== runPinnedBd) return this.#workspace;
     try {
-      const canonical2 = await realpath(this.#workspace);
-      return (await stat(canonical2)).isDirectory() ? canonical2 : void 0;
+      const canonical2 = await realpath2(this.#workspace);
+      return (await stat2(canonical2)).isDirectory() ? canonical2 : void 0;
     } catch {
       return void 0;
     }
@@ -22806,11 +29943,11 @@ var PinnedBdServerProcess = class {
   }
   #matchesContext(context, identity2, workspace) {
     const endpoint = `${String(context.server_host ?? "")}:${String(context.server_port ?? "")}`;
-    if (context.backend !== "dolt" || context.database !== identity2.database || context.dolt_mode !== "server" || endpoint !== identity2.endpoint || typeof context.beads_dir !== "string" || !isAbsolute6(context.beads_dir))
+    if (context.backend !== "dolt" || context.database !== identity2.database || context.dolt_mode !== "server" || endpoint !== identity2.endpoint || typeof context.beads_dir !== "string" || !isAbsolute7(context.beads_dir))
       return false;
     if (identity2.topology === "managed_local_shared_server" && this.#runtimeEnvironment === void 0 || identity2.topology === "external_server" && this.#credentialEnvironment === void 0)
       return false;
-    return context.beads_dir === join3(workspace, ".beads");
+    return context.beads_dir === join4(workspace, ".beads");
   }
   async #exec(executable, argv, additionalPath = []) {
     const source = this.#credentialEnvironment?.();
@@ -22820,7 +29957,7 @@ var PinnedBdServerProcess = class {
       return { exitCode: void 0, output: "", timedOut: false };
     if (runtime !== void 0 && (Object.keys(runtime).some(
       (key) => key !== "HOME" && key !== "XDG_CONFIG_HOME"
-    ) || runtime.HOME !== void 0 && (!isAbsolute6(runtime.HOME) || !safeText(runtime.HOME, 4096)) || runtime.XDG_CONFIG_HOME !== void 0 && (!isAbsolute6(runtime.XDG_CONFIG_HOME) || !safeText(runtime.XDG_CONFIG_HOME, 4096))))
+    ) || runtime.HOME !== void 0 && (!isAbsolute7(runtime.HOME) || !safeText(runtime.HOME, 4096)) || runtime.XDG_CONFIG_HOME !== void 0 && (!isAbsolute7(runtime.XDG_CONFIG_HOME) || !safeText(runtime.XDG_CONFIG_HOME, 4096))))
       return { exitCode: void 0, output: "", timedOut: false };
     return this.#process({
       argv,
@@ -22840,8 +29977,8 @@ var PinnedBdServerProcess = class {
   }
 };
 async function runPinnedBd(request) {
-  return new Promise((resolve8) => {
-    const child = spawn4(request.executable, request.argv, {
+  return new Promise((resolve9) => {
+    const child = spawn5(request.executable, request.argv, {
       env: request.env,
       stdio: ["ignore", "pipe", "ignore"]
     });
@@ -22878,7 +30015,7 @@ async function runPinnedBd(request) {
     child.once("close", (code) => {
       clearTimeout(timer);
       if (killTimer !== void 0) clearTimeout(killTimer);
-      resolve8({
+      resolve9({
         exitCode: capped || timedOut || failed ? void 0 : code ?? void 0,
         output,
         timedOut: capped || timedOut
@@ -22890,7 +30027,7 @@ function slotScopeReference(scope) {
   return `sce-scope:v1:${deriveScopeCommitment(scope)}`;
 }
 function serverSlotTransitionKey(input) {
-  return createHash4("sha256").update(
+  return createHash5("sha256").update(
     canonicalJson({
       domain: "sce.beads-server.slot-transition.v1",
       transition: input
@@ -22961,7 +30098,7 @@ var PinnedBdManagedServerProcess = class {
   #verifiedDolt;
   #verifiedExecutable;
   constructor(input) {
-    if (!isAbsolute6(input.dataDirectory) || !isAbsolute6(input.doltExecutable) || !isAbsolute6(input.executable) || !isAbsolute6(input.workspace))
+    if (!isAbsolute7(input.dataDirectory) || !isAbsolute7(input.doltExecutable) || !isAbsolute7(input.executable) || !isAbsolute7(input.workspace))
       throw new Error("invalid pinned managed bd process configuration");
     this.#dataDirectory = input.dataDirectory;
     this.#doltExecutable = input.doltExecutable;
@@ -23063,11 +30200,11 @@ var PinnedBdManagedServerProcess = class {
         return void 0;
       if (!value.running)
         return value.data_dir === "" && value.pid === 0 && value.port === 0 ? "stopped" : void 0;
-      if (typeof value.data_dir !== "string" || !isAbsolute6(value.data_dir) || typeof value.pid !== "number" || !Number.isSafeInteger(value.pid) || value.pid <= 0 || typeof value.port !== "number" || !Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65535)
+      if (typeof value.data_dir !== "string" || !isAbsolute7(value.data_dir) || typeof value.pid !== "number" || !Number.isSafeInteger(value.pid) || value.pid <= 0 || typeof value.port !== "number" || !Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65535)
         return void 0;
       const [actual, expected] = await Promise.all([
-        realpath(value.data_dir),
-        realpath(this.#dataDirectory)
+        realpath2(value.data_dir),
+        realpath2(this.#dataDirectory)
       ]);
       return actual === expected ? "running" : void 0;
     } catch {
@@ -23076,8 +30213,8 @@ var PinnedBdManagedServerProcess = class {
   }
   async #canonicalWorkspace() {
     try {
-      const canonical2 = await realpath(this.#workspace);
-      return (await stat(canonical2)).isDirectory() ? canonical2 : void 0;
+      const canonical2 = await realpath2(this.#workspace);
+      return (await stat2(canonical2)).isDirectory() ? canonical2 : void 0;
     } catch {
       return void 0;
     }
@@ -23086,7 +30223,7 @@ var PinnedBdManagedServerProcess = class {
     const runtime = this.#runtimeEnvironment?.();
     if (runtime !== void 0 && (Object.keys(runtime).some(
       (key) => key !== "HOME" && key !== "XDG_CONFIG_HOME"
-    ) || runtime.HOME !== void 0 && (!isAbsolute6(runtime.HOME) || !safeText(runtime.HOME, 4096)) || runtime.XDG_CONFIG_HOME !== void 0 && (!isAbsolute6(runtime.XDG_CONFIG_HOME) || !safeText(runtime.XDG_CONFIG_HOME, 4096))))
+    ) || runtime.HOME !== void 0 && (!isAbsolute7(runtime.HOME) || !safeText(runtime.HOME, 4096)) || runtime.XDG_CONFIG_HOME !== void 0 && (!isAbsolute7(runtime.XDG_CONFIG_HOME) || !safeText(runtime.XDG_CONFIG_HOME, 4096))))
       return { exitCode: void 0, output: "", timedOut: false };
     return this.#process({
       argv,
@@ -23112,6 +30249,19 @@ function exact(left, right) {
     return canonicalJson(left) === canonicalJson(right);
   } catch {
     return false;
+  }
+}
+function sha2562(value) {
+  return createHash5("sha256").update(value).digest("hex");
+}
+function canonicalJsonText(value, maximumBytes) {
+  if (typeof value !== "string" || Buffer.byteLength(value, "utf8") > maximumBytes)
+    return void 0;
+  try {
+    const parsed = JSON.parse(value);
+    return canonicalJson(parsed) === value ? parsed : void 0;
+  } catch {
+    return void 0;
   }
 }
 function safeRecord(input, keys) {
@@ -23655,6 +30805,86 @@ var BeadsServerAdapter = class {
     });
     return transition === void 0 ? { status: "quarantined" } : { status: "planned", transition };
   }
+  async prepareProvenanceCarryClaim(predecessorRootIssueId, currentRun) {
+    const inspected = await this.#inspectCarryPredecessor(
+      predecessorRootIssueId,
+      currentRun
+    );
+    return inspected.status === "planned" ? { plan: inspected.plan.plan, status: "planned" } : inspected.status === "blocked" ? { status: "blocked" } : { status: inspected.status };
+  }
+  async reconcileProvenanceCarryClaim(effect2, run2) {
+    const inspected = await this.#inspectCarryPredecessor(
+      effect2.params.predecessorRootBeadId,
+      run2
+    );
+    if (inspected.status !== "planned")
+      return inspected.status === "blocked" ? {
+        result: this.#predecessorRefusal(
+          effect2.params.predecessorRootBeadId,
+          inspected.reason
+        ),
+        status: "observed"
+      } : { status: inspected.status };
+    if (!this.#carryPlanMatchesEffect(inspected.plan, effect2, run2))
+      return { status: "ambiguous" };
+    return this.#classifyCarryClaims(inspected.claims, inspected.plan, effect2);
+  }
+  async executeProvenanceCarryClaim(effect2, run2) {
+    const inspected = await this.#inspectCarryPredecessor(
+      effect2.params.predecessorRootBeadId,
+      run2
+    );
+    if (inspected.status !== "planned")
+      return inspected.status === "blocked" ? {
+        result: this.#predecessorRefusal(
+          effect2.params.predecessorRootBeadId,
+          inspected.reason
+        ),
+        status: "observed"
+      } : { status: inspected.status };
+    if (!this.#carryPlanMatchesEffect(inspected.plan, effect2, run2))
+      return { status: "ambiguous" };
+    const existing = this.#classifyCarryClaims(
+      inspected.claims,
+      inspected.plan,
+      effect2
+    );
+    if (existing.status === "observed") return existing;
+    if (this.#driver.claimProvenanceCarry === void 0 || this.#recoveryScope === void 0 || run2.controller.state !== "acquired" || run2.controller.holder === void 0 || !exact(this.#recoveryScope, inspected.predecessor.scope))
+      return { status: "ambiguous" };
+    let response;
+    try {
+      response = await this.#driver.claimProvenanceCarry({
+        expectedRoot: inspected.predecessor,
+        exportDigest: effect2.params.exportId.slice("sce:carry:".length),
+        holder: run2.controller.holder,
+        identity: this.#identity,
+        predecessorRootBeadId: effect2.params.predecessorRootBeadId,
+        record: this.#carryClaimRecord(effect2),
+        scope: this.#recoveryScope
+      });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (response.status !== "ok") {
+      this.#revoke();
+      return response.phase === "before_transaction" && response.status === "unavailable" ? { status: "unavailable" } : { status: "ambiguous" };
+    }
+    const reread = await this.#inspectCarryPredecessor(
+      effect2.params.predecessorRootBeadId,
+      run2
+    );
+    if (reread.status !== "planned") return { status: "ambiguous" };
+    if (!this.#carryPlanMatchesEffect(reread.plan, effect2, run2))
+      return { status: "ambiguous" };
+    const readback = this.#classifyCarryClaims(
+      reread.claims,
+      reread.plan,
+      effect2
+    );
+    return readback.status === "absent" ? { status: "ambiguous" } : readback;
+  }
   /**
    * Read-only reconciliation of an already-persisted server transition.
    * Exact `before` is positive retry authority; exact `after` is completion.
@@ -23924,6 +31154,168 @@ var BeadsServerAdapter = class {
       return { status: "quarantined" };
     }
     return result2;
+  }
+  async #inspectCarryPredecessor(predecessorRootBeadId, currentRun) {
+    if (!this.#ready || this.#recoveryScope === void 0 || this.#driver.readProvenanceCarry === void 0 || !validIdentifier(predecessorRootBeadId) || !isSchema(RepositoryRunSchema, currentRun))
+      return { status: "unavailable" };
+    let response;
+    try {
+      response = await this.#driver.readProvenanceCarry({
+        identity: this.#identity,
+        predecessorRootBeadId
+      });
+    } catch {
+      this.#revoke();
+      return { status: "ambiguous" };
+    }
+    if (response.status !== "ok") {
+      this.#revoke();
+      return response.status === "unavailable" ? { status: "unavailable" } : { status: "ambiguous" };
+    }
+    const readback = response.value;
+    if (readback.status === "not_found")
+      return Object.keys(readback).sort().join(",") === "currentRootBeadId,status" && validIdentifier(readback.currentRootBeadId) ? { reason: "not_found", status: "blocked" } : { status: "ambiguous" };
+    const keys = Object.keys(readback).sort().join(",");
+    if (keys !== (readback.claimsPresent ? "claimsPresent,claimsText,currentRootBeadId,rootText,status" : "claimsPresent,currentRootBeadId,rootText,status") || !validIdentifier(readback.currentRootBeadId))
+      return { status: "ambiguous" };
+    const rootJson = canonicalJsonText(
+      readback.rootText,
+      FENCING_LIMITS.projectionBytes
+    );
+    const root = validateRootProjection(rootJson);
+    if (!root.ok) return { reason: "projection_invalid", status: "blocked" };
+    if (!exact(root.value.scope, this.#recoveryScope) || root.value.run.gitObjectFormat !== currentRun.gitObjectFormat)
+      return { reason: "scope_mismatch", status: "blocked" };
+    let claims = {};
+    if (readback.claimsPresent) {
+      const claimsJson = canonicalJsonText(readback.claimsText, 8192);
+      if (claimsJson === void 0 || claimsJson === null || typeof claimsJson !== "object" || Array.isArray(claimsJson))
+        return { reason: "projection_invalid", status: "blocked" };
+      claims = claimsJson;
+    }
+    if (!this.#validCarryClaimsBoundary(claims))
+      return { reason: "projection_invalid", status: "blocked" };
+    const planned = planProvenanceCarryFromProjection(
+      predecessorRootBeadId,
+      readback.currentRootBeadId,
+      currentRun,
+      root.value
+    );
+    if (planned.status !== "planned")
+      return { reason: planned.reason, status: "blocked" };
+    return {
+      claims,
+      plan: planned.value,
+      predecessor: root.value,
+      status: "planned"
+    };
+  }
+  #validCarryClaimsBoundary(value) {
+    const entries = Object.entries(value);
+    if (entries.length > 1) return false;
+    const entry = entries[0];
+    if (entry === void 0) return true;
+    const [digest, candidate] = entry;
+    const parsed = validate(
+      ProvenanceCarryClaimRecordSchema,
+      candidate
+    );
+    return /^[0-9a-f]{64}$/u.test(digest) && parsed.ok && parsed.value !== void 0 && parsed.value.exportId === `sce:carry:${digest}` && Buffer.byteLength(canonicalJson(parsed.value)) <= 4096;
+  }
+  #carryPlanMatchesEffect(value, effect2, run2) {
+    if (!isSchema(RuntimeEffectSchema, effect2) || effect2.kind !== "provenance_carry_claim")
+      return false;
+    const plan = value.plan;
+    return plan.exportId === effect2.params.exportId && plan.predecessorFinalRevision === effect2.params.predecessorFinalRevision && plan.predecessorJournalCheckpointCommitment === effect2.params.predecessorJournalCheckpointCommitment && plan.predecessorRootAggregateCommitment === effect2.params.predecessorRootAggregateCommitment && plan.predecessorRunId === effect2.params.predecessorRunId && plan.predecessorWaveId === effect2.params.predecessorWaveId && plan.snapshotCommitment === effect2.params.snapshotCommitment && effect2.params.claimToken === effect2.idempotencyKey && effect2.params.currentRunId === run2.controller.runId && effect2.params.storeIdentity === run2.storeIdentity && effect2.params.repositoryIdentity === run2.repositoryIdentity && effect2.params.integrationBranch === run2.integrationBranch;
+  }
+  #carryClaimRecord(effect2) {
+    return {
+      claimRevision: 1,
+      claimantRunId: effect2.params.currentRunId,
+      claimToken: effect2.params.claimToken,
+      exportId: effect2.params.exportId,
+      predecessorRootBeadId: effect2.params.predecessorRootBeadId,
+      predecessorRunId: effect2.params.predecessorRunId,
+      predecessorWaveId: effect2.params.predecessorWaveId,
+      schema: "sce.provenance-carry-claim",
+      snapshotCommitment: effect2.params.snapshotCommitment,
+      version: 1
+    };
+  }
+  #carryClaimRecordDigest(record3) {
+    return sha2562(
+      canonicalJson({
+        claimRecord: record3,
+        domain: "sce.provenance-carry-claim-record.v1"
+      })
+    );
+  }
+  #predecessorRefusal(predecessorRootBeadId, reason) {
+    return {
+      evidenceDigest: sha2562(
+        canonicalJson({
+          domain: "sce.provenance-carry-predecessor-refusal.v1",
+          predecessorRootBeadId,
+          reason
+        })
+      ),
+      predecessorRootBeadId,
+      reason,
+      status: "predecessor_refused"
+    };
+  }
+  #classifyCarryClaims(claims, planned, effect2) {
+    const entry = Object.entries(claims)[0];
+    if (entry === void 0) return { status: "absent" };
+    const [digest, candidate] = entry;
+    const parsed = validate(
+      ProvenanceCarryClaimRecordSchema,
+      candidate
+    );
+    if (digest !== effect2.params.exportId.slice("sce:carry:".length) || !parsed.ok || parsed.value === void 0 || parsed.value.exportId !== effect2.params.exportId)
+      return {
+        result: this.#predecessorRefusal(
+          effect2.params.predecessorRootBeadId,
+          "projection_invalid"
+        ),
+        status: "observed"
+      };
+    const claimRecordDigest = this.#carryClaimRecordDigest(parsed.value);
+    const candidateClaimToken = deriveProvenanceCarryClaimKey(
+      parsed.value.claimantRunId,
+      effect2.params.exportId,
+      effect2.params.predecessorRootBeadId
+    );
+    if (parsed.value.predecessorRootBeadId !== effect2.params.predecessorRootBeadId || parsed.value.predecessorRunId !== effect2.params.predecessorRunId || parsed.value.predecessorWaveId !== effect2.params.predecessorWaveId || parsed.value.snapshotCommitment !== effect2.params.snapshotCommitment || parsed.value.claimToken !== candidateClaimToken)
+      return {
+        result: this.#predecessorRefusal(
+          effect2.params.predecessorRootBeadId,
+          "projection_invalid"
+        ),
+        status: "observed"
+      };
+    if (!exact(parsed.value, this.#carryClaimRecord(effect2)))
+      return {
+        result: {
+          claimRecordDigest,
+          claimRevision: 1,
+          claimantRunId: parsed.value.claimantRunId,
+          exportId: parsed.value.exportId,
+          status: "already_claimed"
+        },
+        status: "observed"
+      };
+    return {
+      result: {
+        carry: {
+          ...planned.carry,
+          claimRecordDigest,
+          claimRevision: 1
+        },
+        status: "imported"
+      },
+      status: "observed"
+    };
   }
   #durable(commit2) {
     if (commit2.autoCommitPolicy !== this.#identity.autoCommitPolicy || commit2.workingSet !== "clean")
@@ -24228,6 +31620,79 @@ var DoltBeadsServerDriver = class {
     if (affected.rows === 0) return { status: "already_initialized" };
     return affected.rows === 1 ? { status: "initialized" } : { status: "refused" };
   }
+  async readProvenanceCarry(input) {
+    const parsed = this.#carryReadInput(input);
+    if (parsed === void 0 || !this.#isReady(parsed.identity))
+      return this.#invalidate({ status: "refused" });
+    const binding = await this.#liveDiscoveryBinding();
+    if (binding.status !== "ok") return this.#invalidate(binding);
+    return this.#readCarryRoot(parsed.predecessorRootBeadId);
+  }
+  async claimProvenanceCarry(input) {
+    const parsed = this.#carryClaimInput(input);
+    if (parsed === void 0 || !this.#isReady(parsed.identity)) {
+      this.disarm();
+      return { phase: "before_transaction", status: "refused" };
+    }
+    if (this.#slotProcess === void 0)
+      return { phase: "before_transaction", status: "refused" };
+    const binding = await this.#slotProcess.matchesIdentity(this.#identity);
+    if (binding.status !== "ok") {
+      this.disarm();
+      return { phase: "before_transaction", status: binding.status };
+    }
+    if (this.#identity.autoCommitPolicy !== "on" || !this.#autoCommitObserved || !this.#doltTransactionCommitObserved)
+      return { phase: "before_transaction", status: "refused" };
+    const singleton = { [parsed.exportDigest]: parsed.record };
+    const singletonText = canonicalJson(singleton);
+    const rootText = canonicalJson(parsed.expectedRoot);
+    const slotId2 = `${this.#identity.prefix}-merge-slot`;
+    const slotMetadata = canonicalJson({ holder: parsed.holder });
+    const issues = this.#issues();
+    const labels = this.#labels();
+    const statement = `UPDATE ${issues} SET metadata = JSON_SET(metadata, '$.sce_carry_claims', ${sqlJson(singleton)}) WHERE id = ${sqlLiteral(parsed.predecessorRootBeadId)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce')) = ${sqlLiteral(rootText)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.aggregateCommitment')) = ${sqlLiteral(parsed.expectedRoot.aggregateCommitment)} AND (JSON_EXTRACT(metadata, '$.sce_carry_claims') IS NULL OR (JSON_TYPE(JSON_EXTRACT(metadata, '$.sce_carry_claims')) = 'OBJECT' AND JSON_LENGTH(JSON_EXTRACT(metadata, '$.sce_carry_claims')) = 0 AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce_carry_claims')) = '{}')) AND (SELECT COUNT(*) FROM ${issues} slot WHERE slot.id = ${sqlLiteral(slotId2)} AND slot.title = 'Merge Slot' AND slot.status = 'in_progress' AND slot.external_ref = ${sqlLiteral(slotScopeReference(parsed.scope))} AND slot.design = ${sqlLiteral(canonicalJson(parsed.scope))} AND JSON_UNQUOTE(JSON_EXTRACT(slot.metadata, '$')) = ${sqlLiteral(slotMetadata)}) = 1 AND (SELECT COUNT(*) FROM ${labels} WHERE issue_id = ${sqlLiteral(slotId2)}) = 1 AND (SELECT COUNT(*) FROM ${labels} WHERE issue_id = ${sqlLiteral(slotId2)} AND label = 'gt:slot') = 1`;
+    const readbackQuery = `SELECT predecessor.id AS predecessor_id, JSON_UNQUOTE(JSON_EXTRACT(predecessor.metadata, '$.sce')) AS root_text, JSON_UNQUOTE(JSON_EXTRACT(predecessor.metadata, '$.sce_carry_claims')) AS claims_text, JSON_TYPE(JSON_EXTRACT(predecessor.metadata, '$.sce_carry_claims')) AS claims_type, slot.id AS slot_id, slot.status AS slot_status, JSON_UNQUOTE(JSON_EXTRACT(slot.metadata, '$')) AS slot_metadata, slot.external_ref AS slot_external_ref, slot.title AS slot_title, slot.design AS slot_design FROM ${issues} predecessor JOIN ${issues} slot ON slot.id = ${sqlLiteral(slotId2)} JOIN ${labels} slot_label ON slot_label.issue_id = slot.id AND slot_label.label = 'gt:slot' WHERE predecessor.id = ${sqlLiteral(parsed.predecessorRootBeadId)} AND (SELECT COUNT(*) FROM ${labels} WHERE issue_id = slot.id) = 1 FOR UPDATE`;
+    const affected = await this.#mutateAffected(statement, 1, {
+      expectedRows: [
+        {
+          claims_text: singletonText,
+          claims_type: "OBJECT",
+          predecessor_id: parsed.predecessorRootBeadId,
+          root_text: rootText,
+          slot_design: canonicalJson(parsed.scope),
+          slot_external_ref: slotScopeReference(parsed.scope),
+          slot_id: slotId2,
+          slot_metadata: slotMetadata,
+          slot_status: "in_progress",
+          slot_title: "Merge Slot"
+        }
+      ],
+      query: readbackQuery
+    });
+    if (affected.status !== "ok") {
+      this.disarm();
+      return { phase: "commit_unknown", status: affected.status };
+    }
+    if (affected.rows === 0)
+      return { status: "ok", value: { status: "stale" } };
+    if (affected.rows !== 1 || affected.committedHead === void 0) {
+      this.disarm();
+      return { phase: "commit_unknown", status: "ambiguous" };
+    }
+    return {
+      status: "ok",
+      value: {
+        readback: {
+          claimsPresent: true,
+          claimsText: singletonText,
+          currentRootBeadId: this.#rows.rootBeadId,
+          rootText,
+          status: "observed"
+        },
+        status: "applied"
+      }
+    };
+  }
   async mutate(input) {
     const mutation = this.#mutationInput(input);
     const batch = mutation === void 0 ? void 0 : normalizedMutationBatch(mutation.batch);
@@ -24406,34 +31871,35 @@ var DoltBeadsServerDriver = class {
     if (liveBinding.status !== "ok") return this.#invalidate(liveBinding);
     const slot = await this.#slotReadback(discovery.prefix, discovery.scope);
     if (slot.status !== "ok") return this.#invalidate(slot);
-    const metadata = await this.#metadata([
-      this.#rows.rootBeadId,
-      ...Object.values(this.#rows.childBeadIds)
-    ]);
-    if (metadata.status !== "ok")
-      return this.#invalidate({ status: metadata.status });
-    const configuredIds = [
-      this.#rows.rootBeadId,
-      ...Object.values(this.#rows.childBeadIds)
-    ];
-    const presence = configuredIds.map(
-      (id) => Object.prototype.hasOwnProperty.call(metadata.value.get(id) ?? {}, "sce")
-    );
-    if (presence.every((present) => !present))
+    const rootMetadata = await this.#metadata([this.#rows.rootBeadId]);
+    if (rootMetadata.status !== "ok")
+      return this.#invalidate({ status: rootMetadata.status });
+    const rootRecord = rootMetadata.value.get(this.#rows.rootBeadId) ?? {};
+    if (!Object.prototype.hasOwnProperty.call(rootRecord, "sce"))
       return slot.value.observation.status === "available" ? {
         status: "ok",
         value: { status: "absent", slot: slot.value.observation }
       } : this.#invalidate({ status: "refused" });
-    if (presence.some((present) => !present))
-      return this.#invalidate({ status: "refused" });
-    const root = metadata.value.get(this.#rows.rootBeadId)?.sce;
+    const root = rootRecord.sce;
     const parsedRoot = validateRootProjection(root);
     if (!parsedRoot.ok) return this.#invalidate({ status: "refused" });
-    const children = Object.values(this.#rows.childBeadIds).map(
-      (id) => metadata.value.get(id)?.sce
+    const authoritativeChildIds = parsedRoot.value.childRows.map(
+      (reference) => this.#rows.childBeadIds[reference.unitId]
     );
-    if (children.length !== parsedRoot.value.childRows.length || children.some((child) => !validateChildProjection(child).ok))
+    if (authoritativeChildIds.some((id) => id === void 0) || new Set(authoritativeChildIds).size !== authoritativeChildIds.length)
       return this.#invalidate({ status: "refused" });
+    const childMetadata = authoritativeChildIds.length === 0 ? { status: "ok", value: /* @__PURE__ */ new Map() } : await this.#metadata(authoritativeChildIds);
+    if (childMetadata.status !== "ok")
+      return this.#invalidate({ status: childMetadata.status });
+    const children = authoritativeChildIds.map(
+      (id) => childMetadata.value.get(id)?.sce
+    );
+    for (const [index, child] of children.entries()) {
+      const parsedChild = validateChildProjection(child);
+      const reference = parsedRoot.value.childRows[index];
+      if (!parsedChild.ok || reference === void 0 || parsedChild.value.unitId !== reference.unitId || parsedChild.value.revision !== reference.revision || parsedChild.value.commitment !== reference.commitment)
+        return this.#invalidate({ status: "refused" });
+    }
     return {
       status: "ok",
       value: {
@@ -24537,6 +32003,89 @@ var DoltBeadsServerDriver = class {
     } catch {
       return void 0;
     }
+  }
+  #carryReadInput(input) {
+    const value = safeRecord(input, ["identity", "predecessorRootBeadId"]);
+    const identity2 = value === void 0 ? void 0 : normalizedServerIdentity(value.identity);
+    return value !== void 0 && identity2 !== void 0 && typeof value.predecessorRootBeadId === "string" && validIdentifier(value.predecessorRootBeadId) && value.predecessorRootBeadId !== this.#rows.rootBeadId ? { identity: identity2, predecessorRootBeadId: value.predecessorRootBeadId } : void 0;
+  }
+  #carryClaimInput(input) {
+    const value = safeRecord(input, [
+      "expectedRoot",
+      "exportDigest",
+      "holder",
+      "identity",
+      "predecessorRootBeadId",
+      "record",
+      "scope"
+    ]);
+    if (value === void 0) return void 0;
+    const identity2 = normalizedServerIdentity(value.identity);
+    const expectedRoot = validateRootProjection(value.expectedRoot);
+    const scope = normalizedScope(value.scope);
+    const record3 = validate(
+      ProvenanceCarryClaimRecordSchema,
+      value.record
+    );
+    const predecessorRun = expectedRoot.ok ? expectedRoot.value.run : void 0;
+    const predecessorAggregateCommitment = expectedRoot.ok ? expectedRoot.value.aggregateCommitment : void 0;
+    const snapshot = predecessorRun?.gate?.provenance?.projectionInputSnapshot;
+    const snapshotCommitment = snapshot === void 0 ? void 0 : provenanceCarrySnapshotCommitment(snapshot);
+    const expectedExportId = predecessorRun === void 0 || predecessorRun.gate === void 0 || predecessorAggregateCommitment === void 0 || snapshotCommitment === void 0 ? void 0 : deriveProvenanceCarryExportId({
+      finalRevision: predecessorRun.revision,
+      integrationBranch: predecessorRun.integrationBranch,
+      predecessorRootAggregateCommitment: predecessorAggregateCommitment,
+      predecessorRunId: predecessorRun.controller.runId,
+      predecessorWaveId: predecessorRun.gate.waveId,
+      repositoryIdentity: predecessorRun.repositoryIdentity,
+      snapshotCommitment,
+      storeIdentity: predecessorRun.storeIdentity
+    });
+    return identity2 !== void 0 && expectedRoot.ok && scope !== void 0 && record3.ok && record3.value !== void 0 && typeof value.exportDigest === "string" && /^[0-9a-f]{64}$/u.test(value.exportDigest) && typeof value.holder === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(
+      value.holder
+    ) && typeof value.predecessorRootBeadId === "string" && validIdentifier(value.predecessorRootBeadId) && value.predecessorRootBeadId !== this.#rows.rootBeadId && record3.value.exportId === `sce:carry:${value.exportDigest}` && record3.value.exportId === expectedExportId && record3.value.predecessorRootBeadId === value.predecessorRootBeadId && record3.value.predecessorRunId === predecessorRun?.controller.runId && record3.value.predecessorWaveId === predecessorRun?.gate?.waveId && record3.value.snapshotCommitment === snapshotCommitment && value.holder.split("/")[0] === record3.value.claimantRunId && exact(expectedRoot.value.scope, scope) && Buffer.byteLength(
+      canonicalJson(record3.value),
+      "utf8"
+    ) <= 4096 ? {
+      expectedRoot: expectedRoot.value,
+      exportDigest: value.exportDigest,
+      holder: value.holder,
+      identity: identity2,
+      predecessorRootBeadId: value.predecessorRootBeadId,
+      record: record3.value,
+      scope
+    } : void 0;
+  }
+  async #readCarryRoot(predecessorRootBeadId) {
+    const result2 = await executeDoltSqlRead(
+      this.#writer,
+      `SELECT id, JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce')) AS root_text, JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce_carry_claims')) AS claims_text, JSON_TYPE(JSON_EXTRACT(metadata, '$.sce_carry_claims')) AS claims_type FROM ${this.#issues()} WHERE id = ${sqlLiteral(predecessorRootBeadId)}`
+    );
+    if (result2.status !== "ok") return { status: result2.status };
+    if (result2.rows.length === 0)
+      return {
+        status: "ok",
+        value: {
+          currentRootBeadId: this.#rows.rootBeadId,
+          status: "not_found"
+        }
+      };
+    if (result2.rows.length !== 1 || result2.rows[0]?.id !== predecessorRootBeadId)
+      return { status: "refused" };
+    const row = result2.rows[0];
+    const rootText = typeof row.root_text === "string" ? row.root_text : canonicalJson(row.root_text ?? null);
+    const claimsAbsent = row.claims_type === null || row.claims_type === void 0;
+    const claimsText = claimsAbsent ? void 0 : typeof row.claims_text === "string" ? row.claims_text : canonicalJson(row.claims_text ?? null);
+    return {
+      status: "ok",
+      value: {
+        claimsPresent: !claimsAbsent,
+        ...claimsText === void 0 ? {} : { claimsText },
+        currentRootBeadId: this.#rows.rootBeadId,
+        rootText,
+        status: "observed"
+      }
+    };
   }
   #mutationInput(input) {
     const value = safeRecord(input, ["batch", "identity"]);
@@ -24646,11 +32195,12 @@ var DoltBeadsServerDriver = class {
       }
     } : { status: "refused" };
   }
-  async #mutateAffected(statement, expectedRows) {
+  async #mutateAffected(statement, expectedRows, readback) {
     const response = await executeDoltSqlTransaction(
       this.#writer,
       statement,
-      expectedRows
+      expectedRows,
+      readback
     );
     if (response.status !== "ok") return response;
     return {
@@ -24847,10 +32397,10 @@ function record(input, keys) {
 function text3(value, limit = 4096) {
   return typeof value === "string" && value.length > 0 && value.length <= limit && !value.includes("\0") ? value : void 0;
 }
-function absolutePath3(value) {
+function absolutePath4(value) {
   const path2 = text3(value);
-  if (path2 === void 0 || !isAbsolute7(path2)) return void 0;
-  const canonical2 = normalize4(resolve4(path2));
+  if (path2 === void 0 || !isAbsolute8(path2)) return void 0;
+  const canonical2 = normalize5(resolve5(path2));
   return canonical2 === "/" ? void 0 : canonical2;
 }
 function identifier5(value) {
@@ -24860,6 +32410,34 @@ function identifier5(value) {
 function environmentName(value) {
   const candidate = text3(value, 160);
   return candidate !== void 0 && ENVIRONMENT_NAME.test(candidate) ? candidate : void 0;
+}
+function commandArgument2(value) {
+  if (typeof value !== "string" || value.length === 0 || Buffer.byteLength(value, "utf8") > 1024)
+    return void 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit === 0 || unit >= 56320 && unit <= 57343) return void 0;
+    if (unit >= 55296 && unit <= 56319) {
+      const low = value.charCodeAt(index + 1);
+      if (low < 56320 || low > 57343) return void 0;
+      index += 1;
+    }
+  }
+  return value;
+}
+function commandSet(value) {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 32)
+    return void 0;
+  const commands = [];
+  for (const candidate of value) {
+    if (!Array.isArray(candidate) || candidate.length < 1 || candidate.length > 32)
+      return void 0;
+    const command = candidate.map(commandArgument2);
+    if (command.some((argument) => argument === void 0) || Buffer.byteLength(canonicalJson(command), "utf8") > 8192)
+      return void 0;
+    commands.push(command);
+  }
+  return Buffer.byteLength(canonicalJson(commands), "utf8") <= 32768 ? commands : void 0;
 }
 function childRows2(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value))
@@ -24902,9 +32480,9 @@ function embeddedTopology(value) {
   const parsedRemote = remote2 === void 0 ? void 0 : record(remote2, ["name", "ref", "url"]);
   if (item.mode === "git-sync" && parsedRemote === void 0 || item.mode === "local-only" && parsedRemote !== void 0)
     return void 0;
-  const bdExecutable = absolutePath3(item.bdExecutable);
-  const doltExecutable = absolutePath3(item.doltExecutable);
-  const databaseDirectory = absolutePath3(item.databaseDirectory);
+  const bdExecutable = absolutePath4(item.bdExecutable);
+  const doltExecutable = absolutePath4(item.doltExecutable);
+  const databaseDirectory = absolutePath4(item.databaseDirectory);
   const rootBeadId = identifier5(item.rootBeadId);
   const prefix = identifier5(item.prefix);
   const mapped = childRows2(item.childBeadIds);
@@ -24964,9 +32542,9 @@ function sharedServerTopology(value) {
   const identity2 = item.identity;
   if (rows === void 0 || identity2 === null || typeof identity2 !== "object" || Array.isArray(identity2))
     return void 0;
-  const bdExecutable = absolutePath3(item.bdExecutable);
-  const doltExecutable = absolutePath3(item.doltExecutable);
-  const workspace = absolutePath3(item.workspace);
+  const bdExecutable = absolutePath4(item.bdExecutable);
+  const doltExecutable = absolutePath4(item.doltExecutable);
+  const workspace = absolutePath4(item.workspace);
   const rootBeadId = identifier5(rows.rootBeadId);
   const mapped = childRows2(rows.childBeadIds);
   const writerEnvironment = environmentName(item.writerEnvironment);
@@ -24992,9 +32570,9 @@ function sharedServerTopology(value) {
       writerUser
     };
   }
-  const dataDirectory = absolutePath3(managed?.dataDirectory);
-  const runtimeHome = absolutePath3(managed?.runtimeHome);
-  const runtimeConfigHome = absolutePath3(managed?.runtimeConfigHome);
+  const dataDirectory = absolutePath4(managed?.dataDirectory);
+  const runtimeHome = absolutePath4(managed?.runtimeHome);
+  const runtimeConfigHome = absolutePath4(managed?.runtimeConfigHome);
   if (server.topology !== "managed_local_shared_server" || server.credentialProvenance !== "managed_local_runtime" || dataDirectory === void 0 || runtimeHome === void 0 || runtimeConfigHome === void 0)
     return void 0;
   return {
@@ -25055,7 +32633,94 @@ function parseServerIdentity(value) {
     workerCredentialReference
   };
 }
-function parseControllerConfig(input) {
+function parseKnowledgeContract(input, environment) {
+  const value = record(input, [
+    "aliases",
+    "domainScope",
+    "gateTargets",
+    "humanDriver",
+    "provenance",
+    "verification"
+  ]);
+  const verification = record(value?.verification, [
+    "fast",
+    "integration",
+    "release"
+  ]);
+  const provenance = record(value?.provenance, [
+    "eventsDirectory",
+    "recordFormatVersion",
+    "reproducibilityCommand",
+    "rollupGeneratorCommand",
+    "worktreeRootVariable"
+  ]);
+  if (value === void 0 || provenance === void 0 || verification === void 0 || !Array.isArray(value.aliases))
+    return void 0;
+  const fastCommands = commandSet(verification.fast);
+  const integrationCommands = commandSet(verification.integration);
+  const releaseCommands = commandSet(verification.release);
+  const combinedVerificationCommands = commandSet([
+    ...fastCommands ?? [],
+    ...integrationCommands ?? []
+  ]);
+  if (fastCommands === void 0 || integrationCommands === void 0 || releaseCommands === void 0 || combinedVerificationCommands === void 0)
+    return void 0;
+  const cache = /* @__PURE__ */ new Map();
+  const resolveVariable = (inputName) => {
+    const name = environmentName(inputName);
+    if (name === void 0) return void 0;
+    if (!cache.has(name)) cache.set(name, environment(name));
+    const resolved2 = cache.get(name);
+    return absolutePath4(resolved2) === resolved2 && !containsSecretShape(resolved2) ? resolved2 : void 0;
+  };
+  const aliasNames = /* @__PURE__ */ new Set();
+  const variableNames = /* @__PURE__ */ new Set();
+  const aliases = [];
+  for (const candidate of value.aliases) {
+    const alias = record(candidate, [
+      "alias",
+      "markerFile",
+      "mountPathVariable",
+      "mountPolicy",
+      "namespaceControl"
+    ]);
+    const name = identifier5(alias?.alias);
+    const variable = environmentName(alias?.mountPathVariable);
+    const canonicalRoot = resolveVariable(variable);
+    if (alias === void 0 || name === void 0 || variable === void 0 || canonicalRoot === void 0 || aliasNames.has(name) || variableNames.has(variable))
+      return void 0;
+    aliasNames.add(name);
+    variableNames.add(variable);
+    aliases.push({
+      alias: name,
+      canonicalRoot,
+      markerFile: alias.markerFile,
+      mountPolicy: alias.mountPolicy,
+      namespaceControl: alias.namespaceControl
+    });
+  }
+  const worktreeVariable = environmentName(provenance.worktreeRootVariable);
+  const provenanceWorktreeRoot = resolveVariable(worktreeVariable);
+  if (worktreeVariable === void 0 || provenanceWorktreeRoot === void 0 || variableNames.has(worktreeVariable))
+    return void 0;
+  const resolved = {
+    aliases,
+    combinedVerificationCommands,
+    domainScope: value.domainScope,
+    gateTargets: value.gateTargets,
+    humanDriver: value.humanDriver,
+    provenance: {
+      eventsDirectory: provenance.eventsDirectory,
+      recordFormatVersion: provenance.recordFormatVersion,
+      reproducibilityCommand: provenance.reproducibilityCommand,
+      rollupGeneratorCommand: provenance.rollupGeneratorCommand
+    },
+    provenanceWorktreeRoot
+  };
+  const parsed = validate(KnowledgeContractSchema, resolved);
+  return parsed.ok ? parsed.value : void 0;
+}
+function parseControllerConfig(input, environment) {
   if (containsSecretShape(input)) return void 0;
   const keys = [
     "git",
@@ -25066,7 +32731,12 @@ function parseControllerConfig(input) {
     "topology",
     "version"
   ];
-  const value = record(input, keys) ?? record(input, [...keys, "harnessSupport"]);
+  const inputRecord = input !== null && typeof input === "object" && !Array.isArray(input) ? input : void 0;
+  const optionalKeys = [
+    ...inputRecord?.harnessSupport === void 0 ? [] : ["harnessSupport"],
+    ...inputRecord?.knowledgeContract === void 0 ? [] : ["knowledgeContract"]
+  ];
+  const value = record(input, [...keys, ...optionalKeys]);
   if (value === void 0 || value.schema !== "sce.controller-config" || value.version !== 1 || !isSchema(RepositoryRunSchema, value.initialRun) || !isSchema(FencingScopeSchema, value.scope))
     return void 0;
   const git = record(value.git, ["remote", "repository"]) ?? record(value.git, ["repository"]);
@@ -25077,10 +32747,23 @@ function parseControllerConfig(input) {
   const topology = embeddedTopology(value.topology) ?? sharedServerTopology(value.topology);
   const run2 = value.initialRun;
   const parsedHarness = value.harnessSupport === void 0 ? void 0 : parseHarnessSupport(value.harnessSupport);
+  const knowledgeContract = value.knowledgeContract === void 0 ? void 0 : parseKnowledgeContract(value.knowledgeContract, environment);
   const commitment = value.harnessSupport === void 0 ? void 0 : harnessSupportCommitment(value.harnessSupport);
   const scope = value.scope;
   const repository = git.repository;
-  if (nonce === void 0 || git.remote !== void 0 && remote2 === void 0 || topology === void 0 || parsedHarness !== void 0 && !parsedHarness.ok || commitment !== void 0 && !commitment.ok || run2.harness !== void 0 && parsedHarness === void 0 || parsedHarness !== void 0 && (run2.harness === void 0 || commitment === void 0 || !commitment.ok || run2.harness.family !== parsedHarness.value.capabilities.family || run2.harness.adapterVersion !== parsedHarness.value.capabilities.adapterVersion || run2.harness.harnessVersion !== parsedHarness.value.capabilities.harnessVersion || run2.harness.supportCommitment !== commitment.value) || canonicalGitCommonDir(repository.commonDir) !== repository.commonDir || absolutePath3(repository.cwd) !== repository.cwd || run2.controller.holder.length === 0 || run2.repositoryIdentity !== repository.identity || run2.repositoryIdentity !== scope.gitRepositoryIdentity || run2.storeIdentity !== scope.beadsStoreIdentity || run2.integrationBranch !== scope.integrationBranch)
+  if (nonce === void 0 || git.remote !== void 0 && remote2 === void 0 || topology === void 0 || parsedHarness !== void 0 && !parsedHarness.ok || value.knowledgeContract !== void 0 && knowledgeContract === void 0 || commitment !== void 0 && !commitment.ok || run2.harness !== void 0 && parsedHarness === void 0 || parsedHarness !== void 0 && (run2.harness === void 0 || commitment === void 0 || !commitment.ok || run2.harness.family !== parsedHarness.value.capabilities.family || run2.harness.adapterVersion !== parsedHarness.value.capabilities.adapterVersion || run2.harness.harnessVersion !== parsedHarness.value.capabilities.harnessVersion || run2.harness.supportCommitment !== commitment.value) || canonicalGitCommonDir(repository.commonDir) !== repository.commonDir || absolutePath4(repository.cwd) !== repository.cwd || run2.controller.holder.length === 0 || run2.repositoryIdentity !== repository.identity || run2.repositoryIdentity !== scope.gitRepositoryIdentity || run2.storeIdentity !== scope.beadsStoreIdentity || run2.integrationBranch !== scope.integrationBranch)
+    return void 0;
+  if (knowledgeContract === void 0 !== (run2.knowledgeContract === void 0) && !(knowledgeContract !== void 0 && canFreezeKnowledgeContractAtFirstWave(run2)) || knowledgeContract !== void 0 && run2.knowledgeContract !== void 0 && canonicalJson(knowledgeContract) !== canonicalJson(run2.knowledgeContract) || knowledgeContract !== void 0 && (run2.harness === void 0 || !knowledgeContractRuntimeValid(knowledgeContract, run2.harness) || maximumMaterialisationSidecarBytes(knowledgeContract, run2.harness) > 8192))
+    return void 0;
+  if (knowledgeContract !== void 0 && (() => {
+    const roots = [
+      ...knowledgeContract.aliases.map((alias) => alias.canonicalRoot),
+      knowledgeContract.provenanceWorktreeRoot
+    ];
+    return !roots.every((root) => absolutePath4(root) === root) || roots.some(
+      (root, index) => roots.slice(index + 1).some((other) => pathsOverlap(root, other))
+    );
+  })())
     return void 0;
   if (topology.kind === "embedded" && (topology.preflight.payload.status !== "ready" || topology.preflight.payload.git.commonDir !== repository.commonDir || topology.preflight.payload.git.identity !== repository.identity || topology.preflight.payload.git.objectFormat !== repository.objectFormat))
     return void 0;
@@ -25088,12 +32771,19 @@ function parseControllerConfig(input) {
     git: { repository, ...remote2 === void 0 ? {} : { remote: remote2 } },
     ...parsedHarness === void 0 ? {} : { harnessSupport: parsedHarness.value },
     initialRun: run2,
+    ...knowledgeContract === void 0 ? {} : { knowledgeContract },
     nonce,
     scope,
     schema: "sce.controller-config",
     topology,
     version: 1
   };
+}
+function pathsOverlap(left, right) {
+  const leftToRight = relative3(left, right);
+  const rightToLeft = relative3(right, left);
+  const contained = (value) => value === "" || !isAbsolute8(value) && value !== ".." && !value.startsWith("../");
+  return contained(leftToRight) || contained(rightToLeft);
 }
 async function topologyProof(config) {
   const commonDir = canonicalGitCommonDir(config.git.repository.commonDir);
@@ -25144,17 +32834,20 @@ function embeddedRunner(config, topology) {
     prefix: topology.prefix,
     preflight: topology.preflight,
     process: process2,
+    rootIssueId: topology.rootBeadId,
     scope: config.scope
   });
   return createProductionRecoveryCommandRunner({
     git: { ...config.git, runner: nodeGitRunner },
     ...config.harnessSupport === void 0 ? {} : { harness: { support: config.harnessSupport } },
     initialRun: config.initialRun,
+    ...config.knowledgeContract === void 0 ? {} : { knowledgeContract: config.knowledgeContract },
     nonce: config.nonce,
     preOwnership: adapter,
     proveTopology: async () => await embeddedTopologyProof(config, process2),
     store: adapter,
-    topology: adapter
+    topology: adapter,
+    carry: adapter
   });
 }
 async function sharedServerRunner(config, topology, environment = (name) => process.env[name]) {
@@ -25210,18 +32903,20 @@ async function sharedServerRunner(config, topology, environment = (name) => proc
       git: { ...config.git, runner: nodeGitRunner },
       ...config.harnessSupport === void 0 ? {} : { harness: { support: config.harnessSupport } },
       initialRun: config.initialRun,
+      ...config.knowledgeContract === void 0 ? {} : { knowledgeContract: config.knowledgeContract },
       nonce: config.nonce,
       preOwnership: adapter,
       proveTopology: async () => await topologyProof(config),
       store: adapter,
-      topology: adapter
+      topology: adapter,
+      carry: adapter
     });
   } catch {
     return void 0;
   }
 }
 async function createControllerConfigRunner(path2, dependencies = {}) {
-  if (!isAbsolute7(path2)) return void 0;
+  if (!isAbsolute8(path2)) return void 0;
   let source;
   try {
     source = await readFile(path2, "utf8");
@@ -25235,12 +32930,12 @@ async function createControllerConfigRunner(path2, dependencies = {}) {
   } catch {
     return void 0;
   }
-  const config = parseControllerConfig(input);
+  const environment = dependencies.environment ?? ((name) => process.env[name]);
+  const config = parseControllerConfig(input, environment);
   if (config === void 0) return void 0;
   const topology = config.topology;
   if (topology.kind === "embedded")
     return dependencies.composeEmbedded?.(config, topology) ?? embeddedRunner(config, topology);
-  const environment = dependencies.environment ?? ((name) => process.env[name]);
   const writerPassword = environment(topology.writerEnvironment);
   const workerPassword = environment(topology.workerEnvironment);
   if (writerPassword === void 0 || workerPassword === void 0)
@@ -25637,7 +33332,7 @@ function authorizes(packet, authority) {
 // src/feedback/github.ts
 import { mkdtemp as mkdtemp2, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
 import { tmpdir as tmpdir2 } from "node:os";
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 var MAX_PROVIDER_OUTPUT_BYTES = 128 * 1024;
 var PAGE_SIZE = 100;
 var MAX_ISSUES = 1e4;
@@ -25674,8 +33369,8 @@ var GhFeedbackTransport = class {
   async createIssue(request) {
     if (request.target.repository !== FIXED_TARGET_NAME || request.target.repositoryId !== FIXED_TARGET_REPOSITORY_ID)
       throw rejected();
-    const directory = await mkdtemp2(join4(tmpdir2(), "sce-feedback-gh-"));
-    const bodyFile = join4(directory, "body.md");
+    const directory = await mkdtemp2(join5(tmpdir2(), "sce-feedback-gh-"));
+    const bodyFile = join5(directory, "body.md");
     try {
       await writeFile2(bodyFile, request.body, {
         encoding: "utf8",
@@ -25829,7 +33524,7 @@ function rejected() {
 import {
   chmodSync as chmodSync2,
   closeSync as closeSync4,
-  constants as constants2,
+  constants as constants3,
   fstatSync as fstatSync2,
   fsyncSync,
   lstatSync as lstatSync2,
@@ -25844,7 +33539,7 @@ import {
   writeFileSync as writeFileSync2
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { join as join5 } from "node:path";
+import { join as join6 } from "node:path";
 
 // src/feedback/submit.ts
 function canonicalIssueUrl(number) {
@@ -25923,7 +33618,7 @@ var FeedbackOutbox = class _FeedbackOutbox {
   constructor(directory, hooks) {
     this.hooks = hooks;
     this.directory = directory;
-    this.lockPath = join5(directory, ".lock");
+    this.lockPath = join6(directory, ".lock");
   }
   hooks;
   directory;
@@ -25972,7 +33667,7 @@ var FeedbackOutbox = class _FeedbackOutbox {
     for (const name of names.filter(
       (entry) => /^[0-9a-f]{64}\.json$/u.test(entry)
     )) {
-      const source = safeFile(join5(this.directory, name));
+      const source = safeFile(join6(this.directory, name));
       const envelope = source === void 0 ? void 0 : parseEnvelope(source);
       if (envelope === void 0 || envelope.packet.telemetry.fingerprint !== name.slice(0, -5))
         return { status: "invalid" };
@@ -26122,16 +33817,16 @@ var FeedbackOutbox = class _FeedbackOutbox {
     let descriptor;
     let opened;
     try {
-      if (constants2.O_NOFOLLOW === void 0) return { status: "unavailable" };
+      if (constants3.O_NOFOLLOW === void 0) return { status: "unavailable" };
       descriptor = openSync4(
         this.lockPath,
-        constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | constants2.O_NOFOLLOW,
+        constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL | constants3.O_NOFOLLOW,
         384
       );
-      const stat2 = fstatSync2(descriptor);
-      if (!stat2.isFile() || (stat2.mode & 511) !== 384)
+      const stat3 = fstatSync2(descriptor);
+      if (!stat3.isFile() || (stat3.mode & 511) !== 384)
         return { status: "unavailable" };
-      opened = { dev: stat2.dev, ino: stat2.ino };
+      opened = { dev: stat3.dev, ino: stat3.ino };
       writeFileSync2(
         descriptor,
         `pid=${process.pid}
@@ -26150,8 +33845,8 @@ token=${randomUUID()}
       if (descriptor !== void 0) {
         closeSync4(descriptor);
         try {
-          const stat2 = lstatSync2(this.lockPath);
-          if (stat2.isFile() && !stat2.isSymbolicLink() && (stat2.mode & 511) === 384 && stat2.dev === opened?.dev && stat2.ino === opened?.ino)
+          const stat3 = lstatSync2(this.lockPath);
+          if (stat3.isFile() && !stat3.isSymbolicLink() && (stat3.mode & 511) === 384 && stat3.dev === opened?.dev && stat3.ino === opened?.ino)
             unlinkSync2(this.lockPath);
         } catch {
         }
@@ -26160,10 +33855,10 @@ token=${randomUUID()}
   }
   recoverKilledLock(path2) {
     try {
-      const stat2 = lstatSync2(path2);
-      if (!stat2.isFile() || stat2.isSymbolicLink() || (stat2.mode & 511) !== 384)
+      const stat3 = lstatSync2(path2);
+      if (!stat3.isFile() || stat3.isSymbolicLink() || (stat3.mode & 511) !== 384)
         return false;
-      const identity2 = { dev: stat2.dev, ino: stat2.ino };
+      const identity2 = { dev: stat3.dev, ino: stat3.ino };
       const source = readFileSync2(path2, "utf8");
       const pidSource = /^pid=(0|[1-9][0-9]*)\ntoken=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\n$/u.exec(
         source
@@ -26183,19 +33878,19 @@ token=${randomUUID()}
     }
   }
   acquireSubmissionLock(fingerprint) {
-    const path2 = join5(this.directory, `.submit-${fingerprint}.lock`);
+    const path2 = join6(this.directory, `.submit-${fingerprint}.lock`);
     let descriptor;
     let identity2;
     try {
-      if (constants2.O_NOFOLLOW === void 0) return { status: "unavailable" };
+      if (constants3.O_NOFOLLOW === void 0) return { status: "unavailable" };
       descriptor = openSync4(
         path2,
-        constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | constants2.O_NOFOLLOW,
+        constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL | constants3.O_NOFOLLOW,
         384
       );
-      const stat2 = fstatSync2(descriptor);
-      identity2 = { dev: stat2.dev, ino: stat2.ino };
-      if (!stat2.isFile() || (stat2.mode & 511) !== 384) {
+      const stat3 = fstatSync2(descriptor);
+      identity2 = { dev: stat3.dev, ino: stat3.ino };
+      if (!stat3.isFile() || (stat3.mode & 511) !== 384) {
         this.releaseLock(descriptor, identity2, path2);
         descriptor = void 0;
         return { status: "unavailable" };
@@ -26230,8 +33925,8 @@ token=${randomUUID()}
   releaseLock(descriptor, identity2, path2) {
     closeSync4(descriptor);
     try {
-      const stat2 = lstatSync2(path2);
-      if (stat2.isFile() && !stat2.isSymbolicLink() && stat2.dev === identity2.dev && stat2.ino === identity2.ino)
+      const stat3 = lstatSync2(path2);
+      if (stat3.isFile() && !stat3.isSymbolicLink() && stat3.dev === identity2.dev && stat3.ino === identity2.ino)
         unlinkSync2(path2);
     } catch {
     }
@@ -26243,9 +33938,9 @@ token=${randomUUID()}
     let bytes2 = 0;
     for (const name of names) {
       if (name === ".lock") continue;
-      const stat2 = safeStat(join5(this.directory, name));
-      if (stat2 === void 0) return "unavailable";
-      bytes2 += stat2.size;
+      const stat3 = safeStat(join6(this.directory, name));
+      if (stat3 === void 0) return "unavailable";
+      bytes2 += stat3.size;
       if (/^[0-9a-f]{64}\.json$/u.test(name)) packets += 1;
     }
     return packets >= OUTBOX_MAX_PACKETS || bytes2 + incomingBytes > OUTBOX_MAX_BYTES ? "quota" : "ok";
@@ -26254,16 +33949,16 @@ token=${randomUUID()}
     const source = sourceFor(envelope);
     if (new TextEncoder().encode(source).byteLength > OUTBOX_MAX_BYTES)
       return { status: "quota" };
-    const temporary = join5(
+    const temporary = join6(
       this.directory,
       `.${envelope.packet.telemetry.fingerprint}.${randomUUID()}.tmp`
     );
     let descriptor;
     try {
-      if (constants2.O_NOFOLLOW === void 0) return { status: "unavailable" };
+      if (constants3.O_NOFOLLOW === void 0) return { status: "unavailable" };
       descriptor = openSync4(
         temporary,
-        constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | constants2.O_NOFOLLOW,
+        constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL | constants3.O_NOFOLLOW,
         384
       );
       writeFileSync2(descriptor, source, "utf8");
@@ -26282,7 +33977,7 @@ token=${randomUUID()}
     }
   }
   packetPath(fingerprint) {
-    return join5(this.directory, `${fingerprint}.json`);
+    return join6(this.directory, `${fingerprint}.json`);
   }
 };
 function outboxDirectory(commonDir) {
@@ -26290,9 +33985,9 @@ function outboxDirectory(commonDir) {
     if (lstatSync2(commonDir).isSymbolicLink()) return void 0;
     const resolved = realpathSync5(commonDir);
     if (!strictDirectory2(resolved)) return void 0;
-    const sce = join5(resolved, "sce");
+    const sce = join6(resolved, "sce");
     createStrictDirectory(sce);
-    const outbox = join5(sce, "feedback-outbox");
+    const outbox = join6(sce, "feedback-outbox");
     createStrictDirectory(outbox);
     return statSync4(resolved).dev === statSync4(outbox).dev ? outbox : void 0;
   } catch {
@@ -26313,8 +34008,8 @@ function createStrictDirectory(path2) {
 }
 function strictDirectory2(path2, mode) {
   try {
-    const stat2 = lstatSync2(path2);
-    return stat2.isDirectory() && !stat2.isSymbolicLink() && (typeof process.getuid !== "function" || stat2.uid === process.getuid()) && (mode === void 0 || (stat2.mode & 511) === mode);
+    const stat3 = lstatSync2(path2);
+    return stat3.isDirectory() && !stat3.isSymbolicLink() && (typeof process.getuid !== "function" || stat3.uid === process.getuid()) && (mode === void 0 || (stat3.mode & 511) === mode);
   } catch {
     return false;
   }
@@ -26328,8 +34023,8 @@ function safeNames(directory) {
 }
 function safeStat(path2) {
   try {
-    const stat2 = lstatSync2(path2);
-    return stat2.isFile() && !stat2.isSymbolicLink() ? stat2 : void 0;
+    const stat3 = lstatSync2(path2);
+    return stat3.isFile() && !stat3.isSymbolicLink() ? stat3 : void 0;
   } catch {
     return void 0;
   }
@@ -26338,9 +34033,9 @@ function safeFile(path2) {
   let descriptor;
   try {
     const before = lstatSync2(path2);
-    if (!before.isFile() || before.isSymbolicLink() || (before.mode & 511) !== 384 || constants2.O_NOFOLLOW === void 0)
+    if (!before.isFile() || before.isSymbolicLink() || (before.mode & 511) !== 384 || constants3.O_NOFOLLOW === void 0)
       return void 0;
-    descriptor = openSync4(path2, constants2.O_RDONLY | constants2.O_NOFOLLOW);
+    descriptor = openSync4(path2, constants3.O_RDONLY | constants3.O_NOFOLLOW);
     const opened = fstatSync2(descriptor);
     if (!opened.isFile() || opened.dev !== before.dev || opened.ino !== before.ino || opened.size > OUTBOX_MAX_BYTES)
       return void 0;
@@ -26352,7 +34047,7 @@ function safeFile(path2) {
   }
 }
 function fsyncDirectory(directory) {
-  const descriptor = openSync4(directory, constants2.O_RDONLY);
+  const descriptor = openSync4(directory, constants3.O_RDONLY);
   try {
     fsyncSync(descriptor);
   } finally {
@@ -26423,8 +34118,8 @@ function isStatus(value) {
 
 // src/feedback/runtime.ts
 import { execFile } from "node:child_process";
-import { constants as constants3, accessSync, lstatSync as lstatSync3, realpathSync as realpathSync6 } from "node:fs";
-import { isAbsolute as isAbsolute8, resolve as resolve5 } from "node:path";
+import { constants as constants4, accessSync, lstatSync as lstatSync3, realpathSync as realpathSync6 } from "node:fs";
+import { isAbsolute as isAbsolute9, resolve as resolve6 } from "node:path";
 import { promisify } from "node:util";
 var executeFile = promisify(execFile);
 var MAX_COMMAND_OUTPUT_BYTES = 128 * 1024;
@@ -26468,8 +34163,8 @@ function productionExecutable(file) {
     try {
       const real = realpathSync6(candidate);
       const entry = lstatSync3(real);
-      accessSync(real, constants3.X_OK);
-      if (isAbsolute8(real) && entry.isFile() && !entry.isSymbolicLink())
+      accessSync(real, constants4.X_OK);
+      if (isAbsolute9(real) && entry.isFile() && !entry.isSymbolicLink())
         return real;
     } catch {
     }
@@ -26518,7 +34213,7 @@ async function resolveGitCommonDirectory(executor, cwd = process.cwd()) {
   if (candidate.includes("\0") || candidate.includes("\r") || candidate.includes("\n"))
     return void 0;
   try {
-    const real = realpathSync6(resolve5(cwd, candidate));
+    const real = realpathSync6(resolve6(cwd, candidate));
     const entry = lstatSync3(real);
     return entry.isDirectory() && !entry.isSymbolicLink() ? real : void 0;
   } catch {
@@ -26712,12 +34407,12 @@ function unavailable4(code, message) {
 }
 
 // src/install/index.ts
-import { createHash as createHash5, randomUUID as randomUUID2 } from "node:crypto";
+import { createHash as createHash6, randomUUID as randomUUID2 } from "node:crypto";
 import {
   cp,
-  lstat,
+  lstat as lstat2,
   mkdir,
-  open as open2,
+  open as open3,
   readFile as readFile2,
   readdir,
   rename,
@@ -26725,7 +34420,7 @@ import {
   unlink,
   writeFile as writeFile3
 } from "node:fs/promises";
-import { basename as basename3, dirname as dirname5, join as join6, resolve as resolve6 } from "node:path";
+import { basename as basename3, dirname as dirname5, join as join7, resolve as resolve7 } from "node:path";
 var INSTALL_MANIFEST = ".sce-skill-install.json";
 var INSTALL_JOURNAL = ".sce-skill-install.transaction.json";
 var INSTALL_LOCK = ".sce-skill-install.lock";
@@ -26823,11 +34518,11 @@ function parseJournal(value) {
     version: 1
   };
 }
-async function sha2562(path2) {
-  return createHash5("sha256").update(await readFile2(path2)).digest("hex");
+async function sha2563(path2) {
+  return createHash6("sha256").update(await readFile2(path2)).digest("hex");
 }
 async function fsync(path2) {
-  const handle = await open2(path2, "r");
+  const handle = await open3(path2, "r");
   try {
     await handle.sync();
   } finally {
@@ -26835,18 +34530,18 @@ async function fsync(path2) {
   }
 }
 async function fsyncTree(root) {
-  const entry = await lstat(root);
+  const entry = await lstat2(root);
   if (entry.isSymbolicLink())
     fail2(`symbolic links are not installable: ${root}`);
   if (entry.isFile()) return await fsync(root);
   if (!entry.isDirectory()) fail2(`unsupported install entry: ${root}`);
-  for (const child of await readdir(root)) await fsyncTree(join6(root, child));
+  for (const child of await readdir(root)) await fsyncTree(join7(root, child));
   await fsync(root);
 }
 async function assertSafeExistingAncestors(path2) {
-  let current = resolve6(path2);
+  let current = resolve7(path2);
   while (true) {
-    const entry = await lstat(current).catch(() => void 0);
+    const entry = await lstat2(current).catch(() => void 0);
     if (entry?.isSymbolicLink() && current !== "/var" && current !== "/tmp")
       fail2(`refusing symlinked install parent: ${current}`);
     const parent = dirname5(current);
@@ -26857,7 +34552,7 @@ async function assertSafeExistingAncestors(path2) {
 async function assertDirectory(path2, create = false) {
   await assertSafeExistingAncestors(path2);
   if (create) await mkdir(path2, { recursive: true, mode: 448 });
-  const entry = await lstat(path2).catch(() => void 0);
+  const entry = await lstat2(path2).catch(() => void 0);
   if (!entry?.isDirectory() || entry.isSymbolicLink())
     fail2(`refusing non-directory install path: ${path2}`);
 }
@@ -26868,7 +34563,7 @@ async function filesAt(root, prefix = "") {
     (left, right) => left.name.localeCompare(right.name)
   )) {
     const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
-    const fullPath = join6(root, entry.name);
+    const fullPath = join7(root, entry.name);
     if (entry.isSymbolicLink())
       fail2(`symbolic links are not installable: ${relativePath}`);
     if (entry.isDirectory())
@@ -26876,14 +34571,14 @@ async function filesAt(root, prefix = "") {
     else if (entry.isFile())
       result2.push({
         path: canonicalRelative(relativePath),
-        sha256: await sha2562(fullPath)
+        sha256: await sha2563(fullPath)
       });
     else fail2(`unsupported install entry: ${relativePath}`);
   }
   return result2;
 }
 async function skillVersion(path2) {
-  const text5 = await readFile2(join6(path2, "SKILL.md"), "utf8").catch(
+  const text5 = await readFile2(join7(path2, "SKILL.md"), "utf8").catch(
     () => fail2(`missing SKILL.md in ${basename3(path2)}`)
   );
   const match = /^<!--\s*sce-skill-version:\s*([^\s#]+)\s*-->\s*$/mu.exec(text5);
@@ -26892,13 +34587,13 @@ async function skillVersion(path2) {
   return match[1];
 }
 async function createSkillInstallManifest(source) {
-  const resolved = resolve6(source);
+  const resolved = resolve7(source);
   await assertDirectory(resolved);
   const skills = {};
   const files = [];
   for (const name of SKILL_NAMES) {
-    const skillRoot = join6(resolved, name);
-    const entry = await lstat(skillRoot).catch(() => void 0);
+    const skillRoot = join7(resolved, name);
+    const entry = await lstat2(skillRoot).catch(() => void 0);
     if (!entry?.isDirectory() || entry.isSymbolicLink())
       fail2(`missing regular skill directory: ${name}`);
     skills[name] = await skillVersion(skillRoot);
@@ -26924,8 +34619,8 @@ async function writeDurable(path2, value) {
   await fsync(dirname5(path2));
 }
 async function readManifest(destination) {
-  const path2 = join6(destination, INSTALL_MANIFEST);
-  const entry = await lstat(path2).catch(() => void 0);
+  const path2 = join7(destination, INSTALL_MANIFEST);
+  const entry = await lstat2(path2).catch(() => void 0);
   if (entry === void 0) return void 0;
   if (!entry.isFile() || entry.isSymbolicLink())
     fail2("invalid existing skill-install manifest");
@@ -26937,8 +34632,8 @@ async function readManifest(destination) {
   }
 }
 async function readJournal(destination) {
-  const path2 = join6(destination, INSTALL_JOURNAL);
-  const entry = await lstat(path2).catch(() => void 0);
+  const path2 = join7(destination, INSTALL_JOURNAL);
+  const entry = await lstat2(path2).catch(() => void 0);
   if (entry === void 0) return void 0;
   if (!entry.isFile() || entry.isSymbolicLink())
     fail2("invalid skill-install transaction journal");
@@ -26952,19 +34647,19 @@ async function readJournal(destination) {
 function localTransactionPath(parent, name) {
   if (basename3(name) !== name || !name.startsWith(JOURNAL_PREFIX))
     fail2("unsafe skill-install transaction path");
-  return join6(parent, name);
+  return join7(parent, name);
 }
 async function validateTree(root, manifest) {
   for (const name of SKILL_NAMES) {
-    const directory = join6(root, name);
-    const entry = await lstat(directory).catch(() => void 0);
+    const directory = join7(root, name);
+    const entry = await lstat2(directory).catch(() => void 0);
     if (!entry?.isDirectory() || entry.isSymbolicLink())
       fail2(`installed skill missing: ${name}`);
     if (await skillVersion(directory) !== manifest.skills[name])
       fail2(`installed skill version differs: ${name}`);
   }
   const actual = (await Promise.all(
-    SKILL_NAMES.map((name) => filesAt(join6(root, name), name))
+    SKILL_NAMES.map((name) => filesAt(join7(root, name), name))
   )).flat().sort((left, right) => left.path.localeCompare(right.path));
   const expected = manifest.files;
   if (actual.length !== expected.length)
@@ -26987,13 +34682,13 @@ async function assertOwnedOrAbsent(destination, manifest) {
     SKILL_NAMES.map(
       async (name) => [
         name,
-        await lstat(join6(destination, name)).catch(() => void 0)
+        await lstat2(join7(destination, name)).catch(() => void 0)
       ]
     )
   );
   const anySkill = entries.some(([, entry]) => entry !== void 0);
   if (manifest === void 0) {
-    if (anySkill || await lstat(join6(destination, INSTALL_MANIFEST)).catch(() => void 0))
+    if (anySkill || await lstat2(join7(destination, INSTALL_MANIFEST)).catch(() => void 0))
       fail2("refusing unrelated skill collision");
     return;
   }
@@ -27007,12 +34702,12 @@ async function move(from, to, phase, fault) {
   await fault?.(`after-${phase}`);
 }
 async function movePresent(from, to, phase, fault) {
-  if (!await lstat(from).catch(() => void 0)) return false;
+  if (!await lstat2(from).catch(() => void 0)) return false;
   await move(from, to, phase, fault);
   return true;
 }
 async function removeJournal(destination) {
-  await unlink(join6(destination, INSTALL_JOURNAL));
+  await unlink(join7(destination, INSTALL_JOURNAL));
   await fsync(destination);
 }
 async function cleanCommitted(destination, parent, journal) {
@@ -27024,7 +34719,7 @@ async function cleanCommitted(destination, parent, journal) {
     if (await readManifest(destination))
       fail2("uninstall transaction did not remove manifest");
     for (const name of SKILL_NAMES) {
-      if (await lstat(join6(destination, name)).catch(() => void 0))
+      if (await lstat2(join7(destination, name)).catch(() => void 0))
         fail2("uninstall transaction did not remove skill pair");
     }
   }
@@ -27034,9 +34729,9 @@ async function cleanCommitted(destination, parent, journal) {
   await removeJournal(destination);
 }
 async function preserveForRecovery(parent, source) {
-  const entry = await lstat(source).catch(() => void 0);
+  const entry = await lstat2(source).catch(() => void 0);
   if (!entry) return;
-  const preserved = join6(
+  const preserved = join7(
     parent,
     `.sce-recovery-${randomUUID2()}-${basename3(source)}`
   );
@@ -27048,11 +34743,11 @@ async function restoreBackup(destination, parent, journal) {
   try {
     if (journal.previous !== null) {
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
-        const target = join6(destination, name);
-        const source = join6(backup, name);
-        if (await lstat(source).catch(() => void 0))
+        const target = join7(destination, name);
+        const source = join7(backup, name);
+        if (await lstat2(source).catch(() => void 0))
           await preserveForRecovery(parent, target);
-        else if (await lstat(target).catch(() => void 0))
+        else if (await lstat2(target).catch(() => void 0))
           await rename(target, source);
         else fail2("recovery-needed: rollback source is incomplete");
       }
@@ -27061,23 +34756,23 @@ async function restoreBackup(destination, parent, journal) {
       await validateInstalled(backup, journal.previous);
     } else {
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
-        await preserveForRecovery(parent, join6(destination, name));
+        await preserveForRecovery(parent, join7(destination, name));
     }
     for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
-      const source = join6(backup, name);
-      if (await lstat(source).catch(() => void 0))
-        await rename(source, join6(destination, name));
+      const source = join7(backup, name);
+      if (await lstat2(source).catch(() => void 0))
+        await rename(source, join7(destination, name));
     }
     await fsync(destination);
     if (journal.previous === null) {
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
-        if (await lstat(join6(destination, name)).catch(() => void 0))
+        if (await lstat2(join7(destination, name)).catch(() => void 0))
           fail2(
             "recovery-needed: prior empty installation could not be restored"
           );
       }
     } else await validateInstalled(destination, journal.previous);
-    await writeDurable(join6(destination, INSTALL_JOURNAL), {
+    await writeDurable(join7(destination, INSTALL_JOURNAL), {
       ...journal,
       phase: "committed"
     });
@@ -27088,7 +34783,7 @@ async function restoreBackup(destination, parent, journal) {
 async function validatePrior(destination, journal) {
   if (journal.previous === null) {
     for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
-      if (await lstat(join6(destination, name)).catch(() => void 0))
+      if (await lstat2(join7(destination, name)).catch(() => void 0))
         fail2("recovery-needed: prior empty installation could not be restored");
     }
   } else await validateInstalled(destination, journal.previous);
@@ -27112,7 +34807,7 @@ async function recover(destination, parent) {
   if (journal.operation === "install") {
     try {
       await validateInstalled(destination, journal.manifest);
-      await writeDurable(join6(destination, INSTALL_JOURNAL), {
+      await writeDurable(join7(destination, INSTALL_JOURNAL), {
         ...journal,
         phase: "committed"
       });
@@ -27139,11 +34834,11 @@ async function recover(destination, parent) {
   await cleanRollback(destination, parent, journal);
 }
 async function acquireLock(destination) {
-  const path2 = join6(destination, INSTALL_LOCK);
-  const reaper = join6(destination, INSTALL_LOCK_REAPER);
+  const path2 = join7(destination, INSTALL_LOCK);
+  const reaper = join7(destination, INSTALL_LOCK_REAPER);
   let handle;
   try {
-    handle = await open2(path2, "wx", 384);
+    handle = await open3(path2, "wx", 384);
   } catch (error) {
     if (error.code !== "EEXIST") throw error;
     try {
@@ -27165,13 +34860,13 @@ async function acquireLock(destination) {
           fail2("another skill installation is active");
       }
       await unlink(path2);
-      handle = await open2(path2, "wx", 384);
+      handle = await open3(path2, "wx", 384);
     } finally {
       await rm3(reaper, { recursive: true }).catch(() => void 0);
       await fsync(destination);
     }
   }
-  if (await lstat(reaper).catch(() => void 0)) {
+  if (await lstat2(reaper).catch(() => void 0)) {
     await handle.close();
     await unlink(path2).catch(() => void 0);
     fail2("another skill installation is active");
@@ -27185,7 +34880,7 @@ token=${token}
   await handle.close();
   await fsync(destination);
   return async () => {
-    const current = await lstat(path2).catch(() => void 0);
+    const current = await lstat2(path2).catch(() => void 0);
     const text5 = await readFile2(path2, "utf8").catch(() => void 0);
     if (current?.dev === acquired.dev && current.ino === acquired.ino && text5 === `pid=${process.pid}
 token=${token}
@@ -27203,11 +34898,11 @@ async function withLock(destination, operation) {
   }
 }
 async function installSkills(options) {
-  const source = resolve6(options.source);
-  const destination = resolve6(options.destination);
+  const source = resolve7(options.source);
+  const destination = resolve7(options.destination);
   const manifest = await createSkillInstallManifest(source);
   if (options.dryRun) {
-    const entry = await lstat(destination).catch(() => void 0);
+    const entry = await lstat2(destination).catch(() => void 0);
     if (entry !== void 0) {
       await assertDirectory(destination);
       await assertOwnedOrAbsent(destination, await readManifest(destination));
@@ -27215,7 +34910,7 @@ async function installSkills(options) {
     return { manifest, status: "dry-run" };
   }
   await assertDirectory(destination, true);
-  if (options.stagingDirectory !== void 0 && resolve6(options.stagingDirectory) !== destination)
+  if (options.stagingDirectory !== void 0 && resolve7(options.stagingDirectory) !== destination)
     fail2("staging must be destination-local for deterministic recovery");
   const parent = destination;
   return await withLock(destination, async () => {
@@ -27229,11 +34924,11 @@ async function installSkills(options) {
     const backupPath = localTransactionPath(parent, backup);
     await mkdir(stagePath, { mode: 448 });
     for (const name of SKILL_NAMES)
-      await cp(join6(source, name), join6(stagePath, name), {
+      await cp(join7(source, name), join7(stagePath, name), {
         recursive: true,
         verbatimSymlinks: true
       });
-    await writeDurable(join6(stagePath, INSTALL_MANIFEST), manifest);
+    await writeDurable(join7(stagePath, INSTALL_MANIFEST), manifest);
     await fsyncTree(stagePath);
     await mkdir(backupPath, { mode: 448 });
     let journal = {
@@ -27246,30 +34941,30 @@ async function installSkills(options) {
       stage,
       version: 1
     };
-    await writeDurable(join6(destination, INSTALL_JOURNAL), journal);
+    await writeDurable(join7(destination, INSTALL_JOURNAL), journal);
     try {
       journal = { ...journal, phase: "backing-up" };
-      await writeDurable(join6(destination, INSTALL_JOURNAL), journal);
+      await writeDurable(join7(destination, INSTALL_JOURNAL), journal);
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
         await movePresent(
-          join6(destination, name),
-          join6(backupPath, name),
+          join7(destination, name),
+          join7(backupPath, name),
           "backup",
           options.fault
         );
       journal = { ...journal, phase: "swapping" };
-      await writeDurable(join6(destination, INSTALL_JOURNAL), journal);
+      await writeDurable(join7(destination, INSTALL_JOURNAL), journal);
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
         await move(
-          join6(stagePath, name),
-          join6(destination, name),
+          join7(stagePath, name),
+          join7(destination, name),
           "new",
           options.fault
         );
       await validateInstalled(destination, manifest);
       await options.fault?.("after-post-swap-validation");
       journal = { ...journal, phase: "committed" };
-      await writeDurable(join6(destination, INSTALL_JOURNAL), journal);
+      await writeDurable(join7(destination, INSTALL_JOURNAL), journal);
       await cleanCommitted(destination, parent, journal);
       return { manifest, status: "installed" };
     } catch (error) {
@@ -27289,7 +34984,7 @@ async function installSkills(options) {
   });
 }
 async function uninstallSkills(destinationInput, options = {}) {
-  const destination = resolve6(destinationInput);
+  const destination = resolve7(destinationInput);
   await assertDirectory(destination);
   await withLock(destination, async () => {
     await recover(destination, destination);
@@ -27310,12 +35005,12 @@ async function uninstallSkills(destinationInput, options = {}) {
       stage: `${transaction}.stage`,
       version: 1
     };
-    await writeDurable(join6(destination, INSTALL_JOURNAL), journal);
+    await writeDurable(join7(destination, INSTALL_JOURNAL), journal);
     try {
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
         await move(
-          join6(destination, name),
-          join6(backupPath, name),
+          join7(destination, name),
+          join7(backupPath, name),
           "backup",
           options.fault
         );
@@ -27324,7 +35019,7 @@ async function uninstallSkills(destinationInput, options = {}) {
         ...journal,
         phase: "committed"
       };
-      await writeDurable(join6(destination, INSTALL_JOURNAL), committed);
+      await writeDurable(join7(destination, INSTALL_JOURNAL), committed);
       await cleanCommitted(destination, destination, committed);
     } catch (error) {
       if (error instanceof SimulatedProcessLoss) throw error;
@@ -27598,12 +35293,12 @@ function parseOptions(values) {
   };
 }
 function parseControllerConfigPath(value) {
-  if (!isAbsolute9(value) || value.length > 4096 || value.includes("\0"))
+  if (!isAbsolute10(value) || value.length > 4096 || value.includes("\0"))
     throw new CliError(
       "SCE_INVALID_OPTION_VALUE",
       "--controller-config must be an absolute path."
     );
-  const path2 = normalize5(resolve7(value));
+  const path2 = normalize6(resolve8(value));
   if (path2 === "/")
     throw new CliError(
       "SCE_INVALID_OPTION_VALUE",
@@ -27612,12 +35307,12 @@ function parseControllerConfigPath(value) {
   return path2;
 }
 function parseDestination(value) {
-  if (!isAbsolute9(value) || value.length > 4096 || value.includes("\0"))
+  if (!isAbsolute10(value) || value.length > 4096 || value.includes("\0"))
     throw new CliError(
       "SCE_INVALID_OPTION_VALUE",
       "--destination must be an absolute non-root path."
     );
-  const destination = normalize5(resolve7(value));
+  const destination = normalize6(resolve8(value));
   if (destination === "/")
     throw new CliError(
       "SCE_INVALID_OPTION_VALUE",
@@ -27799,8 +35494,8 @@ async function runInstaller(invocation, dependencies) {
 function resolvePackagedSkillSource(moduleUrl = import.meta.url) {
   const modulePath = fileURLToPath(moduleUrl);
   const moduleDirectory = dirname6(modulePath);
-  const packageRoot = basename4(moduleDirectory) === "src" ? resolve7(moduleDirectory, "..") : resolve7(moduleDirectory, "../../..");
-  return join7(packageRoot, "skills");
+  const packageRoot = basename4(moduleDirectory) === "src" ? resolve8(moduleDirectory, "..") : resolve8(moduleDirectory, "../../..");
+  return join8(packageRoot, "skills");
 }
 async function main(argv, dependencies = {}, write = (value) => process.stdout.write(value)) {
   const execution2 = await runCli(argv, dependencies);

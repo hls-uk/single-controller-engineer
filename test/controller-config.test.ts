@@ -18,7 +18,7 @@ import {
   deriveParamsHash,
   type ProtocolEffect,
 } from "../src/protocol/reducer.js";
-import { validate } from "../src/protocol/schemas.js";
+import { validate, type KnowledgeContract } from "../src/protocol/schemas.js";
 import { run } from "./protocol/fixtures.js";
 
 const repository = {
@@ -95,6 +95,66 @@ function configuredBase() {
       },
       repositoryIdentity: repository.identity,
     },
+  };
+}
+
+const knowledgeContract: KnowledgeContract = {
+  aliases: [
+    {
+      alias: "drive",
+      canonicalRoot: "/mnt/knowledge-drive",
+      markerFile: ".sce-drive",
+      mountPolicy: "required",
+      namespaceControl: "exclusive",
+    },
+  ],
+  combinedVerificationCommands: [
+    ["npm", "test"],
+    ["npm", "run", "test:integration"],
+  ],
+  domainScope: "knowledge",
+  gateTargets: [],
+  humanDriver: "knowledge-owner",
+  provenance: {
+    eventsDirectory: "knowledge/events",
+    recordFormatVersion: 1,
+    reproducibilityCommand: ["npm", "run", "reproduce"],
+    rollupGeneratorCommand: ["npm", "run", "rollup"],
+  },
+  provenanceWorktreeRoot: "/tmp/sce-provenance",
+};
+
+function unresolvedKnowledgeContract() {
+  return {
+    aliases: knowledgeContract.aliases.map(
+      ({ canonicalRoot: _canonicalRoot, ...alias }) => ({
+        ...alias,
+        mountPathVariable: "SCE_DRIVE_ROOT",
+      }),
+    ),
+    domainScope: knowledgeContract.domainScope,
+    gateTargets: knowledgeContract.gateTargets,
+    humanDriver: knowledgeContract.humanDriver,
+    provenance: {
+      ...knowledgeContract.provenance,
+      worktreeRootVariable: "SCE_PROVENANCE_ROOT",
+    },
+    verification: {
+      fast: [knowledgeContract.combinedVerificationCommands[0]],
+      integration: [["npm", "run", "test:integration"]],
+      release: [["npm", "run", "test:release"]],
+    },
+  };
+}
+
+function knowledgeConfiguredBase() {
+  const value = configuredBase();
+  return {
+    ...value,
+    initialRun: { ...value.initialRun, knowledgeContract },
+    knowledgeContract: unresolvedKnowledgeContract(),
+    harnessSupport,
+    topology: embedded(),
   };
 }
 
@@ -384,4 +444,186 @@ test("configured harness support is strict, committed, and reaches composition",
       assert.equal(await createControllerConfigRunner(path), undefined);
     },
   );
+});
+
+test("knowledge authority resolves exact environment roots once and strips variable names", async () => {
+  const calls: string[] = [];
+  let received: KnowledgeContract | undefined;
+  await withConfig(knowledgeConfiguredBase(), async (path) => {
+    const runner = await createControllerConfigRunner(path, {
+      composeEmbedded(config) {
+        received = config.knowledgeContract;
+        return async () => ({ status: "unavailable" }) as never;
+      },
+      environment(name) {
+        calls.push(name);
+        return name === "SCE_DRIVE_ROOT"
+          ? knowledgeContract.aliases[0]!.canonicalRoot
+          : name === "SCE_PROVENANCE_ROOT"
+            ? knowledgeContract.provenanceWorktreeRoot
+            : undefined;
+      },
+    });
+    assert.equal(typeof runner, "function");
+  });
+  assert.deepEqual(received, knowledgeContract);
+  assert.deepEqual(calls, ["SCE_DRIVE_ROOT", "SCE_PROVENANCE_ROOT"]);
+  assert.equal(JSON.stringify(received).includes("mountPathVariable"), false);
+  assert.equal(
+    JSON.stringify(received).includes("worktreeRootVariable"),
+    false,
+  );
+});
+
+test("knowledge verification tiers concatenate fast then integration and exclude release", async () => {
+  const value = knowledgeConfiguredBase();
+  const expected = [
+    ["npm", "test"],
+    ["npm", "test"],
+    ["npm", "run", "test:integration"],
+  ];
+  value.knowledgeContract.verification = {
+    fast: [
+      ["npm", "test"],
+      ["npm", "test"],
+    ],
+    integration: [["npm", "run", "test:integration"]],
+    release: [["npm", "run", "test:release"]],
+  };
+  value.initialRun.knowledgeContract = {
+    ...knowledgeContract,
+    combinedVerificationCommands: expected,
+  };
+  let received: KnowledgeContract | undefined;
+  await withConfig(value, async (path) => {
+    const runner = await createControllerConfigRunner(path, {
+      composeEmbedded(config) {
+        received = config.knowledgeContract;
+        return async () => ({ status: "unavailable" }) as never;
+      },
+      environment: (name) =>
+        name === "SCE_DRIVE_ROOT"
+          ? "/mnt/knowledge-drive"
+          : name === "SCE_PROVENANCE_ROOT"
+            ? "/tmp/sce-provenance"
+            : undefined,
+    });
+    assert.equal(typeof runner, "function");
+  });
+  assert.deepEqual(received?.combinedVerificationCommands, expected);
+});
+
+test("knowledge authority rejects resolved roots, bad environment, overlap, and contract drift", async () => {
+  const validEnvironment = (name: string) =>
+    name === "SCE_DRIVE_ROOT"
+      ? "/mnt/knowledge-drive"
+      : name === "SCE_PROVENANCE_ROOT"
+        ? "/tmp/sce-provenance"
+        : undefined;
+  const directRoot = knowledgeConfiguredBase();
+  const directAlias = {
+    ...directRoot.knowledgeContract.aliases[0],
+    canonicalRoot: "/mnt/knowledge-drive",
+  };
+  delete (directAlias as { mountPathVariable?: string }).mountPathVariable;
+  const cases: readonly Readonly<{
+    environment?: (name: string) => string | undefined;
+    value: unknown;
+  }>[] = [
+    {
+      value: {
+        ...directRoot,
+        knowledgeContract: {
+          ...directRoot.knowledgeContract,
+          aliases: [directAlias],
+        },
+      },
+    },
+    { environment: () => undefined, value: knowledgeConfiguredBase() },
+    {
+      environment: (name) =>
+        name === "SCE_DRIVE_ROOT" ? "relative/drive" : "/tmp/provenance",
+      value: knowledgeConfiguredBase(),
+    },
+    {
+      environment: (name) =>
+        name === "SCE_DRIVE_ROOT" ? "/" : "/tmp/provenance",
+      value: knowledgeConfiguredBase(),
+    },
+    {
+      environment: (name) =>
+        name === "SCE_DRIVE_ROOT" ? "/mnt/drive/../drive" : "/tmp/provenance",
+      value: knowledgeConfiguredBase(),
+    },
+    {
+      environment: (name) =>
+        name === "SCE_DRIVE_ROOT" ? "/tmp/secret_canary" : "/tmp/provenance",
+      value: knowledgeConfiguredBase(),
+    },
+    {
+      environment: (name) =>
+        name === "SCE_DRIVE_ROOT"
+          ? "/mnt/knowledge"
+          : "/mnt/knowledge/provenance",
+      value: knowledgeConfiguredBase(),
+    },
+    {
+      value: {
+        ...knowledgeConfiguredBase(),
+        initialRun: {
+          ...knowledgeConfiguredBase().initialRun,
+          knowledgeContract: {
+            ...knowledgeContract,
+            combinedVerificationCommands: [["npm", "check"]],
+          },
+        },
+      },
+    },
+    {
+      value: {
+        ...knowledgeConfiguredBase(),
+        knowledgeContract: {
+          ...unresolvedKnowledgeContract(),
+          aliases: [
+            ...unresolvedKnowledgeContract().aliases,
+            unresolvedKnowledgeContract().aliases[0],
+          ],
+        },
+      },
+    },
+    {
+      value: {
+        ...knowledgeConfiguredBase(),
+        knowledgeContract: {
+          ...unresolvedKnowledgeContract(),
+          provenance: {
+            ...unresolvedKnowledgeContract().provenance,
+            worktreeRootVariable: "SCE_DRIVE_ROOT",
+          },
+        },
+      },
+    },
+    {
+      value: {
+        ...knowledgeConfiguredBase(),
+        knowledgeContract: {
+          ...unresolvedKnowledgeContract(),
+          unknown: true,
+        },
+      },
+    },
+  ];
+  for (const [index, entry] of cases.entries())
+    await withConfig(entry.value, async (path) => {
+      assert.equal(
+        await createControllerConfigRunner(path, {
+          composeEmbedded: () => {
+            throw new Error(`invalid case ${index} composed`);
+          },
+          environment: entry.environment ?? validEnvironment,
+        }),
+        undefined,
+        `case ${index}`,
+      );
+    });
 });

@@ -6,7 +6,7 @@
  * or a CLI response.
  */
 import { readFile } from "node:fs/promises";
-import { isAbsolute, normalize, resolve } from "node:path";
+import { isAbsolute, normalize, relative, resolve } from "node:path";
 
 import {
   canonicalGitCommonDir,
@@ -49,7 +49,19 @@ import {
   PreflightEnvelopeSchema,
   type PreflightEnvelope,
 } from "./preflight/index.js";
-import { RepositoryRunSchema, type RepositoryRun } from "./protocol/schemas.js";
+import {
+  KnowledgeContractSchema,
+  RepositoryRunSchema,
+  validate,
+  type KnowledgeContract,
+  type RepositoryRun,
+} from "./protocol/schemas.js";
+import { canonicalJson, type JsonValue } from "./protocol/canonical.js";
+import {
+  canFreezeKnowledgeContractAtFirstWave,
+  knowledgeContractRuntimeValid,
+  maximumMaterialisationSidecarBytes,
+} from "./protocol/reducer.js";
 
 const MAX_CONFIG_BYTES = 256 * 1024;
 const ENVIRONMENT_NAME = /^[A-Z_][A-Z0-9_]{0,159}$/u;
@@ -100,6 +112,7 @@ export type ControllerConfig = Readonly<{
   /** Optional only for an old run that has no harness configuration. */
   harnessSupport?: HarnessSupport;
   initialRun: RepositoryRun;
+  knowledgeContract?: KnowledgeContract;
   nonce: string;
   scope: FencingScope;
   schema: "sce.controller-config";
@@ -161,6 +174,52 @@ function environmentName(value: unknown): string | undefined {
   const candidate = text(value, 160);
   return candidate !== undefined && ENVIRONMENT_NAME.test(candidate)
     ? candidate
+    : undefined;
+}
+
+function commandArgument(value: unknown): string | undefined {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    Buffer.byteLength(value, "utf8") > 1_024
+  )
+    return undefined;
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit === 0 || (unit >= 0xdc00 && unit <= 0xdfff)) return undefined;
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const low = value.charCodeAt(index + 1);
+      if (low < 0xdc00 || low > 0xdfff) return undefined;
+      index += 1;
+    }
+  }
+  return value;
+}
+
+function commandSet(
+  value: unknown,
+): readonly (readonly string[])[] | undefined {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 32)
+    return undefined;
+  const commands: string[][] = [];
+  for (const candidate of value) {
+    if (
+      !Array.isArray(candidate) ||
+      candidate.length < 1 ||
+      candidate.length > 32
+    )
+      return undefined;
+    const command = candidate.map(commandArgument);
+    if (
+      command.some((argument) => argument === undefined) ||
+      Buffer.byteLength(canonicalJson(command as JsonValue), "utf8") > 8_192
+    )
+      return undefined;
+    commands.push(command as string[]);
+  }
+  return Buffer.byteLength(canonicalJson(commands as JsonValue), "utf8") <=
+    32_768
+    ? commands
     : undefined;
 }
 
@@ -434,7 +493,124 @@ function parseServerIdentity(value: unknown): ServerIdentity | undefined {
   };
 }
 
-function parseControllerConfig(input: unknown): ControllerConfig | undefined {
+function parseKnowledgeContract(
+  input: unknown,
+  environment: (name: string) => string | undefined,
+): KnowledgeContract | undefined {
+  const value = record(input, [
+    "aliases",
+    "domainScope",
+    "gateTargets",
+    "humanDriver",
+    "provenance",
+    "verification",
+  ]);
+  const verification = record(value?.verification, [
+    "fast",
+    "integration",
+    "release",
+  ]);
+  const provenance = record(value?.provenance, [
+    "eventsDirectory",
+    "recordFormatVersion",
+    "reproducibilityCommand",
+    "rollupGeneratorCommand",
+    "worktreeRootVariable",
+  ]);
+  if (
+    value === undefined ||
+    provenance === undefined ||
+    verification === undefined ||
+    !Array.isArray(value.aliases)
+  )
+    return undefined;
+  const fastCommands = commandSet(verification.fast);
+  const integrationCommands = commandSet(verification.integration);
+  const releaseCommands = commandSet(verification.release);
+  const combinedVerificationCommands = commandSet([
+    ...(fastCommands ?? []),
+    ...(integrationCommands ?? []),
+  ]);
+  if (
+    fastCommands === undefined ||
+    integrationCommands === undefined ||
+    releaseCommands === undefined ||
+    combinedVerificationCommands === undefined
+  )
+    return undefined;
+  const cache = new Map<string, string | undefined>();
+  const resolveVariable = (inputName: unknown): string | undefined => {
+    const name = environmentName(inputName);
+    if (name === undefined) return undefined;
+    if (!cache.has(name)) cache.set(name, environment(name));
+    const resolved = cache.get(name);
+    return absolutePath(resolved) === resolved && !containsSecretShape(resolved)
+      ? resolved
+      : undefined;
+  };
+  const aliasNames = new Set<string>();
+  const variableNames = new Set<string>();
+  const aliases: Record<string, unknown>[] = [];
+  for (const candidate of value.aliases) {
+    const alias = record(candidate, [
+      "alias",
+      "markerFile",
+      "mountPathVariable",
+      "mountPolicy",
+      "namespaceControl",
+    ]);
+    const name = identifier(alias?.alias);
+    const variable = environmentName(alias?.mountPathVariable);
+    const canonicalRoot = resolveVariable(variable);
+    if (
+      alias === undefined ||
+      name === undefined ||
+      variable === undefined ||
+      canonicalRoot === undefined ||
+      aliasNames.has(name) ||
+      variableNames.has(variable)
+    )
+      return undefined;
+    aliasNames.add(name);
+    variableNames.add(variable);
+    aliases.push({
+      alias: name,
+      canonicalRoot,
+      markerFile: alias.markerFile,
+      mountPolicy: alias.mountPolicy,
+      namespaceControl: alias.namespaceControl,
+    });
+  }
+  const worktreeVariable = environmentName(provenance.worktreeRootVariable);
+  const provenanceWorktreeRoot = resolveVariable(worktreeVariable);
+  if (
+    worktreeVariable === undefined ||
+    provenanceWorktreeRoot === undefined ||
+    variableNames.has(worktreeVariable)
+  )
+    return undefined;
+  const resolved = {
+    aliases,
+    combinedVerificationCommands,
+    domainScope: value.domainScope,
+    gateTargets: value.gateTargets,
+    humanDriver: value.humanDriver,
+    provenance: {
+      eventsDirectory: provenance.eventsDirectory,
+      recordFormatVersion: provenance.recordFormatVersion,
+      reproducibilityCommand: provenance.reproducibilityCommand,
+      rollupGeneratorCommand: provenance.rollupGeneratorCommand,
+    },
+    provenanceWorktreeRoot,
+  };
+  const parsed = validate<KnowledgeContract>(KnowledgeContractSchema, resolved);
+  return parsed.ok ? parsed.value : undefined;
+}
+
+function parseControllerConfig(
+  input: unknown,
+  environment: (name: string) => string | undefined,
+): ControllerConfig | undefined {
   if (containsSecretShape(input)) return undefined;
   const keys = [
     "git",
@@ -445,8 +621,17 @@ function parseControllerConfig(input: unknown): ControllerConfig | undefined {
     "topology",
     "version",
   ] as const;
-  const value =
-    record(input, keys) ?? record(input, [...keys, "harnessSupport"]);
+  const inputRecord =
+    input !== null && typeof input === "object" && !Array.isArray(input)
+      ? (input as Record<string, unknown>)
+      : undefined;
+  const optionalKeys = [
+    ...(inputRecord?.harnessSupport === undefined ? [] : ["harnessSupport"]),
+    ...(inputRecord?.knowledgeContract === undefined
+      ? []
+      : ["knowledgeContract"]),
+  ];
+  const value = record(input, [...keys, ...optionalKeys]);
   if (
     value === undefined ||
     value.schema !== "sce.controller-config" ||
@@ -469,6 +654,10 @@ function parseControllerConfig(input: unknown): ControllerConfig | undefined {
     value.harnessSupport === undefined
       ? undefined
       : parseHarnessSupport(value.harnessSupport);
+  const knowledgeContract =
+    value.knowledgeContract === undefined
+      ? undefined
+      : parseKnowledgeContract(value.knowledgeContract, environment);
   const commitment =
     value.harnessSupport === undefined
       ? undefined
@@ -480,6 +669,8 @@ function parseControllerConfig(input: unknown): ControllerConfig | undefined {
     (git.remote !== undefined && remote === undefined) ||
     topology === undefined ||
     (parsedHarness !== undefined && !parsedHarness.ok) ||
+    (value.knowledgeContract !== undefined &&
+      knowledgeContract === undefined) ||
     (commitment !== undefined && !commitment.ok) ||
     (run.harness !== undefined && parsedHarness === undefined) ||
     (parsedHarness !== undefined &&
@@ -502,6 +693,40 @@ function parseControllerConfig(input: unknown): ControllerConfig | undefined {
   )
     return undefined;
   if (
+    ((knowledgeContract === undefined) !==
+      (run.knowledgeContract === undefined) &&
+      !(
+        knowledgeContract !== undefined &&
+        canFreezeKnowledgeContractAtFirstWave(run)
+      )) ||
+    (knowledgeContract !== undefined &&
+      run.knowledgeContract !== undefined &&
+      canonicalJson(knowledgeContract as unknown as JsonValue) !==
+        canonicalJson(run.knowledgeContract as unknown as JsonValue)) ||
+    (knowledgeContract !== undefined &&
+      (run.harness === undefined ||
+        !knowledgeContractRuntimeValid(knowledgeContract, run.harness) ||
+        maximumMaterialisationSidecarBytes(knowledgeContract, run.harness) >
+          8_192))
+  )
+    return undefined;
+  if (
+    knowledgeContract !== undefined &&
+    (() => {
+      const roots = [
+        ...knowledgeContract.aliases.map((alias) => alias.canonicalRoot),
+        knowledgeContract.provenanceWorktreeRoot,
+      ];
+      return (
+        !roots.every((root) => absolutePath(root) === root) ||
+        roots.some((root, index) =>
+          roots.slice(index + 1).some((other) => pathsOverlap(root, other)),
+        )
+      );
+    })()
+  )
+    return undefined;
+  if (
     topology.kind === "embedded" &&
     (topology.preflight.payload.status !== "ready" ||
       topology.preflight.payload.git.commonDir !== repository.commonDir ||
@@ -515,12 +740,22 @@ function parseControllerConfig(input: unknown): ControllerConfig | undefined {
       ? {}
       : { harnessSupport: parsedHarness.value }),
     initialRun: run,
+    ...(knowledgeContract === undefined ? {} : { knowledgeContract }),
     nonce,
     scope,
     schema: "sce.controller-config",
     topology,
     version: 1,
   };
+}
+
+function pathsOverlap(left: string, right: string): boolean {
+  const leftToRight = relative(left, right);
+  const rightToLeft = relative(right, left);
+  const contained = (value: string) =>
+    value === "" ||
+    (!isAbsolute(value) && value !== ".." && !value.startsWith("../"));
+  return contained(leftToRight) || contained(rightToLeft);
 }
 
 async function topologyProof(
@@ -596,6 +831,7 @@ function embeddedRunner(
     prefix: topology.prefix,
     preflight: topology.preflight,
     process,
+    rootIssueId: topology.rootBeadId,
     scope: config.scope,
   });
   return createProductionRecoveryCommandRunner({
@@ -604,11 +840,15 @@ function embeddedRunner(
       ? {}
       : { harness: { support: config.harnessSupport } }),
     initialRun: config.initialRun,
+    ...(config.knowledgeContract === undefined
+      ? {}
+      : { knowledgeContract: config.knowledgeContract }),
     nonce: config.nonce,
     preOwnership: adapter,
     proveTopology: async () => await embeddedTopologyProof(config, process),
     store: adapter,
     topology: adapter,
+    carry: adapter,
   });
 }
 
@@ -678,11 +918,15 @@ async function sharedServerRunner(
         ? {}
         : { harness: { support: config.harnessSupport } }),
       initialRun: config.initialRun,
+      ...(config.knowledgeContract === undefined
+        ? {}
+        : { knowledgeContract: config.knowledgeContract }),
       nonce: config.nonce,
       preOwnership: adapter,
       proveTopology: async () => await topologyProof(config),
       store: adapter,
       topology: adapter,
+      carry: adapter,
     });
   } catch {
     return undefined;
@@ -708,7 +952,8 @@ export async function createControllerConfigRunner(
   } catch {
     return undefined;
   }
-  const config = parseControllerConfig(input);
+  const environment = dependencies.environment ?? ((name) => process.env[name]);
+  const config = parseControllerConfig(input, environment);
   if (config === undefined) return undefined;
   const topology = config.topology;
   if (topology.kind === "embedded")
@@ -716,7 +961,6 @@ export async function createControllerConfigRunner(
       dependencies.composeEmbedded?.(config, topology) ??
       embeddedRunner(config, topology)
     );
-  const environment = dependencies.environment ?? ((name) => process.env[name]);
   const writerPassword = environment(topology.writerEnvironment);
   const workerPassword = environment(topology.workerEnvironment);
   if (writerPassword === undefined || workerPassword === undefined)

@@ -4,28 +4,51 @@ import test from "node:test";
 import {
   createProductionRecoveryEffectAdapter,
   createProductionRecoveryRunner,
+  planProvenanceCarryFromProjection,
   type ControllerTransitionRecoveryPort,
+  type ProvenanceCarryClaimPlan,
+  type ProvenanceCarryClaimRecoveryPort,
 } from "../../src/commands/production-recovery.js";
 import { createProductionRecoveryCommandRunner } from "../../src/commands/index.js";
 import type { GitRepository, GitRunner } from "../../src/adapters/git/index.js";
+import { makeSlotTransitionIntent } from "../../src/adapters/beads-embedded/index.js";
 import {
+  deriveScopeCommitment,
+  deriveSlotReadbackHash,
   makeChildProjection,
   makeRootProjection,
   type MutationBatch,
 } from "../../src/fencing/index.js";
 import {
+  deriveProvenanceCarryClaimKey,
   deriveCandidateDiffHash,
+  deriveIdempotencyKey,
+  deriveProvenanceCarryExportId,
+  projectionInputIsValid,
+  provenanceCarryAncestorDigest,
+  provenanceCarryLineageCommitment,
+  provenanceCarrySnapshotCommitment,
   reduce,
   runInvariantErrors,
   type ProtocolEffect,
 } from "../../src/protocol/reducer.js";
-import type { RepositoryRun } from "../../src/protocol/schemas.js";
+import { canonicalJson } from "../../src/protocol/canonical.js";
+import { sha256 } from "../../src/protocol/evidence.js";
+import type {
+  KnowledgeContract,
+  ProtocolEvent,
+  ProvenanceCarry,
+  ProvenanceInput,
+  RepositoryRun,
+} from "../../src/protocol/schemas.js";
+import { ProtocolEventSchema, validate } from "../../src/protocol/schemas.js";
 import { runCli } from "../../src/cli.js";
 import {
   event,
   HASH,
   OID_A,
   OID_B,
+  OID_C,
   run,
   transition,
 } from "../protocol/fixtures.js";
@@ -38,6 +61,28 @@ const repository: GitRepository = {
   remoteUrls: [],
 };
 const remoteRepositoryIdentity = "provider:fixture";
+const predecessorRootBeadId = "sce-predecessor-root";
+const carryRemoteRepository: GitRepository = {
+  ...repository,
+  identity: remoteRepositoryIdentity,
+  remoteUrls: ["https://example.invalid/repo.git"],
+};
+
+test("provenance carry export id has a stable cross-module golden vector", () => {
+  assert.equal(
+    deriveProvenanceCarryExportId({
+      finalRevision: 17,
+      integrationBranch: "main",
+      predecessorRootAggregateCommitment: "a".repeat(64),
+      predecessorRunId: "run-prev",
+      predecessorWaveId: "wave-9",
+      repositoryIdentity: "repo:example",
+      snapshotCommitment: "b".repeat(64),
+      storeIdentity: "store:example",
+    }),
+    "sce:carry:5b6113eaeb90b2f1e0186391c22968eb6a94282f3e1a4c4d7157d43236288f7a",
+  );
+});
 
 function localRun(): RepositoryRun {
   return { ...run(), repositoryIdentity: repository.identity };
@@ -194,6 +239,1399 @@ function integrationIntentRun(
   }
   return transition(state, event(state, "integrate_intent"), reduce);
 }
+
+function carryRun(
+  profile: "local-ff" | "remote-ff" = "local-ff",
+): RepositoryRun {
+  return {
+    ...run([]),
+    completionBoundary:
+      profile === "local-ff" ? "local-integration" : "remote-integration",
+    integrationProfile: profile,
+    repositoryIdentity:
+      profile === "local-ff" ? repository.identity : remoteRepositoryIdentity,
+  };
+}
+
+function carryProjectionInput(): ProvenanceInput {
+  let state = integrationIntentRun("local-ff");
+  const integrate = state.effectJournal.at(-1)!;
+  state = transition(
+    state,
+    event(state, "integrate_observed", {
+      baseOid: OID_A,
+      controllerFencingToken: "fence-1",
+      effectId: integrate.effectId,
+      effectKind: "integrate",
+      headOid: OID_B,
+      integrationOid: OID_B,
+      observationHash: HASH,
+      treeOid: OID_A,
+    }),
+    reduce,
+  );
+  state = transition(state, event(state, "reservation_release_intent"), reduce);
+  const release = state.effectJournal.at(-1)!;
+  state = transition(
+    state,
+    event(state, "reservation_released", {
+      effectId: release.effectId,
+      effectKind: "reservation_release",
+      observationHash: HASH,
+    }),
+    reduce,
+  );
+  assert.deepEqual(runInvariantErrors(state), []);
+  assert.equal(state.units["unit-1"], undefined);
+  const input: ProvenanceInput = {
+    closedUnitEvidence: state.closedUnitEvidence,
+    closureEvidenceCommitment: state.closedUnitEvidenceCommitment,
+    destinationProbeEvidence: [],
+    targetEvidence: [],
+    unitIds: ["unit-1"],
+  };
+  assert.equal(projectionInputIsValid(input), true);
+  return input;
+}
+
+function carryPlan(run: RepositoryRun): Readonly<{
+  plan: ProvenanceCarryClaimPlan;
+  projectionInputSnapshot: ProvenanceInput;
+}> {
+  const projectionInputSnapshot = carryProjectionInput();
+  const snapshotCommitment = provenanceCarrySnapshotCommitment(
+    projectionInputSnapshot,
+  );
+  const predecessorRootAggregateCommitment = "2".repeat(64);
+  const predecessorRunId = "run-predecessor";
+  const predecessorWaveId = "wave-predecessor";
+  return {
+    plan: {
+      exportId: deriveProvenanceCarryExportId({
+        finalRevision: 17,
+        integrationBranch: run.integrationBranch,
+        predecessorRootAggregateCommitment,
+        predecessorRunId,
+        predecessorWaveId,
+        repositoryIdentity: run.repositoryIdentity,
+        snapshotCommitment,
+        storeIdentity: run.storeIdentity,
+      }),
+      predecessorFinalRevision: 17,
+      predecessorJournalCheckpointCommitment: "3".repeat(64),
+      predecessorRootAggregateCommitment,
+      predecessorRunId,
+      predecessorWaveId,
+      snapshotCommitment,
+    },
+    projectionInputSnapshot,
+  };
+}
+
+function importedCarry(
+  run: RepositoryRun,
+  plan: ProvenanceCarryClaimPlan,
+  projectionInputSnapshot: ProvenanceInput,
+): ProvenanceCarry {
+  const claimToken = deriveProvenanceCarryClaimKey(
+    run.controller.runId,
+    plan.exportId,
+    predecessorRootBeadId,
+  );
+  const claimRecord = {
+    claimRevision: 1,
+    claimantRunId: run.controller.runId,
+    claimToken,
+    exportId: plan.exportId,
+    predecessorRootBeadId,
+    predecessorRunId: plan.predecessorRunId,
+    predecessorWaveId: plan.predecessorWaveId,
+    schema: "sce.provenance-carry-claim",
+    snapshotCommitment: plan.snapshotCommitment,
+    version: 1,
+  } as const;
+  const predecessorAncestor = provenanceCarryAncestorDigest(
+    predecessorRootBeadId,
+    plan.predecessorRunId,
+  );
+  return {
+    claimRecordDigest: sha256(
+      canonicalJson({
+        claimRecord,
+        domain: "sce.provenance-carry-claim-record.v1",
+      }),
+    ),
+    claimRevision: 1,
+    exportId: plan.exportId,
+    integrationOid: OID_A,
+    lineageAncestorDigests: [predecessorAncestor],
+    lineageCommitment: provenanceCarryLineageCommitment([predecessorAncestor]),
+    predecessorFinalRevision: plan.predecessorFinalRevision,
+    predecessorJournalCheckpointCommitment:
+      plan.predecessorJournalCheckpointCommitment,
+    predecessorRootAggregateCommitment: plan.predecessorRootAggregateCommitment,
+    predecessorRootBeadId,
+    predecessorRunId: plan.predecessorRunId,
+    predecessorWaveId: plan.predecessorWaveId,
+    projectionInputSnapshot,
+    snapshotCommitment: plan.snapshotCommitment,
+  };
+}
+
+function carryStore(initial: RepositoryRun, order: string[] = []) {
+  let root = makeRootProjection(initial);
+  let children = Object.keys(initial.units).map((unitId) =>
+    makeChildProjection(root, unitId)!,
+  );
+  let writes = 0;
+  const compareAndSet = async (batch: MutationBatch) => {
+    writes += 1;
+    order.push(
+      `persist:${batch.next.root.run.effectJournal.at(-1)?.status ?? "none"}`,
+    );
+    const affectedChildren = [...batch.next.children];
+    root = batch.next.root;
+    children = root.childRows.map((row) => {
+      const affected = affectedChildren.find(
+        (child) => child.unitId === row.unitId,
+      );
+      const retained = children.find((child) => child.unitId === row.unitId);
+      assert.ok(affected ?? retained);
+      return (affected ?? retained)!;
+    });
+    return {
+      affectedRowCount: batch.changedRows.length + 1,
+      checkpoint: batch.checkpoint,
+      children: affectedChildren,
+      root,
+      status: "applied" as const,
+    };
+  };
+  return {
+    get root() {
+      return root;
+    },
+    get writes() {
+      return writes;
+    },
+    port: {
+      compareAndSet,
+      async load() {
+        order.push("load");
+        return { status: "observed" as const, value: { children, root } };
+      },
+      persistControllerAcquireIntent: compareAndSet,
+    },
+  };
+}
+
+function carryGitRunner(
+  profile: "local-ff" | "remote-ff",
+  head: string,
+  calls: string[],
+  remoteRef = "main",
+): GitRunner {
+  return async ({ argv }) => {
+    const call = argv.join(" ");
+    calls.push(call);
+    if (call === "rev-parse --git-common-dir")
+      return { exitCode: 0, signal: null, stdout: ".git\n" };
+    if (call === "rev-parse --show-object-format")
+      return { exitCode: 0, signal: null, stdout: "sha1\n" };
+    if (argv[0] === "config")
+      return profile === "local-ff"
+        ? { exitCode: 1, signal: null, stdout: "" }
+        : {
+            exitCode: 0,
+            signal: null,
+            stdout: "remote.origin.url\nhttps://example.invalid/repo.git\u0000",
+          };
+    if (argv[0] === "for-each-ref")
+      return { exitCode: 0, signal: null, stdout: `${head}\n` };
+    if (argv[0] === "ls-remote")
+      return {
+        exitCode: 0,
+        signal: null,
+        stdout: `${head}\trefs/heads/${remoteRef}\n`,
+      };
+    return { exitCode: 1, signal: null, stdout: "" };
+  };
+}
+
+function acquiredLock() {
+  return {
+    status: "acquired" as const,
+    lock: { release: async () => ({ status: "released" as const }) },
+  };
+}
+
+function controllerSlotTransition(
+  state: RepositoryRun,
+  kind: "acquire" | "release",
+) {
+  const scope = {
+    beadsStoreIdentity: state.storeIdentity,
+    gitRepositoryIdentity: state.repositoryIdentity,
+    integrationBranch: state.integrationBranch,
+  };
+  const slot = (status: "acquired" | "available") => {
+    const value = {
+      actor: state.controller.holder,
+      ...(status === "acquired" ? { holder: state.controller.holder } : {}),
+      label: "gt:slot" as const,
+      scope,
+      scopeCommitment: deriveScopeCommitment(scope),
+      slotId: "sce-merge-slot",
+      status,
+      title: "Merge Slot" as const,
+      version: 1 as const,
+    };
+    return { ...value, readbackHash: deriveSlotReadbackHash(value) };
+  };
+  return makeSlotTransitionIntent(
+    kind,
+    state.controller.holder,
+    scope,
+    {
+      head: OID_A,
+      slot: slot(kind === "acquire" ? "available" : "acquired"),
+    },
+    slot(kind === "acquire" ? "acquired" : "available"),
+  );
+}
+
+function configuredKnowledgeContract(
+  humanDriver = "knowledge-owner",
+): KnowledgeContract {
+  return {
+    aliases: [],
+    combinedVerificationCommands: [["npm", "test"]],
+    domainScope: "knowledge",
+    gateTargets: [],
+    humanDriver,
+    provenance: {
+      eventsDirectory: "knowledge/events",
+      recordFormatVersion: 1,
+      reproducibilityCommand: ["npm", "run", "reproduce"],
+      rollupGeneratorCommand: ["npm", "run", "rollup"],
+    },
+    provenanceWorktreeRoot: "/tmp/sce-provenance",
+  };
+}
+
+async function configuredCarryRefusalStore(
+  state: RepositoryRun,
+  knowledgeContract: KnowledgeContract,
+  nonce: string,
+) {
+  const planned = carryPlan(state);
+  const store = carryStore(state);
+  const refused = createProductionRecoveryRunner({
+    acquireOperationLock: async () => acquiredLock(),
+    carry: {
+      async prepareProvenanceCarryClaim() {
+        return { plan: planned.plan, status: "planned" };
+      },
+      async executeProvenanceCarryClaim() {
+        return {
+          result: {
+            evidenceDigest: HASH,
+            predecessorRootBeadId,
+            reason: "not_released",
+            status: "predecessor_refused",
+          },
+          status: "observed",
+        };
+      },
+      async reconcileProvenanceCarryClaim() {
+        return { status: "absent" };
+      },
+    },
+    git: {
+      repository,
+      runner: carryGitRunner("local-ff", OID_B, []),
+    },
+    knowledgeContract,
+    nonce,
+    preOwnership: store.port,
+    proveTopology: async () => ({
+      commonDir: repository.commonDir,
+      holder: state.controller.holder,
+      scope: {
+        beadsStoreIdentity: state.storeIdentity,
+        gitRepositoryIdentity: repository.identity,
+        integrationBranch: state.integrationBranch,
+      },
+    }),
+    store: store.port,
+  });
+  assert.equal(
+    (
+      await refused({
+        provenanceCarryClaim: { predecessorRootBeadId },
+      })
+    ).status,
+    "applied",
+  );
+  return store;
+}
+
+function carryPredecessorProjection(lineageAncestorDigests: readonly string[]) {
+  const base = carryRun("local-ff");
+  const projectionInputSnapshot = carryProjectionInput();
+  const predecessor: RepositoryRun = {
+    ...base,
+    closedUnitEvidence: projectionInputSnapshot.closedUnitEvidence,
+    closedUnitEvidenceCommitment:
+      projectionInputSnapshot.closureEvidenceCommitment,
+    controller: {
+      ...base.controller,
+      holder: "run-predecessor/incarnation-1",
+      runId: "run-predecessor",
+      state: "released",
+    },
+    gate: {
+      aggregateVerifyPromise: {
+        disposition: "deferral_cascade",
+        followUpBeadId: "follow-up-1",
+        status: "voided",
+      },
+      currentIntegrationOid: OID_A,
+      destinationProbes: [],
+      lineageAncestorDigests: [...lineageAncestorDigests],
+      lineageCommitment: provenanceCarryLineageCommitment(
+        lineageAncestorDigests,
+      ),
+      originalUnitIds: ["unit-1"],
+      provenance: {
+        attemptIdempotencyKey: `sce:${"e".repeat(64)}`,
+        attemptedCommitOid: OID_B,
+        attemptedTreeOid: OID_A,
+        baseOid: OID_A,
+        disposition: "deferred_by_controller",
+        followUpBeadId: "follow-up-1",
+        gateEntryId: "predecessor-provenance",
+        lastRefusal: {
+          code: "provenance_reproducibility_failed",
+          detailHash: HASH,
+        },
+        projectionInputSnapshot,
+        status: "voided",
+        worktreePath: "/tmp/sce-provenance/predecessor",
+      },
+      provenanceUnitAccounting: [],
+      targetDefinitionCommitment: HASH,
+      targetPromises: [],
+      targets: [],
+      waveId: "wave-predecessor",
+    },
+    knowledgeContract: configuredKnowledgeContract(),
+    state: "released",
+    wave: { id: "wave-predecessor", unitIds: [] },
+  };
+  return makeRootProjection(predecessor);
+}
+
+test("direct carry planner refuses cyclic, duplicate, and over-limit lineage", () => {
+  const current = carryRun("local-ff");
+  const currentRootIssueId = "sce-current-root";
+  const validPredecessor = carryPredecessorProjection([]);
+  const valid = planProvenanceCarryFromProjection(
+    predecessorRootBeadId,
+    currentRootIssueId,
+    current,
+    validPredecessor,
+  );
+  assert.equal(
+    valid.status,
+    "planned",
+    valid.status === "refused" ? valid.reason : undefined,
+  );
+
+  const cycle = planProvenanceCarryFromProjection(
+    predecessorRootBeadId,
+    currentRootIssueId,
+    current,
+    carryPredecessorProjection([
+      provenanceCarryAncestorDigest(
+        currentRootIssueId,
+        current.controller.runId,
+      ),
+    ]),
+  );
+  assert.equal(cycle.status, "refused");
+  assert.equal(
+    cycle.status === "refused" ? cycle.reason : undefined,
+    "lineage_invalid",
+  );
+
+  const duplicateAncestor = sha256("duplicate-ancestor");
+  const duplicate = planProvenanceCarryFromProjection(
+    predecessorRootBeadId,
+    currentRootIssueId,
+    current,
+    carryPredecessorProjection([duplicateAncestor, duplicateAncestor]),
+  );
+  assert.equal(duplicate.status, "refused");
+  assert.equal(
+    duplicate.status === "refused" ? duplicate.reason : undefined,
+    "lineage_invalid",
+  );
+
+  const overLimit = planProvenanceCarryFromProjection(
+    predecessorRootBeadId,
+    currentRootIssueId,
+    current,
+    carryPredecessorProjection(
+      Array.from({ length: 128 }, (_, index) => sha256(`ancestor-${index}`)),
+    ),
+  );
+  assert.equal(overLimit.status, "refused");
+  assert.equal(
+    overLimit.status === "refused" ? overLimit.reason : undefined,
+    "lineage_limit_exceeded",
+  );
+});
+
+test("direct carry planner prefers an advanced provenance base over the attempted base and current integration", () => {
+  const current = carryRun("local-ff");
+  const source = carryPredecessorProjection([]);
+  const sourceGate = source.run.gate!;
+  const sourceProvenance = sourceGate.provenance!;
+  const predecessorRun: RepositoryRun = {
+    ...source.run,
+    gate: {
+      ...sourceGate,
+      currentIntegrationOid: OID_A,
+      provenance: {
+        ...sourceProvenance,
+        advancedBaseOid: OID_C,
+        baseOid: OID_B,
+        lastRefusal: {
+          code: "provenance_base_advanced",
+          detailHash: sha256(
+            canonicalJson({
+              advancedBaseOid: OID_C,
+              attemptedCommitOid: sourceProvenance.attemptedCommitOid!,
+              attemptedTreeOid: sourceProvenance.attemptedTreeOid!,
+              domain: "sce.provenance-base-advanced.v1",
+            }),
+          ),
+        },
+      },
+    },
+  };
+  const result = planProvenanceCarryFromProjection(
+    predecessorRootBeadId,
+    "sce-current-root",
+    current,
+    makeRootProjection(predecessorRun),
+  );
+  assert.equal(
+    result.status,
+    "planned",
+    result.status === "refused" ? result.reason : undefined,
+  );
+  if (result.status === "planned")
+    assert.equal(result.value.carry.integrationOid, OID_C);
+});
+
+test("dedicated embedded carry persists one stable intent before CAS and binds the local head", async () => {
+  const state = carryRun("local-ff");
+  const planned = carryPlan(state);
+  const claimKey = deriveProvenanceCarryClaimKey(
+    state.controller.runId,
+    planned.plan.exportId,
+    predecessorRootBeadId,
+  );
+  const independentlyDerivedKey = `carry-claim:${sha256(
+    canonicalJson({
+      currentRunId: state.controller.runId,
+      domain: "sce.provenance-carry-claim-key.v1",
+      exportId: planned.plan.exportId,
+      predecessorRootBeadId,
+    }),
+  )}`;
+  assert.equal(claimKey, independentlyDerivedKey);
+  const order: string[] = [];
+  const gitCalls: string[] = [];
+  const store = carryStore(state, order);
+  let reconciles = 0;
+  const carry: ProvenanceCarryClaimRecoveryPort = {
+    async prepareProvenanceCarryClaim(predecessor, current) {
+      order.push("embedded:prepare");
+      assert.equal(predecessor, predecessorRootBeadId);
+      assert.equal(current.revision, state.revision);
+      return { plan: planned.plan, status: "planned" };
+    },
+    async executeProvenanceCarryClaim(effect, current) {
+      order.push("embedded:execute");
+      assert.equal(effect.idempotencyKey, claimKey);
+      assert.equal(effect.params.claimToken, claimKey);
+      assert.equal(effect.paramsHash, current.effectJournal[0]?.paramsHash);
+      assert.equal(current.effectJournal[0]?.status, "intended");
+      const carry = importedCarry(
+        current,
+        planned.plan,
+        planned.projectionInputSnapshot,
+      );
+      return {
+        result: {
+          carry,
+          status: "imported",
+        },
+        status: "observed",
+      };
+    },
+    async reconcileProvenanceCarryClaim() {
+      reconciles += 1;
+      return { status: "absent" };
+    },
+  };
+  const baseGitRunner = carryGitRunner("local-ff", OID_B, gitCalls);
+  const recovery = createProductionRecoveryRunner({
+    acquireOperationLock: async () => acquiredLock(),
+    carry,
+    git: {
+      repository,
+      runner: async (request) => {
+        order.push(`git:${request.argv[0]}`);
+        return await baseGitRunner(request);
+      },
+    },
+    nonce: "carry-local",
+    preOwnership: store.port,
+    proveTopology: async () => ({
+      commonDir: repository.commonDir,
+      holder: state.controller.holder,
+      scope: {
+        beadsStoreIdentity: state.storeIdentity,
+        gitRepositoryIdentity: repository.identity,
+        integrationBranch: state.integrationBranch,
+      },
+    }),
+    store: store.port,
+  });
+
+  const result = await recovery({
+    provenanceCarryClaim: { predecessorRootBeadId },
+  });
+  assert.equal(result.status, "applied");
+  assert.equal(store.root.run.pendingProvenanceCarry?.integrationOid, OID_B);
+  assert.equal(store.root.run.effectJournal[0]?.idempotencyKey, claimKey);
+  assert.equal(
+    store.root.run.effectJournal[0]?.effectId,
+    `carry-claim-${claimKey.slice("carry-claim:".length)}:provenance_carry_claim`,
+  );
+  assert.equal(store.root.run.effectJournal[0]?.status, "observed");
+  assert.equal(reconciles, 0);
+  assert.deepEqual(gitCalls, [
+    "rev-parse --git-common-dir",
+    "rev-parse --show-object-format",
+    "config --null --get-regexp ^remote\\..*\\.url$",
+    "rev-parse --git-common-dir",
+    "rev-parse --show-object-format",
+    "config --null --get-regexp ^remote\\..*\\.url$",
+    "for-each-ref --format=%(objectname) refs/heads/main",
+  ]);
+  assert.ok(
+    order.indexOf("persist:intended") < order.indexOf("embedded:execute"),
+  );
+  assert.ok(
+    order.indexOf("embedded:execute") < order.indexOf("git:for-each-ref"),
+  );
+  assert.ok(
+    order.indexOf("git:for-each-ref") < order.indexOf("persist:observed"),
+  );
+});
+
+test("dedicated server carry resumes a persisted intent by reconciliation and binds the remote head", async () => {
+  const state = carryRun("remote-ff");
+  const planned = carryPlan(state);
+  const order: string[] = [];
+  const store = carryStore(state, order);
+  let executes = 0;
+  const crashGitCalls: string[] = [];
+  const firstCarry: ProvenanceCarryClaimRecoveryPort = {
+    async prepareProvenanceCarryClaim() {
+      order.push("server:prepare");
+      return { plan: planned.plan, status: "planned" };
+    },
+    async executeProvenanceCarryClaim() {
+      executes += 1;
+      return { status: "ambiguous" };
+    },
+    async reconcileProvenanceCarryClaim() {
+      return { status: "absent" };
+    },
+  };
+  const common = {
+    acquireOperationLock: async () => acquiredLock(),
+    git: {
+      remote: "origin",
+      repository: carryRemoteRepository,
+      runner: carryGitRunner("remote-ff", OID_B, crashGitCalls),
+    },
+    nonce: "carry-server-crash",
+    preOwnership: store.port,
+    proveTopology: async () => ({
+      commonDir: carryRemoteRepository.commonDir,
+      holder: state.controller.holder,
+      scope: {
+        beadsStoreIdentity: state.storeIdentity,
+        gitRepositoryIdentity: carryRemoteRepository.identity,
+        integrationBranch: state.integrationBranch,
+      },
+    }),
+    store: store.port,
+  };
+  const crashed = createProductionRecoveryRunner({
+    ...common,
+    carry: firstCarry,
+    fault: (point) => {
+      if (point === "after_intent_persist")
+        throw new Error("simulated post-intent crash");
+    },
+  });
+  await assert.rejects(
+    crashed({ provenanceCarryClaim: { predecessorRootBeadId } }),
+    /simulated post-intent crash/u,
+  );
+  assert.equal(executes, 0);
+  assert.equal(store.root.run.effectJournal[0]?.status, "intended");
+  assert.deepEqual(crashGitCalls, [
+    "rev-parse --git-common-dir",
+    "rev-parse --show-object-format",
+    "config --null --get-regexp ^remote\\..*\\.url$",
+  ]);
+
+  let reconciles = 0;
+  const gitCalls: string[] = [];
+  const serverCarry: ProvenanceCarryClaimRecoveryPort = {
+    async prepareProvenanceCarryClaim() {
+      throw new Error("resume must not create a second plan");
+    },
+    async executeProvenanceCarryClaim() {
+      executes += 1;
+      return { status: "ambiguous" };
+    },
+    async reconcileProvenanceCarryClaim(effect, current) {
+      reconciles += 1;
+      assert.equal(
+        effect.idempotencyKey,
+        current.effectJournal[0]?.idempotencyKey,
+      );
+      return {
+        result: {
+          carry: importedCarry(
+            current,
+            planned.plan,
+            planned.projectionInputSnapshot,
+          ),
+          status: "imported",
+        },
+        status: "observed",
+      };
+    },
+  };
+  const resumed = createProductionRecoveryRunner({
+    ...common,
+    carry: serverCarry,
+    git: {
+      remote: "origin",
+      repository: carryRemoteRepository,
+      runner: carryGitRunner("remote-ff", OID_B, gitCalls),
+    },
+  });
+  const result = await resumed();
+  assert.equal(result.status, "idle");
+  assert.equal(reconciles, 1);
+  assert.equal(executes, 0);
+  assert.equal(store.root.run.pendingProvenanceCarry?.integrationOid, OID_B);
+  assert.equal(store.root.run.effectJournal[0]?.status, "observed");
+  assert.deepEqual(gitCalls, [
+    "rev-parse --git-common-dir",
+    "rev-parse --show-object-format",
+    "config --null --get-regexp ^remote\\..*\\.url$",
+    "rev-parse --git-common-dir",
+    "rev-parse --show-object-format",
+    "config --null --get-regexp ^remote\\..*\\.url$",
+    "ls-remote --refs --exit-code origin refs/heads/main",
+  ]);
+});
+
+test("dedicated carry keeps ref mismatch and ambiguous CAS unresolved", async () => {
+  const remoteState = carryRun("remote-ff");
+  const remotePlan = carryPlan(remoteState);
+  const remoteStore = carryStore(remoteState);
+  let remoteExecutes = 0;
+  const remoteCarry: ProvenanceCarryClaimRecoveryPort = {
+    async prepareProvenanceCarryClaim() {
+      return { plan: remotePlan.plan, status: "planned" };
+    },
+    async executeProvenanceCarryClaim(_effect, current) {
+      remoteExecutes += 1;
+      return {
+        result: {
+          carry: importedCarry(
+            current,
+            remotePlan.plan,
+            remotePlan.projectionInputSnapshot,
+          ),
+          status: "imported",
+        },
+        status: "observed",
+      };
+    },
+    async reconcileProvenanceCarryClaim() {
+      return { status: "absent" };
+    },
+  };
+  const remoteGitCalls: string[] = [];
+  const refMismatch = createProductionRecoveryRunner({
+    acquireOperationLock: async () => acquiredLock(),
+    carry: remoteCarry,
+    git: {
+      remote: "origin",
+      repository: carryRemoteRepository,
+      runner: carryGitRunner("remote-ff", OID_B, remoteGitCalls, "release"),
+    },
+    nonce: "carry-ref-mismatch",
+    preOwnership: remoteStore.port,
+    proveTopology: async () => ({
+      commonDir: carryRemoteRepository.commonDir,
+      holder: remoteState.controller.holder,
+      scope: {
+        beadsStoreIdentity: remoteState.storeIdentity,
+        gitRepositoryIdentity: carryRemoteRepository.identity,
+        integrationBranch: remoteState.integrationBranch,
+      },
+    }),
+    store: remoteStore.port,
+  });
+  assert.deepEqual(
+    await refMismatch({
+      provenanceCarryClaim: { predecessorRootBeadId },
+    }),
+    { status: "unavailable" },
+  );
+  assert.equal(remoteExecutes, 1);
+  assert.equal(remoteStore.writes, 1);
+  assert.equal(remoteStore.root.run.effectJournal[0]?.status, "intended");
+  assert.equal(remoteStore.root.run.pendingProvenanceCarry, undefined);
+  assert.equal(
+    remoteGitCalls.at(-1),
+    "ls-remote --refs --exit-code origin refs/heads/main",
+  );
+
+  const localState = carryRun("local-ff");
+  const localPlan = carryPlan(localState);
+  const localStore = carryStore(localState);
+  const localGitCalls: string[] = [];
+  let ambiguityReduction: ReturnType<typeof reduce> | undefined;
+  const ambiguous = createProductionRecoveryRunner({
+    acquireOperationLock: async () => acquiredLock(),
+    carry: {
+      async prepareProvenanceCarryClaim() {
+        return { plan: localPlan.plan, status: "planned" };
+      },
+      async executeProvenanceCarryClaim(effect, current) {
+        ambiguityReduction = reduce(current, {
+          effectId: effect.effectId,
+          effectKind: effect.kind,
+          eventId: `recover-${effect.effectId}`,
+          expectedRevision: current.revision,
+          type: "effect_ambiguous",
+          unitId: null,
+        });
+        return { status: "ambiguous" };
+      },
+      async reconcileProvenanceCarryClaim() {
+        return { status: "absent" };
+      },
+    },
+    git: {
+      repository,
+      runner: carryGitRunner("local-ff", OID_B, localGitCalls),
+    },
+    nonce: "carry-ambiguous",
+    preOwnership: localStore.port,
+    proveTopology: async () => ({
+      commonDir: repository.commonDir,
+      holder: localState.controller.holder,
+      scope: {
+        beadsStoreIdentity: localState.storeIdentity,
+        gitRepositoryIdentity: repository.identity,
+        integrationBranch: localState.integrationBranch,
+      },
+    }),
+    store: localStore.port,
+  });
+  const ambiguousResult = await ambiguous({
+    provenanceCarryClaim: { predecessorRootBeadId },
+  });
+  assert.equal(
+    ambiguityReduction?.ok,
+    true,
+    ambiguityReduction === undefined || ambiguityReduction.ok
+      ? undefined
+      : `${ambiguityReduction.code}: ${ambiguityReduction.reason}`,
+  );
+  assert.deepEqual(ambiguousResult, { status: "ambiguous" });
+  assert.equal(localStore.writes, 2);
+  assert.equal(localStore.root.run.effectJournal[0]?.status, "ambiguous");
+  assert.equal(localStore.root.run.pendingProvenanceCarry, undefined);
+  assert.deepEqual(localGitCalls, [
+    "rev-parse --git-common-dir",
+    "rev-parse --show-object-format",
+    "config --null --get-regexp ^remote\\..*\\.url$",
+  ]);
+});
+
+test("generic recovery input cannot inject carry intent or observation", async () => {
+  const state = carryRun("local-ff");
+  const planned = carryPlan(state);
+  const claimKey = deriveProvenanceCarryClaimKey(
+    state.controller.runId,
+    planned.plan.exportId,
+    predecessorRootBeadId,
+  );
+  const store = carryStore(state);
+  let carryCalls = 0;
+  const gitCalls: string[] = [];
+  const recovery = createProductionRecoveryRunner({
+    acquireOperationLock: async () => acquiredLock(),
+    carry: {
+      async prepareProvenanceCarryClaim() {
+        carryCalls += 1;
+        return { plan: planned.plan, status: "planned" };
+      },
+      async executeProvenanceCarryClaim() {
+        carryCalls += 1;
+        return { status: "ambiguous" };
+      },
+      async reconcileProvenanceCarryClaim() {
+        carryCalls += 1;
+        return { status: "absent" };
+      },
+    },
+    git: {
+      repository,
+      runner: carryGitRunner("local-ff", OID_B, gitCalls),
+    },
+    nonce: "carry-no-injection",
+    preOwnership: store.port,
+    proveTopology: async () => ({
+      commonDir: repository.commonDir,
+      holder: state.controller.holder,
+      scope: {
+        beadsStoreIdentity: state.storeIdentity,
+        gitRepositoryIdentity: repository.identity,
+        integrationBranch: state.integrationBranch,
+      },
+    }),
+    store: store.port,
+  });
+  const directIntent = {
+    claimToken: claimKey,
+    eventId: "direct-carry-intent",
+    expectedRevision: state.revision,
+    exportId: planned.plan.exportId,
+    idempotencyKey: claimKey,
+    predecessorFinalRevision: planned.plan.predecessorFinalRevision,
+    predecessorJournalCheckpointCommitment:
+      planned.plan.predecessorJournalCheckpointCommitment,
+    predecessorRootAggregateCommitment:
+      planned.plan.predecessorRootAggregateCommitment,
+    predecessorRootBeadId,
+    predecessorRunId: planned.plan.predecessorRunId,
+    predecessorWaveId: planned.plan.predecessorWaveId,
+    snapshotCommitment: planned.plan.snapshotCommitment,
+    type: "provenance_carry_claim_intent",
+  } satisfies ProtocolEvent;
+  assert.deepEqual(await recovery(directIntent), { status: "blocked" });
+  const directObservation = {
+    effectId: "direct:provenance_carry_claim",
+    effectKind: "provenance_carry_claim",
+    eventId: "direct-carry-observation",
+    expectedRevision: state.revision,
+    observationHash: HASH,
+    result: {
+      claimantRunId: "other-run",
+      claimRecordDigest: "4".repeat(64),
+      claimRevision: 1,
+      exportId: planned.plan.exportId,
+      status: "already_claimed",
+    },
+    type: "provenance_carry_claim_observed",
+  } satisfies ProtocolEvent;
+  assert.deepEqual(await recovery(directObservation), { status: "blocked" });
+  assert.equal(store.writes, 0);
+  assert.equal(carryCalls, 0);
+  assert.deepEqual(gitCalls, [
+    "rev-parse --git-common-dir",
+    "rev-parse --show-object-format",
+    "config --null --get-regexp ^remote\\..*\\.url$",
+    "rev-parse --git-common-dir",
+    "rev-parse --show-object-format",
+    "config --null --get-regexp ^remote\\..*\\.url$",
+  ]);
+});
+
+test("configured recovery admits the first exact knowledge wave then blocks configuration drift", async () => {
+  const base = localRun();
+  const state = { ...base, wave: { id: "wave-0", unitIds: [] } };
+  assert.deepEqual(runInvariantErrors(state), []);
+  const knowledgeContract = configuredKnowledgeContract();
+  const store = carryStore(state);
+  const gitCalls: string[] = [];
+  const options = {
+    acquireOperationLock: async () => acquiredLock(),
+    git: {
+      repository,
+      runner: carryGitRunner("local-ff", OID_B, gitCalls),
+    },
+    nonce: "configured-knowledge-wave",
+    preOwnership: store.port,
+    proveTopology: async () => ({
+      commonDir: repository.commonDir,
+      holder: state.controller.holder,
+      scope: {
+        beadsStoreIdentity: state.storeIdentity,
+        gitRepositoryIdentity: repository.identity,
+        integrationBranch: state.integrationBranch,
+      },
+    }),
+    store: store.port,
+  };
+  const configured = createProductionRecoveryRunner({
+    ...options,
+    knowledgeContract,
+  });
+  const wavePlanned = {
+    eventId: "knowledge-wave-planned",
+    expectedRevision: state.revision,
+    knowledgeContract,
+    tasks: [state.units["unit-1"]!.taskMetadata!],
+    type: "wave_planned",
+    waveId: "knowledge-wave",
+  } satisfies ProtocolEvent;
+  const planned = await configured(wavePlanned);
+  assert.equal(planned.status, "applied");
+  assert.deepEqual(store.root.run.knowledgeContract, knowledgeContract);
+  assert.equal(store.root.run.wave.id, "knowledge-wave");
+  assert.equal(store.writes, 1);
+
+  const mismatched = createProductionRecoveryRunner({
+    ...options,
+    knowledgeContract: configuredKnowledgeContract("different-owner"),
+  });
+  assert.deepEqual(await mismatched(), { status: "unavailable" });
+  assert.equal(store.writes, 1);
+});
+
+test("configured carry reload reconciles ambiguous and post-intent-crash claims before the first wave", async () => {
+  const knowledgeContract = configuredKnowledgeContract();
+  for (const mode of ["ambiguous", "post-intent-crash"] as const) {
+    const state = carryRun("local-ff");
+    const planned = carryPlan(state);
+    const store = carryStore(state);
+    let executes = 0;
+    const first = createProductionRecoveryRunner({
+      acquireOperationLock: async () => acquiredLock(),
+      carry: {
+        async prepareProvenanceCarryClaim() {
+          return { plan: planned.plan, status: "planned" };
+        },
+        async executeProvenanceCarryClaim() {
+          executes += 1;
+          return { status: "ambiguous" };
+        },
+        async reconcileProvenanceCarryClaim() {
+          return { status: "absent" };
+        },
+      },
+      ...(mode === "post-intent-crash"
+        ? {
+            fault: (point) => {
+              if (point === "after_intent_persist")
+                throw new Error("configured carry post-intent crash");
+            },
+          }
+        : {}),
+      git: {
+        repository,
+        runner: carryGitRunner("local-ff", OID_B, []),
+      },
+      knowledgeContract,
+      nonce: `configured-carry-${mode}`,
+      preOwnership: store.port,
+      proveTopology: async () => ({
+        commonDir: repository.commonDir,
+        holder: state.controller.holder,
+        scope: {
+          beadsStoreIdentity: state.storeIdentity,
+          gitRepositoryIdentity: repository.identity,
+          integrationBranch: state.integrationBranch,
+        },
+      }),
+      store: store.port,
+    });
+    if (mode === "post-intent-crash") {
+      await assert.rejects(
+        first({ provenanceCarryClaim: { predecessorRootBeadId } }),
+        /configured carry post-intent crash/u,
+      );
+    } else {
+      assert.deepEqual(
+        await first({ provenanceCarryClaim: { predecessorRootBeadId } }),
+        { status: "ambiguous" },
+      );
+    }
+    assert.equal(executes, mode === "ambiguous" ? 1 : 0);
+    assert.equal(
+      store.root.run.effectJournal.at(-1)?.status,
+      mode === "ambiguous" ? "ambiguous" : "intended",
+    );
+    assert.equal(store.root.run.knowledgeContract, undefined);
+
+    let reconciles = 0;
+    const resumed = createProductionRecoveryRunner({
+      acquireOperationLock: async () => acquiredLock(),
+      carry: {
+        async prepareProvenanceCarryClaim() {
+          throw new Error("reload must use the durable carry intent");
+        },
+        async executeProvenanceCarryClaim() {
+          throw new Error("observed reconciliation must not replay the CAS");
+        },
+        async reconcileProvenanceCarryClaim(effect, current) {
+          reconciles += 1;
+          const carry = importedCarry(
+            current,
+            planned.plan,
+            planned.projectionInputSnapshot,
+          );
+          return {
+            result: {
+              carry,
+              status: "imported",
+            },
+            status: "observed",
+          };
+        },
+      },
+      git: {
+        repository,
+        runner: carryGitRunner("local-ff", OID_B, []),
+      },
+      knowledgeContract,
+      nonce: `configured-carry-${mode}-reload`,
+      preOwnership: store.port,
+      proveTopology: async () => ({
+        commonDir: repository.commonDir,
+        holder: state.controller.holder,
+        scope: {
+          beadsStoreIdentity: state.storeIdentity,
+          gitRepositoryIdentity: repository.identity,
+          integrationBranch: state.integrationBranch,
+        },
+      }),
+      store: store.port,
+    });
+    const resumedResult = await resumed();
+    assert.equal(resumedResult.status, "idle", mode);
+    assert.equal(reconciles, 1, mode);
+    assert.equal(store.root.run.effectJournal.at(-1)?.status, "observed");
+    assert.equal(store.root.run.pendingProvenanceCarry?.integrationOid, OID_B);
+    assert.equal(store.root.run.knowledgeContract, undefined);
+  }
+});
+
+test("configured pending carry reload accepts an exact carry-only first wave and freezes the contract", async () => {
+  const state = carryRun("local-ff");
+  const planned = carryPlan(state);
+  const store = carryStore(state);
+  const imported = createProductionRecoveryRunner({
+    acquireOperationLock: async () => acquiredLock(),
+    carry: {
+      async prepareProvenanceCarryClaim() {
+        return { plan: planned.plan, status: "planned" };
+      },
+      async executeProvenanceCarryClaim(_effect, current) {
+        return {
+          result: {
+            carry: importedCarry(
+              current,
+              planned.plan,
+              planned.projectionInputSnapshot,
+            ),
+            status: "imported",
+          },
+          status: "observed",
+        };
+      },
+      async reconcileProvenanceCarryClaim() {
+        return { status: "absent" };
+      },
+    },
+    git: {
+      repository,
+      runner: carryGitRunner("local-ff", OID_B, []),
+    },
+    nonce: "pending-carry-fixture",
+    preOwnership: store.port,
+    proveTopology: async () => ({
+      commonDir: repository.commonDir,
+      holder: state.controller.holder,
+      scope: {
+        beadsStoreIdentity: state.storeIdentity,
+        gitRepositoryIdentity: repository.identity,
+        integrationBranch: state.integrationBranch,
+      },
+    }),
+    store: store.port,
+  });
+  assert.equal(
+    (
+      await imported({
+        provenanceCarryClaim: { predecessorRootBeadId },
+      })
+    ).status,
+    "applied",
+  );
+  const pending = store.root.run;
+  assert.ok(pending.pendingProvenanceCarry);
+  assert.equal(pending.knowledgeContract, undefined);
+
+  const knowledgeContract = configuredKnowledgeContract();
+  const configured = createProductionRecoveryRunner({
+    acquireOperationLock: async () => acquiredLock(),
+    git: {
+      repository,
+      runner: carryGitRunner("local-ff", OID_B, []),
+    },
+    knowledgeContract,
+    nonce: "pending-carry-first-wave",
+    preOwnership: store.port,
+    proveTopology: async () => ({
+      commonDir: repository.commonDir,
+      holder: state.controller.holder,
+      scope: {
+        beadsStoreIdentity: state.storeIdentity,
+        gitRepositoryIdentity: repository.identity,
+        integrationBranch: state.integrationBranch,
+      },
+    }),
+    store: store.port,
+  });
+  const carryOnlyWave = {
+    carryOnly: true,
+    eventId: "configured-carry-only-wave",
+    expectedRevision: pending.revision,
+    knowledgeContract,
+    tasks: [],
+    type: "wave_planned",
+    waveId: "carry-only-wave",
+  } satisfies ProtocolEvent;
+  assert.equal((await configured(carryOnlyWave)).status, "applied");
+  assert.deepEqual(store.root.run.knowledgeContract, knowledgeContract);
+  assert.equal(store.root.run.pendingProvenanceCarry, undefined);
+  assert.equal(store.root.run.gate?.waveId, "carry-only-wave");
+  assert.deepEqual(store.root.run.wave.unitIds, []);
+});
+
+test("configured durable carry refusal reload permits a new carry intent or an ordinary first wave", async () => {
+  const base = localRun();
+  const state = { ...base, wave: { id: "wave-0", unitIds: [] } };
+  assert.deepEqual(runInvariantErrors(state), []);
+  const knowledgeContract = configuredKnowledgeContract();
+  const refusalStore = await configuredCarryRefusalStore(
+    state,
+    knowledgeContract,
+    "configured-carry-refusal",
+  );
+  const refusedRun = refusalStore.root.run;
+  assert.equal(refusedRun.provenanceCarryClaim, undefined);
+  assert.equal(
+    refusedRun.lastProvenanceCarryRefusal?.status,
+    "predecessor_refused",
+  );
+  if (refusedRun.lastProvenanceCarryRefusal?.status === "predecessor_refused")
+    assert.equal(refusedRun.lastProvenanceCarryRefusal.reason, "not_released");
+  assert.equal(refusedRun.knowledgeContract, undefined);
+
+  const retryStore = carryStore(refusedRun);
+  const retryRootBeadId = "sce-predecessor-retry";
+  const retryPlan = carryPlan(refusedRun);
+  const retry = createProductionRecoveryRunner({
+    acquireOperationLock: async () => acquiredLock(),
+    carry: {
+      async prepareProvenanceCarryClaim(predecessor) {
+        assert.equal(predecessor, retryRootBeadId);
+        return { plan: retryPlan.plan, status: "planned" };
+      },
+      async executeProvenanceCarryClaim() {
+        return { status: "ambiguous" };
+      },
+      async reconcileProvenanceCarryClaim() {
+        return { status: "absent" };
+      },
+    },
+    fault: (point) => {
+      if (point === "after_intent_persist")
+        throw new Error("configured carry retry intent persisted");
+    },
+    git: {
+      repository,
+      runner: carryGitRunner("local-ff", OID_B, []),
+    },
+    knowledgeContract,
+    nonce: "configured-carry-retry",
+    preOwnership: retryStore.port,
+    proveTopology: async () => ({
+      commonDir: repository.commonDir,
+      holder: state.controller.holder,
+      scope: {
+        beadsStoreIdentity: state.storeIdentity,
+        gitRepositoryIdentity: repository.identity,
+        integrationBranch: state.integrationBranch,
+      },
+    }),
+    store: retryStore.port,
+  });
+  await assert.rejects(
+    retry({ provenanceCarryClaim: { predecessorRootBeadId: retryRootBeadId } }),
+    /configured carry retry intent persisted/u,
+  );
+  assert.equal(
+    retryStore.root.run.provenanceCarryClaim?.predecessorRootBeadId,
+    retryRootBeadId,
+  );
+  assert.equal(retryStore.root.run.lastProvenanceCarryRefusal, undefined);
+  assert.equal(retryStore.root.run.effectJournal.at(-1)?.status, "intended");
+
+  const releaseBase = carryRun("local-ff");
+  const releaseRefusalStore = await configuredCarryRefusalStore(
+    releaseBase,
+    knowledgeContract,
+    "configured-carry-release-refusal",
+  );
+  const releaseRefusedRun = releaseRefusalStore.root.run;
+  assert.equal(releaseRefusedRun.provenanceCarryClaim, undefined);
+  assert.equal(
+    releaseRefusedRun.lastProvenanceCarryRefusal?.status,
+    "predecessor_refused",
+  );
+  assert.deepEqual(runInvariantErrors(releaseRefusedRun), []);
+  const releaseStore = carryStore(releaseRefusedRun);
+  const slotTransition = controllerSlotTransition(releaseRefusedRun, "release");
+  let releasePlans = 0;
+  let releaseExecutions = 0;
+  const release = createProductionRecoveryRunner({
+    acquireOperationLock: async () => acquiredLock(),
+    git: {
+      repository,
+      runner: carryGitRunner("local-ff", OID_B, []),
+    },
+    knowledgeContract,
+    nonce: "configured-release-after-refusal",
+    preOwnership: releaseStore.port,
+    proveTopology: async () => ({
+      commonDir: repository.commonDir,
+      holder: releaseRefusedRun.controller.holder,
+      scope: {
+        beadsStoreIdentity: releaseRefusedRun.storeIdentity,
+        gitRepositoryIdentity: repository.identity,
+        integrationBranch: releaseRefusedRun.integrationBranch,
+      },
+    }),
+    store: releaseStore.port,
+    topology: {
+      async executeControllerTransition(transition) {
+        releaseExecutions += 1;
+        assert.deepEqual(transition, slotTransition);
+        return { status: "observed" };
+      },
+      async prepareControllerTransition({ kind }) {
+        releasePlans += 1;
+        assert.equal(kind, "release");
+        return { status: "planned", transition: slotTransition };
+      },
+      async reconcileControllerTransition() {
+        return { status: "absent" };
+      },
+    },
+  });
+  const releaseIntent = {
+    eventId: "release-after-carry-refusal",
+    expectedRevision: releaseRefusedRun.revision,
+    idempotencyKey: deriveIdempotencyKey(
+      releaseRefusedRun,
+      releaseRefusedRun.revision,
+      null,
+      "controller_release",
+    ),
+    type: "controller_release_intent",
+  } satisfies ProtocolEvent;
+  const preparedRelease = reduce(releaseRefusedRun, {
+    ...releaseIntent,
+    slotTransition,
+  });
+  assert.equal(
+    preparedRelease.ok,
+    true,
+    preparedRelease.ok
+      ? undefined
+      : `${preparedRelease.code}: ${preparedRelease.reason}`,
+  );
+  assert.equal((await release(releaseIntent)).status, "applied");
+  assert.equal(releasePlans, 1);
+  assert.equal(releaseExecutions, 1);
+  assert.equal(releaseStore.root.run.controller.state, "released");
+  assert.deepEqual(
+    releaseStore.root.run.lastProvenanceCarryRefusal,
+    releaseRefusedRun.lastProvenanceCarryRefusal,
+  );
+  assert.equal(releaseStore.root.run.knowledgeContract, undefined);
+
+  const waveStore = carryStore(refusedRun);
+  const ordinary = createProductionRecoveryRunner({
+    acquireOperationLock: async () => acquiredLock(),
+    git: {
+      repository,
+      runner: carryGitRunner("local-ff", OID_B, []),
+    },
+    knowledgeContract,
+    nonce: "configured-first-wave-after-refusal",
+    preOwnership: waveStore.port,
+    proveTopology: async () => ({
+      commonDir: repository.commonDir,
+      holder: state.controller.holder,
+      scope: {
+        beadsStoreIdentity: state.storeIdentity,
+        gitRepositoryIdentity: repository.identity,
+        integrationBranch: state.integrationBranch,
+      },
+    }),
+    store: waveStore.port,
+  });
+  const ordinaryWave = {
+    eventId: "knowledge-wave-after-carry-refusal",
+    expectedRevision: refusedRun.revision,
+    knowledgeContract,
+    tasks: [refusedRun.units["unit-1"]!.taskMetadata!],
+    type: "wave_planned",
+    waveId: "knowledge-wave-after-refusal",
+  } satisfies ProtocolEvent;
+  assert.equal((await ordinary(ordinaryWave)).status, "applied");
+  assert.deepEqual(waveStore.root.run.knowledgeContract, knowledgeContract);
+  assert.deepEqual(
+    waveStore.root.run.lastProvenanceCarryRefusal,
+    refusedRun.lastProvenanceCarryRefusal,
+  );
+  assert.equal(waveStore.root.run.wave.id, "knowledge-wave-after-refusal");
+});
 
 function runner(
   answers: Readonly<Record<string, string | undefined>>,
@@ -788,6 +2226,79 @@ test("controller topology is exactly bound and reconcile never executes its muta
     "ambiguous",
   );
   assert.equal(executions, 1);
+});
+
+test("controller acquire and release execute and reconcile emit strict unitless observations", async () => {
+  const state = localRun();
+  for (const kind of ["acquire", "release"] as const) {
+    const transition = controllerSlotTransition(state, kind);
+    let executions = 0;
+    let reconciliations = 0;
+    const topology: ControllerTransitionRecoveryPort = {
+      async executeControllerTransition(actual) {
+        executions += 1;
+        assert.deepEqual(actual, transition);
+        return { status: "observed" };
+      },
+      async reconcileControllerTransition(actual) {
+        reconciliations += 1;
+        assert.deepEqual(actual, transition);
+        return { status: "observed" };
+      },
+    };
+    const effect = {
+      effectId: `effect-controller-${kind}`,
+      idempotencyKey: `key-controller-${kind}`,
+      kind: `controller_${kind}`,
+      params: {
+        controllerFencingToken: state.controllerFencingToken,
+        holder: state.controller.holder,
+        ...(kind === "acquire"
+          ? {
+              promptHash: state.controller.promptHash,
+              requestedModel: state.controller.requestedModel,
+              returnedModel: state.controller.returnedModel,
+            }
+          : {}),
+        slotTransition: transition,
+      },
+      paramsHash: HASH,
+      schemaVersion: 1,
+      unitId: null,
+    } as ProtocolEffect;
+    const adapter = createProductionRecoveryEffectAdapter({
+      git: {
+        repository,
+        runner: async () => ({ exitCode: 1, signal: null, stdout: "" }),
+      },
+      topology,
+    });
+
+    for (const operation of ["execute", "reconcile"] as const) {
+      const result = await adapter[operation](effect, state);
+      assert.equal(result.status, "observed", `${kind} ${operation}`);
+      if (result.status !== "observed") continue;
+      const observation = result.observation;
+      assert.equal("unitId" in observation, false);
+      assert.equal("effectId" in observation, true);
+      assert.equal("effectKind" in observation, true);
+      if (!("effectId" in observation && "effectKind" in observation)) continue;
+      assert.equal(observation.effectId, effect.effectId);
+      assert.equal(observation.effectKind, effect.kind);
+      assert.equal(
+        observation.type,
+        kind === "acquire" ? "controller_acquired" : "controller_released",
+      );
+      const parsed = validate(ProtocolEventSchema, observation);
+      assert.equal(
+        parsed.ok,
+        true,
+        parsed.ok ? undefined : parsed.errors.join("; "),
+      );
+    }
+    assert.equal(executions, 1);
+    assert.equal(reconciliations, 1);
+  }
 });
 
 test("local integration recovery verifies repository identity and uses the canonical branch ref", async () => {

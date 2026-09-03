@@ -3,10 +3,12 @@ import { chmod, mkdtemp, mkdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { inflateRawSync } from "node:zlib";
 
 import {
   deriveScopeCommitment,
   deriveSlotReadbackHash,
+  deriveChangedRowsCommitment,
   makeChildProjection,
   makeRootProjection,
   type MutationBatch,
@@ -14,6 +16,7 @@ import {
 } from "../../src/fencing/index.js";
 import {
   createRecoveryRunner as createRunner,
+  recoveryEventId,
   type AuthoritativeRunReadback,
   type InitialControllerAcquire,
   type RecoveryEffectAdapter,
@@ -35,6 +38,20 @@ const scope = {
   gitRepositoryIdentity: "repo-1",
   integrationBranch: "main",
 } as const;
+
+test("recovery and ambiguity event IDs stay distinct and bounded", () => {
+  assert.equal(recoveryEventId("effect-1"), "recover-effect-1");
+  assert.equal(
+    recoveryEventId("ambiguous-effect-1"),
+    "recover-ambiguous-effect-1",
+  );
+  const maximumEffectId = "x".repeat(192);
+  const observed = recoveryEventId(maximumEffectId);
+  const ambiguous = recoveryEventId(`ambiguous-${maximumEffectId}`);
+  assert.equal(observed.length, 72);
+  assert.equal(ambiguous.length, 72);
+  assert.notEqual(observed, ambiguous);
+});
 
 function slot(status: "available" | "acquired", slotHolder?: string) {
   const value = {
@@ -94,6 +111,7 @@ function readback(runState: RepositoryRun): AuthoritativeRunReadback {
 
 class MemoryStore {
   public current: AuthoritativeRunReadback | undefined;
+  public lastBatch: MutationBatch | undefined;
   public malformedCreateResult = false;
   public createCalls = 0;
   public casCalls = 0;
@@ -126,6 +144,7 @@ class MemoryStore {
 
   async compareAndSet(batch: MutationBatch): Promise<RunStoreResult> {
     this.casCalls += 1;
+    this.lastBatch = batch;
     if (
       this.current === undefined ||
       this.current.root.aggregateRevision !== batch.expectedAggregateRevision ||
@@ -136,6 +155,106 @@ class MemoryStore {
     this.current = { children: batch.next.children, root: batch.next.root };
     return applied(this.current);
   }
+}
+
+function softwareReleaseIntentRun(): RepositoryRun {
+  let state = run();
+  const step = (
+    type: import("../../src/protocol/schemas.js").ProtocolEvent["type"],
+    fields: Record<string, unknown> = {},
+  ) => {
+    state = transition(state, event(state, type, fields), reduce);
+  };
+  const observe = (
+    type: import("../../src/protocol/schemas.js").ProtocolEvent["type"],
+    kind: string,
+    fields: Record<string, unknown> = {},
+  ) =>
+    step(type, {
+      effectId: state.effectJournal.at(-1)!.effectId,
+      effectKind: kind,
+      observationHash: HASH,
+      ...fields,
+    });
+  const oidA = "a".repeat(40);
+  const oidB = "b".repeat(40);
+  const oidC = "c".repeat(40);
+  step("reservation_intent", {
+    reservations: [{ id: "res-1", namespace: "path", resource: "src" }],
+  });
+  observe("reservation_observed", "reservation_acquire");
+  step("branch_intent", { branchRef: "sce/unit-1" });
+  observe("branch_observed", "branch_create", {
+    branchRef: "sce/unit-1",
+  });
+  step("worktree_intent", { worktreePath: "/tmp/sce-unit-1" });
+  observe("worktree_observed", "worktree_create", {
+    worktreePath: "/tmp/sce-unit-1",
+  });
+  step("dispatch_intent");
+  observe("dispatch_observed", "dispatch", {
+    promptHash: HASH,
+    requestedModel: "workhorse",
+    returnedModel: "workhorse-1",
+    sessionId: "worker-1",
+  });
+  step("collect_intent");
+  observe("worker_collected", "worker_collect", {
+    workerResult: { residualRisks: [], status: "completed", summary: "done" },
+  });
+  step("candidate_intent");
+  observe("candidate_observed", "candidate_collect", {
+    headOid: oidB,
+    treeOid: oidC,
+  });
+  step("verification_intent");
+  observe("verification_observed", "verify", {
+    baseOid: oidA,
+    headOid: oidB,
+    treeOid: oidC,
+  });
+  step("reviewer_dispatch_intent");
+  observe("reviewer_observed", "review_dispatch", {
+    promptHash: HASH,
+    requestedModel: "frontier",
+    returnedModel: "frontier-1",
+    sessionId: "reviewer-1",
+  });
+  step("review_collect_intent");
+  observe("review_collected", "review_collect", {
+    judgment: {
+      aggregateRevision: state.revision,
+      baseOid: oidA,
+      decision: "approve",
+      findings: [],
+      headOid: oidB,
+      kind: "review_verdict",
+      promptHash: HASH,
+      rationale: "approved",
+      requestedModel: "frontier",
+      responseHash: HASH,
+      returnedModel: "frontier-1",
+      role: "reviewer",
+      schemaVersion: 1,
+      sessionId: "reviewer-1",
+      treeOid: oidC,
+      unitId: "unit-1",
+    },
+  });
+  step("publish_intent");
+  observe("publish_observed", "publish", {
+    publication: { kind: "push_branch", remoteHeadOid: oidB },
+  });
+  step("integrate_intent");
+  observe("integrate_observed", "integrate", {
+    baseOid: oidA,
+    controllerFencingToken: "fence-1",
+    headOid: oidB,
+    integrationOid: oidC,
+    treeOid: oidC,
+  });
+  step("reservation_release_intent");
+  return state;
 }
 
 function applied(value: AuthoritativeRunReadback) {
@@ -498,4 +617,129 @@ test("every coordinator crash boundary resumes without a duplicate Git act", asy
     assert.equal(resumed.run.units["unit-1"]?.state, "branch_observed", point);
     assert.equal(executeCalls, 1, point);
   }
+});
+
+test("reservation release persists a root-only closure batch and drains the authoritative unit set", async () => {
+  const state = softwareReleaseIntentRun();
+  const store = new MemoryStore();
+  store.current = readback(state);
+  let reconcileCalls = 0;
+  const runner = createRunner({
+    adapter: {
+      canReconcile(effect) {
+        return effect.kind === "reservation_release";
+      },
+      async reconcile(effect, current) {
+        reconcileCalls += 1;
+        assert.equal(effect.kind, "reservation_release");
+        return {
+          status: "observed" as const,
+          observation: {
+            effectId: effect.effectId,
+            effectKind: effect.kind,
+            eventId: "release-observed",
+            expectedRevision: current.revision,
+            observationHash: HASH,
+            type: "reservation_released" as const,
+            unitId: "unit-1",
+          },
+        };
+      },
+      async execute() {
+        throw new Error("terminal release is reconcile-only");
+      },
+    },
+    acquireOperationLock: async () => ({
+      status: "acquired" as const,
+      lock: { release: async () => ({ status: "released" as const }) },
+    }),
+    nonce: "nonce-root-only-closure",
+    preOwnership: store,
+    proveTopology: async () => ({ commonDir: "/repo/.git", holder, scope }),
+    store,
+  });
+  const result = await runner();
+  assert.ok("run" in result, JSON.stringify(result));
+  if (!("run" in result)) return;
+  assert.equal(reconcileCalls, 1);
+  assert.deepEqual(Object.keys(result.run.units), []);
+  assert.deepEqual(result.run.wave.unitIds, []);
+  const closureEvidence = JSON.parse(
+    inflateRawSync(
+      Buffer.from(result.run.closedUnitEvidence, "base64"),
+    ).toString("utf8"),
+  ) as { u?: Record<string, unknown> };
+  assert.ok(closureEvidence.u?.["unit-1"]);
+  assert.deepEqual(store.lastBatch?.changedRows, []);
+  assert.deepEqual(store.lastBatch?.expectedChildren, []);
+  assert.deepEqual(store.lastBatch?.next.children, []);
+  assert.deepEqual(store.lastBatch?.next.root.childRows, []);
+  assert.equal(
+    store.lastBatch?.checkpoint.changedRowsCommitment,
+    deriveChangedRowsCommitment([]),
+  );
+});
+
+test("generic recovery rejects direct provenance carry intent and observation injection", async () => {
+  const state = run([]);
+  const store = new MemoryStore();
+  store.current = readback(state);
+  let adapterCalls = 0;
+  const runner = createRunner({
+    adapter: {
+      async execute() {
+        adapterCalls += 1;
+        return { status: "ambiguous" as const };
+      },
+      async reconcile() {
+        adapterCalls += 1;
+        return { status: "ambiguous" as const };
+      },
+    },
+    acquireOperationLock: async () => ({
+      status: "acquired" as const,
+      lock: { release: async () => ({ status: "released" as const }) },
+    }),
+    nonce: "nonce-carry-injection",
+    preOwnership: store,
+    prepareProvenanceCarryClaim: async () => {
+      throw new Error("direct injection must not reach dedicated planning");
+    },
+    proveTopology: async () => ({ commonDir: "/repo/.git", holder, scope }),
+    store,
+  });
+  const intent = {
+    claimToken: "carry-key",
+    eventId: "carry-intent",
+    expectedRevision: state.revision,
+    exportId: `sce:carry:${HASH}`,
+    idempotencyKey: "carry-key",
+    predecessorFinalRevision: 1,
+    predecessorJournalCheckpointCommitment: HASH,
+    predecessorRootAggregateCommitment: HASH,
+    predecessorRootBeadId: "sce-predecessor",
+    predecessorRunId: "run-predecessor",
+    predecessorWaveId: "wave-predecessor",
+    snapshotCommitment: HASH,
+    type: "provenance_carry_claim_intent" as const,
+  };
+  assert.deepEqual(await runner(intent), { status: "blocked" });
+  assert.deepEqual(
+    await runner({
+      effectId: "carry-effect",
+      effectKind: "provenance_carry_claim",
+      eventId: "carry-observed",
+      expectedRevision: state.revision,
+      observationHash: HASH,
+      result: {
+        evidenceDigest: HASH,
+        predecessorRootBeadId: "sce-predecessor",
+        reason: "not_found",
+        status: "predecessor_refused",
+      },
+      type: "provenance_carry_claim_observed",
+    }),
+    { status: "blocked" },
+  );
+  assert.equal(adapterCalls, 0);
 });

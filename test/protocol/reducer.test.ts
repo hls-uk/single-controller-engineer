@@ -4,16 +4,28 @@ import { deflateRawSync, inflateRawSync } from "node:zlib";
 import fc from "fast-check";
 import { legalActions } from "../../src/protocol/actions.js";
 import {
+  makeChildProjection,
+  makeRootProjection,
+} from "../../src/fencing/index.js";
+import {
   deriveClosedUnitEvidenceCommitment,
+  deriveGateEntryId,
   deriveIdempotencyKey,
   deriveIntentCommitment,
   deriveJournalCommitment,
   deriveParamsHash,
+  deriveProvenanceCarryClaimKey,
+  deriveProvenanceCarryExportId,
   deriveRepairJudgmentPromptHash,
   deriveRepairJudgmentResponseHash,
   deriveSessionFingerprint,
   deriveSessionLineageRoot,
   hasUsedSession,
+  maximumMaterialisationSidecarBytes,
+  compareProtocolText,
+  provenanceCarryAncestorDigest,
+  provenanceCarryLineageCommitment,
+  provenanceCarrySnapshotCommitment,
   reduce,
   runInvariantErrors,
   sessionLineageCount,
@@ -24,6 +36,8 @@ import type {
   ProtocolEvent,
   RepositoryRun,
   UnitState,
+  KnowledgeContract,
+  ProvenanceInput,
 } from "../../src/protocol/schemas.js";
 import {
   LIMITS,
@@ -32,7 +46,7 @@ import {
   RepositoryRunEnvelopeSchema,
   validate,
 } from "../../src/protocol/schemas.js";
-import { canonicalJson } from "../../src/protocol/canonical.js";
+import { canonicalJson, type JsonValue } from "../../src/protocol/canonical.js";
 import { sha256 } from "../../src/protocol/evidence.js";
 import {
   HASH,
@@ -53,6 +67,2433 @@ function step(
 ): RepositoryRun {
   return transition(state, event(state, type, fields), reduce);
 }
+
+function gateIntent(
+  state: RepositoryRun,
+  type:
+    | "destination_probe_intent"
+    | "materialisation_resolve_intent"
+    | "materialise_intent"
+    | "provenance_commit_intent"
+    | "verification_intent",
+  kind:
+    | "destination_probe"
+    | "materialisation_resolve"
+    | "materialise"
+    | "provenance_commit"
+    | "verify",
+  gateEntryId: string,
+  fields: Record<string, unknown> = {},
+): RepositoryRun {
+  return transition(
+    state,
+    {
+      eventId: `${kind}-${state.revision}`,
+      expectedRevision: state.revision,
+      gateEntryId,
+      idempotencyKey: deriveIdempotencyKey(
+        state,
+        state.revision,
+        null,
+        kind,
+        gateEntryId,
+      ),
+      ...fields,
+      type,
+      unitId: null,
+    } as ProtocolEvent,
+    reduce,
+  );
+}
+
+function gateObservation(
+  state: RepositoryRun,
+  type:
+    | "destination_probe_observed"
+    | "materialisation_sources_observed"
+    | "materialise_observed"
+    | "provenance_commit_observed"
+    | "verification_observed"
+    | "verification_failed",
+  gateEntryId: string,
+  fields: Record<string, unknown>,
+): RepositoryRun {
+  const entry = [...state.effectJournal]
+    .reverse()
+    .find(
+      (candidate) =>
+        candidate.gateEntryId === gateEntryId &&
+        candidate.status === "intended",
+    );
+  assert.ok(entry);
+  return transition(
+    state,
+    {
+      effectId: entry.effectId,
+      effectKind: entry.kind,
+      eventId: `${type}-${state.revision}`,
+      expectedRevision: state.revision,
+      gateEntryId,
+      observationHash: HASH,
+      ...fields,
+      type,
+      unitId: null,
+    } as ProtocolEvent,
+    reduce,
+  );
+}
+
+function knowledgeContract(humanDriver = "knowledge-owner"): KnowledgeContract {
+  return {
+    aliases: [
+      {
+        alias: "drive",
+        canonicalRoot: "/mnt/knowledge-drive",
+        markerFile: ".sce-drive",
+        mountPolicy: "required",
+        namespaceControl: "exclusive",
+      },
+    ],
+    combinedVerificationCommands: [["npm", "test"]],
+    domainScope: "knowledge",
+    gateTargets: [],
+    humanDriver,
+    provenance: {
+      eventsDirectory: "knowledge/events",
+      recordFormatVersion: 1,
+      reproducibilityCommand: ["npm", "run", "reproduce"],
+      rollupGeneratorCommand: ["npm", "run", "rollup"],
+    },
+    provenanceWorktreeRoot: "/tmp/sce-provenance",
+  };
+}
+
+function carryProjection(unitIds: readonly string[]): ProvenanceInput {
+  const denseUnits: Record<string, unknown> = {};
+  for (const [ordinal, unitId] of unitIds.entries()) {
+    const intent = {
+      effectId: `${unitId}:integrate`,
+      idempotencyKey: `integrate-${unitId}`,
+      intentRevision: ordinal + 1,
+      kind: "integrate" as const,
+      paramsHash: "8".repeat(64),
+      schemaVersion: 1 as const,
+      unitId,
+    };
+    const terminal = {
+      ...intent,
+      intentCommitment: deriveIntentCommitment(intent),
+      observationHash: "9".repeat(64),
+      status: "observed" as const,
+    };
+    denseUnits[unitId] = [
+      "landed",
+      unitId,
+      ordinal,
+      OID_A,
+      0,
+      null,
+      null,
+      null,
+      null,
+      [],
+      [
+        terminal.effectId,
+        terminal.unitId,
+        terminal.idempotencyKey,
+        terminal.kind,
+        terminal.intentRevision,
+        terminal.intentCommitment,
+        terminal.paramsHash,
+        terminal.status,
+        terminal.observationHash,
+        terminal.schemaVersion,
+      ],
+      [
+        OID_C,
+        [OID_B, OID_C],
+        [OID_A, OID_B, OID_C, HASH, ["npm test"]],
+        [OID_A, OID_B, OID_C, HASH],
+      ],
+    ];
+  }
+  const closedUnitEvidence = deflateRawSync(
+    Buffer.from(
+      canonicalJson({
+        u: denseUnits,
+        v: 1,
+      } as unknown as import("../../src/protocol/canonical.js").JsonValue),
+      "utf8",
+    ),
+    { level: 9 },
+  ).toString("base64");
+  return {
+    closedUnitEvidence,
+    closureEvidenceCommitment:
+      deriveClosedUnitEvidenceCommitment(closedUnitEvidence),
+    destinationProbeEvidence: [],
+    targetEvidence: [],
+    unitIds: [...unitIds],
+  };
+}
+
+function carryClaimEvents(
+  state: RepositoryRun,
+  projectionInputSnapshot: ProvenanceInput,
+  lineageAncestorDigests: readonly string[],
+  suffix: string,
+) {
+  const predecessorRootBeadId = `root-${suffix}`;
+  const predecessorRunId = `run-${suffix}`;
+  const predecessorWaveId = `wave-${suffix}`;
+  const predecessorFinalRevision = 7;
+  const predecessorJournalCheckpointCommitment = "3".repeat(64);
+  const predecessorRootAggregateCommitment = "4".repeat(64);
+  const snapshotCommitment = provenanceCarrySnapshotCommitment(
+    projectionInputSnapshot,
+  );
+  const exportId = deriveProvenanceCarryExportId({
+    finalRevision: predecessorFinalRevision,
+    integrationBranch: state.integrationBranch,
+    predecessorRootAggregateCommitment,
+    predecessorRunId,
+    predecessorWaveId,
+    repositoryIdentity: state.repositoryIdentity,
+    snapshotCommitment,
+    storeIdentity: state.storeIdentity,
+  });
+  const claimToken = deriveProvenanceCarryClaimKey(
+    state.controller.runId,
+    exportId,
+    predecessorRootBeadId,
+  );
+  const claimRecord = {
+    claimRevision: 1,
+    claimantRunId: state.controller.runId,
+    claimToken,
+    exportId,
+    predecessorRootBeadId,
+    predecessorRunId,
+    predecessorWaveId,
+    schema: "sce.provenance-carry-claim",
+    snapshotCommitment,
+    version: 1,
+  } as const;
+  const lineage = [
+    ...lineageAncestorDigests,
+    provenanceCarryAncestorDigest(predecessorRootBeadId, predecessorRunId),
+  ];
+  const eventId = `carry-${suffix}`;
+  return {
+    intent: {
+      claimToken,
+      eventId,
+      expectedRevision: state.revision,
+      exportId,
+      idempotencyKey: claimToken,
+      predecessorFinalRevision,
+      predecessorJournalCheckpointCommitment,
+      predecessorRootAggregateCommitment,
+      predecessorRootBeadId,
+      predecessorRunId,
+      predecessorWaveId,
+      snapshotCommitment,
+      type: "provenance_carry_claim_intent" as const,
+    },
+    observation: {
+      effectId: `${eventId}:provenance_carry_claim`,
+      effectKind: "provenance_carry_claim" as const,
+      eventId: `${eventId}-observed`,
+      expectedRevision: state.revision + 1,
+      observationHash: HASH,
+      result: {
+        carry: {
+          claimRecordDigest: sha256(
+            canonicalJson({
+              claimRecord,
+              domain: "sce.provenance-carry-claim-record.v1",
+            }),
+          ),
+          claimRevision: 1 as const,
+          exportId,
+          integrationOid: OID_C,
+          lineageAncestorDigests: lineage,
+          lineageCommitment: provenanceCarryLineageCommitment(lineage),
+          predecessorFinalRevision,
+          predecessorJournalCheckpointCommitment,
+          predecessorRootAggregateCommitment,
+          predecessorRootBeadId,
+          predecessorRunId,
+          predecessorWaveId,
+          projectionInputSnapshot,
+          snapshotCommitment,
+        },
+        status: "imported" as const,
+      },
+      type: "provenance_carry_claim_observed" as const,
+    },
+  };
+}
+
+test("knowledge admission rejects an escape-heavy sidecar before promises", () => {
+  const initial = { ...run(), wave: { id: "wave-0", unitIds: [] } };
+  const contract = knowledgeContract('"'.repeat(4_096));
+  assert.ok(
+    maximumMaterialisationSidecarBytes(contract, initial.harness!) >
+      LIMITS.materialisationSidecarBytes,
+  );
+  const planned = reduce(initial, {
+    eventId: "knowledge-wave",
+    expectedRevision: initial.revision,
+    knowledgeContract: contract,
+    tasks: [initial.units["unit-1"]!.taskMetadata!],
+    type: "wave_planned",
+    waveId: "wave-knowledge",
+  });
+  assert.equal(planned.ok, false);
+  assert.equal(initial.gate, undefined);
+});
+
+test("knowledge admission requires an exact harness while software stays gate-free and pending gates block", () => {
+  const base = { ...run(), wave: { id: "wave-0", unitIds: [] } };
+  const task = base.units["unit-1"]!.taskMetadata!;
+  const { harness: _harness, ...withoutHarness } = base;
+  assert.equal(
+    reduce(withoutHarness, {
+      eventId: "missing-harness-knowledge",
+      expectedRevision: withoutHarness.revision,
+      knowledgeContract: knowledgeContract(),
+      tasks: [task],
+      type: "wave_planned",
+      waveId: "missing-harness",
+    }).ok,
+    false,
+  );
+  const software = reduce(withoutHarness, {
+    eventId: "software-without-harness",
+    expectedRevision: withoutHarness.revision,
+    tasks: [task],
+    type: "wave_planned",
+    waveId: "software-wave",
+  });
+  assert.equal(software.ok, true);
+  if (software.ok) assert.equal(software.nextState.gate, undefined);
+
+  const planned = transition(
+    base,
+    {
+      eventId: "exact-harness-knowledge",
+      expectedRevision: base.revision,
+      knowledgeContract: knowledgeContract(),
+      tasks: [task],
+      type: "wave_planned",
+      waveId: "exact-harness",
+    },
+    reduce,
+  );
+  assert.ok(planned.gate);
+  assert.equal(
+    reduce(planned, {
+      eventId: "blocked-next-wave",
+      expectedRevision: planned.revision,
+      knowledgeContract: knowledgeContract(),
+      tasks: [task],
+      type: "wave_planned",
+      waveId: "too-early",
+    }).ok,
+    false,
+  );
+  assert.equal(
+    reduce(planned, {
+      eventId: "blocked-release",
+      expectedRevision: planned.revision,
+      idempotencyKey: deriveIdempotencyKey(
+        planned,
+        planned.revision,
+        null,
+        "controller_release",
+      ),
+      type: "controller_release_intent",
+    }).ok,
+    false,
+  );
+
+  const carryBase = run([]);
+  const carryEvents = carryClaimEvents(
+    carryBase,
+    carryProjection(["unit-carried"]),
+    [],
+    "missing-harness-carry",
+  );
+  let carry = transition(carryBase, carryEvents.intent, reduce);
+  carry = transition(carry, carryEvents.observation, reduce);
+  const { harness: _carryHarness, ...carryWithoutHarness } = carry;
+  assert.equal(
+    reduce(carryWithoutHarness, {
+      carryOnly: true,
+      eventId: "missing-harness-carry-wave",
+      expectedRevision: carryWithoutHarness.revision,
+      knowledgeContract: knowledgeContract(),
+      tasks: [],
+      type: "wave_planned",
+      waveId: "missing-harness-carry",
+    }).ok,
+    false,
+  );
+});
+
+test("protocol ordering is locale-independent for non-ASCII text", () => {
+  assert.deepEqual(["é", "z", "ä", "a"].sort(compareProtocolText), [
+    "a",
+    "z",
+    "ä",
+    "é",
+  ]);
+});
+
+test("dedicated carry claims use their stable domain key and settle exactly once", () => {
+  const initial = { ...run(), wave: { id: "wave-0", unitIds: [] } };
+  const predecessor = {
+    finalRevision: 7,
+    predecessorRootAggregateCommitment: "1".repeat(64),
+    predecessorRunId: "run-predecessor",
+    predecessorWaveId: "wave-predecessor",
+    snapshotCommitment: "2".repeat(64),
+  };
+  const exportId = deriveProvenanceCarryExportId({
+    ...predecessor,
+    integrationBranch: initial.integrationBranch,
+    repositoryIdentity: initial.repositoryIdentity,
+    storeIdentity: initial.storeIdentity,
+  });
+  const idempotencyKey = deriveProvenanceCarryClaimKey(
+    initial.controller.runId,
+    exportId,
+    "root-predecessor",
+  );
+  const intent = {
+    claimToken: idempotencyKey,
+    eventId: "carry-claim-event",
+    expectedRevision: initial.revision,
+    exportId,
+    idempotencyKey,
+    predecessorFinalRevision: predecessor.finalRevision,
+    predecessorJournalCheckpointCommitment: "3".repeat(64),
+    predecessorRootAggregateCommitment:
+      predecessor.predecessorRootAggregateCommitment,
+    predecessorRootBeadId: "root-predecessor",
+    predecessorRunId: predecessor.predecessorRunId,
+    predecessorWaveId: predecessor.predecessorWaveId,
+    snapshotCommitment: predecessor.snapshotCommitment,
+    type: "provenance_carry_claim_intent" as const,
+  };
+  const bad = reduce(initial, {
+    ...intent,
+    idempotencyKey: `carry-claim:${"0".repeat(64)}`,
+  });
+  assert.equal(bad.ok, false);
+  const ambiguousIntent = transition(initial, intent, reduce);
+  assert.equal(
+    legalActions(ambiguousIntent).some(
+      (action) =>
+        action.type === "provenance_carry_claim_observed" &&
+        action.effectId === "carry-claim-event:provenance_carry_claim" &&
+        action.mode === "record",
+    ),
+    true,
+  );
+  assert.equal(
+    legalActions(ambiguousIntent).some(
+      (action) => action.type === "controller_release_intent",
+    ),
+    false,
+  );
+  const ambiguous = reduce(ambiguousIntent, {
+    effectId: "carry-claim-event:provenance_carry_claim",
+    effectKind: "provenance_carry_claim",
+    eventId: "carry-claim-ambiguous",
+    expectedRevision: ambiguousIntent.revision,
+    observationHash: HASH,
+    type: "effect_ambiguous",
+    unitId: null,
+  });
+  assert.equal(ambiguous.ok, true);
+  if (ambiguous.ok) {
+    assert.equal(ambiguous.nextState.state, "blocked");
+    assert.equal(ambiguous.nextState.effectJournal.at(-1)?.status, "ambiguous");
+    assert.equal(
+      ambiguous.nextState.provenanceCarryClaim?.currentEffectId,
+      "carry-claim-event:provenance_carry_claim",
+    );
+  }
+  let state = transition(initial, intent, reduce);
+  assert.equal(state.provenanceCarryClaim?.claimToken, idempotencyKey);
+  assert.equal(state.effectJournal.at(-1)?.idempotencyKey, idempotencyKey);
+  state = transition(
+    state,
+    {
+      effectId: "carry-claim-event:provenance_carry_claim",
+      effectKind: "provenance_carry_claim",
+      eventId: "carry-claim-refused",
+      expectedRevision: state.revision,
+      observationHash: HASH,
+      result: {
+        claimRecordDigest: "4".repeat(64),
+        claimRevision: 1,
+        claimantRunId: "another-run",
+        exportId,
+        status: "already_claimed",
+      },
+      type: "provenance_carry_claim_observed",
+    },
+    reduce,
+  );
+  assert.equal(state.provenanceCarryClaim, undefined);
+  assert.equal(state.lastProvenanceCarryRefusal?.status, "already_claimed");
+  assert.equal(runInvariantErrors(state).length, 0);
+});
+
+test("carry lineage admits one, two, and 128 hops and refuses duplicates or 129", () => {
+  const input = carryProjection(["unit-carried"]);
+  for (const ancestors of [
+    [],
+    [sha256("ancestor-one")],
+    Array.from({ length: 127 }, (_, index) => sha256(`ancestor-${index}`)),
+  ]) {
+    const initial = run([]);
+    const events = carryClaimEvents(
+      initial,
+      input,
+      ancestors,
+      `depth-${ancestors.length}`,
+    );
+    const intended = transition(initial, events.intent, reduce);
+    const observed = transition(intended, events.observation, reduce);
+    assert.equal(
+      observed.pendingProvenanceCarry?.lineageAncestorDigests.length,
+      ancestors.length + 1,
+    );
+    assert.deepEqual(runInvariantErrors(observed), []);
+  }
+
+  const duplicateInitial = run([]);
+  const duplicateRoot = "root-duplicate";
+  const duplicateRun = "run-duplicate";
+  const duplicate = carryClaimEvents(
+    duplicateInitial,
+    input,
+    [provenanceCarryAncestorDigest(duplicateRoot, duplicateRun)],
+    "duplicate",
+  );
+  const duplicateIntended = transition(
+    duplicateInitial,
+    duplicate.intent,
+    reduce,
+  );
+  assert.equal(reduce(duplicateIntended, duplicate.observation).ok, false);
+
+  const overflowInitial = run([]);
+  const overflow = carryClaimEvents(
+    overflowInitial,
+    input,
+    Array.from({ length: 128 }, (_, index) => sha256(`overflow-${index}`)),
+    "overflow",
+  );
+  const overflowIntended = transition(overflowInitial, overflow.intent, reduce);
+  assert.equal(reduce(overflowIntended, overflow.observation).ok, false);
+});
+
+test("a full 64-unit carry-only wave reaches an observed provenance commit", () => {
+  const unitIds = Array.from(
+    { length: LIMITS.units },
+    (_, index) => `unit-${index.toString().padStart(2, "0")}`,
+  );
+  const initial = run([]);
+  const events = carryClaimEvents(
+    initial,
+    carryProjection(unitIds),
+    [],
+    "full",
+  );
+  let state = transition(initial, events.intent, reduce);
+  state = transition(state, events.observation, reduce);
+  state = transition(
+    state,
+    {
+      carryOnly: true,
+      eventId: "carry-only-wave",
+      expectedRevision: state.revision,
+      knowledgeContract: knowledgeContract(),
+      tasks: [],
+      type: "wave_planned",
+      waveId: "wave-carry-only",
+    },
+    reduce,
+  );
+  assert.equal(
+    state.gate?.provenance?.projectionInputSnapshot.unitIds.length,
+    64,
+  );
+  assert.equal(state.gate?.provenanceUnitAccounting.length, 64);
+  const provenance = state.gate!.provenance!;
+  state = transition(
+    state,
+    {
+      eventId: "carry-only-clock",
+      expectedRevision: state.revision,
+      gateEntryId: provenance.gateEntryId,
+      timestamp: "2026-09-03T12:00:00Z",
+      type: "gate_clock_observed",
+      unitId: null,
+    },
+    reduce,
+  );
+  const intentRevision = state.revision;
+  state = transition(
+    state,
+    {
+      eventId: "carry-only-provenance",
+      expectedRevision: state.revision,
+      gateEntryId: provenance.gateEntryId,
+      idempotencyKey: deriveIdempotencyKey(
+        state,
+        state.revision,
+        null,
+        "provenance_commit",
+        provenance.gateEntryId,
+      ),
+      type: "provenance_commit_intent",
+      unitId: null,
+    },
+    reduce,
+  );
+  state = transition(
+    state,
+    {
+      effectId: "carry-only-provenance:provenance_commit",
+      effectKind: "provenance_commit",
+      eventId: "carry-only-provenance-observed",
+      expectedRevision: state.revision,
+      gateEntryId: provenance.gateEntryId,
+      observationHash: HASH,
+      result: {
+        attemptedBaseOid: OID_C,
+        commitOid: OID_B,
+        status: "committed",
+        treeOid: OID_C,
+      },
+      type: "provenance_commit_observed",
+      unitId: null,
+    },
+    reduce,
+  );
+  assert.equal(state.revision, intentRevision + 2);
+  assert.equal(state.gate?.provenance?.status, "observed");
+  assert.equal(
+    state.gate?.provenanceUnitAccounting.filter(
+      (item) =>
+        item.status === "committed" && item.provenanceCommitOid === OID_B,
+    ).length,
+    64,
+  );
+  assert.deepEqual(runInvariantErrors(state), []);
+});
+
+test("knowledge target commitments reject dropped obligations and forged void origins", () => {
+  const initial = { ...run(), wave: { id: "wave-0", unitIds: [] } };
+  const task = {
+    ...initial.units["unit-1"]!.taskMetadata!,
+    materialisationTargets: [
+      {
+        destinationAlias: "drive",
+        destinationSubpath: "published",
+        namingPolicy: "source-basename" as const,
+        sidecarRequired: true as const,
+        sourcePattern: "docs/file*.md",
+      },
+    ],
+  };
+  const state = transition(
+    initial,
+    {
+      eventId: "knowledge-obligations",
+      expectedRevision: initial.revision,
+      knowledgeContract: knowledgeContract(),
+      tasks: [task],
+      type: "wave_planned",
+      waveId: "wave-obligations",
+    },
+    reduce,
+  );
+  assert.ok(state.gate);
+  assert.notDeepEqual(
+    runInvariantErrors({
+      ...state,
+      gate: { ...state.gate, targetPromises: [] },
+    }),
+    [],
+  );
+  assert.notDeepEqual(
+    runInvariantErrors({ ...state, wave: { ...state.wave, unitIds: [] } }),
+    [],
+  );
+  for (const disposition of [
+    "unit_not_landed",
+    "no_landed_units",
+    "deferral_cascade",
+  ] as const) {
+    const promise = state.gate.targetPromises[0]!;
+    assert.notDeepEqual(
+      runInvariantErrors({
+        ...state,
+        gate: {
+          ...state.gate,
+          targetPromises: [
+            {
+              ...promise,
+              disposition,
+              ...(disposition === "deferral_cascade"
+                ? { followUpBeadId: "follow-up" }
+                : {}),
+              status: "voided",
+            },
+          ],
+        },
+      }),
+      [],
+    );
+  }
+  assert.notDeepEqual(
+    runInvariantErrors({
+      ...state,
+      gate: {
+        ...state.gate,
+        provenancePromise: {
+          disposition: "no_landed_units",
+          status: "voided",
+        },
+      },
+    }),
+    [],
+  );
+  assert.notDeepEqual(
+    runInvariantErrors({
+      ...state,
+      gate: {
+        ...state.gate,
+        aggregateVerifyPromise: {
+          disposition: "deferral_cascade",
+          followUpBeadId: "follow-up",
+          status: "voided",
+        },
+      },
+    }),
+    [],
+  );
+});
+
+test("optional probe refusal voids only expanded dependents and retains evidence", () => {
+  const initial = run();
+  const task = {
+    ...initial.units["unit-1"]!.taskMetadata!,
+    materialisationTargets: [
+      {
+        destinationAlias: "drive",
+        destinationSubpath: "published",
+        namingPolicy: "source-basename" as const,
+        sidecarRequired: true as const,
+        sourcePattern: "docs/file*.md",
+      },
+    ],
+  };
+  const contract = knowledgeContract();
+  contract.aliases[0] = { ...contract.aliases[0]!, mountPolicy: "optional" };
+  contract.gateTargets = [
+    {
+      destinationAlias: "drive",
+      destinationSubpath: "gate-published",
+      namingPolicy: "source-basename",
+      sidecarRequired: true,
+      sourcePattern: "rollup/file*.md",
+    },
+  ];
+  const drained = { ...initial, wave: { id: "wave-0", unitIds: [] } };
+  let state = transition(
+    drained,
+    {
+      eventId: "knowledge-wave-planned",
+      expectedRevision: drained.revision,
+      knowledgeContract: contract,
+      tasks: [task],
+      type: "wave_planned",
+      waveId: "knowledge-wave",
+    },
+    reduce,
+  );
+  state = approvedCandidate(
+    "integrate",
+    "remote-ff",
+    "remote-integration",
+    state,
+  );
+  state = step(state, "publish_intent");
+  state = observe(state, "publish_observed", "publish", {
+    publication: { kind: "push_branch", remoteHeadOid: OID_B },
+  });
+  state = step(state, "integrate_intent");
+  state = observe(state, "integrate_observed", "integrate", {
+    baseOid: OID_A,
+    controllerFencingToken: "fence-1",
+    headOid: OID_B,
+    integrationOid: OID_C,
+    treeOid: OID_C,
+  });
+  state = step(state, "reservation_release_intent");
+  state = observe(state, "reservation_released", "reservation_release");
+  assert.equal(state.gate?.targetPromises.length, 1);
+  const resolution = state.gate?.targets[0]?.resolution;
+  assert.ok(resolution !== undefined);
+  state = transition(
+    state,
+    {
+      eventId: `resolve-${state.revision}`,
+      expectedRevision: state.revision,
+      gateEntryId: resolution.gateEntryId,
+      idempotencyKey: deriveIdempotencyKey(
+        state,
+        state.revision,
+        null,
+        "materialisation_resolve",
+        resolution.gateEntryId,
+      ),
+      type: "materialisation_resolve_intent",
+      unitId: null,
+    },
+    reduce,
+  );
+  state = transition(
+    state,
+    {
+      effectId: `resolve-${state.revision - 1}:materialisation_resolve`,
+      effectKind: "materialisation_resolve",
+      eventId: `resolved-${state.revision}`,
+      expectedRevision: state.revision,
+      gateEntryId: resolution.gateEntryId,
+      observationHash: HASH,
+      result: {
+        sources: [
+          {
+            blobOid: OID_B,
+            byteCount: 4,
+            path: "docs/file.md",
+            sha256: HASH,
+          },
+        ],
+        status: "observed",
+      },
+      type: "materialisation_sources_observed",
+      unitId: null,
+    },
+    reduce,
+  );
+  const probe = state.gate?.destinationProbes[0];
+  assert.ok(probe !== undefined);
+  assert.notDeepEqual(
+    runInvariantErrors({
+      ...state,
+      gate: { ...state.gate!, destinationProbes: [] },
+    }),
+    [],
+  );
+  const alias = state.knowledgeContract!.aliases[0]!;
+  const orphanSubpath = "orphan";
+  const orphanProbe = {
+    destinationAlias: alias.alias,
+    destinationSubpath: orphanSubpath,
+    gateEntryId: deriveGateEntryId(
+      state.controller.runId,
+      state.gate!.waveId,
+      "unit-destination-probe",
+      { destination: alias, destinationSubpath: orphanSubpath },
+    ),
+    stage: "unit" as const,
+    status: "pending" as const,
+  };
+  assert.notDeepEqual(
+    runInvariantErrors({
+      ...state,
+      gate: {
+        ...state.gate!,
+        destinationProbes: [...state.gate!.destinationProbes, orphanProbe],
+      },
+    }),
+    [],
+  );
+  const target = state.gate!.targets[0]!;
+  const wrongSourceOid = OID_A;
+  const wrongResolutionId = deriveGateEntryId(
+    state.controller.runId,
+    state.gate!.waveId,
+    "unit-resolve",
+    { sourceOid: wrongSourceOid, targetId: target.definition.targetId },
+  );
+  const wrongMaterialisations = target.materialisations.map((item) => ({
+    ...item,
+    gateEntryId: deriveGateEntryId(
+      state.controller.runId,
+      state.gate!.waveId,
+      "unit-materialise",
+      {
+        blobOid: item.source.blobOid,
+        destinationProbeGateEntryId: item.destinationProbeGateEntryId,
+        path: item.source.path,
+        sourceOid: wrongSourceOid,
+        targetId: item.targetId,
+      },
+    ),
+    sourceOid: wrongSourceOid,
+  }));
+  assert.ok(
+    runInvariantErrors({
+      ...state,
+      gate: {
+        ...state.gate!,
+        targets: [
+          {
+            ...target,
+            materialisations: wrongMaterialisations,
+            resolution: {
+              ...target.resolution!,
+              gateEntryId: wrongResolutionId,
+              sourceOid: wrongSourceOid,
+            },
+          },
+        ],
+      },
+    }).some((error) => error.includes("lacks authoritative source")),
+  );
+  assert.ok(
+    runInvariantErrors({
+      ...state,
+      gate: {
+        ...state.gate!,
+        targets: [
+          {
+            ...target,
+            resolution: {
+              ...target.resolution!,
+              sources: target.resolution!.sources!.map((source) => ({
+                ...source,
+                path: "outside/not-matched.txt",
+              })),
+            },
+          },
+        ],
+      },
+    }).some((error) => error.includes("observed resolution")),
+  );
+  assert.ok(
+    runInvariantErrors({
+      ...state,
+      gate: {
+        ...state.gate!,
+        targets: [
+          {
+            ...target,
+            resolution: {
+              ...target.resolution!,
+              capacities: {
+                ...target.resolution!.capacities!,
+                remainingItemCapacity: 0,
+              },
+            },
+          },
+        ],
+      },
+    }).some((error) => error.includes("observed resolution")),
+  );
+  state = transition(
+    state,
+    {
+      eventId: `probe-${state.revision}`,
+      expectedRevision: state.revision,
+      gateEntryId: probe.gateEntryId,
+      idempotencyKey: deriveIdempotencyKey(
+        state,
+        state.revision,
+        null,
+        "destination_probe",
+        probe.gateEntryId,
+      ),
+      type: "destination_probe_intent",
+      unitId: null,
+    },
+    reduce,
+  );
+  state = transition(
+    state,
+    {
+      effectId: `probe-${state.revision - 1}:destination_probe`,
+      effectKind: "destination_probe",
+      eventId: `probed-${state.revision}`,
+      expectedRevision: state.revision,
+      gateEntryId: probe.gateEntryId,
+      observationHash: HASH,
+      result: {
+        refusal: { code: "optional_alias_unmounted", detailHash: HASH },
+        status: "refused",
+      },
+      type: "destination_probe_observed",
+      unitId: null,
+    },
+    reduce,
+  );
+  assert.equal(state.gate?.targetPromises.length, 1);
+  assert.equal(state.gate?.targets[0]?.status, "voided");
+  assert.equal(state.gate?.targets[0]?.resolution?.status, "observed");
+  assert.equal(state.gate?.targets[0]?.materialisations[0]?.status, "voided");
+  assert.equal(state.gate?.destinationProbes[0]?.status, "voided");
+  assert.equal(
+    state.gate?.destinationProbes[0]?.lastRefusal?.code,
+    "optional_alias_unmounted",
+  );
+  assert.deepEqual(runInvariantErrors(state), []);
+  assert.ok(
+    runInvariantErrors({
+      ...state,
+      knowledgeContract: {
+        ...state.knowledgeContract!,
+        aliases: state.knowledgeContract!.aliases.map((item) => ({
+          ...item,
+          mountPolicy: "required" as const,
+        })),
+      },
+    }).some((error) => error.includes("contradicts mount policy")),
+  );
+  const provenanceTarget =
+    state.gate?.provenance?.projectionInputSnapshot.targetEvidence[0];
+  assert.ok(provenanceTarget);
+  assert.ok(
+    runInvariantErrors({
+      ...state,
+      gate: {
+        ...state.gate!,
+        provenance: {
+          ...state.gate!.provenance!,
+          projectionInputSnapshot: {
+            ...state.gate!.provenance!.projectionInputSnapshot,
+            targetEvidence: [
+              {
+                ...provenanceTarget,
+                materialisations: provenanceTarget.materialisations.map(
+                  (item) => ({
+                    ...item,
+                    source: { ...item.source, blobOid: "e".repeat(64) },
+                  }),
+                ),
+              },
+            ],
+          },
+        },
+      },
+    }).some((error) => error.includes("OID incompatible")),
+  );
+  const provenance = state.gate!.provenance!;
+  state = transition(
+    state,
+    {
+      eventId: `provenance-clock-${state.revision}`,
+      expectedRevision: state.revision,
+      gateEntryId: provenance.gateEntryId,
+      timestamp: "2026-09-03T12:00:00Z",
+      type: "gate_clock_observed",
+      unitId: null,
+    },
+    reduce,
+  );
+  const provenanceIntentRevision = state.revision;
+  const provenanceIntentEventId = `provenance-intent-${state.revision}`;
+  state = transition(
+    state,
+    {
+      eventId: provenanceIntentEventId,
+      expectedRevision: state.revision,
+      gateEntryId: provenance.gateEntryId,
+      idempotencyKey: deriveIdempotencyKey(
+        state,
+        state.revision,
+        null,
+        "provenance_commit",
+        provenance.gateEntryId,
+      ),
+      type: "provenance_commit_intent",
+      unitId: null,
+    },
+    reduce,
+  );
+  state = transition(
+    state,
+    {
+      effectId: `${provenanceIntentEventId}:provenance_commit`,
+      effectKind: "provenance_commit",
+      eventId: `provenance-observed-${state.revision}`,
+      expectedRevision: state.revision,
+      gateEntryId: provenance.gateEntryId,
+      observationHash: HASH,
+      result: {
+        attemptedBaseOid: OID_C,
+        commitOid: OID_B,
+        status: "committed",
+        treeOid: OID_C,
+      },
+      type: "provenance_commit_observed",
+      unitId: null,
+    },
+    reduce,
+  );
+  assert.equal(state.revision, provenanceIntentRevision + 2);
+  const aggregateVerify = state.gate!.aggregateVerify!;
+  const verifyEventId = `aggregate-verify-${state.revision}`;
+  state = transition(
+    state,
+    {
+      commands: contract.combinedVerificationCommands,
+      eventId: verifyEventId,
+      expectedRevision: state.revision,
+      gateEntryId: aggregateVerify.gateEntryId,
+      idempotencyKey: deriveIdempotencyKey(
+        state,
+        state.revision,
+        null,
+        "verify",
+        aggregateVerify.gateEntryId,
+      ),
+      type: "verification_intent",
+      unitId: null,
+    },
+    reduce,
+  );
+  state = transition(
+    state,
+    {
+      baseOid: OID_C,
+      effectId: `${verifyEventId}:verify`,
+      effectKind: "verify",
+      eventId: `aggregate-verified-${state.revision}`,
+      expectedRevision: state.revision,
+      gateEntryId: aggregateVerify.gateEntryId,
+      headOid: OID_B,
+      observationHash: HASH,
+      treeOid: OID_C,
+      type: "verification_observed",
+      unitId: null,
+    },
+    reduce,
+  );
+  const gateTarget = state.gate!.targets.find(
+    (target) => target.definition.scope === "gate",
+  );
+  assert.ok(gateTarget?.resolution);
+  const forgedGateSource = {
+    ...gateTarget,
+    resolution: {
+      ...gateTarget.resolution,
+      gateEntryId: deriveGateEntryId(
+        state.controller.runId,
+        state.gate!.waveId,
+        "gate-resolve",
+        { sourceOid: OID_A, targetId: gateTarget.definition.targetId },
+      ),
+      sourceOid: OID_A,
+    },
+  };
+  assert.ok(
+    runInvariantErrors({
+      ...state,
+      gate: {
+        ...state.gate!,
+        targets: state.gate!.targets.map((target) =>
+          target.definition.targetId === gateTarget.definition.targetId
+            ? forgedGateSource
+            : target,
+        ),
+      },
+    }).some((error) => error.includes("lacks authoritative source")),
+  );
+});
+
+test("required shared-probe and evidence-budget deferrals preserve exact upstream evidence", () => {
+  const targetA = {
+    destinationAlias: "drive",
+    destinationSubpath: "published",
+    namingPolicy: "source-basename" as const,
+    sidecarRequired: true as const,
+    sourcePattern: "docs/a*.md",
+  };
+  const targetB = { ...targetA, sourcePattern: "docs/b*.md" };
+  const contract = knowledgeContract();
+  let state = landedKnowledgeRun(contract, [targetA, targetB]);
+  for (const target of state.gate!.targets) {
+    const resolution = target.resolution!;
+    state = gateIntent(
+      state,
+      "materialisation_resolve_intent",
+      "materialisation_resolve",
+      resolution.gateEntryId,
+    );
+    state = gateObservation(
+      state,
+      "materialisation_sources_observed",
+      resolution.gateEntryId,
+      {
+        result: {
+          sources: [
+            {
+              blobOid: OID_B,
+              byteCount: 4,
+              path:
+                target.definition.target.sourcePattern === "docs/a*.md"
+                  ? "docs/a.md"
+                  : "docs/b.md",
+              sha256: HASH,
+            },
+          ],
+          status: "observed",
+        },
+      },
+    );
+  }
+  assert.equal(state.gate!.destinationProbes.length, 1);
+  const probe = state.gate!.destinationProbes[0]!;
+  state = gateIntent(
+    state,
+    "destination_probe_intent",
+    "destination_probe",
+    probe.gateEntryId,
+  );
+  state = gateObservation(
+    state,
+    "destination_probe_observed",
+    probe.gateEntryId,
+    {
+      result: {
+        refusal: { code: "required_alias_unmounted", detailHash: HASH },
+        status: "refused",
+      },
+    },
+  );
+  const refusedProbe = state;
+  let retriedProbe = gateIntent(
+    refusedProbe,
+    "destination_probe_intent",
+    "destination_probe",
+    probe.gateEntryId,
+  );
+  retriedProbe = gateObservation(
+    retriedProbe,
+    "destination_probe_observed",
+    probe.gateEntryId,
+    {
+      result: {
+        identity: {
+          canonicalPath: "/mnt/knowledge-drive/published",
+          device: "1",
+          inode: "2",
+        },
+        status: "observed",
+      },
+    },
+  );
+  assert.equal(retriedProbe.gate!.destinationProbes[0]!.status, "observed");
+  assert.equal(retriedProbe.gate!.destinationProbes[0]!.lastRefusal, undefined);
+  assert.deepEqual(runInvariantErrors(retriedProbe), []);
+  state = transition(
+    state,
+    {
+      eventId: "defer-required-shared-probe",
+      expectedRevision: state.revision,
+      followUpBeadId: "follow-up-shared-probe",
+      gateEntryId: probe.gateEntryId,
+      type: "gate_entry_deferred",
+      unitId: null,
+    },
+    reduce,
+  );
+  assert.equal(state.gate!.destinationProbes[0]!.status, "voided");
+  assert.equal(
+    state.gate!.destinationProbes[0]!.disposition,
+    "deferred_by_controller",
+  );
+  assert.equal(
+    state.gate!.targets.every(
+      (target) =>
+        target.status === "voided" &&
+        target.resolution?.status === "observed" &&
+        target.materialisations.every(
+          (item) =>
+            item.status === "voided" && item.disposition === "deferral_cascade",
+        ),
+    ),
+    true,
+  );
+  assert.deepEqual(runInvariantErrors(state), []);
+
+  let budget = landedKnowledgeRun(contract, targetA);
+  const resolution = budget.gate!.targets[0]!.resolution!;
+  budget = gateIntent(
+    budget,
+    "materialisation_resolve_intent",
+    "materialisation_resolve",
+    resolution.gateEntryId,
+  );
+  budget = gateObservation(
+    budget,
+    "materialisation_sources_observed",
+    resolution.gateEntryId,
+    {
+      result: {
+        refusal: { code: "evidence_budget_exceeded", detailHash: HASH },
+        status: "refused",
+      },
+    },
+  );
+  const refusedResolution = budget;
+  let retriedResolution = gateIntent(
+    refusedResolution,
+    "materialisation_resolve_intent",
+    "materialisation_resolve",
+    resolution.gateEntryId,
+  );
+  retriedResolution = gateObservation(
+    retriedResolution,
+    "materialisation_sources_observed",
+    resolution.gateEntryId,
+    {
+      result: {
+        sources: [
+          {
+            blobOid: OID_B,
+            byteCount: 4,
+            path: "docs/a.md",
+            sha256: HASH,
+          },
+        ],
+        status: "observed",
+      },
+    },
+  );
+  assert.equal(
+    retriedResolution.gate!.targets[0]!.resolution!.lastRefusal,
+    undefined,
+  );
+  assert.deepEqual(runInvariantErrors(retriedResolution), []);
+  budget = transition(
+    budget,
+    {
+      eventId: "defer-budget-refusal",
+      expectedRevision: budget.revision,
+      followUpBeadId: "follow-up-budget",
+      gateEntryId: resolution.gateEntryId,
+      type: "gate_entry_deferred",
+      unitId: null,
+    },
+    reduce,
+  );
+  assert.equal(budget.gate!.targets[0]!.resolution!.status, "voided");
+  assert.equal(
+    budget.gate!.targets[0]!.resolution!.disposition,
+    "deferred_by_controller",
+  );
+  assert.deepEqual(runInvariantErrors(budget), []);
+});
+
+test("final-name collisions carry exact witnesses and permit deterministic retry or deferral", () => {
+  const target = {
+    destinationAlias: "drive",
+    destinationSubpath: "published",
+    namingPolicy: "source-basename" as const,
+    sidecarRequired: true as const,
+    sourcePattern: "docs/a*/r*.md",
+  };
+  let state = landedKnowledgeRun(knowledgeContract(), target);
+  const resolution = state.gate!.targets[0]!.resolution!;
+  state = gateIntent(
+    state,
+    "materialisation_resolve_intent",
+    "materialisation_resolve",
+    resolution.gateEntryId,
+  );
+  state = gateObservation(
+    state,
+    "materialisation_sources_observed",
+    resolution.gateEntryId,
+    {
+      result: {
+        sources: [
+          {
+            blobOid: OID_B,
+            byteCount: 4,
+            path: "docs/a/report.md",
+            sha256: HASH,
+          },
+          {
+            blobOid: OID_B,
+            byteCount: 4,
+            path: "docs/ab/report.md",
+            sha256: HASH,
+          },
+          {
+            blobOid: OID_B,
+            byteCount: 4,
+            path: "docs/ac/record.md",
+            sha256: HASH,
+          },
+        ],
+        status: "observed",
+      },
+    },
+  );
+  const probe = state.gate!.destinationProbes[0]!;
+  state = gateIntent(
+    state,
+    "destination_probe_intent",
+    "destination_probe",
+    probe.gateEntryId,
+  );
+  state = gateObservation(
+    state,
+    "destination_probe_observed",
+    probe.gateEntryId,
+    {
+      result: {
+        identity: {
+          canonicalPath: "/mnt/knowledge-drive/published",
+          device: "1",
+          inode: "2",
+        },
+        status: "observed",
+      },
+    },
+  );
+  const ids = state
+    .gate!.targets[0]!.materialisations.map((item) => item.gateEntryId)
+    .sort(compareProtocolText);
+  for (const gateEntryId of ids)
+    state = transition(
+      state,
+      {
+        eventId: `collision-clock-${state.revision}`,
+        expectedRevision: state.revision,
+        gateEntryId,
+        timestamp: "2026-09-03T12:00:00Z",
+        type: "gate_clock_observed",
+        unitId: null,
+      },
+      reduce,
+    );
+  const collided = state;
+  const collidedItems = collided.gate!.targets[0]!.materialisations.filter(
+    (item) => item.source.path.endsWith("/report.md"),
+  );
+  const collisionIds = collidedItems
+    .map((item) => item.gateEntryId)
+    .sort(compareProtocolText);
+  const uniqueItem = collided.gate!.targets[0]!.materialisations.find((item) =>
+    item.source.path.endsWith("/record.md"),
+  );
+  assert.ok(uniqueItem);
+  assert.equal(uniqueItem.lastRefusal, undefined);
+  for (const item of collidedItems) {
+    assert.equal(item.lastRefusal?.code, "output_name_collision");
+    if (item.lastRefusal?.code === "output_name_collision")
+      assert.equal(
+        item.lastRefusal.conflictingGateEntryId,
+        collisionIds.find((id) => id !== item.gateEntryId),
+      );
+  }
+  assert.equal(
+    reduce(collided, {
+      eventId: "blocked-unique-materialise",
+      expectedRevision: collided.revision,
+      gateEntryId: uniqueItem.gateEntryId,
+      idempotencyKey: deriveIdempotencyKey(
+        collided,
+        collided.revision,
+        null,
+        "materialise",
+        uniqueItem.gateEntryId,
+      ),
+      type: "materialise_intent",
+      unitId: null,
+    }).ok,
+    false,
+  );
+  assert.deepEqual(runInvariantErrors(collided), []);
+
+  let retried = collided;
+  const retryOrder = [
+    collisionIds[0]!,
+    ...ids.filter((gateEntryId) => gateEntryId !== collisionIds[0]),
+  ];
+  for (const [index, gateEntryId] of retryOrder.entries())
+    retried = transition(
+      retried,
+      {
+        eventId: `retry-clock-${retried.revision}`,
+        expectedRevision: retried.revision,
+        gateEntryId,
+        timestamp: `2026-09-03T12:00:0${index + 1}Z`,
+        type: "gate_clock_observed",
+        unitId: null,
+      },
+      reduce,
+    );
+  const retryItems = retried.gate!.targets[0]!.materialisations;
+  assert.equal(
+    retryItems.every((item) => item.lastRefusal === undefined),
+    true,
+  );
+  assert.equal(new Set(retryItems.map((item) => item.artifactName)).size, 3);
+  assert.deepEqual(runInvariantErrors(retried), []);
+
+  const deferred = transition(
+    collided,
+    {
+      eventId: "defer-collision",
+      expectedRevision: collided.revision,
+      followUpBeadId: "follow-up-collision",
+      gateEntryId: collisionIds[0]!,
+      type: "gate_entry_deferred",
+      unitId: null,
+    },
+    reduce,
+  );
+  assert.equal(
+    deferred.gate!.targets[0]!.materialisations.find(
+      (item) => item.gateEntryId === collisionIds[0],
+    )!.status,
+    "voided",
+  );
+  assert.equal(
+    deferred.gate!.targets[0]!.materialisations.find(
+      (item) => item.gateEntryId === collisionIds[1],
+    )!.status,
+    "pending",
+  );
+  assert.deepEqual(runInvariantErrors(deferred), []);
+});
+
+test("a later unit wave refuses an exact final-name collision with carried output evidence", () => {
+  const target = {
+    destinationAlias: "drive",
+    destinationSubpath: "published",
+    namingPolicy: "source-basename" as const,
+    sidecarRequired: true as const,
+    sourcePattern: "docs/report.md",
+  };
+  const contract = knowledgeContract();
+  const prior = completeKnowledgeTarget(
+    landedKnowledgeRun(contract, target),
+    "docs/report.md",
+    "2026-09-03T12:00:00Z",
+  );
+  const snapshot = prior.gate!.provenance!.projectionInputSnapshot;
+  const carriedMaterialisation =
+    snapshot.targetEvidence[0]!.materialisations[0]!;
+
+  const fresh = run([unit("unit-2")]);
+  const initial = { ...fresh, wave: { id: "wave-0", unitIds: [] } };
+  const claim = carryClaimEvents(initial, snapshot, [], "cross-wave-name");
+  let state = transition(initial, claim.intent, reduce);
+  state = transition(state, claim.observation, reduce);
+  const task = {
+    ...state.units["unit-2"]!.taskMetadata!,
+    materialisationTargets: [target],
+  };
+  state = transition(
+    state,
+    {
+      eventId: "cross-wave-plan",
+      expectedRevision: state.revision,
+      knowledgeContract: contract,
+      tasks: [task],
+      type: "wave_planned",
+      waveId: "cross-wave-current",
+    },
+    reduce,
+  );
+  state = approvedCandidate(
+    "integrate",
+    "remote-ff",
+    "remote-integration",
+    state,
+  );
+  state = stepUnit(state, "unit-2", "publish_intent");
+  state = observeUnit(state, "unit-2", "publish_observed", "publish", {
+    publication: { kind: "push_branch", remoteHeadOid: OID_B },
+  });
+  state = stepUnit(state, "unit-2", "integrate_intent");
+  state = observeUnit(state, "unit-2", "integrate_observed", "integrate", {
+    baseOid: OID_A,
+    controllerFencingToken: "fence-1",
+    headOid: OID_B,
+    integrationOid: OID_C,
+    treeOid: OID_C,
+  });
+  state = stepUnit(state, "unit-2", "reservation_release_intent");
+  state = observeUnit(
+    state,
+    "unit-2",
+    "reservation_released",
+    "reservation_release",
+  );
+
+  const resolution = state.gate!.targets[0]!.resolution!;
+  state = gateIntent(
+    state,
+    "materialisation_resolve_intent",
+    "materialisation_resolve",
+    resolution.gateEntryId,
+  );
+  state = gateObservation(
+    state,
+    "materialisation_sources_observed",
+    resolution.gateEntryId,
+    {
+      result: {
+        sources: [
+          {
+            blobOid: OID_B,
+            byteCount: 4,
+            path: "docs/report.md",
+            sha256: HASH,
+          },
+        ],
+        status: "observed",
+      },
+    },
+  );
+  const probe = state.gate!.destinationProbes[0]!;
+  state = gateIntent(
+    state,
+    "destination_probe_intent",
+    "destination_probe",
+    probe.gateEntryId,
+  );
+  state = gateObservation(
+    state,
+    "destination_probe_observed",
+    probe.gateEntryId,
+    {
+      result: {
+        identity: {
+          canonicalPath: "/mnt/knowledge-drive/published",
+          device: "1",
+          inode: "2",
+        },
+        status: "observed",
+      },
+    },
+  );
+  const current = state.gate!.targets[0]!.materialisations[0]!;
+  state = transition(
+    state,
+    {
+      eventId: "cross-wave-clock",
+      expectedRevision: state.revision,
+      gateEntryId: current.gateEntryId,
+      timestamp: "2026-09-03T12:00:00Z",
+      type: "gate_clock_observed",
+      unitId: null,
+    },
+    reduce,
+  );
+  const refused = state.gate!.targets[0]!.materialisations[0]!;
+  assert.deepEqual(refused.lastRefusal, {
+    code: "output_name_collision",
+    conflictingGateEntryId: carriedMaterialisation.gateEntryId,
+  });
+  assert.deepEqual(runInvariantErrors(state), []);
+});
+
+test("all naming policies produce exact canonical final-name and sidecar vectors", () => {
+  const timestamp = "2026-09-03T12:34:56Z";
+  const expectedNames = {
+    "content-hash-suffix":
+      "my-report--dddddddddddd--bbbbbbbbbbbb--20260903T123456Z.md",
+    "iso-date-prefix":
+      "2026-09-03--my-report--bbbbbbbbbbbb--20260903T123456Z.md",
+    "source-basename": "my-report--bbbbbbbbbbbb--20260903T123456Z.md",
+  } as const;
+  const vectors: { name: string; policy: string; sidecarDigest: string }[] = [];
+  for (const policy of [
+    "source-basename",
+    "iso-date-prefix",
+    "content-hash-suffix",
+  ] as const) {
+    const target = {
+      destinationAlias: "drive",
+      destinationSubpath: "published",
+      namingPolicy: policy,
+      sidecarRequired: true as const,
+      sourcePattern: "docs/My_report.MD",
+    };
+    const state = clockKnowledgeTarget(
+      landedKnowledgeRun(knowledgeContract(), target),
+      "docs/My_report.MD",
+      timestamp,
+    );
+    const item = state.gate!.targets[0]!.materialisations[0]!;
+    assert.equal(item.artifactName, expectedNames[policy]);
+    assert.equal(
+      item.sidecarName,
+      `${expectedNames[policy]}.sce-provenance.json`,
+    );
+    const intent = reduce(state, {
+      eventId: `naming-${policy}`,
+      expectedRevision: state.revision,
+      gateEntryId: item.gateEntryId,
+      idempotencyKey: deriveIdempotencyKey(
+        state,
+        state.revision,
+        null,
+        "materialise",
+        item.gateEntryId,
+      ),
+      type: "materialise_intent",
+      unitId: null,
+    });
+    assert.equal(intent.ok, true);
+    if (!intent.ok) continue;
+    const effect = intent.effects[0]!;
+    assert.equal(effect.kind, "materialise");
+    if (effect.kind !== "materialise") continue;
+    const parsed = JSON.parse(effect.params.sidecarBytes) as JsonValue;
+    assert.equal(effect.params.sidecarBytes, `${canonicalJson(parsed)}\n`);
+    assert.equal(
+      effect.params.sidecarSha256,
+      sha256(effect.params.sidecarBytes),
+    );
+    vectors.push({
+      name: effect.params.artifactName,
+      policy,
+      sidecarDigest: effect.params.sidecarSha256,
+    });
+  }
+  assert.deepEqual(vectors, [
+    {
+      name: expectedNames["source-basename"],
+      policy: "source-basename",
+      sidecarDigest:
+        "57e38286a59edaad3f6fb7442ef177ba2598a055ac0492283897b6198d7fb854",
+    },
+    {
+      name: expectedNames["iso-date-prefix"],
+      policy: "iso-date-prefix",
+      sidecarDigest:
+        "2bf8230a35bba75889ceff468db9e0d39f3dd6354e29edf2d7030f3be550d71a",
+    },
+    {
+      name: expectedNames["content-hash-suffix"],
+      policy: "content-hash-suffix",
+      sidecarDigest:
+        "3ffa95f34ac0556752c5c7c1ba247fda68da8dd492adf95255c99ad4367e0866",
+    },
+  ]);
+});
+
+test("handoff gates defer unit-target voiding to closure, preserve empty placeholders, and reject carry claims", () => {
+  const target = {
+    destinationAlias: "drive",
+    destinationSubpath: "published",
+    namingPolicy: "source-basename" as const,
+    sidecarRequired: true as const,
+    sourcePattern: "docs/report.md",
+  };
+  const base = run();
+  const initial = {
+    ...base,
+    authorityProfile: "push-branch" as const,
+    completionBoundary: "branch-handoff" as const,
+    integrationProfile: "none" as const,
+    wave: { id: "wave-0", unitIds: [] },
+  };
+  const task = {
+    ...initial.units["unit-1"]!.taskMetadata!,
+    materialisationTargets: [target],
+  };
+  let state = transition(
+    initial,
+    {
+      eventId: "handoff-knowledge-wave",
+      expectedRevision: initial.revision,
+      knowledgeContract: knowledgeContract(),
+      tasks: [task],
+      type: "wave_planned",
+      waveId: "handoff-knowledge",
+    },
+    reduce,
+  );
+  assert.equal(state.gate!.targetPromises[0]!.status, "pending");
+  assert.equal(state.gate!.provenancePromise?.disposition, "handoff_boundary");
+  state = approvedCandidate("push-branch", "none", "branch-handoff", state);
+  state = step(state, "publish_intent");
+  state = observe(state, "publish_observed", "publish", {
+    publication: { kind: "push_branch", remoteHeadOid: OID_B },
+  });
+  assert.equal(state.gate!.targetPromises[0]!.status, "voided");
+  assert.equal(state.gate!.targetPromises[0]!.disposition, "handoff_boundary");
+  state = step(state, "reservation_release_intent");
+  state = observe(state, "reservation_released", "reservation_release");
+  assert.equal(state.gate!.provenance, undefined);
+  assert.equal(state.gate!.provenancePromise?.disposition, "handoff_boundary");
+  assert.equal(
+    state.gate!.aggregateVerifyPromise?.disposition,
+    "handoff_boundary",
+  );
+  assert.deepEqual(runInvariantErrors(state), []);
+
+  const carryInitial = {
+    ...run([]),
+    authorityProfile: "push-branch" as const,
+    completionBoundary: "branch-handoff" as const,
+    integrationProfile: "none" as const,
+  };
+  const carryEvents = carryClaimEvents(
+    carryInitial,
+    carryProjection(["unit-carried"]),
+    [],
+    "handoff-carry",
+  );
+  assert.equal(reduce(carryInitial, carryEvents.intent).ok, false);
+});
+
+test("provenance refusals defer while only base advancement permits a rebound intent", () => {
+  const ready = landedKnowledgeRun(knowledgeContract(), []);
+  const provenance = ready.gate!.provenance!;
+  const clocked = transition(
+    ready,
+    {
+      eventId: "provenance-union-clock",
+      expectedRevision: ready.revision,
+      gateEntryId: provenance.gateEntryId,
+      timestamp: "2026-09-03T12:00:00Z",
+      type: "gate_clock_observed",
+      unitId: null,
+    },
+    reduce,
+  );
+  const intended = gateIntent(
+    clocked,
+    "provenance_commit_intent",
+    "provenance_commit",
+    provenance.gateEntryId,
+  );
+  const cases = [
+    {
+      attemptedCommitOid: OID_B,
+      attemptedTreeOid: OID_C,
+      reasonDigest: HASH,
+      status: "reproducibility_failed" as const,
+    },
+    {
+      condition: "unexpected_head" as const,
+      expectedBaseOid: OID_C,
+      observedHeadOid: null,
+      reasonDigest: HASH,
+      status: "worktree_refused" as const,
+    },
+    {
+      attemptedCommitOid: OID_B,
+      attemptedTreeOid: OID_C,
+      reasonDigest: HASH,
+      status: "integration_refused" as const,
+    },
+  ];
+  for (const [index, result] of cases.entries()) {
+    const refused = gateObservation(
+      intended,
+      "provenance_commit_observed",
+      provenance.gateEntryId,
+      { result },
+    );
+    const deferred = transition(
+      refused,
+      {
+        eventId: `defer-provenance-${index}`,
+        expectedRevision: refused.revision,
+        followUpBeadId: `follow-up-provenance-${index}`,
+        gateEntryId: provenance.gateEntryId,
+        type: "gate_entry_deferred",
+        unitId: null,
+      },
+      reduce,
+    );
+    assert.equal(deferred.gate!.provenance!.status, "voided");
+    assert.equal(
+      deferred.gate!.aggregateVerifyPromise?.disposition,
+      "deferral_cascade",
+    );
+    assert.deepEqual(runInvariantErrors(deferred), []);
+  }
+
+  const advanced = gateObservation(
+    intended,
+    "provenance_commit_observed",
+    provenance.gateEntryId,
+    {
+      result: {
+        advancedBaseOid: OID_A,
+        attemptedCommitOid: OID_B,
+        attemptedTreeOid: OID_C,
+        status: "base_advanced",
+      },
+    },
+  );
+  const rebound = gateIntent(
+    advanced,
+    "provenance_commit_intent",
+    "provenance_commit",
+    provenance.gateEntryId,
+  );
+  assert.equal(rebound.gate!.provenance!.baseOid, OID_A);
+  assert.equal(rebound.gate!.provenance!.lastRefusal, undefined);
+  assert.equal(rebound.effectJournal.at(-1)!.kind, "provenance_commit");
+  assert.deepEqual(runInvariantErrors(rebound), []);
+});
+
+test("keyed provenance and aggregate recovery converge before verify deferral cascades to gate targets", () => {
+  const contract = knowledgeContract();
+  contract.gateTargets = [
+    {
+      destinationAlias: "drive",
+      destinationSubpath: "rollup",
+      namingPolicy: "source-basename",
+      sidecarRequired: true,
+      sourcePattern: "knowledge/rollup.md",
+    },
+  ];
+  let state = landedKnowledgeRun(contract, []);
+  const provenance = state.gate!.provenance!;
+  state = transition(
+    state,
+    {
+      eventId: "recovery-provenance-clock",
+      expectedRevision: state.revision,
+      gateEntryId: provenance.gateEntryId,
+      timestamp: "2026-09-03T12:05:00Z",
+      type: "gate_clock_observed",
+      unitId: null,
+    },
+    reduce,
+  );
+  state = gateIntent(
+    state,
+    "provenance_commit_intent",
+    "provenance_commit",
+    provenance.gateEntryId,
+  );
+  const provenanceEffect = state.effectJournal.at(-1)!;
+  state = transition(
+    state,
+    {
+      effectId: provenanceEffect.effectId,
+      effectKind: provenanceEffect.kind,
+      eventId: "recovery-provenance-ambiguous",
+      expectedRevision: state.revision,
+      gateEntryId: provenance.gateEntryId,
+      observationHash: HASH,
+      type: "effect_ambiguous",
+      unitId: null,
+    },
+    reduce,
+  );
+  state = transition(
+    state,
+    {
+      effectId: provenanceEffect.effectId,
+      effectKind: provenanceEffect.kind,
+      eventId: "recovery-provenance-exact",
+      expectedRevision: state.revision,
+      gateEntryId: provenance.gateEntryId,
+      observationHash: HASH,
+      result: {
+        attemptedBaseOid: provenance.baseOid!,
+        commitOid: OID_B,
+        status: "committed",
+        treeOid: OID_C,
+      },
+      type: "provenance_commit_observed",
+      unitId: null,
+    },
+    reduce,
+  );
+  const aggregate = state.gate!.aggregateVerify!;
+  assert.equal(
+    state.gate!.targetPromises.some(
+      (target) => target.definition.scope === "gate",
+    ),
+    true,
+  );
+  state = gateIntent(
+    state,
+    "verification_intent",
+    "verify",
+    aggregate.gateEntryId,
+    { commands: contract.combinedVerificationCommands },
+  );
+  const verifyEffect = state.effectJournal.at(-1)!;
+  state = transition(
+    state,
+    {
+      effectId: verifyEffect.effectId,
+      effectKind: verifyEffect.kind,
+      eventId: "recovery-verify-ambiguous",
+      expectedRevision: state.revision,
+      gateEntryId: aggregate.gateEntryId,
+      observationHash: HASH,
+      type: "effect_ambiguous",
+      unitId: null,
+    },
+    reduce,
+  );
+  state = transition(
+    state,
+    {
+      baseOid: provenance.baseOid!,
+      effectId: verifyEffect.effectId,
+      effectKind: verifyEffect.kind,
+      eventId: "recovery-verify-failed",
+      expectedRevision: state.revision,
+      gateEntryId: aggregate.gateEntryId,
+      headOid: OID_B,
+      observationHash: HASH,
+      treeOid: OID_C,
+      type: "verification_failed",
+      unitId: null,
+    },
+    reduce,
+  );
+  state = transition(
+    state,
+    {
+      eventId: "defer-aggregate-verify",
+      expectedRevision: state.revision,
+      followUpBeadId: "follow-up-aggregate",
+      gateEntryId: aggregate.gateEntryId,
+      type: "gate_entry_deferred",
+      unitId: null,
+    },
+    reduce,
+  );
+  assert.equal(state.gate!.aggregateVerify!.status, "voided");
+  assert.equal(
+    state.gate!.targetPromises.find(
+      (target) => target.definition.scope === "gate",
+    )!.disposition,
+    "deferral_cascade",
+  );
+  assert.deepEqual(runInvariantErrors(state), []);
+});
+
+test("two knowledge waves retain exact uncommitted and committed membership without replaying the first wave", () => {
+  const first = unit("unit-1");
+  const secondBase = unit("unit-2");
+  const second = {
+    ...secondBase,
+    taskMetadata: {
+      ...secondBase.taskMetadata!,
+      dependencies: ["unit-1"],
+    },
+  };
+  const contract = knowledgeContract();
+  const base = run([first, second]);
+  let state = transition(
+    { ...base, wave: { id: "wave-0", unitIds: [] } },
+    {
+      eventId: "accounting-wave-one",
+      expectedRevision: base.revision,
+      knowledgeContract: contract,
+      tasks: [first.taskMetadata!, second.taskMetadata!],
+      type: "wave_planned",
+      waveId: "accounting-one",
+    },
+    reduce,
+  );
+  assert.deepEqual(state.gate!.originalUnitIds, ["unit-1"]);
+  state = approvedCandidate(
+    "integrate",
+    "remote-ff",
+    "remote-integration",
+    state,
+  );
+  state = stepUnit(state, "unit-1", "publish_intent");
+  state = observeUnit(state, "unit-1", "publish_observed", "publish", {
+    publication: { kind: "push_branch", remoteHeadOid: OID_B },
+  });
+  state = stepUnit(state, "unit-1", "integrate_intent");
+  state = observeUnit(state, "unit-1", "integrate_observed", "integrate", {
+    baseOid: OID_A,
+    controllerFencingToken: "fence-1",
+    headOid: OID_B,
+    integrationOid: OID_C,
+    treeOid: OID_C,
+  });
+  state = stepUnit(state, "unit-1", "reservation_release_intent");
+  state = observeUnit(
+    state,
+    "unit-1",
+    "reservation_released",
+    "reservation_release",
+  );
+  assert.deepEqual(
+    state.gate!.provenanceUnitAccounting.map((item) => [
+      item.unitId,
+      item.status,
+    ]),
+    [["unit-1", "uncommitted"]],
+  );
+  state = completeKnowledgeProvenance(state, "2026-09-03T12:10:00Z");
+  assert.equal(state.gate!.provenanceUnitAccounting[0]!.status, "committed");
+  assert.equal(
+    state.gate!.provenanceUnitAccounting[0]!.provenanceCommitOid,
+    OID_B,
+  );
+
+  state = transition(
+    state,
+    {
+      eventId: "accounting-wave-two",
+      expectedRevision: state.revision,
+      knowledgeContract: contract,
+      tasks: [state.units["unit-2"]!.taskMetadata!],
+      type: "wave_planned",
+      waveId: "accounting-two",
+    },
+    reduce,
+  );
+  assert.deepEqual(state.gate!.originalUnitIds, ["unit-2"]);
+  assert.equal(state.gate!.provenanceUnitAccounting.length, 0);
+  state = approvedCandidate(
+    "integrate",
+    "remote-ff",
+    "remote-integration",
+    state,
+  );
+  state = stepUnit(state, "unit-2", "publish_intent");
+  state = observeUnit(state, "unit-2", "publish_observed", "publish", {
+    publication: { kind: "push_branch", remoteHeadOid: OID_B },
+  });
+  state = stepUnit(state, "unit-2", "integrate_intent");
+  state = observeUnit(state, "unit-2", "integrate_observed", "integrate", {
+    baseOid: OID_A,
+    controllerFencingToken: "fence-1",
+    headOid: OID_B,
+    integrationOid: OID_C,
+    treeOid: OID_C,
+  });
+  state = stepUnit(state, "unit-2", "reservation_release_intent");
+  state = observeUnit(
+    state,
+    "unit-2",
+    "reservation_released",
+    "reservation_release",
+  );
+  assert.deepEqual(
+    state.gate!.provenanceUnitAccounting.map((item) => [
+      item.unitId,
+      item.status,
+    ]),
+    [["unit-2", "uncommitted"]],
+  );
+  state = completeKnowledgeProvenance(state, "2026-09-03T12:11:00Z");
+  assert.deepEqual(
+    state.gate!.provenanceUnitAccounting.map((item) => [
+      item.unitId,
+      item.status,
+      item.status === "committed" ? item.provenanceCommitOid : undefined,
+    ]),
+    [["unit-2", "committed", OID_B]],
+  );
+  assert.deepEqual(runInvariantErrors(state), []);
+});
+
+test("knowledge gates run resolve, probe, publish, provenance, verify, and gate targets in order", () => {
+  const target = (subpath: string, pattern: string) => ({
+    destinationAlias: "drive",
+    destinationSubpath: subpath,
+    namingPolicy: "source-basename" as const,
+    sidecarRequired: true as const,
+    sourcePattern: pattern,
+  });
+  const contract = knowledgeContract();
+  contract.combinedVerificationCommands = [
+    ["npm", "run", "test:fast"],
+    ["npm", "run", "test:integration"],
+  ];
+  contract.gateTargets = [target("gate-published", "rollup/file*.md")];
+  let state = landedKnowledgeRun(
+    contract,
+    target("unit-published", "docs/file*.md"),
+  );
+
+  const completeTarget = (
+    current: RepositoryRun,
+    targetId: string,
+    path: string,
+    timestamp: string,
+  ): RepositoryRun => {
+    let next = current;
+    const resolution = next.gate!.targets.find(
+      (item) => item.definition.targetId === targetId,
+    )!.resolution!;
+    next = gateIntent(
+      next,
+      "materialisation_resolve_intent",
+      "materialisation_resolve",
+      resolution.gateEntryId,
+    );
+    const pending = next.effectJournal.at(-1)!;
+    assert.equal(
+      reduce(next, {
+        effectId: pending.effectId,
+        effectKind: pending.kind,
+        eventId: `ambiguous-omitted-${next.revision}`,
+        expectedRevision: next.revision,
+        observationHash: HASH,
+        type: "effect_ambiguous",
+        unitId: null,
+      }).ok,
+      false,
+    );
+    assert.equal(
+      reduce(next, {
+        effectId: pending.effectId,
+        effectKind: pending.kind,
+        eventId: `ambiguous-wrong-${next.revision}`,
+        expectedRevision: next.revision,
+        gateEntryId: "wrong-gate-entry",
+        observationHash: HASH,
+        type: "effect_ambiguous",
+        unitId: null,
+      }).ok,
+      false,
+    );
+    assert.equal(
+      reduce(next, {
+        effectId: pending.effectId,
+        effectKind: pending.kind,
+        eventId: `ambiguous-exact-${next.revision}`,
+        expectedRevision: next.revision,
+        gateEntryId: resolution.gateEntryId,
+        observationHash: HASH,
+        type: "effect_ambiguous",
+        unitId: null,
+      }).ok,
+      true,
+    );
+    next = gateObservation(
+      next,
+      "materialisation_sources_observed",
+      resolution.gateEntryId,
+      {
+        result: {
+          sources: [{ blobOid: OID_B, byteCount: 4, path, sha256: HASH }],
+          status: "observed",
+        },
+      },
+    );
+    const sourceTarget = next.gate!.targets.find(
+      (item) => item.definition.targetId === targetId,
+    )!;
+    const probe = next.gate!.destinationProbes.find(
+      (item) =>
+        item.gateEntryId ===
+        sourceTarget.materialisations[0]!.destinationProbeGateEntryId,
+    )!;
+    assert.equal(
+      reduce(next, {
+        eventId: `pre-probe-clock-${next.revision}`,
+        expectedRevision: next.revision,
+        gateEntryId: sourceTarget.materialisations[0]!.gateEntryId,
+        timestamp,
+        type: "gate_clock_observed",
+        unitId: null,
+      }).ok,
+      false,
+    );
+    next = gateIntent(
+      next,
+      "destination_probe_intent",
+      "destination_probe",
+      probe.gateEntryId,
+    );
+    next = gateObservation(
+      next,
+      "destination_probe_observed",
+      probe.gateEntryId,
+      {
+        result: {
+          identity: {
+            canonicalPath: `/mnt/knowledge-drive/${sourceTarget.definition.target.destinationSubpath}`,
+            device: "1",
+            inode: sourceTarget.definition.scope === "unit" ? "2" : "3",
+          },
+          status: "observed",
+        },
+      },
+    );
+    const materialisation = next.gate!.targets.find(
+      (item) => item.definition.targetId === targetId,
+    )!.materialisations[0]!;
+    next = transition(
+      next,
+      {
+        eventId: `clock-${next.revision}`,
+        expectedRevision: next.revision,
+        gateEntryId: materialisation.gateEntryId,
+        timestamp,
+        type: "gate_clock_observed",
+        unitId: null,
+      },
+      reduce,
+    );
+    const named = next.gate!.targets.find(
+      (item) => item.definition.targetId === targetId,
+    )!.materialisations[0]!;
+    next = gateIntent(
+      next,
+      "materialise_intent",
+      "materialise",
+      named.gateEntryId,
+    );
+    next = gateObservation(next, "materialise_observed", named.gateEntryId, {
+      result: {
+        refusal: { code: "source_absent", detailHash: HASH },
+        status: "refused",
+      },
+    });
+    next = gateIntent(
+      next,
+      "materialise_intent",
+      "materialise",
+      named.gateEntryId,
+    );
+    next = gateObservation(next, "materialise_observed", named.gateEntryId, {
+      result: {
+        observation: {
+          artifactByteCount: named.source.byteCount,
+          artifactSha256: named.source.sha256,
+          artifactStatus: "published",
+          sidecarByteCount: named.sidecarByteCount,
+          sidecarSha256: named.sidecarSha256,
+          sidecarStatus: "published",
+        },
+        status: "observed",
+      },
+    });
+    return next;
+  };
+
+  const unitTargetId = state.gate!.targets.find(
+    (item) => item.definition.scope === "unit",
+  )!.definition.targetId;
+  state = completeTarget(
+    state,
+    unitTargetId,
+    "docs/file.md",
+    "2026-09-03T12:00:00Z",
+  );
+  const provenance = state.gate!.provenance!;
+  state = transition(
+    state,
+    {
+      eventId: "success-provenance-clock",
+      expectedRevision: state.revision,
+      gateEntryId: provenance.gateEntryId,
+      timestamp: "2026-09-03T12:00:01Z",
+      type: "gate_clock_observed",
+      unitId: null,
+    },
+    reduce,
+  );
+  state = gateIntent(
+    state,
+    "provenance_commit_intent",
+    "provenance_commit",
+    provenance.gateEntryId,
+  );
+  state = gateObservation(
+    state,
+    "provenance_commit_observed",
+    provenance.gateEntryId,
+    {
+      result: {
+        attemptedBaseOid: OID_C,
+        commitOid: OID_B,
+        status: "committed",
+        treeOid: OID_C,
+      },
+    },
+  );
+  const aggregate = state.gate!.aggregateVerify!;
+  assert.equal(
+    state.gate!.targetPromises.some((item) => item.definition.scope === "gate"),
+    true,
+  );
+  assert.equal(
+    reduce(state, {
+      commands: [...contract.combinedVerificationCommands].reverse(),
+      eventId: "aggregate-command-reordered",
+      expectedRevision: state.revision,
+      gateEntryId: aggregate.gateEntryId,
+      idempotencyKey: deriveIdempotencyKey(
+        state,
+        state.revision,
+        null,
+        "verify",
+        aggregate.gateEntryId,
+      ),
+      type: "verification_intent",
+      unitId: null,
+    }).ok,
+    false,
+  );
+  state = gateIntent(
+    state,
+    "verification_intent",
+    "verify",
+    aggregate.gateEntryId,
+    { commands: contract.combinedVerificationCommands },
+  );
+  state = gateObservation(
+    state,
+    "verification_observed",
+    aggregate.gateEntryId,
+    { baseOid: OID_C, headOid: OID_B, treeOid: OID_C },
+  );
+  const gateTargetId = state.gate!.targets.find(
+    (item) => item.definition.scope === "gate",
+  )!.definition.targetId;
+  state = completeTarget(
+    state,
+    gateTargetId,
+    "rollup/file.md",
+    "2026-09-03T12:00:02Z",
+  );
+  assert.equal(
+    state.gate!.targets.every((item) => item.status === "observed"),
+    true,
+  );
+  assert.deepEqual(runInvariantErrors(state), []);
+  assert.equal(
+    legalActions(state).some(
+      (action) =>
+        action.mode === "emit" && action.type === "controller_release_intent",
+    ),
+    true,
+  );
+});
 function effectId(state: RepositoryRun, kind: string): string {
   return `event-${state.revision}:${kind}`;
 }
@@ -91,51 +2532,247 @@ function observeUnit(
     ...fields,
   });
 }
-function completeCandidate(): RepositoryRun {
-  let state = run();
-  state = step(state, "reservation_intent", {
-    idempotencyKey: "reserve-1",
-    reservations: [{ id: "res-1", namespace: "port", resource: "3001" }],
+function completeCandidate(
+  initial: RepositoryRun = run(),
+  unitId = "unit-1",
+): RepositoryRun {
+  let state = initial;
+  const defaultUnit = unitId === "unit-1";
+  const reservationId = defaultUnit ? "res-1" : `res-${unitId}`;
+  const branchRef = `sce/${unitId}`;
+  const worktreePath = `/tmp/${unitId}`;
+  state = stepUnit(state, unitId, "reservation_intent", {
+    idempotencyKey: defaultUnit ? "reserve-1" : `reserve-${unitId}`,
+    reservations: [{ id: reservationId, namespace: "port", resource: "3001" }],
   });
-  state = observe(state, "reservation_observed", "reservation_acquire");
-  state = step(state, "branch_intent", {
-    idempotencyKey: "branch-1",
-    branchRef: "sce/unit-1",
+  state = observeUnit(
+    state,
+    unitId,
+    "reservation_observed",
+    "reservation_acquire",
+  );
+  state = stepUnit(state, unitId, "branch_intent", {
+    idempotencyKey: defaultUnit ? "branch-1" : `branch-${unitId}`,
+    branchRef,
   });
-  state = observe(state, "branch_observed", "branch_create", {
-    branchRef: "sce/unit-1",
+  state = observeUnit(state, unitId, "branch_observed", "branch_create", {
+    branchRef,
   });
-  state = step(state, "worktree_intent", {
-    idempotencyKey: "worktree-1",
-    worktreePath: "/tmp/unit-1",
+  state = stepUnit(state, unitId, "worktree_intent", {
+    idempotencyKey: defaultUnit ? "worktree-1" : `worktree-${unitId}`,
+    worktreePath,
   });
-  state = observe(state, "worktree_observed", "worktree_create", {
-    worktreePath: "/tmp/unit-1",
+  state = observeUnit(state, unitId, "worktree_observed", "worktree_create", {
+    worktreePath,
   });
-  state = step(state, "dispatch_intent", {
-    idempotencyKey: "dispatch-1",
+  state = stepUnit(state, unitId, "dispatch_intent", {
+    idempotencyKey: defaultUnit ? "dispatch-1" : `dispatch-${unitId}`,
   });
-  state = observe(state, "dispatch_observed", "dispatch", {
-    sessionId: "worker-1",
+  state = observeUnit(state, unitId, "dispatch_observed", "dispatch", {
+    sessionId: defaultUnit ? "worker-1" : `worker-${unitId}`,
     requestedModel: "workhorse",
     returnedModel: "workhorse-1",
     promptHash: HASH,
   });
-  state = step(state, "collect_intent", {
-    idempotencyKey: "collect-1",
+  state = stepUnit(state, unitId, "collect_intent", {
+    idempotencyKey: defaultUnit ? "collect-1" : `collect-${unitId}`,
   });
-  state = observe(state, "worker_collected", "worker_collect", {
+  state = observeUnit(state, unitId, "worker_collected", "worker_collect", {
     workerResult: { status: "completed", summary: "done", residualRisks: [] },
   });
-  state = step(state, "candidate_intent", {
-    idempotencyKey: "candidate-1",
+  state = stepUnit(state, unitId, "candidate_intent", {
+    idempotencyKey: defaultUnit ? "candidate-1" : `candidate-${unitId}`,
   });
-  state = observe(state, "candidate_observed", "candidate_collect", {
+  state = observeUnit(
+    state,
+    unitId,
+    "candidate_observed",
+    "candidate_collect",
+    {
+      headOid: OID_B,
+      treeOid: OID_C,
+    },
+  );
+  return state;
+}
+
+test("software verification state and legacy command wire remain byte-identical", () => {
+  const candidate = completeCandidate();
+  const verification = reduce(
+    candidate,
+    event(candidate, "verification_intent"),
+  );
+  assert.equal(verification.ok, true);
+  if (!verification.ok) return;
+  assert.equal(verification.effects.length, 1);
+  const effect = verification.effects[0]!;
+  assert.equal(effect.kind, "verify");
+  if (effect.kind !== "verify") return;
+  assert.deepEqual(effect.params.commands, ["npm test"]);
+  assert.equal(
+    sha256(canonicalJson(effect)),
+    "10c057c7aadc4b1d5c270148e1c509f88dc651731f0e6a891f9a14e5c065c0c8",
+  );
+  assert.equal(
+    sha256(
+      canonicalJson({
+        effects: verification.effects,
+        nextState: verification.nextState,
+      } as unknown as JsonValue),
+    ),
+    "448e0ce34d4fe1886b454998afff6c7afbd607b12689cef0f35c1d20969764d4",
+  );
+});
+
+test("software integrate and release trace preserves projection and recovery bytes", () => {
+  let state = run();
+  const trace: JsonValue[] = [];
+  const applySoftware = (input: ProtocolEvent) => {
+    const result = reduce(state, input);
+    if (!result.ok) assert.fail(`${result.code}: ${result.reason}`);
+    trace.push({
+      effects: result.effects,
+      event: input,
+      nextState: result.nextState,
+    } as unknown as JsonValue);
+    state = result.nextState;
+  };
+  const softwareStep = (
+    type: ProtocolEvent["type"],
+    fields: Record<string, unknown> = {},
+  ) => applySoftware(event(state, type, fields));
+  const softwareObserve = (
+    type: ProtocolEvent["type"],
+    kind: string,
+    fields: Record<string, unknown> = {},
+  ) =>
+    softwareStep(type, {
+      effectId: `event-${state.revision}:${kind}`,
+      effectKind: kind,
+      observationHash: HASH,
+      ...fields,
+    });
+
+  softwareStep("reservation_intent", {
+    reservations: [{ id: "res-1", namespace: "port", resource: "3001" }],
+  });
+  softwareObserve("reservation_observed", "reservation_acquire");
+  softwareStep("branch_intent", { branchRef: "sce/unit-1" });
+  softwareObserve("branch_observed", "branch_create", {
+    branchRef: "sce/unit-1",
+  });
+  softwareStep("worktree_intent", { worktreePath: "/tmp/unit-1" });
+  softwareObserve("worktree_observed", "worktree_create", {
+    worktreePath: "/tmp/unit-1",
+  });
+  softwareStep("dispatch_intent");
+  softwareObserve("dispatch_observed", "dispatch", {
+    promptHash: HASH,
+    requestedModel: "workhorse",
+    returnedModel: "workhorse-1",
+    sessionId: "worker-1",
+  });
+  softwareStep("collect_intent");
+  softwareObserve("worker_collected", "worker_collect", {
+    workerResult: { residualRisks: [], status: "completed", summary: "done" },
+  });
+  softwareStep("candidate_intent");
+  softwareObserve("candidate_observed", "candidate_collect", {
     headOid: OID_B,
     treeOid: OID_C,
   });
-  return state;
-}
+  softwareStep("verification_intent");
+  softwareObserve("verification_observed", "verify", {
+    baseOid: OID_A,
+    headOid: OID_B,
+    treeOid: OID_C,
+  });
+  softwareStep("reviewer_dispatch_intent");
+  softwareObserve("reviewer_observed", "review_dispatch", {
+    promptHash: HASH,
+    requestedModel: "frontier",
+    returnedModel: "frontier-1",
+    sessionId: "reviewer-approved",
+  });
+  softwareStep("review_collect_intent");
+  softwareObserve("review_collected", "review_collect", {
+    judgment: {
+      aggregateRevision: state.revision,
+      baseOid: OID_A,
+      decision: "approve",
+      findings: [],
+      headOid: OID_B,
+      kind: "review_verdict",
+      promptHash: HASH,
+      rationale: "approved exact pair",
+      requestedModel: "frontier",
+      responseHash: HASH,
+      returnedModel: "frontier-1",
+      role: "reviewer",
+      schemaVersion: 1,
+      sessionId: "reviewer-approved",
+      treeOid: OID_C,
+      unitId: "unit-1",
+    },
+  });
+  softwareStep("publish_intent");
+  softwareObserve("publish_observed", "publish", {
+    publication: { kind: "push_branch", remoteHeadOid: OID_B },
+  });
+  softwareStep("integrate_intent");
+  softwareObserve("integrate_observed", "integrate", {
+    baseOid: OID_A,
+    controllerFencingToken: "fence-1",
+    headOid: OID_B,
+    integrationOid: OID_C,
+    treeOid: OID_C,
+  });
+  softwareStep("reservation_release_intent");
+  softwareObserve("reservation_released", "reservation_release");
+  applySoftware({
+    eventId: `event-${state.revision + 1}`,
+    expectedRevision: state.revision,
+    idempotencyKey: deriveIdempotencyKey(
+      state,
+      state.revision,
+      null,
+      "controller_release",
+    ),
+    type: "controller_release_intent",
+  });
+  applySoftware({
+    effectId: `event-${state.revision}:controller_release`,
+    effectKind: "controller_release",
+    eventId: `event-${state.revision + 1}`,
+    expectedRevision: state.revision,
+    observationHash: HASH,
+    type: "controller_released",
+  });
+
+  const root = makeRootProjection(state);
+  const children = Object.keys(state.units).flatMap((unitId) => {
+    const child = makeChildProjection(root, unitId);
+    return child === undefined ? [] : [child];
+  });
+  assert.equal(state.knowledgeContract, undefined);
+  assert.equal(state.gate, undefined);
+  assert.equal(
+    sha256(canonicalJson(trace)),
+    "30b735cc99c78413fb3493bfdbb5012414b13b54a821139076fde4075e586643",
+  );
+  assert.equal(
+    sha256(canonicalJson(state as unknown as JsonValue)),
+    "ffce4ae3f112b3ef337fcfafcd1838cea77c926746bd3d725e091c1d6c2b3cdf",
+  );
+  assert.equal(
+    root.aggregateCommitment,
+    "4c1aa89cb6df0f4a6d9bd0d08723abf4f5c0bea7c0f06238540a6317776d5b80",
+  );
+  assert.equal(
+    sha256(canonicalJson({ children, root } as unknown as JsonValue)),
+    "1be33fae4fad80f5ecbc27b6cd018d846a08c28cf876231d4dd79d8b52095bde",
+  );
+});
 
 test("hydration binds persisted packets, verification, and reviewer diff metadata", () => {
   const legacy = run();
@@ -277,34 +2914,37 @@ function approvedCandidate(
         ? "pr-handoff"
         : "branch-handoff"
       : "remote-integration",
+  initial: RepositoryRun = run(),
 ): RepositoryRun {
+  const unitId = initial.wave.unitIds[0] ?? "unit-1";
   let state = {
-    ...completeCandidate(),
+    ...completeCandidate(initial, unitId),
     authorityProfile,
     completionBoundary,
     integrationProfile,
   };
-  state = step(state, "verification_intent", {});
-  state = observe(state, "verification_observed", "verify", {
+  state = stepUnit(state, unitId, "verification_intent", {});
+  state = observeUnit(state, unitId, "verification_observed", "verify", {
     baseOid: OID_A,
     headOid: OID_B,
     treeOid: OID_C,
   });
-  state = step(state, "reviewer_dispatch_intent", {});
-  state = observe(state, "reviewer_observed", "review_dispatch", {
-    sessionId: "reviewer-approved",
+  state = stepUnit(state, unitId, "reviewer_dispatch_intent", {});
+  state = observeUnit(state, unitId, "reviewer_observed", "review_dispatch", {
+    sessionId: unitId === "unit-1" ? "reviewer-approved" : `reviewer-${unitId}`,
     requestedModel: "frontier",
     returnedModel: "frontier-1",
     promptHash: HASH,
   });
-  state = step(state, "review_collect_intent", {});
-  return observe(state, "review_collected", "review_collect", {
+  state = stepUnit(state, unitId, "review_collect_intent", {});
+  return observeUnit(state, unitId, "review_collected", "review_collect", {
     judgment: {
       schemaVersion: 1,
       role: "reviewer",
       kind: "review_verdict",
-      unitId: "unit-1",
-      sessionId: "reviewer-approved",
+      unitId,
+      sessionId:
+        unitId === "unit-1" ? "reviewer-approved" : `reviewer-${unitId}`,
       requestedModel: "frontier",
       returnedModel: "frontier-1",
       aggregateRevision: state.revision,
@@ -318,6 +2958,206 @@ function approvedCandidate(
       findings: [],
     },
   });
+}
+
+type KnowledgeMaterialisationTarget = NonNullable<
+  NonNullable<
+    RepositoryRun["units"][string]["taskMetadata"]
+  >["materialisationTargets"]
+>[number];
+
+function landedKnowledgeRun(
+  contract: KnowledgeContract,
+  unitTarget:
+    KnowledgeMaterialisationTarget | readonly KnowledgeMaterialisationTarget[],
+): RepositoryRun {
+  const initial = run();
+  const task = {
+    ...initial.units["unit-1"]!.taskMetadata!,
+    materialisationTargets: Array.isArray(unitTarget)
+      ? [...unitTarget]
+      : [unitTarget],
+  };
+  const drained = { ...initial, wave: { id: "wave-0", unitIds: [] } };
+  let state = transition(
+    drained,
+    {
+      eventId: "knowledge-success-wave",
+      expectedRevision: drained.revision,
+      knowledgeContract: contract,
+      tasks: [task],
+      type: "wave_planned",
+      waveId: "knowledge-success",
+    },
+    reduce,
+  );
+  state = approvedCandidate(
+    "integrate",
+    "remote-ff",
+    "remote-integration",
+    state,
+  );
+  state = step(state, "publish_intent");
+  state = observe(state, "publish_observed", "publish", {
+    publication: { kind: "push_branch", remoteHeadOid: OID_B },
+  });
+  state = step(state, "integrate_intent");
+  state = observe(state, "integrate_observed", "integrate", {
+    baseOid: OID_A,
+    controllerFencingToken: "fence-1",
+    headOid: OID_B,
+    integrationOid: OID_C,
+    treeOid: OID_C,
+  });
+  state = step(state, "reservation_release_intent");
+  return observe(state, "reservation_released", "reservation_release");
+}
+
+function completeKnowledgeTarget(
+  initial: RepositoryRun,
+  path: string,
+  timestamp: string,
+): RepositoryRun {
+  let state = clockKnowledgeTarget(initial, path, timestamp);
+  const named = state.gate!.targets.find(
+    (candidate) => candidate.definition.scope === "unit",
+  )!.materialisations[0]!;
+  state = gateIntent(
+    state,
+    "materialise_intent",
+    "materialise",
+    named.gateEntryId,
+  );
+  return gateObservation(state, "materialise_observed", named.gateEntryId, {
+    result: {
+      observation: {
+        artifactByteCount: named.source.byteCount,
+        artifactSha256: named.source.sha256,
+        artifactStatus: "published",
+        sidecarByteCount: named.sidecarByteCount,
+        sidecarSha256: named.sidecarSha256,
+        sidecarStatus: "published",
+      },
+      status: "observed",
+    },
+  });
+}
+
+function clockKnowledgeTarget(
+  initial: RepositoryRun,
+  path: string,
+  timestamp: string,
+): RepositoryRun {
+  let state = initial;
+  const target = state.gate!.targets.find(
+    (candidate) => candidate.definition.scope === "unit",
+  )!;
+  const resolution = target.resolution!;
+  state = gateIntent(
+    state,
+    "materialisation_resolve_intent",
+    "materialisation_resolve",
+    resolution.gateEntryId,
+  );
+  state = gateObservation(
+    state,
+    "materialisation_sources_observed",
+    resolution.gateEntryId,
+    {
+      result: {
+        sources: [{ blobOid: OID_B, byteCount: 4, path, sha256: HASH }],
+        status: "observed",
+      },
+    },
+  );
+  const probe = state.gate!.destinationProbes[0]!;
+  state = gateIntent(
+    state,
+    "destination_probe_intent",
+    "destination_probe",
+    probe.gateEntryId,
+  );
+  state = gateObservation(
+    state,
+    "destination_probe_observed",
+    probe.gateEntryId,
+    {
+      result: {
+        identity: {
+          canonicalPath: `/mnt/knowledge-drive/${target.definition.target.destinationSubpath}`,
+          device: "1",
+          inode: "2",
+        },
+        status: "observed",
+      },
+    },
+  );
+  const item = state.gate!.targets[0]!.materialisations[0]!;
+  return transition(
+    state,
+    {
+      eventId: `complete-target-clock-${state.revision}`,
+      expectedRevision: state.revision,
+      gateEntryId: item.gateEntryId,
+      timestamp,
+      type: "gate_clock_observed",
+      unitId: null,
+    },
+    reduce,
+  );
+}
+
+function completeKnowledgeProvenance(
+  initial: RepositoryRun,
+  timestamp: string,
+): RepositoryRun {
+  let state = initial;
+  const provenance = state.gate!.provenance!;
+  state = transition(
+    state,
+    {
+      eventId: `complete-provenance-clock-${state.revision}`,
+      expectedRevision: state.revision,
+      gateEntryId: provenance.gateEntryId,
+      timestamp,
+      type: "gate_clock_observed",
+      unitId: null,
+    },
+    reduce,
+  );
+  state = gateIntent(
+    state,
+    "provenance_commit_intent",
+    "provenance_commit",
+    provenance.gateEntryId,
+  );
+  state = gateObservation(
+    state,
+    "provenance_commit_observed",
+    provenance.gateEntryId,
+    {
+      result: {
+        attemptedBaseOid: provenance.baseOid,
+        commitOid: OID_B,
+        status: "committed",
+        treeOid: OID_C,
+      },
+    },
+  );
+  const aggregate = state.gate!.aggregateVerify!;
+  state = gateIntent(
+    state,
+    "verification_intent",
+    "verify",
+    aggregate.gateEntryId,
+    { commands: state.knowledgeContract!.combinedVerificationCommands },
+  );
+  return gateObservation(
+    state,
+    "verification_observed",
+    aggregate.gateEntryId,
+    { baseOid: provenance.baseOid, headOid: OID_B, treeOid: OID_C },
+  );
 }
 
 function sessionLedger(...sessionIds: readonly string[]): string {

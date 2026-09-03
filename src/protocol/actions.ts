@@ -5,7 +5,7 @@ import {
   type Unit,
   validate,
 } from "./schemas.js";
-import { runInvariantErrors } from "./reducer.js";
+import { compareProtocolText, runInvariantErrors } from "./reducer.js";
 import { canEnterTerminalIntent } from "./guards.js";
 
 export interface ActionDescriptor {
@@ -14,6 +14,7 @@ export interface ActionDescriptor {
   readonly unitId?: string;
   readonly effectKind?: EffectKind;
   readonly effectId?: string;
+  readonly gateEntryId?: string;
 }
 
 /**
@@ -41,6 +42,7 @@ export function legalActions(
   if (state.controller.state !== "acquired") return [];
   if (
     state.wave.unitIds.length === 0 &&
+    gateGreen(state) &&
     Object.keys(state.units).length > 0 &&
     Object.values(state.units).every((unit) => unit.state === "planned")
   )
@@ -53,8 +55,9 @@ export function legalActions(
   )
     return [{ mode: "emit", type: "harness_configured" }];
 
-  return sortActions(
-    Object.values(state.units)
+  return sortActions([
+    ...actionsForGate(state),
+    ...Object.values(state.units)
       .filter((unit) => state.wave.unitIds.includes(unit.id))
       .flatMap((unit) => actionsForUnit(state, unit))
       .filter(
@@ -66,7 +69,197 @@ export function legalActions(
                 !hasUnresolvedUnitEffect(state, action.unitId)))) &&
           (action.mode !== "record" || pendingUnitEffect(state, action)),
       ),
+  ]);
+}
+
+function actionsForGate(state: RepositoryRun): readonly ActionDescriptor[] {
+  const gate = state.gate;
+  if (gate === undefined) return [];
+  const unresolved = state.effectJournal.find(
+    (entry) =>
+      entry.gateEntryId !== undefined &&
+      (entry.status === "intended" || entry.status === "ambiguous"),
   );
+  if (unresolved?.gateEntryId !== undefined)
+    return observationsForEffect[unresolved.kind].map((type) => ({
+      effectId: unresolved.effectId,
+      effectKind: unresolved.kind,
+      gateEntryId: unresolved.gateEntryId!,
+      mode: "record" as const,
+      type,
+    }));
+  const targets = gate.targets;
+  const resolution = targets
+    .filter(
+      (target) =>
+        (target.definition.scope === "unit" &&
+          state.wave.unitIds.length === 0) ||
+        (target.definition.scope === "gate" &&
+          gate.aggregateVerify?.status === "observed"),
+    )
+    .map((target) => target.resolution)
+    .filter(
+      (entry): entry is NonNullable<typeof entry> =>
+        entry !== undefined && entry.status === "pending",
+    )
+    .sort((left, right) =>
+      compareProtocolText(left.gateEntryId, right.gateEntryId),
+    )[0];
+  if (resolution !== undefined)
+    return [
+      {
+        effectKind: "materialisation_resolve" as const,
+        gateEntryId: resolution.gateEntryId,
+        mode: "emit" as const,
+        type: "materialisation_resolve_intent",
+      },
+      ...(resolution.lastRefusal === undefined
+        ? []
+        : [
+            {
+              gateEntryId: resolution.gateEntryId,
+              mode: "record" as const,
+              type: "gate_entry_deferred",
+            },
+          ]),
+    ];
+  const probe = gate.destinationProbes
+    .filter(
+      (entry) =>
+        entry.status === "pending" &&
+        ((entry.stage === "unit" && state.wave.unitIds.length === 0) ||
+          (entry.stage === "gate" &&
+            gate.aggregateVerify?.status === "observed")),
+    )
+    .sort(
+      (left, right) =>
+        compareProtocolText(left.stage, right.stage) ||
+        compareProtocolText(left.gateEntryId, right.gateEntryId),
+    )[0];
+  if (probe !== undefined)
+    return [
+      {
+        effectKind: "destination_probe",
+        gateEntryId: probe.gateEntryId,
+        mode: "emit",
+        type: "destination_probe_intent",
+      },
+      ...(probe.lastRefusal === undefined
+        ? []
+        : [
+            {
+              gateEntryId: probe.gateEntryId,
+              mode: "record" as const,
+              type: "gate_entry_deferred",
+            },
+          ]),
+    ];
+  const materialisations = targets
+    .flatMap((target) => target.materialisations)
+    .filter((entry) => entry.status === "pending")
+    .sort((left, right) =>
+      compareProtocolText(left.gateEntryId, right.gateEntryId),
+    );
+  const unnamed = materialisations.find(
+    (entry) => entry.timestamp === undefined,
+  );
+  if (unnamed !== undefined)
+    return [
+      {
+        gateEntryId: unnamed.gateEntryId,
+        mode: "record",
+        type: "gate_clock_observed",
+      },
+    ];
+  const refused = materialisations.find(
+    (entry) => entry.lastRefusal !== undefined,
+  );
+  if (refused !== undefined) {
+    const retry =
+      refused.lastRefusal?.code === "output_name_collision"
+        ? {
+            gateEntryId: refused.gateEntryId,
+            mode: "record" as const,
+            type: "gate_clock_observed",
+          }
+        : {
+            effectKind: "materialise" as const,
+            gateEntryId: refused.gateEntryId,
+            mode: "emit" as const,
+            type: "materialise_intent",
+          };
+    return [
+      retry,
+      {
+        gateEntryId: refused.gateEntryId,
+        mode: "record",
+        type: "gate_entry_deferred",
+      },
+    ];
+  }
+  const materialisation = materialisations[0];
+  if (materialisation !== undefined)
+    return [
+      {
+        effectKind: "materialise",
+        gateEntryId: materialisation.gateEntryId,
+        mode: "emit",
+        type: "materialise_intent",
+      },
+    ];
+  const provenance = gate.provenance;
+  if (provenance?.status === "pending") {
+    if (provenance.lastRefusal !== undefined)
+      return [
+        ...(provenance.lastRefusal.code === "provenance_base_advanced"
+          ? [
+              {
+                effectKind: "provenance_commit" as const,
+                gateEntryId: provenance.gateEntryId,
+                mode: "emit" as const,
+                type: "provenance_commit_intent",
+              },
+            ]
+          : []),
+        {
+          gateEntryId: provenance.gateEntryId,
+          mode: "record",
+          type: "gate_entry_deferred",
+        },
+      ];
+    return [
+      {
+        ...(provenance.timestamp === undefined
+          ? {}
+          : { effectKind: "provenance_commit" as const }),
+        gateEntryId: provenance.gateEntryId,
+        mode: provenance.timestamp === undefined ? "record" : "emit",
+        type:
+          provenance.timestamp === undefined
+            ? "gate_clock_observed"
+            : "provenance_commit_intent",
+      },
+    ];
+  }
+  const verify = gate.aggregateVerify;
+  if (verify?.status === "pending")
+    return verify.lastRefusal === undefined
+      ? [
+          {
+            effectKind: "verify",
+            gateEntryId: verify.gateEntryId,
+            mode: "emit",
+            type: "verification_intent",
+          },
+        ]
+      : [
+          {
+            gateEntryId: verify.gateEntryId,
+            mode: "record",
+            type: "gate_entry_deferred",
+          },
+        ];
+  return [];
 }
 
 const observationsForEffect: Readonly<Record<EffectKind, readonly string[]>> = {
@@ -89,6 +282,11 @@ const observationsForEffect: Readonly<Record<EffectKind, readonly string[]>> = {
   park: ["park_observed"],
   cancel: ["cancel_observed"],
   controller_release: ["controller_released"],
+  materialisation_resolve: ["materialisation_sources_observed"],
+  destination_probe: ["destination_probe_observed"],
+  materialise: ["materialise_observed"],
+  provenance_commit: ["provenance_commit_observed"],
+  provenance_carry_claim: ["provenance_carry_claim_observed"],
 };
 
 export function ambiguityRecoveryActions(
@@ -107,6 +305,9 @@ export function ambiguityRecoveryActions(
           mode: "record" as const,
           type,
           ...(effect.unitId === null ? {} : { unitId: effect.unitId }),
+          ...(effect.gateEntryId === undefined
+            ? {}
+            : { gateEntryId: effect.gateEntryId }),
         })),
       ),
   );
@@ -151,6 +352,21 @@ function actionsForController(
       : [];
   }
   if (state.controller.state === "released") return [];
+  const carry = state.effectJournal.find(
+    (entry) =>
+      entry.kind === "provenance_carry_claim" &&
+      (entry.status === "intended" || entry.status === "ambiguous") &&
+      state.provenanceCarryClaim?.currentEffectId === entry.effectId,
+  );
+  if (carry !== undefined)
+    return [
+      {
+        effectId: carry.effectId,
+        effectKind: carry.kind,
+        mode: "record",
+        type: "provenance_carry_claim_observed",
+      },
+    ];
   if (canReleaseController(state))
     return [
       controllerAction(
@@ -384,10 +600,40 @@ function canReleaseController(state: RepositoryRun): boolean {
     state.qualificationOwnerUnitId === undefined &&
     state.integrationOwnerUnitId === undefined &&
     state.currentReviewerUnitId === undefined &&
+    state.provenanceCarryClaim === undefined &&
+    state.pendingProvenanceCarry === undefined &&
+    !state.effectJournal.some(
+      (entry) =>
+        entry.kind === "provenance_carry_claim" &&
+        (entry.status === "intended" || entry.status === "ambiguous"),
+    ) &&
     Object.values(state.units).every((unit) => unit.state === "closed") &&
     Object.values(state.reservations).every(
       (reservation) => reservation.state === "released",
-    )
+    ) &&
+    gateGreen(state)
+  );
+}
+
+function gateGreen(state: RepositoryRun): boolean {
+  const gate = state.gate;
+  if (gate === undefined) return true;
+  return (
+    gate.targetPromises.every((promise) => promise.status === "voided") &&
+    gate.targets.every(
+      (target) =>
+        target.status !== "pending" &&
+        target.resolution?.status !== "pending" &&
+        target.materialisations.every((item) => item.status !== "pending"),
+    ) &&
+    (gate.provenancePromise?.status === "voided" ||
+      (gate.provenancePromise === undefined &&
+        gate.provenance !== undefined &&
+        gate.provenance.status !== "pending")) &&
+    (gate.aggregateVerifyPromise?.status === "voided" ||
+      (gate.aggregateVerifyPromise === undefined &&
+        gate.aggregateVerify !== undefined &&
+        gate.aggregateVerify.status !== "pending"))
   );
 }
 

@@ -18,6 +18,7 @@ import { canonicalJson, type JsonValue } from "../../protocol/canonical.js";
 import { isPinnedBdIssueRow, type EmbeddedResult } from "./schemas.js";
 
 import type {
+  CarryCheckpointIntent,
   CrashDiscovery,
   EmbeddedInitialProjection,
   EmbeddedLoad,
@@ -46,6 +47,15 @@ export interface ProjectionPersistencePort {
     slot: MergeSlotObservation,
   ): Promise<EmbeddedResponse>;
   load?(): Promise<EmbeddedLoad>;
+  readCarry?(predecessorRootIssueId: string): Promise<EmbeddedResponse>;
+  claimCarry?(
+    request: Extract<EmbeddedRequest, { readonly kind: "carry_claim" }>,
+  ): Promise<EmbeddedResponse>;
+  discoverCarry?(
+    request: Extract<EmbeddedRequest, { readonly kind: "carry_discover" }>,
+    ref?: string,
+  ): Promise<CrashDiscovery | undefined>;
+  matchesCarryDelta?(intent: CarryCheckpointIntent, source: string): boolean;
   mutate(batch: MutationBatch): Promise<EmbeddedResponse>;
   mutatePreOwnership?(
     batch: MutationBatch,
@@ -960,6 +970,26 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
               ? { status: "unavailable" }
               : await this.projections.load(),
         };
+      case "carry_read":
+        return this.projections.readCarry === undefined
+          ? { kind: "carry_read", value: { status: "unavailable" } }
+          : await this.projections.readCarry(request.predecessorRootIssueId);
+      case "carry_claim":
+        return this.projections.claimCarry === undefined
+          ? { kind: "carry_claim", value: { status: "unavailable" } }
+          : await this.projections.claimCarry(request);
+      case "carry_discover": {
+        const value = await this.projections.discoverCarry?.(request);
+        if (value === undefined)
+          throw new Error("carry checkpoint discovery failed");
+        return {
+          kind: "carry_discover",
+          value:
+            request.point === "after_push" && this.remote !== undefined
+              ? await this.proveRemoteCarryCheckpoint(request, value)
+              : await this.proveCarryCheckpoint(request, value),
+        };
+      }
       case "slot": {
         if (request.source === "remote") {
           if (request.action !== "check" || this.remote === undefined)
@@ -1281,6 +1311,122 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
     intent: SlotTransitionIntent,
   ): boolean {
     return isPinnedSlotTransitionDelta(source, this.prefix, intent);
+  }
+
+  private async proveCarryCheckpoint(
+    request: Extract<EmbeddedRequest, { readonly kind: "carry_discover" }>,
+    discovery: CrashDiscovery,
+  ): Promise<CrashDiscovery> {
+    if (
+      discovery.status !== "observed" ||
+      this.projections.discoverCarry === undefined ||
+      this.projections.matchesCarryDelta === undefined
+    )
+      return discovery.status === "observed"
+        ? { status: "ambiguous" }
+        : discovery;
+    const currentHead = await this.doltHead(this.databaseDirectory);
+    const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+    if (currentHead === undefined || workingSet === undefined)
+      return { status: "ambiguous" };
+    if (workingSet === "pending") {
+      const before = await this.projections.discoverCarry(request, currentHead);
+      const diff = await this.runDolt(this.databaseDirectory, [
+        "diff",
+        "--data",
+        "-r",
+        "json",
+        currentHead,
+      ]);
+      const proven =
+        before?.status === "absent" &&
+        diff !== undefined &&
+        diff.code === 0 &&
+        !diff.exceeded &&
+        this.projections.matchesCarryDelta(request.intent, diff.stdout)
+          ? { ...discovery, baseHead: currentHead, head: currentHead }
+          : { status: "ambiguous" as const };
+      return this.bindRemoteCheckpointBaseline(proven);
+    }
+    if (workingSet !== "clean") return { status: "ambiguous" };
+    const committed = await this.proveCommittedCarryCheckpoint(
+      request,
+      discovery,
+      currentHead,
+    );
+    return this.bindRemoteCheckpointBaseline(committed);
+  }
+
+  private async proveCommittedCarryCheckpoint(
+    request: Extract<EmbeddedRequest, { readonly kind: "carry_discover" }>,
+    discovery: CrashDiscovery,
+    currentHead: string,
+  ): Promise<CrashDiscovery> {
+    if (
+      discovery.status !== "observed" ||
+      discovery.head !== currentHead ||
+      this.projections.discoverCarry === undefined ||
+      this.projections.matchesCarryDelta === undefined
+    )
+      return { status: "ambiguous" };
+    const parents = await this.directParents(currentHead);
+    const parent = parents?.length === 1 ? parents[0] : undefined;
+    if (parent === undefined) return { status: "ambiguous" };
+    const before = await this.projections.discoverCarry(request, parent);
+    const diff = await this.runDolt(this.databaseDirectory, [
+      "diff",
+      "--data",
+      "-r",
+      "json",
+      parent,
+      currentHead,
+    ]);
+    return before?.status === "absent" &&
+      diff !== undefined &&
+      diff.code === 0 &&
+      !diff.exceeded &&
+      this.projections.matchesCarryDelta(request.intent, diff.stdout)
+      ? { ...discovery, baseHead: parent, head: currentHead }
+      : { status: "ambiguous" };
+  }
+
+  private async proveRemoteCarryCheckpoint(
+    request: Extract<EmbeddedRequest, { readonly kind: "carry_discover" }>,
+    local: CrashDiscovery,
+  ): Promise<CrashDiscovery> {
+    if (
+      local.status !== "observed" ||
+      this.remote === undefined ||
+      this.projections.discoverCarry === undefined
+    )
+      return { status: "ambiguous" };
+    const localHead = await this.doltHead(this.databaseDirectory);
+    const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+    const remoteRef = await this.fetchRemoteMain(this.remote);
+    const remoteHead =
+      remoteRef === undefined ? undefined : await this.doltRefHead(remoteRef);
+    const remote =
+      remoteRef === undefined
+        ? undefined
+        : await this.projections.discoverCarry(request, remoteRef);
+    if (
+      localHead === undefined ||
+      workingSet !== "clean" ||
+      remoteHead === undefined ||
+      remote === undefined ||
+      localHead !== remoteHead
+    )
+      return { status: "ambiguous" };
+    const proven = await this.proveCommittedCarryCheckpoint(
+      request,
+      remote,
+      remoteHead,
+    );
+    return proven.status === "observed" &&
+      proven.baseHead !== undefined &&
+      local.rootCommitment === proven.rootCommitment
+      ? { ...local, baseHead: proven.baseHead, head: localHead, remoteHead }
+      : { status: "ambiguous" };
   }
 
   /**

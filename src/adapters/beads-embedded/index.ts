@@ -30,11 +30,22 @@ import {
 } from "../../commands/recovery.js";
 import {
   validate,
+  ProvenanceCarryClaimRecordSchema,
+  type ProvenanceCarryClaimRecord,
+  type RepositoryRun,
+  type RuntimeEffect,
   type SlotTransitionIntent as ProtocolSlotTransitionIntent,
 } from "../../protocol/schemas.js";
+import { sha256 } from "../../protocol/evidence.js";
+import { deriveProvenanceCarryClaimKey } from "../../protocol/reducer.js";
+import {
+  planProvenanceCarryFromProjection,
+  type ProvenanceCarryProjectionPlan,
+} from "../../commands/production-recovery.js";
 
 import {
   EMBEDDED_ADAPTER_VERSION,
+  type CarryCheckpointIntent,
   type CrashDiscovery,
   type CrashPoint,
   type EmbeddedMode,
@@ -85,6 +96,15 @@ export type WorkerTrackerBaseline = Readonly<{
   slot: MergeSlotObservation;
   workingSet: "clean";
 }>;
+type CarryEffect = Extract<RuntimeEffect, { kind: "provenance_carry_claim" }>;
+type CarryObservationResult = Extract<
+  import("../../protocol/schemas.js").ProtocolEvent,
+  { type: "provenance_carry_claim_observed" }
+>["result"];
+type CarryRefusalReason = Extract<
+  CarryObservationResult,
+  { status: "predecessor_refused" }
+>["reason"];
 
 /** Read-only durable-transition reconciliation for recovery effect adapters. */
 export type EmbeddedTransitionReconcile =
@@ -123,6 +143,7 @@ export interface EmbeddedAdapterOptions {
   readonly prefix: string;
   readonly preflight: PreflightEnvelope;
   readonly process: EmbeddedProcessPort;
+  readonly rootIssueId?: string;
   readonly scope: FencingScope;
 }
 
@@ -208,6 +229,7 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
   private readonly mode: EmbeddedMode;
   private readonly prefix: string;
   private readonly process: EmbeddedProcessPort;
+  private readonly rootIssueId: string | undefined;
   private readonly scope: FencingScope;
   private readonly usable: boolean;
 
@@ -216,6 +238,7 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     this.mode = options.mode;
     this.prefix = options.prefix;
     this.process = options.process;
+    this.rootIssueId = options.rootIssueId;
     this.scope = options.scope;
     this.usable = checkedPreflight(
       options.preflight,
@@ -741,6 +764,189 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
    * passed through; malformed, partial, and transport failures remain tagged
    * failures and can never drive bootstrap.
    */
+  public async prepareProvenanceCarryClaim(
+    predecessorRootIssueId: string,
+    currentRun: RepositoryRun,
+  ) {
+    const inspected = await this.inspectCarryPredecessor(
+      predecessorRootIssueId,
+      currentRun,
+    );
+    return inspected.status === "planned"
+      ? { plan: inspected.value.plan, status: "planned" as const }
+      : { status: inspected.status as "blocked" | "unavailable" };
+  }
+
+  public async reconcileProvenanceCarryClaim(
+    effect: CarryEffect,
+    run: RepositoryRun,
+  ) {
+    const inspected = await this.inspectCarryPredecessor(
+      effect.params.predecessorRootBeadId,
+      run,
+    );
+    if (inspected.status !== "planned")
+      return inspected.status === "unavailable"
+        ? { status: "unavailable" as const }
+        : {
+            result: this.predecessorRefusal(
+              effect.params.predecessorRootBeadId,
+              inspected.reason,
+            ),
+            status: "observed" as const,
+          };
+    if (!this.carryPlanMatchesEffect(inspected.value, effect, run))
+      return { status: "ambiguous" as const };
+    const classified = this.classifyCarryClaims(
+      inspected.claims,
+      inspected.value,
+      effect,
+      false,
+    );
+    if (
+      classified.status === "observed" &&
+      classified.result.status === "already_claimed"
+    )
+      return (await this.competitorCarryIsDurable(inspected.claims, effect))
+        ? classified
+        : { status: "ambiguous" as const };
+    if (
+      classified.status !== "observed" ||
+      classified.result.status !== "imported"
+    )
+      return classified;
+    const durable = await this.reconcileDurableCarryCheckpoint(
+      this.carryCheckpointIntent(effect),
+    );
+    if (durable.code !== "applied")
+      return {
+        status:
+          durable.code === "unavailable"
+            ? ("unavailable" as const)
+            : ("ambiguous" as const),
+      };
+    const reread = await this.inspectCarryPredecessor(
+      effect.params.predecessorRootBeadId,
+      run,
+    );
+    if (
+      reread.status !== "planned" ||
+      !this.carryPlanMatchesEffect(reread.value, effect, run)
+    )
+      return { status: "ambiguous" as const };
+    const readback = this.classifyCarryClaims(
+      reread.claims,
+      reread.value,
+      effect,
+      true,
+    );
+    return readback.status === "absent"
+      ? { status: "ambiguous" as const }
+      : readback;
+  }
+
+  public async executeProvenanceCarryClaim(
+    effect: CarryEffect,
+    run: RepositoryRun,
+  ) {
+    const inspected = await this.inspectCarryPredecessor(
+      effect.params.predecessorRootBeadId,
+      run,
+    );
+    if (inspected.status !== "planned")
+      return inspected.status === "unavailable"
+        ? { status: "unavailable" as const }
+        : {
+            result: this.predecessorRefusal(
+              effect.params.predecessorRootBeadId,
+              inspected.reason,
+            ),
+            status: "observed" as const,
+          };
+    if (!this.carryPlanMatchesEffect(inspected.value, effect, run))
+      return { status: "ambiguous" as const };
+    const existing = this.classifyCarryClaims(
+      inspected.claims,
+      inspected.value,
+      effect,
+      false,
+    );
+    if (existing.status === "observed")
+      return existing.result.status === "already_claimed" &&
+        !(await this.competitorCarryIsDurable(inspected.claims, effect))
+        ? { status: "ambiguous" as const }
+        : existing;
+    if (existing.status !== "absent") return { status: "ambiguous" as const };
+    const baseline = this.checkpointBaseline(await this.state());
+    const slot = await this.slot("check");
+    if (
+      baseline === undefined ||
+      slot?.status !== "acquired" ||
+      slot.holder !== this.holder
+    )
+      return { status: "ambiguous" as const };
+    const record = this.carryClaimRecord(effect);
+    const checkpointIntent = this.carryCheckpointIntent(effect);
+    const response = await this.call({
+      exportDigest: checkpointIntent.exportDigest,
+      expectedAggregateCommitment:
+        effect.params.predecessorRootAggregateCommitment,
+      kind: "carry_claim",
+      predecessorRootIssueId: effect.params.predecessorRootBeadId,
+      record,
+      slot,
+    });
+    if (response?.kind !== "carry_claim")
+      return { status: "unavailable" as const };
+    if (response.value.status === "unavailable")
+      return { status: "unavailable" as const };
+    if (response.value.status === "stale") {
+      const raced = await this.inspectCarryPredecessor(
+        effect.params.predecessorRootBeadId,
+        run,
+      );
+      if (
+        raced.status !== "planned" ||
+        !this.carryPlanMatchesEffect(raced.value, effect, run)
+      )
+        return { status: "ambiguous" as const };
+      const classified = this.classifyCarryClaims(
+        raced.claims,
+        raced.value,
+        effect,
+        true,
+      );
+      if (
+        classified.status === "observed" &&
+        classified.result.status === "already_claimed" &&
+        !(await this.competitorCarryIsDurable(raced.claims, effect))
+      )
+        return { status: "ambiguous" as const };
+      return classified.status === "absent"
+        ? { status: "ambiguous" as const }
+        : classified;
+    }
+    const durable = await this.durableCarryCheckpoint(
+      checkpointIntent,
+      baseline,
+    );
+    if (durable.code !== "applied") return { status: "ambiguous" as const };
+    const reread = await this.inspectCarryPredecessor(
+      effect.params.predecessorRootBeadId,
+      run,
+    );
+    if (reread.status !== "planned") return { status: "ambiguous" as const };
+    const readback = this.classifyCarryClaims(
+      reread.claims,
+      reread.value,
+      effect,
+      true,
+    );
+    return readback.status === "absent"
+      ? { status: "ambiguous" as const }
+      : readback;
+  }
+
   public async load(): Promise<AuthoritativeLoadResult> {
     if (!this.usable) return { status: "quarantined" };
     const response = await this.call({ kind: "load" });
@@ -1506,6 +1712,83 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
   }
 
   /** Commit state and sync it without force; discovery brackets commit/push. */
+  private async durableCarryCheckpoint(
+    intent: CarryCheckpointIntent,
+    baseline: Readonly<{ head: string; remoteHead?: string }>,
+  ): Promise<EmbeddedResult> {
+    const discover = async (point: CrashPoint) => {
+      const response = await this.call({
+        kind: "carry_discover",
+        point,
+        intent,
+      });
+      return response?.kind === "carry_discover"
+        ? response.value
+        : { status: "ambiguous" as const };
+    };
+    let current = await this.state();
+    if (
+      current === undefined ||
+      !current.reachable ||
+      current.workingSet === "unknown"
+    )
+      return result("ambiguous");
+    if (current.workingSet === "pending") {
+      const beforeCommit = await discover("before_commit");
+      if (
+        beforeCommit.status !== "observed" ||
+        !this.matchesCheckpointBaseline(beforeCommit, baseline)
+      )
+        return result("ambiguous");
+      const commit = await this.call({ kind: "commit" });
+      if (commit?.kind !== "commit" || commit.value !== "applied")
+        return result(
+          commit?.kind === "commit" && commit.value === "unavailable"
+            ? "unavailable"
+            : "ambiguous",
+        );
+      const afterCommit = await discover("after_commit");
+      if (
+        afterCommit.status !== "observed" ||
+        !this.matchesCheckpointBaseline(afterCommit, baseline)
+      )
+        return result("ambiguous");
+      current = await this.state();
+    }
+    if (
+      current === undefined ||
+      !current.reachable ||
+      current.workingSet !== "clean" ||
+      !head(current.head)
+    )
+      return result("ambiguous");
+    if (this.mode === "local-only") return result("applied");
+    const beforePush = await discover("before_push");
+    if (
+      beforePush.status !== "observed" ||
+      !this.matchesCheckpointBaseline(beforePush, baseline)
+    )
+      return result("ambiguous");
+    const push = await this.call({ kind: "push" });
+    if (push?.kind !== "push") return result("ambiguous");
+    if (push.value === "conflict") return result("conflict");
+    if (push.value !== "applied") return result(push.value);
+    const afterPush = await discover("after_push");
+    const final = await this.state();
+    return afterPush.status === "observed" &&
+      afterPush.baseHead === baseline.head &&
+      final !== undefined &&
+      final.reachable &&
+      final.workingSet === "clean" &&
+      head(final.head) &&
+      final.remoteHead === final.head &&
+      afterPush.head === final.head &&
+      afterPush.remoteHead === final.head
+      ? result("applied")
+      : result("ambiguous");
+  }
+
+  /** Commit state and sync it without force; discovery brackets commit/push. */
   private async durableCheckpoint(
     batch?: MutationBatch,
     baseline?: Readonly<{ head: string; remoteHead?: string }>,
@@ -1783,6 +2066,371 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
         this.holder,
       )
     );
+  }
+
+  private async inspectCarryPredecessor(
+    predecessorRootIssueId: string,
+    currentRun: RepositoryRun,
+  ): Promise<
+    | Readonly<{
+        status: "planned";
+        value: ProvenanceCarryProjectionPlan;
+        claims: unknown;
+      }>
+    | Readonly<{
+        status: "blocked";
+        reason: CarryRefusalReason;
+      }>
+    | Readonly<{ status: "unavailable" }>
+  > {
+    if (
+      !this.usable ||
+      this.rootIssueId === undefined ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u.test(predecessorRootIssueId)
+    )
+      return { status: "unavailable" };
+    const response = await this.call({
+      kind: "carry_read",
+      predecessorRootIssueId,
+    });
+    if (response?.kind !== "carry_read") return { status: "unavailable" };
+    if (response.value.status !== "observed")
+      return response.value.status === "not_found"
+        ? { reason: "not_found", status: "blocked" }
+        : { status: "unavailable" };
+    const root = validateRootProjection(response.value.root);
+    if (!root.ok) return { reason: "projection_invalid", status: "blocked" };
+    const planned = planProvenanceCarryFromProjection(
+      predecessorRootIssueId,
+      this.rootIssueId,
+      currentRun,
+      root.value,
+    );
+    if (planned.status !== "planned")
+      return { reason: planned.reason, status: "blocked" };
+    if (!this.validCarryClaimsBoundary(response.value.claims))
+      return { reason: "projection_invalid", status: "blocked" };
+    return {
+      claims: response.value.claims,
+      status: "planned",
+      value: planned.value,
+    };
+  }
+
+  private validCarryClaimsBoundary(value: unknown): boolean {
+    const claims = object(value);
+    if (claims === undefined || Object.keys(claims).length > 1) return false;
+    const entry = Object.entries(claims)[0];
+    if (entry === undefined) return true;
+    const [digest, record] = entry;
+    const parsed = validate<ProvenanceCarryClaimRecord>(
+      ProvenanceCarryClaimRecordSchema,
+      record,
+    );
+    return (
+      /^[0-9a-f]{64}$/u.test(digest) &&
+      parsed.ok &&
+      parsed.value !== undefined &&
+      parsed.value.exportId === `sce:carry:${digest}` &&
+      Buffer.byteLength(canonicalJson(parsed.value as unknown as JsonValue)) <=
+        4_096
+    );
+  }
+
+  private carryPlanMatchesEffect(
+    value: ProvenanceCarryProjectionPlan,
+    effect: CarryEffect,
+    run: RepositoryRun,
+  ): boolean {
+    const plan = value.plan;
+    return (
+      plan.exportId === effect.params.exportId &&
+      plan.predecessorFinalRevision ===
+        effect.params.predecessorFinalRevision &&
+      plan.predecessorJournalCheckpointCommitment ===
+        effect.params.predecessorJournalCheckpointCommitment &&
+      plan.predecessorRootAggregateCommitment ===
+        effect.params.predecessorRootAggregateCommitment &&
+      plan.predecessorRunId === effect.params.predecessorRunId &&
+      plan.predecessorWaveId === effect.params.predecessorWaveId &&
+      plan.snapshotCommitment === effect.params.snapshotCommitment &&
+      effect.params.claimToken === effect.idempotencyKey &&
+      effect.params.currentRunId === run.controller.runId &&
+      run.controller.state === "acquired" &&
+      run.controller.holder === this.holder &&
+      this.holder ===
+        `${run.controller.runId}/${run.controller.incarnationId}` &&
+      effect.params.storeIdentity === run.storeIdentity &&
+      effect.params.storeIdentity === this.scope.beadsStoreIdentity &&
+      effect.params.repositoryIdentity === run.repositoryIdentity &&
+      effect.params.repositoryIdentity === this.scope.gitRepositoryIdentity &&
+      effect.params.integrationBranch === run.integrationBranch &&
+      effect.params.integrationBranch === this.scope.integrationBranch
+    );
+  }
+
+  private carryClaimRecord(effect: CarryEffect): ProvenanceCarryClaimRecord {
+    return {
+      claimRevision: 1,
+      claimantRunId: effect.params.currentRunId,
+      claimToken: effect.params.claimToken,
+      exportId: effect.params.exportId,
+      predecessorRootBeadId: effect.params.predecessorRootBeadId,
+      predecessorRunId: effect.params.predecessorRunId,
+      predecessorWaveId: effect.params.predecessorWaveId,
+      schema: "sce.provenance-carry-claim",
+      snapshotCommitment: effect.params.snapshotCommitment,
+      version: 1,
+    };
+  }
+
+  private carryCheckpointIntent(effect: CarryEffect): CarryCheckpointIntent {
+    return {
+      expectedAggregateCommitment:
+        effect.params.predecessorRootAggregateCommitment,
+      exportDigest: effect.params.exportId.slice("sce:carry:".length),
+      predecessorRootIssueId: effect.params.predecessorRootBeadId,
+      record: this.carryClaimRecord(effect),
+    };
+  }
+
+  /**
+   * Proves and finishes only this journaled carry claim after a lost process
+   * result. A local singleton is not durable evidence: it may still be an
+   * uncommitted Dolt working-set change or a commit that has not reached the
+   * configured git-sync remote.
+   */
+  private async reconcileDurableCarryCheckpoint(
+    intent: CarryCheckpointIntent,
+  ): Promise<EmbeddedResult> {
+    const slot = await this.slot("check");
+    if (
+      slot?.status !== "acquired" ||
+      slot.actor !== this.holder ||
+      slot.holder !== this.holder
+    )
+      return result("ambiguous");
+    const current = await this.state();
+    if (
+      current === undefined ||
+      !current.reachable ||
+      current.workingSet === "unknown" ||
+      !head(current.head)
+    )
+      return result("ambiguous");
+    if (current.workingSet === "pending") {
+      const baseline = this.checkpointBaseline(current);
+      return baseline === undefined
+        ? result("ambiguous")
+        : this.durableCarryCheckpoint(intent, baseline);
+    }
+    if (current.workingSet !== "clean") return result("ambiguous");
+    const discover = async (point: CrashPoint) => {
+      const response = await this.call({
+        kind: "carry_discover",
+        point,
+        intent,
+      });
+      return response?.kind === "carry_discover"
+        ? response.value
+        : { status: "ambiguous" as const };
+    };
+    if (this.mode === "local-only") {
+      const committed = await discover("after_commit");
+      const final = await this.state();
+      return committed.status === "observed" &&
+        head(committed.baseHead) &&
+        committed.head === current.head &&
+        final !== undefined &&
+        final.reachable &&
+        final.workingSet === "clean" &&
+        final.head === current.head
+        ? result("applied")
+        : result("ambiguous");
+    }
+    if (!head(current.remoteHead)) return result("ambiguous");
+    if (current.head !== current.remoteHead) {
+      const local = await discover("before_push");
+      if (
+        local.status !== "observed" ||
+        !head(local.baseHead) ||
+        local.head !== current.head ||
+        local.remoteHead !== current.remoteHead
+      )
+        return result("ambiguous");
+      return this.durableCarryCheckpoint(intent, {
+        head: local.baseHead,
+        remoteHead: current.remoteHead,
+      });
+    }
+    const pushed = await discover("after_push");
+    const final = await this.state();
+    return pushed.status === "observed" &&
+      head(pushed.baseHead) &&
+      pushed.head === current.head &&
+      pushed.remoteHead === current.head &&
+      final !== undefined &&
+      final.reachable &&
+      final.workingSet === "clean" &&
+      final.head === current.head &&
+      final.remoteHead === current.head
+      ? result("applied")
+      : result("ambiguous");
+  }
+
+  /** A competing claim is evidence only after its exact sibling-only delta is durable. */
+  private async competitorCarryIsDurable(
+    claimsValue: unknown,
+    effect: CarryEffect,
+  ): Promise<boolean> {
+    const claims = object(claimsValue);
+    const candidate =
+      claims === undefined ? undefined : Object.values(claims)[0];
+    const parsed = validate<ProvenanceCarryClaimRecord>(
+      ProvenanceCarryClaimRecordSchema,
+      candidate,
+    );
+    if (!parsed.ok || parsed.value === undefined) return false;
+    const current = await this.state();
+    if (
+      current === undefined ||
+      !current.reachable ||
+      current.workingSet !== "clean" ||
+      !head(current.head) ||
+      (this.mode === "git-sync" && current.remoteHead !== current.head)
+    )
+      return false;
+    const intent: CarryCheckpointIntent = {
+      ...this.carryCheckpointIntent(effect),
+      record: parsed.value,
+    };
+    const point: CrashPoint =
+      this.mode === "local-only" ? "after_commit" : "after_push";
+    const response = await this.call({ kind: "carry_discover", point, intent });
+    const discovery =
+      response?.kind === "carry_discover" ? response.value : undefined;
+    return (
+      discovery?.status === "observed" &&
+      head(discovery.baseHead) &&
+      discovery.baseHead !== current.head &&
+      discovery.head === current.head &&
+      (this.mode === "local-only" || discovery.remoteHead === current.head)
+    );
+  }
+
+  private carryClaimRecordDigest(record: ProvenanceCarryClaimRecord): string {
+    return sha256(
+      canonicalJson({
+        claimRecord: record,
+        domain: "sce.provenance-carry-claim-record.v1",
+      }),
+    );
+  }
+
+  private predecessorRefusal(
+    predecessorRootBeadId: string,
+    reason: CarryRefusalReason,
+  ): Extract<CarryObservationResult, { status: "predecessor_refused" }> {
+    return {
+      evidenceDigest: sha256(
+        canonicalJson({
+          domain: "sce.provenance-carry-predecessor-refusal.v1",
+          predecessorRootBeadId,
+          reason,
+        }),
+      ),
+      predecessorRootBeadId,
+      reason,
+      status: "predecessor_refused",
+    };
+  }
+
+  private classifyCarryClaims(
+    value: unknown,
+    planned: ProvenanceCarryProjectionPlan,
+    effect: CarryEffect,
+    requireClaim: boolean,
+  ):
+    | Readonly<{ status: "absent" }>
+    | Readonly<{ status: "ambiguous" }>
+    | Readonly<{ status: "observed"; result: CarryObservationResult }> {
+    const claims = object(value);
+    if (claims === undefined || Object.keys(claims).length > 1)
+      return {
+        result: this.predecessorRefusal(
+          effect.params.predecessorRootBeadId,
+          "projection_invalid",
+        ),
+        status: "observed",
+      };
+    const entry = Object.entries(claims)[0];
+    if (entry === undefined)
+      return { status: requireClaim ? "ambiguous" : "absent" };
+    const [digest, candidate] = entry;
+    const parsed = validate<ProvenanceCarryClaimRecord>(
+      ProvenanceCarryClaimRecordSchema,
+      candidate,
+    );
+    if (
+      digest !== effect.params.exportId.slice("sce:carry:".length) ||
+      !parsed.ok ||
+      parsed.value === undefined ||
+      parsed.value.exportId !== effect.params.exportId ||
+      Buffer.byteLength(canonicalJson(parsed.value as unknown as JsonValue)) >
+        4_096
+    )
+      return {
+        result: this.predecessorRefusal(
+          effect.params.predecessorRootBeadId,
+          "projection_invalid",
+        ),
+        status: "observed",
+      };
+    const expected = this.carryClaimRecord(effect);
+    const claimRecordDigest = this.carryClaimRecordDigest(parsed.value);
+    const candidateClaimToken = deriveProvenanceCarryClaimKey(
+      parsed.value.claimantRunId,
+      effect.params.exportId,
+      effect.params.predecessorRootBeadId,
+    );
+    if (
+      parsed.value.exportId !== effect.params.exportId ||
+      parsed.value.predecessorRootBeadId !==
+        effect.params.predecessorRootBeadId ||
+      parsed.value.predecessorRunId !== effect.params.predecessorRunId ||
+      parsed.value.predecessorWaveId !== effect.params.predecessorWaveId ||
+      parsed.value.snapshotCommitment !== effect.params.snapshotCommitment ||
+      parsed.value.claimToken !== candidateClaimToken
+    )
+      return {
+        result: this.predecessorRefusal(
+          effect.params.predecessorRootBeadId,
+          "projection_invalid",
+        ),
+        status: "observed",
+      };
+    if (!same(parsed.value, expected))
+      return {
+        result: {
+          claimRecordDigest,
+          claimRevision: 1,
+          claimantRunId: parsed.value.claimantRunId,
+          exportId: parsed.value.exportId,
+          status: "already_claimed",
+        },
+        status: "observed",
+      };
+    return {
+      result: {
+        carry: {
+          ...planned.carry,
+          claimRecordDigest,
+          claimRevision: 1,
+        },
+        status: "imported",
+      },
+      status: "observed",
+    };
   }
 
   private async slot(

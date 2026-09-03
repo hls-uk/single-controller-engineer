@@ -219,6 +219,16 @@ export interface RecoveryRunnerOptions {
       scope: FencingScope;
     }>,
   ) => Promise<ControllerTransitionPlanResult>;
+  /** Dedicated authoritative predecessor load; generic event input cannot call it. */
+  readonly prepareProvenanceCarryClaim?: (
+    input: Readonly<{
+      predecessorRootBeadId: string;
+      run: RepositoryRun;
+    }>,
+  ) => Promise<
+    | Readonly<{ status: "planned"; event: ProtocolEvent }>
+    | Readonly<{ status: "blocked" | "ambiguous" | "unavailable" }>
+  >;
   /** Injectable only for deterministic coordinator tests; production uses OperationLock. */
   readonly acquireOperationLock?: (
     input: Readonly<{
@@ -238,6 +248,11 @@ export interface RecoveryRunnerOptions {
   readonly validateLoadedRun?: (
     input: Readonly<{ proof: RecoveryTopologyProof; run: RepositoryRun }>,
   ) => LoadedRunValidation;
+  /** Optional composition authority check before the pure reducer sees input. */
+  readonly validateEvent?: (
+    event: ProtocolEvent,
+    run: RepositoryRun,
+  ) => boolean;
 }
 
 export type RecoveryOperationLockAcquire =
@@ -278,7 +293,11 @@ export type RecoveryOutcome =
 
 /** A command may submit either a reducer event or a narrow host acknowledgement. */
 export type RecoveryRequest =
-  ProtocolEvent | Readonly<{ harnessAcknowledgement: unknown }>;
+  | ProtocolEvent
+  | Readonly<{ harnessAcknowledgement: unknown }>
+  | Readonly<{
+      provenanceCarryClaim: Readonly<{ predecessorRootBeadId: string }>;
+    }>;
 
 /**
  * Positive absence permits replay only for Phase-2 effects with adapter-level
@@ -376,13 +395,9 @@ function batchFor(
   const changedIds = Object.keys(nextRun.units)
     .filter((unitId) => !same(before.run.units[unitId], nextRun.units[unitId]))
     .sort();
-  // Deletion is never silently represented as a normal transition batch.
-  if (
-    Object.keys(before.run.units).some(
-      (unitId) => nextRun.units[unitId] === undefined,
-    )
-  )
-    return undefined;
+  // Root childRows are the authority set. A closed unit is removed there
+  // atomically with its durable closure evidence; its Bead-local child
+  // projection is retained as inert history and is no longer loaded.
   const changedRows = changedIds.map((unitId) => {
     const prior = before.childRows.find((row) => row.unitId === unitId);
     const child = makeChildProjection(nextBase, unitId);
@@ -493,12 +508,25 @@ function ambiguousEvent(
   return {
     effectId: entry.effectId,
     effectKind: entry.kind,
-    eventId: `recover-${entry.effectId}`,
+    eventId: recoveryEventId(`ambiguous-${entry.effectId}`),
     expectedRevision: run.revision,
     ...(observationHash === undefined ? {} : { observationHash }),
     type: "effect_ambiguous",
     unitId: entry.unitId,
+    ...(entry.gateEntryId === undefined
+      ? {}
+      : { gateEntryId: entry.gateEntryId }),
   };
+}
+
+/** Bounded, domain-separated IDs even when the durable effect ID is maximal. */
+export function recoveryEventId(effectId: string): string {
+  const legacy = `recover-${effectId}`;
+  return legacy.length <= 160
+    ? legacy
+    : `recover-${sha256(
+        canonicalJson({ domain: "sce.recovery-event.v1", effectId }),
+      )}`;
 }
 
 function observationFor(
@@ -589,10 +617,14 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
       !same(parsed.value.checkpoint, batch.checkpoint)
     )
       return { status: "quarantined" };
-    const read = validReadback(
-      { children: parsed.value.children, root: parsed.value.root },
-      before.scope,
-    );
+    let authoritative: AuthoritativeLoadResult;
+    try {
+      authoritative = await options.store.load();
+    } catch {
+      return { status: "quarantined" };
+    }
+    if (authoritative.status !== "observed") return { status: "quarantined" };
+    const read = validReadback(authoritative.value, before.scope);
     return read === undefined || !same(read, reduction.nextState)
       ? { status: "quarantined" }
       : read;
@@ -863,6 +895,24 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
           ? run
           : await reconcile(root, run);
       if (!isRun(reconciled)) return reconciled;
+      let dedicatedCarryPlan = false;
+      if (requested !== undefined && isProvenanceCarryClaimRequest(requested)) {
+        if (options.prepareProvenanceCarryClaim === undefined)
+          return { status: "blocked" };
+        let planned;
+        try {
+          planned = await options.prepareProvenanceCarryClaim({
+            predecessorRootBeadId:
+              requested.provenanceCarryClaim.predecessorRootBeadId,
+            run: reconciled,
+          });
+        } catch {
+          return { status: "unavailable" };
+        }
+        if (planned.status !== "planned") return { status: planned.status };
+        requested = planned.event;
+        dedicatedCarryPlan = true;
+      }
       if (requested === undefined)
         return {
           status: initialized ? "reconciled" : "idle",
@@ -916,6 +966,14 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
       }
       const event = validate<ProtocolEvent>(ProtocolEventSchema, requested);
       if (!event.ok || event.value === undefined) return { status: "corrupt" };
+      if (
+        (event.value.type === "provenance_carry_claim_intent" ||
+          event.value.type === "provenance_carry_claim_observed") &&
+        !dedicatedCarryPlan
+      )
+        return { status: "blocked" };
+      if (options.validateEvent?.(event.value, reconciled) === false)
+        return { status: "blocked" };
       if (event.value.expectedRevision !== reconciled.revision)
         return { status: "stale" };
       const prepared = await preparedControllerEvent(
@@ -1025,6 +1083,23 @@ function isHarnessAcknowledgementRequest(
     typeof value === "object" &&
     "harnessAcknowledgement" in value &&
     Object.keys(value).length === 1
+  );
+}
+
+function isProvenanceCarryClaimRequest(
+  value: RecoveryRequest,
+): value is Readonly<{
+  provenanceCarryClaim: Readonly<{ predecessorRootBeadId: string }>;
+}> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "provenanceCarryClaim" in value &&
+    Object.keys(value).length === 1 &&
+    value.provenanceCarryClaim !== null &&
+    typeof value.provenanceCarryClaim === "object" &&
+    Object.keys(value.provenanceCarryClaim).length === 1 &&
+    typeof value.provenanceCarryClaim.predecessorRootBeadId === "string"
   );
 }
 

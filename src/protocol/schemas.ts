@@ -19,6 +19,12 @@ export const LIMITS = {
   reservations: 128,
   text: 8_192,
   findings: 64,
+  materialisationBlobBytes: 16 * 1024 * 1024,
+  materialisationMatches: 64,
+  materialisationOutputs: 128,
+  materialisationPathBytes: 192,
+  materialisationSidecarBytes: 8_192,
+  materialisationWaveBytes: 64 * 1024 * 1024,
 } as const;
 /** Four concurrent bounded packets stay well within the run envelope. */
 export const HARNESS_PACKET_BYTES = 8_192;
@@ -109,6 +115,11 @@ export const EffectKindSchema = Type.Union([
   Type.Literal("park"),
   Type.Literal("cancel"),
   Type.Literal("controller_release"),
+  Type.Literal("provenance_carry_claim"),
+  Type.Literal("materialisation_resolve"),
+  Type.Literal("destination_probe"),
+  Type.Literal("materialise"),
+  Type.Literal("provenance_commit"),
 ]);
 export type EffectKind = Static<typeof EffectKindSchema>;
 // This is deliberately duplicated here instead of importing fencing schemas:
@@ -188,6 +199,8 @@ export const EffectJournalEntrySchema = strictObject({
   unitId: nullableIdentifier(),
   idempotencyKey: idempotencyKey(),
   kind: EffectKindSchema,
+  /** Stable logical identity for aggregate gate effects only. */
+  gateEntryId: Type.Optional(identifier()),
   intentRevision: revision(),
   intentCommitment: hash(),
   paramsHash: hash(),
@@ -371,6 +384,559 @@ export const HarnessPacketBindingSchema = Type.Union([
   harnessPacketBinding(2),
 ]);
 export type HarnessPacketBinding = Static<typeof HarnessPacketBindingSchema>;
+
+const canonicalSourcePath = () =>
+  Type.String({
+    minLength: 1,
+    maxLength: LIMITS.materialisationPathBytes,
+    maxUtf8Bytes: LIMITS.materialisationPathBytes,
+    pattern:
+      "^(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)(?!.*\\\\)(?!.*\\*\\*)[A-Za-z0-9][A-Za-z0-9._*?-]*(?:/[A-Za-z0-9][A-Za-z0-9._*?-]*)*$",
+  });
+const canonicalResolvedPath = () =>
+  Type.String({
+    minLength: 1,
+    maxLength: LIMITS.materialisationPathBytes,
+    maxUtf8Bytes: LIMITS.materialisationPathBytes,
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$",
+  });
+const canonicalSubpath = () => canonicalResolvedPath();
+const plainBasename = () =>
+  Type.String({
+    minLength: 1,
+    maxLength: 255,
+    maxUtf8Bytes: 255,
+    pattern: "^[A-Za-z0-9.][A-Za-z0-9._-]*$",
+  });
+const absolutePath = () =>
+  Type.String({
+    minLength: 2,
+    maxLength: 4_096,
+    maxUtf8Bytes: 4_096,
+    pattern: "^/[^\\u0000\\r\\n]*$",
+  });
+const utcSecond = () =>
+  Type.String({
+    minLength: 20,
+    maxLength: 20,
+    pattern:
+      "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$",
+  });
+
+export const MaterialisationTargetSchema = strictObject({
+  destinationAlias: Type.String({
+    minLength: 1,
+    maxLength: 63,
+    pattern: "^[a-z][a-z0-9-]{0,62}$",
+  }),
+  destinationSubpath: canonicalSubpath(),
+  namingPolicy: Type.Union([
+    Type.Literal("source-basename"),
+    Type.Literal("iso-date-prefix"),
+    Type.Literal("content-hash-suffix"),
+  ]),
+  sidecarRequired: Type.Literal(true),
+  sourcePattern: canonicalSourcePath(),
+});
+export type MaterialisationTarget = Static<typeof MaterialisationTargetSchema>;
+
+export const DriveAliasSchema = strictObject({
+  alias: Type.String({
+    minLength: 1,
+    maxLength: 63,
+    pattern: "^[a-z][a-z0-9-]{0,62}$",
+  }),
+  canonicalRoot: absolutePath(),
+  markerFile: plainBasename(),
+  mountPolicy: Type.Union([Type.Literal("required"), Type.Literal("optional")]),
+  namespaceControl: Type.Literal("exclusive"),
+});
+export type DriveAlias = Static<typeof DriveAliasSchema>;
+
+const commandArgument = () =>
+  Type.String({
+    minLength: 1,
+    maxLength: 1_024,
+    maxUtf8Bytes: 1_024,
+    pattern:
+      "^(?:[^\\u0000\\uD800-\\uDFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])+$",
+  });
+const commandVector = () =>
+  Type.Array(commandArgument(), { minItems: 1, maxItems: 32 });
+
+export const KnowledgeContractSchema = strictObject({
+  aliases: Type.Array(DriveAliasSchema, {
+    maxItems: 64,
+  }),
+  combinedVerificationCommands: Type.Array(commandVector(), {
+    minItems: 1,
+    maxItems: 32,
+  }),
+  domainScope: identifier(),
+  gateTargets: Type.Array(MaterialisationTargetSchema, { maxItems: 64 }),
+  humanDriver: text(),
+  provenance: strictObject({
+    eventsDirectory: ownedPath(),
+    recordFormatVersion: Type.Literal(1),
+    reproducibilityCommand: commandVector(),
+    rollupGeneratorCommand: commandVector(),
+  }),
+  provenanceWorktreeRoot: Type.String({
+    minLength: 2,
+    maxLength: 3_840,
+    maxUtf8Bytes: 3_840,
+    pattern: "^/[^\\u0000\\r\\n]*$",
+  }),
+});
+export type KnowledgeContract = Static<typeof KnowledgeContractSchema>;
+
+export const MaterialisationSourceSchema = strictObject({
+  blobOid: oid(),
+  byteCount: Type.Integer({
+    minimum: 0,
+    maximum: LIMITS.materialisationBlobBytes,
+  }),
+  path: canonicalResolvedPath(),
+  sha256: hash(),
+});
+export type MaterialisationSource = Static<typeof MaterialisationSourceSchema>;
+
+export const MaterialisationSidecarSchema = strictObject({
+  artifactName: plainBasename(),
+  blobOid: oid(),
+  byteCount: Type.Integer({
+    minimum: 0,
+    maximum: LIMITS.materialisationBlobBytes,
+  }),
+  destinationAlias: Type.String({
+    minLength: 1,
+    maxLength: 63,
+    pattern: "^[a-z][a-z0-9-]{0,62}$",
+  }),
+  destinationSubpath: canonicalSubpath(),
+  domainScope: identifier(),
+  driver: text(),
+  executorTool: identifier(),
+  gateEntryId: identifier(),
+  originUnitId: nullableIdentifier(),
+  runId: identifier(),
+  schema: Type.Literal("sce.materialisation-provenance"),
+  sha256: hash(),
+  sourceOid: oid(),
+  sourcePath: canonicalResolvedPath(),
+  targetId: identifier(),
+  timestamp: utcSecond(),
+  version: Type.Literal(1),
+  waveId: identifier(),
+});
+export type MaterialisationSidecar = Static<
+  typeof MaterialisationSidecarSchema
+>;
+
+const refusalSchema = <T extends TSchema>(code: T) =>
+  strictObject({ code, detailHash: hash() });
+export const MaterialisationResolveRefusalSchema = refusalSchema(
+  Type.Union([
+    Type.Literal("source_absent"),
+    Type.Literal("zero_matches"),
+    Type.Literal("too_many_matches"),
+    Type.Literal("wave_item_limit"),
+    Type.Literal("wave_byte_limit"),
+    Type.Literal("unsafe_path"),
+    Type.Literal("non_blob"),
+    Type.Literal("blob_too_large"),
+    Type.Literal("evidence_budget_exceeded"),
+  ]),
+);
+export type MaterialisationResolveRefusal = Static<
+  typeof MaterialisationResolveRefusalSchema
+>;
+export const DestinationProbeRefusalSchema = refusalSchema(
+  Type.Union([
+    Type.Literal("optional_alias_unmounted"),
+    Type.Literal("required_alias_unmounted"),
+    Type.Literal("invalid_destination"),
+  ]),
+);
+export type DestinationProbeRefusal = Static<
+  typeof DestinationProbeRefusalSchema
+>;
+export const MaterialiseRefusalSchema = refusalSchema(
+  Type.Union([
+    Type.Literal("source_absent"),
+    Type.Literal("hard_links_unsupported"),
+  ]),
+);
+export type MaterialiseRefusal = Static<typeof MaterialiseRefusalSchema>;
+export const GateMaterialisationRefusalSchema = refusalSchema(
+  Type.Union([
+    Type.Literal("source_absent"),
+    Type.Literal("hard_links_unsupported"),
+  ]),
+);
+export const OutputNameCollisionRefusalSchema = strictObject({
+  code: Type.Literal("output_name_collision"),
+  conflictingGateEntryId: identifier(),
+});
+export const GateMaterialisationEntryRefusalSchema = Type.Union([
+  GateMaterialisationRefusalSchema,
+  OutputNameCollisionRefusalSchema,
+]);
+export type GateMaterialisationEntryRefusal = Static<
+  typeof GateMaterialisationEntryRefusalSchema
+>;
+export const ProvenanceRefusalSchema = refusalSchema(
+  Type.Union([
+    Type.Literal("provenance_reproducibility_failed"),
+    Type.Literal("provenance_base_advanced"),
+    Type.Literal("provenance_worktree_refused"),
+    Type.Literal("provenance_integration_refused"),
+  ]),
+);
+export type ProvenanceRefusal = Static<typeof ProvenanceRefusalSchema>;
+export const AggregateVerificationRefusalSchema = refusalSchema(
+  Type.Literal("verification_failed"),
+);
+export type AggregateVerificationRefusal = Static<
+  typeof AggregateVerificationRefusalSchema
+>;
+export const MaterialisationRefusalSchema = Type.Union([
+  MaterialisationResolveRefusalSchema,
+  DestinationProbeRefusalSchema,
+  GateMaterialisationRefusalSchema,
+  OutputNameCollisionRefusalSchema,
+  ProvenanceRefusalSchema,
+  AggregateVerificationRefusalSchema,
+]);
+export type MaterialisationRefusal = Static<
+  typeof MaterialisationRefusalSchema
+>;
+
+const gateDisposition = () =>
+  Type.Union([
+    Type.Literal("unit_not_landed"),
+    Type.Literal("handoff_boundary"),
+    Type.Literal("optional_alias_unmounted"),
+    Type.Literal("no_landed_units"),
+    Type.Literal("deferred_by_controller"),
+    Type.Literal("deferral_cascade"),
+  ]);
+const gateStatus = () =>
+  Type.Union([
+    Type.Literal("pending"),
+    Type.Literal("observed"),
+    Type.Literal("voided"),
+  ]);
+const GateTargetDefinitionSchema = strictObject({
+  originUnitId: nullableIdentifier(),
+  scope: Type.Union([Type.Literal("unit"), Type.Literal("gate")]),
+  target: MaterialisationTargetSchema,
+  targetId: identifier(),
+  targetOrdinal: Type.Integer({ minimum: 0, maximum: 63 }),
+});
+export type GateTargetDefinition = Static<typeof GateTargetDefinitionSchema>;
+const GateResolutionSchema = strictObject({
+  capacities: Type.Optional(
+    strictObject({
+      remainingAggregateEnvelopeByteCapacity: Type.Integer({
+        minimum: 0,
+        maximum: LIMITS.envelopeBytes,
+      }),
+      remainingItemCapacity: Type.Integer({
+        minimum: 0,
+        maximum: LIMITS.materialisationOutputs,
+      }),
+      remainingProjectionSnapshotByteCapacity: Type.Integer({
+        minimum: 0,
+        maximum: 65_536,
+      }),
+      remainingSourceByteCapacity: Type.Integer({
+        minimum: 0,
+        maximum: LIMITS.materialisationWaveBytes,
+      }),
+    }),
+  ),
+  currentEffectId: Type.Optional(effectIdentifier()),
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  gateEntryId: identifier(),
+  lastRefusal: Type.Optional(MaterialisationResolveRefusalSchema),
+  sourceOid: oid(),
+  sources: Type.Optional(
+    Type.Array(MaterialisationSourceSchema, {
+      minItems: 1,
+      maxItems: LIMITS.materialisationMatches,
+    }),
+  ),
+  status: gateStatus(),
+  targetId: identifier(),
+});
+export type GateResolution = Static<typeof GateResolutionSchema>;
+const MaterialisationObservationSchema = strictObject({
+  artifactByteCount: Type.Integer({
+    minimum: 0,
+    maximum: LIMITS.materialisationBlobBytes,
+  }),
+  artifactSha256: hash(),
+  artifactStatus: Type.Union([
+    Type.Literal("published"),
+    Type.Literal("already_present"),
+  ]),
+  sidecarByteCount: Type.Integer({
+    minimum: 1,
+    maximum: LIMITS.materialisationSidecarBytes,
+  }),
+  sidecarSha256: hash(),
+  sidecarStatus: Type.Union([
+    Type.Literal("published"),
+    Type.Literal("already_present"),
+  ]),
+});
+export const GateMaterialisationSchema = strictObject({
+  artifactName: Type.Optional(plainBasename()),
+  currentEffectId: Type.Optional(effectIdentifier()),
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  gateEntryId: identifier(),
+  destinationProbeGateEntryId: identifier(),
+  lastRefusal: Type.Optional(GateMaterialisationEntryRefusalSchema),
+  observation: Type.Optional(MaterialisationObservationSchema),
+  originUnitId: nullableIdentifier(),
+  sidecarByteCount: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      maximum: LIMITS.materialisationSidecarBytes,
+    }),
+  ),
+  sidecarName: Type.Optional(plainBasename()),
+  sidecarSha256: Type.Optional(hash()),
+  source: MaterialisationSourceSchema,
+  sourceOid: oid(),
+  status: gateStatus(),
+  target: MaterialisationTargetSchema,
+  targetId: identifier(),
+  timestamp: Type.Optional(utcSecond()),
+});
+export type GateMaterialisation = Static<typeof GateMaterialisationSchema>;
+const GateTargetStateSchema = strictObject({
+  definition: GateTargetDefinitionSchema,
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  materialisations: Type.Array(GateMaterialisationSchema, {
+    maxItems: LIMITS.materialisationMatches,
+  }),
+  resolution: Type.Optional(GateResolutionSchema),
+  status: gateStatus(),
+});
+export type GateTargetState = Static<typeof GateTargetStateSchema>;
+const GateTargetPromiseSchema = strictObject({
+  definition: GateTargetDefinitionSchema,
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  status: Type.Union([Type.Literal("pending"), Type.Literal("voided")]),
+});
+export type GateTargetPromise = Static<typeof GateTargetPromiseSchema>;
+
+export const MaterialisationDestinationIdentitySchema = strictObject({
+  canonicalPath: absolutePath(),
+  device: Type.String({ pattern: "^(?:0|[1-9][0-9]{0,19})$" }),
+  inode: Type.String({ pattern: "^(?:0|[1-9][0-9]{0,19})$" }),
+});
+export type MaterialisationDestinationIdentity = Static<
+  typeof MaterialisationDestinationIdentitySchema
+>;
+const GateDestinationProbeSchema = strictObject({
+  currentEffectId: Type.Optional(effectIdentifier()),
+  destinationAlias: Type.String({
+    minLength: 1,
+    maxLength: 63,
+    pattern: "^[a-z][a-z0-9-]{0,62}$",
+  }),
+  destinationSubpath: canonicalSubpath(),
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  gateEntryId: identifier(),
+  identity: Type.Optional(MaterialisationDestinationIdentitySchema),
+  lastRefusal: Type.Optional(DestinationProbeRefusalSchema),
+  stage: Type.Union([Type.Literal("unit"), Type.Literal("gate")]),
+  status: gateStatus(),
+});
+export type GateDestinationProbe = Static<typeof GateDestinationProbeSchema>;
+
+export const ProvenanceInputSchema = strictObject({
+  closedUnitEvidence: Type.String({
+    maxLength: LIMITS.envelopeBytes,
+    pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+  }),
+  closureEvidenceCommitment: hash(),
+  destinationProbeEvidence: Type.Array(GateDestinationProbeSchema, {
+    maxItems: 128,
+  }),
+  targetEvidence: Type.Array(GateTargetStateSchema, { maxItems: 192 }),
+  unitIds: Type.Array(identifier(), { maxItems: LIMITS.units }),
+});
+export type ProvenanceInput = Static<typeof ProvenanceInputSchema>;
+export const ProvenanceCarryClaimRecordSchema = strictObject({
+  schema: Type.Literal("sce.provenance-carry-claim"),
+  version: Type.Literal(1),
+  exportId: identifier(),
+  predecessorRootBeadId: identifier(),
+  predecessorRunId: identifier(),
+  predecessorWaveId: identifier(),
+  snapshotCommitment: hash(),
+  claimantRunId: identifier(),
+  claimToken: idempotencyKey(),
+  claimRevision: Type.Literal(1),
+});
+export type ProvenanceCarryClaimRecord = Static<
+  typeof ProvenanceCarryClaimRecordSchema
+>;
+export const ProvenanceCarryRefusalReasonSchema = Type.Union([
+  Type.Literal("not_found"),
+  Type.Literal("projection_invalid"),
+  Type.Literal("scope_mismatch"),
+  Type.Literal("not_released"),
+  Type.Literal("effects_unsettled"),
+  Type.Literal("provenance_not_deferred"),
+  Type.Literal("snapshot_invalid"),
+  Type.Literal("lineage_invalid"),
+  Type.Literal("lineage_limit_exceeded"),
+]);
+export const ProvenanceCarrySchema = strictObject({
+  claimRecordDigest: hash(),
+  claimRevision: Type.Literal(1),
+  exportId: identifier(),
+  integrationOid: oid(),
+  lineageAncestorDigests: Type.Array(hash(), {
+    maxItems: 128,
+    uniqueItems: true,
+  }),
+  lineageCommitment: hash(),
+  predecessorFinalRevision: revision(),
+  predecessorJournalCheckpointCommitment: hash(),
+  predecessorRootBeadId: identifier(),
+  predecessorRootAggregateCommitment: hash(),
+  predecessorRunId: identifier(),
+  predecessorWaveId: identifier(),
+  projectionInputSnapshot: ProvenanceInputSchema,
+  snapshotCommitment: hash(),
+});
+export type ProvenanceCarry = Static<typeof ProvenanceCarrySchema>;
+const ProvenanceCarryClaimStateSchema = strictObject({
+  claimToken: idempotencyKey(),
+  currentEffectId: effectIdentifier(),
+  exportId: identifier(),
+  predecessorFinalRevision: revision(),
+  predecessorJournalCheckpointCommitment: hash(),
+  predecessorRootBeadId: identifier(),
+  predecessorRootAggregateCommitment: hash(),
+  predecessorRunId: identifier(),
+  predecessorWaveId: identifier(),
+  snapshotCommitment: hash(),
+});
+const ProvenanceCarryRefusalSchema = Type.Union([
+  strictObject({
+    status: Type.Literal("already_claimed"),
+    exportId: identifier(),
+    claimantRunId: identifier(),
+    claimRecordDigest: hash(),
+    claimRevision: Type.Literal(1),
+  }),
+  strictObject({
+    status: Type.Literal("predecessor_refused"),
+    predecessorRootBeadId: identifier(),
+    evidenceDigest: hash(),
+    reason: ProvenanceCarryRefusalReasonSchema,
+  }),
+]);
+const GateProvenanceSchema = strictObject({
+  advancedBaseOid: Type.Optional(oid()),
+  attemptIdempotencyKey: Type.Optional(idempotencyKey()),
+  attemptedCommitOid: Type.Optional(oid()),
+  attemptedTreeOid: Type.Optional(oid()),
+  baseOid: Type.Optional(oid()),
+  commitOid: Type.Optional(oid()),
+  currentEffectId: Type.Optional(effectIdentifier()),
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  gateEntryId: identifier(),
+  projectionInputSnapshot: ProvenanceInputSchema,
+  lastRefusal: Type.Optional(ProvenanceRefusalSchema),
+  observedHeadOid: Type.Optional(Type.Union([oid(), Type.Null()])),
+  status: gateStatus(),
+  timestamp: Type.Optional(utcSecond()),
+  treeOid: Type.Optional(oid()),
+  worktreeCondition: Type.Optional(
+    Type.Union([
+      Type.Literal("dirty_worktree"),
+      Type.Literal("unexpected_head"),
+    ]),
+  ),
+  expectedBaseOid: Type.Optional(oid()),
+  worktreePath: Type.Optional(absolutePath()),
+});
+export type GateProvenance = Static<typeof GateProvenanceSchema>;
+const GateAggregateVerifySchema = strictObject({
+  currentEffectId: Type.Optional(effectIdentifier()),
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  gateEntryId: identifier(),
+  lastRefusal: Type.Optional(AggregateVerificationRefusalSchema),
+  provenanceGateEntryId: identifier(),
+  status: gateStatus(),
+});
+export type GateAggregateVerify = Static<typeof GateAggregateVerifySchema>;
+export const WaveGateSchema = strictObject({
+  aggregateVerify: Type.Optional(GateAggregateVerifySchema),
+  aggregateVerifyPromise: Type.Optional(
+    strictObject({
+      disposition: Type.Optional(gateDisposition()),
+      followUpBeadId: Type.Optional(identifier()),
+      status: Type.Union([Type.Literal("pending"), Type.Literal("voided")]),
+    }),
+  ),
+  carriedProjectionInputSnapshot: Type.Optional(ProvenanceInputSchema),
+  carriedSnapshotCommitment: Type.Optional(hash()),
+  carriedProvenanceBaseOid: Type.Optional(oid()),
+  currentIntegrationOid: Type.Optional(oid()),
+  destinationProbes: Type.Array(GateDestinationProbeSchema, { maxItems: 128 }),
+  lineageAncestorDigests: Type.Array(hash(), {
+    maxItems: 128,
+    uniqueItems: true,
+  }),
+  lineageCommitment: hash(),
+  provenancePromise: Type.Optional(
+    strictObject({
+      disposition: Type.Optional(gateDisposition()),
+      followUpBeadId: Type.Optional(identifier()),
+      status: Type.Union([Type.Literal("pending"), Type.Literal("voided")]),
+    }),
+  ),
+  provenance: Type.Optional(GateProvenanceSchema),
+  provenanceUnitAccounting: Type.Array(
+    Type.Union([
+      strictObject({
+        closureEvidenceCommitment: hash(),
+        status: Type.Literal("uncommitted"),
+        unitId: identifier(),
+      }),
+      strictObject({
+        closureEvidenceCommitment: hash(),
+        provenanceCommitOid: oid(),
+        status: Type.Literal("committed"),
+        unitId: identifier(),
+      }),
+    ]),
+    { maxItems: 64 },
+  ),
+  targetPromises: Type.Array(GateTargetPromiseSchema, { maxItems: 256 }),
+  targets: Type.Array(GateTargetStateSchema, { maxItems: 256 }),
+  targetDefinitionCommitment: hash(),
+  originalUnitIds: Type.Array(identifier(), { maxItems: 3, uniqueItems: true }),
+  waveId: identifier(),
+});
+export type WaveGate = Static<typeof WaveGateSchema>;
+
 /** Validated Beads task metadata supplied to the deterministic wave planner. */
 export const WaveTaskMetadataSchema = strictObject({
   acceptanceIds: Type.Array(identifier(), {
@@ -388,6 +954,9 @@ export const WaveTaskMetadataSchema = strictObject({
   }),
   independence: Type.Union([Type.Literal("ambiguous"), Type.Literal("proven")]),
   mandatoryVerification: packetStrings(1, 32),
+  materialisationTargets: Type.Optional(
+    Type.Array(MaterialisationTargetSchema, { maxItems: 64 }),
+  ),
   ownedPaths: Type.Array(ownedPath(), {
     minItems: 1,
     maxItems: 128,
@@ -404,6 +973,12 @@ export const WaveTaskMetadataSchema = strictObject({
     Type.Literal("medium"),
     Type.Literal("low"),
   ]),
+  supersedes: Type.Optional(
+    Type.Array(identifier(), { maxItems: 64, uniqueItems: true }),
+  ),
+  tombstones: Type.Optional(
+    Type.Array(identifier(), { maxItems: 64, uniqueItems: true }),
+  ),
   unitId: identifier(),
 });
 export type WaveTaskMetadata = Static<typeof WaveTaskMetadataSchema>;
@@ -658,9 +1233,18 @@ export const WaveSchema = strictObject({
 export type Wave = Static<typeof WaveSchema>;
 export const JournalCheckpointSchema = strictObject({
   revision: revision(),
-  compactedEffects: Type.Integer({ minimum: 0 }),
-  compactedEvents: Type.Integer({ minimum: 0 }),
-  compactedIdempotencyKeys: Type.Integer({ minimum: 0 }),
+  compactedEffects: Type.Integer({
+    minimum: 0,
+    maximum: Number.MAX_SAFE_INTEGER,
+  }),
+  compactedEvents: Type.Integer({
+    minimum: 0,
+    maximum: Number.MAX_SAFE_INTEGER,
+  }),
+  compactedIdempotencyKeys: Type.Integer({
+    minimum: 0,
+    maximum: Number.MAX_SAFE_INTEGER,
+  }),
   commitment: hash(),
 });
 export const ControllerOwnershipSchema = strictObject({
@@ -700,6 +1284,14 @@ export const RepositoryRunSchema = strictObject({
   controllerFencingToken: identifier(),
   controller: ControllerOwnershipSchema,
   harness: Type.Optional(HarnessConfigurationSchema),
+  /** Frozen by wave_planned; absent for ordinary software runs. */
+  knowledgeContract: Type.Optional(KnowledgeContractSchema),
+  /** Aggregate post-integration work; absent for ordinary software runs. */
+  gate: Type.Optional(WaveGateSchema),
+  /** Claimed predecessor evidence awaiting one knowledge wave. */
+  pendingProvenanceCarry: Type.Optional(ProvenanceCarrySchema),
+  provenanceCarryClaim: Type.Optional(ProvenanceCarryClaimStateSchema),
+  lastProvenanceCarryRefusal: Type.Optional(ProvenanceCarryRefusalSchema),
   units: Type.Record(identifier(), UnitSchema, {
     maxProperties: LIMITS.units,
     additionalProperties: false,
@@ -898,9 +1490,11 @@ export const ProtocolEventSchema = Type.Union([
     expectedRevision: revision(),
     type: Type.Literal("wave_planned"),
     tasks: Type.Array(WaveTaskMetadataSchema, {
-      minItems: 1,
+      minItems: 0,
       maxItems: LIMITS.units,
     }),
+    carryOnly: Type.Optional(Type.Literal(true)),
+    knowledgeContract: Type.Optional(KnowledgeContractSchema),
     waveId: identifier(),
   }),
   strictObject({
@@ -918,6 +1512,32 @@ export const ProtocolEventSchema = Type.Union([
   }),
   strictObject({
     ...controllerEventBase,
+    type: Type.Literal("provenance_carry_claim_intent"),
+    ...effectIntent,
+    claimToken: idempotencyKey(),
+    exportId: identifier(),
+    predecessorFinalRevision: revision(),
+    predecessorJournalCheckpointCommitment: hash(),
+    predecessorRootBeadId: identifier(),
+    predecessorRootAggregateCommitment: hash(),
+    predecessorRunId: identifier(),
+    predecessorWaveId: identifier(),
+    snapshotCommitment: hash(),
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("provenance_carry_claim_observed"),
+    ...observedEffect,
+    result: Type.Union([
+      strictObject({
+        status: Type.Literal("imported"),
+        carry: ProvenanceCarrySchema,
+      }),
+      ProvenanceCarryRefusalSchema,
+    ]),
+  }),
+  strictObject({
+    ...controllerEventBase,
     type: Type.Literal("controller_release_intent"),
     ...effectIntent,
     slotTransition: Type.Optional(SlotTransitionIntentSchema),
@@ -926,6 +1546,173 @@ export const ProtocolEventSchema = Type.Union([
     ...controllerEventBase,
     type: Type.Literal("controller_released"),
     ...observedEffect,
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("materialisation_resolve_intent"),
+    ...effectIntent,
+    gateEntryId: identifier(),
+    unitId: Type.Null(),
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("materialisation_sources_observed"),
+    ...observedEffect,
+    gateEntryId: identifier(),
+    result: Type.Union([
+      strictObject({
+        status: Type.Literal("observed"),
+        sources: Type.Array(MaterialisationSourceSchema, {
+          minItems: 1,
+          maxItems: LIMITS.materialisationMatches,
+        }),
+      }),
+      strictObject({
+        status: Type.Literal("refused"),
+        refusal: MaterialisationResolveRefusalSchema,
+      }),
+    ]),
+    unitId: Type.Null(),
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("gate_clock_observed"),
+    gateEntryId: identifier(),
+    timestamp: utcSecond(),
+    unitId: Type.Null(),
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("destination_probe_intent"),
+    ...effectIntent,
+    gateEntryId: identifier(),
+    unitId: Type.Null(),
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("destination_probe_observed"),
+    ...observedEffect,
+    gateEntryId: identifier(),
+    result: Type.Union([
+      strictObject({
+        status: Type.Literal("observed"),
+        identity: MaterialisationDestinationIdentitySchema,
+      }),
+      strictObject({
+        status: Type.Literal("refused"),
+        refusal: DestinationProbeRefusalSchema,
+      }),
+    ]),
+    unitId: Type.Null(),
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("materialise_intent"),
+    ...effectIntent,
+    gateEntryId: identifier(),
+    unitId: Type.Null(),
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("materialise_observed"),
+    ...observedEffect,
+    gateEntryId: identifier(),
+    result: Type.Union([
+      strictObject({
+        status: Type.Literal("observed"),
+        observation: MaterialisationObservationSchema,
+      }),
+      strictObject({
+        status: Type.Literal("refused"),
+        refusal: MaterialiseRefusalSchema,
+      }),
+    ]),
+    unitId: Type.Null(),
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("provenance_commit_intent"),
+    ...effectIntent,
+    gateEntryId: identifier(),
+    unitId: Type.Null(),
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("provenance_commit_observed"),
+    ...observedEffect,
+    gateEntryId: identifier(),
+    result: Type.Union([
+      strictObject({
+        status: Type.Literal("committed"),
+        attemptedBaseOid: oid(),
+        commitOid: oid(),
+        treeOid: oid(),
+      }),
+      strictObject({
+        status: Type.Literal("reproducibility_failed"),
+        attemptedCommitOid: oid(),
+        attemptedTreeOid: oid(),
+        reasonDigest: hash(),
+      }),
+      strictObject({
+        status: Type.Literal("base_advanced"),
+        advancedBaseOid: oid(),
+        attemptedCommitOid: oid(),
+        attemptedTreeOid: oid(),
+      }),
+      strictObject({
+        status: Type.Literal("worktree_refused"),
+        condition: Type.Union([
+          Type.Literal("dirty_worktree"),
+          Type.Literal("unexpected_head"),
+        ]),
+        expectedBaseOid: oid(),
+        observedHeadOid: Type.Union([oid(), Type.Null()]),
+        reasonDigest: hash(),
+      }),
+      strictObject({
+        status: Type.Literal("integration_refused"),
+        attemptedCommitOid: oid(),
+        attemptedTreeOid: oid(),
+        reasonDigest: hash(),
+      }),
+    ]),
+    unitId: Type.Null(),
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("gate_entry_deferred"),
+    followUpBeadId: identifier(),
+    gateEntryId: identifier(),
+    unitId: Type.Null(),
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("verification_intent"),
+    ...effectIntent,
+    commands: Type.Array(commandVector(), { minItems: 1, maxItems: 32 }),
+    gateEntryId: identifier(),
+    unitId: Type.Null(),
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("verification_observed"),
+    ...observedEffect,
+    baseOid: oid(),
+    gateEntryId: identifier(),
+    headOid: oid(),
+    treeOid: oid(),
+    unitId: Type.Null(),
+  }),
+  strictObject({
+    ...controllerEventBase,
+    type: Type.Literal("verification_failed"),
+    ...observedEffect,
+    baseOid: oid(),
+    gateEntryId: identifier(),
+    headOid: oid(),
+    treeOid: oid(),
+    unitId: Type.Null(),
   }),
   strictObject({
     ...eventBase,
@@ -1177,6 +1964,7 @@ export const ProtocolEventSchema = Type.Union([
     type: Type.Literal("effect_ambiguous"),
     effectId: effectIdentifier(),
     effectKind: EffectKindSchema,
+    gateEntryId: Type.Optional(identifier()),
     observationHash: Type.Optional(hash()),
   }),
 ]);
@@ -1186,6 +1974,7 @@ const runtimeEffectBase = {
   effectId: effectIdentifier(),
   unitId: nullableIdentifier(),
   idempotencyKey: idempotencyKey(),
+  gateEntryId: Type.Optional(identifier()),
   // The reducer derives this domain-separated digest from the typed params
   // below; adapters execute the typed params, never the opaque digest.
   paramsHash: hash(),
@@ -1269,6 +2058,128 @@ export const RuntimeEffectSchema = Type.Union([
     kind: Type.Literal("candidate_collect"),
     unitId: identifier(),
     params: strictObject({ branchRef: identifier(), worktreePath: text() }),
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    gateEntryId: identifier(),
+    kind: Type.Literal("materialisation_resolve"),
+    unitId: Type.Null(),
+    params: strictObject({
+      destinationProbeGateEntryId: identifier(),
+      domainScope: text(),
+      driver: text(),
+      executorTool: identifier(),
+      gateEntryId: identifier(),
+      remainingAggregateEnvelopeByteCapacity: Type.Integer({
+        minimum: 0,
+        maximum: LIMITS.envelopeBytes,
+      }),
+      remainingProjectionSnapshotByteCapacity: Type.Integer({
+        minimum: 0,
+        maximum: 65_536,
+      }),
+      remainingSourceByteCapacity: Type.Integer({
+        minimum: 0,
+        maximum: LIMITS.materialisationWaveBytes,
+      }),
+      remainingItemCapacity: Type.Integer({
+        minimum: 0,
+        maximum: LIMITS.materialisationOutputs,
+      }),
+      originUnitId: nullableIdentifier(),
+      repositoryIdentity: identifier(),
+      runId: identifier(),
+      sourceOid: oid(),
+      sourcePattern: canonicalSourcePath(),
+      stage: Type.Union([Type.Literal("unit"), Type.Literal("gate")]),
+      target: MaterialisationTargetSchema,
+      targetId: identifier(),
+      targetOrdinal: Type.Integer({ minimum: 0, maximum: 63 }),
+      waveId: identifier(),
+    }),
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    gateEntryId: identifier(),
+    kind: Type.Literal("destination_probe"),
+    unitId: Type.Null(),
+    params: strictObject({
+      destination: DriveAliasSchema,
+      destinationSubpath: canonicalSubpath(),
+      expectedPriorIdentity: Type.Optional(
+        MaterialisationDestinationIdentitySchema,
+      ),
+      gateEntryId: identifier(),
+      repositoryIdentity: identifier(),
+      stage: Type.Union([Type.Literal("unit"), Type.Literal("gate")]),
+      waveId: identifier(),
+    }),
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    gateEntryId: identifier(),
+    kind: Type.Literal("materialise"),
+    unitId: Type.Null(),
+    params: strictObject({
+      artifactName: plainBasename(),
+      destination: DriveAliasSchema,
+      destinationIdentity: MaterialisationDestinationIdentitySchema,
+      destinationProbeGateEntryId: identifier(),
+      destinationSubpath: canonicalSubpath(),
+      domainScope: identifier(),
+      driver: text(),
+      executorTool: identifier(),
+      gateEntryId: identifier(),
+      namespaceControl: Type.Literal("exclusive"),
+      originUnitId: nullableIdentifier(),
+      repositoryIdentity: identifier(),
+      runId: identifier(),
+      sidecarByteCount: Type.Integer({
+        minimum: 1,
+        maximum: LIMITS.materialisationSidecarBytes,
+      }),
+      sidecarBytes: Type.String({
+        minLength: 1,
+        maxLength: LIMITS.materialisationSidecarBytes,
+        maxUtf8Bytes: LIMITS.materialisationSidecarBytes,
+      }),
+      sidecarName: plainBasename(),
+      sidecarSha256: hash(),
+      source: MaterialisationSourceSchema,
+      sourceOid: oid(),
+      targetId: identifier(),
+      timestamp: utcSecond(),
+      waveId: identifier(),
+    }),
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    gateEntryId: identifier(),
+    kind: Type.Literal("provenance_commit"),
+    unitId: Type.Null(),
+    params: strictObject({
+      baseOid: oid(),
+      gateEntryId: identifier(),
+      projectionInputSnapshot: ProvenanceInputSchema,
+      knowledgeContract: KnowledgeContractSchema,
+      runId: identifier(),
+      timestamp: utcSecond(),
+      waveId: identifier(),
+      worktreePath: absolutePath(),
+    }),
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    gateEntryId: identifier(),
+    kind: Type.Literal("verify"),
+    unitId: Type.Null(),
+    params: strictObject({
+      candidate: CandidateBindingSchema,
+      commands: Type.Array(commandVector(), { minItems: 1, maxItems: 32 }),
+      gateEntryId: identifier(),
+      provenanceOid: oid(),
+      worktreePath: absolutePath(),
+    }),
   }),
   strictObject({
     ...runtimeEffectBase,
@@ -1360,6 +2271,26 @@ export const RuntimeEffectSchema = Type.Union([
       ]),
     }),
   ),
+  strictObject({
+    ...runtimeEffectBase,
+    kind: Type.Literal("provenance_carry_claim"),
+    unitId: Type.Null(),
+    params: strictObject({
+      claimToken: idempotencyKey(),
+      currentRunId: identifier(),
+      exportId: identifier(),
+      integrationBranch: identifier(),
+      predecessorFinalRevision: revision(),
+      predecessorJournalCheckpointCommitment: hash(),
+      predecessorRootBeadId: identifier(),
+      predecessorRootAggregateCommitment: hash(),
+      predecessorRunId: identifier(),
+      predecessorWaveId: identifier(),
+      repositoryIdentity: identifier(),
+      snapshotCommitment: hash(),
+      storeIdentity: identifier(),
+    }),
+  }),
   strictObject({
     ...runtimeEffectBase,
     kind: Type.Literal("controller_release"),
