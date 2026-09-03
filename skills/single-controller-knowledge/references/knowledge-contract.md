@@ -40,10 +40,11 @@ configuration. It records:
 - `projectId`, `domainScope` (the access-domain identifier), and `audience`,
   copied into every provenance record;
 - the alias table: alias, marker file, mount policy (`required` or
-  `optional`), the mount-path environment variable, and the required version 1
-  `namespaceControl: "exclusive"` assertion. Composition resolves each named
-  variable exactly once into a canonical absolute root; alias names are
-  unique and roots are pairwise disjoint;
+  `optional`), the canonical absolute root, and the required version 1
+  `namespaceControl: "exclusive"` assertion. Composition resolves each
+  manifest mount-path variable exactly once into that root; alias names are
+  unique and roots are pairwise disjoint, checked at composition and again
+  when the reducer admits the contract;
 - `humanDriver`, the person accountable for the domain;
 - the provenance block: events directory, generated directory, record format
   version, rollup generator argv, reproducibility argv, and the worktree-root
