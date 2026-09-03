@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   discoverDetachedWorktree,
   nodeGitRunner,
+  readTreeFiles,
 } from "../../../src/adapters/git/index.js";
 import { createProductionRecoveryEffectAdapter } from "../../../src/commands/production-recovery.js";
 import {
@@ -757,6 +758,36 @@ test("remote-ff lands through a non-force push and a rejected push observes the 
       throw new Error("unreachable");
     assert.equal(rejected.result.advancedBaseOid, advanced);
     assert.equal(git(fixture.remote!, "rev-parse", "main"), advanced);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("oversize record readback refuses the whole read instead of truncating", async () => {
+  const fixture = await provenanceFixture();
+  try {
+    await writeFile(
+      join(fixture.repository, "events", "big.md"),
+      `---\nid: big\n---\n\n# Provenance record\n\n${"x".repeat(70_000)}\n`,
+      "utf8",
+    );
+    git(fixture.repository, "add", "-A");
+    git(fixture.repository, "commit", "-q", "-m", "oversize record");
+    const head = git(fixture.repository, "rev-parse", "HEAD");
+    const blob = git(fixture.repository, "rev-parse", `${head}:events/big.md`);
+    const raw = await nodeGitRunner({
+      argv: ["cat-file", "blob", blob],
+      cwd: fixture.repository,
+    });
+    assert.ok(Buffer.byteLength(raw.stdout, "utf8") > 65_536);
+    assert.equal(
+      await readTreeFiles(nodeGitRunner, fixture.gitRepository, {
+        commit: head,
+        directory: "events",
+        maxFiles: 64,
+      }),
+      undefined,
+    );
   } finally {
     await fixture.cleanup();
   }

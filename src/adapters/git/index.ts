@@ -1996,10 +1996,18 @@ export const nodeGitRunner: GitRunner = async ({ argv, cwd, env }) => {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
+    // The chunk that crosses the cap is retained so the result's stdout is
+    // provably oversize and `commandOk` refuses it; later chunks are dropped
+    // and the child is killed, keeping memory bounded to one extra chunk.
+    let outputExceeded = false;
     const consume = (isStdout: boolean, chunk: Buffer): void => {
+      if (outputExceeded) return;
       outputBytes += chunk.byteLength;
-      if (outputBytes > MAX_OUTPUT) child.kill("SIGKILL");
-      else if (isStdout) stdoutChunks.push(chunk);
+      if (isStdout) stdoutChunks.push(chunk);
+      if (outputBytes > MAX_OUTPUT) {
+        outputExceeded = true;
+        child.kill("SIGKILL");
+      }
     };
     child.stdout.on("data", (chunk: Buffer) => consume(true, chunk));
     child.stderr.on("data", (chunk: Buffer) => consume(false, chunk));

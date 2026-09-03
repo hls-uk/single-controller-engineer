@@ -22142,10 +22142,15 @@ var nodeGitRunner = async ({ argv, cwd, env }) => {
       stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true
     });
+    let outputExceeded = false;
     const consume = (isStdout, chunk) => {
+      if (outputExceeded) return;
       outputBytes += chunk.byteLength;
-      if (outputBytes > MAX_OUTPUT) child.kill("SIGKILL");
-      else if (isStdout) stdoutChunks.push(chunk);
+      if (isStdout) stdoutChunks.push(chunk);
+      if (outputBytes > MAX_OUTPUT) {
+        outputExceeded = true;
+        child.kill("SIGKILL");
+      }
     };
     child.stdout.on("data", (chunk) => consume(true, chunk));
     child.stderr.on("data", (chunk) => consume(false, chunk));
