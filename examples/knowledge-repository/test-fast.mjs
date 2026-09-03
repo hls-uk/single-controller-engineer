@@ -95,6 +95,74 @@ function runSelfTests() {
       "unknown key unexpected",
     );
 
+    const unsafePatternManifest = JSON.parse(
+      readFileSync(join(root, "knowledge-manifest.json"), "utf8"),
+    );
+    unsafePatternManifest.materialisationTargets[0].sourcePattern =
+      "knowledge/**/secret.md";
+    const unsafePatternPath = join(temporary, "unsafe-source-pattern.json");
+    writeFileSync(
+      unsafePatternPath,
+      `${JSON.stringify(unsafePatternManifest, null, 2)}\n`,
+      "utf8",
+    );
+    expectFailure(
+      "unsafe materialisation source pattern",
+      invoke("validate-manifest.mjs", [
+        "--root",
+        root,
+        "--manifest",
+        unsafePatternPath,
+      ]),
+      "sourcePattern: string does not match",
+    );
+
+    const wildcardLeadingManifest = JSON.parse(
+      readFileSync(join(root, "knowledge-manifest.json"), "utf8"),
+    );
+    wildcardLeadingManifest.materialisationTargets[0].sourcePattern =
+      "knowledge/current/*.md";
+    const wildcardLeadingPath = join(
+      temporary,
+      "wildcard-leading-source-pattern.json",
+    );
+    writeFileSync(
+      wildcardLeadingPath,
+      `${JSON.stringify(wildcardLeadingManifest, null, 2)}\n`,
+      "utf8",
+    );
+    expectFailure(
+      "wildcard-leading materialisation source pattern",
+      invoke("validate-manifest.mjs", [
+        "--root",
+        root,
+        "--manifest",
+        wildcardLeadingPath,
+      ]),
+      "sourcePattern: string does not match",
+    );
+
+    const missingSidecarManifest = JSON.parse(
+      readFileSync(join(root, "knowledge-manifest.json"), "utf8"),
+    );
+    missingSidecarManifest.materialisationTargets[0].sidecarRequired = false;
+    const missingSidecarPath = join(temporary, "missing-sidecar-policy.json");
+    writeFileSync(
+      missingSidecarPath,
+      `${JSON.stringify(missingSidecarManifest, null, 2)}\n`,
+      "utf8",
+    );
+    expectFailure(
+      "optional materialisation sidecar",
+      invoke("validate-manifest.mjs", [
+        "--root",
+        root,
+        "--manifest",
+        missingSidecarPath,
+      ]),
+      "sidecarRequired",
+    );
+
     const boundaryRoot = join(temporary, "boundary-repository");
     copyRepositoryFixture(boundaryRoot);
     mkdirSync(join(boundaryRoot, "private"));

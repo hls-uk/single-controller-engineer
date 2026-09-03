@@ -137,6 +137,7 @@
     },
     "materialisationTargets": {
       "type": "array",
+      "maxItems": 64,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -148,9 +149,22 @@
           "sidecarRequired"
         ],
         "properties": {
-          "sourcePattern": { "type": "string", "minLength": 1 },
-          "destinationAlias": { "type": "string", "minLength": 1 },
-          "destinationSubpath": { "type": "string", "minLength": 1 },
+          "sourcePattern": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 192,
+            "pattern": "^(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)(?!.*\\\\)(?!.*\\*\\*)[A-Za-z0-9][A-Za-z0-9._*?-]*(?:/[A-Za-z0-9][A-Za-z0-9._*?-]*)*$"
+          },
+          "destinationAlias": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,62}$"
+          },
+          "destinationSubpath": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 192,
+            "pattern": "^(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*//)(?!.*\\\\)[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
+          },
           "namingPolicy": {
             "enum": [
               "source-basename",
@@ -158,7 +172,7 @@
               "content-hash-suffix"
             ]
           },
-          "sidecarRequired": { "type": "boolean" }
+          "sidecarRequired": { "type": "boolean", "const": true }
         }
       }
     },

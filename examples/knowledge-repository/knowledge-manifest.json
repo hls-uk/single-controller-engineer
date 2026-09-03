@@ -47,7 +47,7 @@
   },
   "materialisationTargets": [
     {
-      "sourcePattern": "knowledge/current/*.md",
+      "sourcePattern": "knowledge/current/access-*.md",
       "destinationAlias": "partner-drive",
       "destinationSubpath": "rendered/guidance",
       "namingPolicy": "source-basename",

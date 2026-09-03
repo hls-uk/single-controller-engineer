@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-02
 **Status:** Amended through successive fresh frontier reviews; accepted with
-DEC-20260902-011
+DEC-20260902-011 and DEC-20260903-012
 **Architecture authority:**
 [Single-Controller Engineer](2026-08-24-single-controller-engineer.md)
 **Delivery companion:**
@@ -12,8 +12,9 @@ collaboration), DEC-003 (projects compose access-domain repos and partnered
 Drives), `wiki/projects/agent-knowledge-migration.md`, and the IWPRB
 Git-and-Drive pilot technical runbook
 **Controller decisions:**
-[DEC-20260902-011](../decisions/2026-09-02-011-knowledge-profile-extends-engine.md)
-**Beads:** `sce-9f5`
+[DEC-20260902-011](../decisions/2026-09-02-011-knowledge-profile-extends-engine.md),
+[DEC-20260903-012](../decisions/2026-09-03-012-materialisation-source-and-no-clobber.md)
+**Beads:** `sce-9f5`, `sce-085`
 
 The Single-Controller Engineer design remains authoritative for architecture,
 authority, privacy, secrets, fencing, integration safety, and topology
@@ -46,11 +47,12 @@ profile-neutral capabilities are added to the runtime:
    path instead of the diff bytes, which closes `sce-cfl` for every profile.
 
 Those capabilities bring the schema they require: optional targets and
-supersession fields on task metadata, gate state on the run aggregate with
-voided dispositions, the existing `verify` effect extended to admit a null
-unit for the wave's combined verification, a clock observation event, closure
-evidence extended with the task-metadata facts a record needs, and a
-knowledge contract in the controller configuration.
+supersession fields on task metadata, a journaled source-resolution effect,
+gate state on the run aggregate with voided dispositions, the existing
+`verify` effect extended to admit a null unit for the wave's combined
+verification, a clock observation event, closure evidence extended with the
+task-metadata facts a record needs, and a knowledge contract in the controller
+configuration.
 
 Everything else that distinguishes knowledge from software is a **profile**:
 verification vocabulary, severity table, author and reviewer charges, Drive
@@ -220,10 +222,10 @@ artifact is defective at planning time.
 Worktree isolation, reservations, and the merge slot protect Git. They do not
 protect a synced Drive. Therefore no worker, reviewer, or controller session
 writes to a Drive path directly. Drive writes are typed effects: the intent
-journals the complete destination name, the adapter performs an ordered pair
-of atomic renames to that name, and a strict readback is recorded. A
-destination that already exists with different bytes is ambiguous and blocks;
-it is never overwritten.
+journals the complete artifact and sidecar destination names, the adapter
+performs an ordered pair of atomic no-clobber hard links to those names, and a
+strict readback is recorded. A destination that already exists with different
+bytes is ambiguous and blocks; it is never overwritten.
 
 ### Provenance is a projection, not prose
 
@@ -260,7 +262,7 @@ enforced by the fast gate and by review, not by an agent remembering the rule.
 | Verification | Commands, exit status, tree binding, cache keys | The existing `verify` effect kind extended to admit a null unit, emitted at aggregate level in the provenance step's journaled detached worktree at the provenance-commit OID | Prose verification vocabulary and templates |
 | Review | Packet hash, schema-valid verdict, exact-pair binding | Digest-bound reviewer packet (`sce-cfl`) | Reviewer charge and severity table |
 | Integration | Local and remote fast-forward (the parent's merge-group profile is designed, not yet implemented) | | |
-| Materialisation | | `materialise` effect with clock-bound destination names, filesystem adapter | Destination policy, naming, sidecar fields |
+| Materialisation | | Journaled source resolution and `materialise` effects with clock-bound destination names, filesystem adapter | Destination policy, naming, sidecar fields |
 | Provenance | Closure evidence in the run store | Provenance record projection and deterministic provenance commit | Rollup generators in the repository |
 | Recovery | Intent, observation, ambiguity, idempotency | New effects join the journal | |
 | Roles and tiers | Frontier controller and reviewer, workhorse implementer | | Author and reviewer packet guidance |
@@ -372,14 +374,17 @@ acceptance identifiers, dependencies, owned paths, conflict domains,
 reservations, mandatory verification, risk, priority, and independence. Two
 optional
 fields are added to that schema for every profile: `materialisationTargets`,
-each naming a destination alias, a source path pattern in the landed tree, a
-naming policy, and whether a sidecar is required; and `supersedes` and
-`tombstones`, lists of provenance record identifiers, so supersession is a
-validated fact the projection reads rather than a note. Both are committed
-with the wave plan, so the wave gate's promise set and every record's
-supersession links are aggregate state the reducer owns, never facts the
-controller remembers. The profile adds conventions in the design and notes
-fields for facts the engine does not execute:
+each naming a destination alias, a bounded canonical Git glob in the landed
+tree, a naming policy, and the version 1 constant `sidecarRequired: true`; and
+`supersedes` and `tombstones`, lists of provenance record identifiers, so
+supersession is a validated fact the projection reads rather than a note. A
+source pattern is a slash-separated ASCII path whose segments do not begin
+with a wildcard; it admits `*` and `?` within a segment, rejects `**`, pathspec
+magic, empty, dot, and parent segments, and never matches a directory. Both
+sets of fields are committed with the wave plan, so the wave gate's promise
+set and every record's supersession links are aggregate state the reducer
+owns, never facts the controller remembers. The profile adds conventions in
+the design and notes fields for facts the engine does not execute:
 
 - the source list: Drive or Git paths an author may read, informational for
   the packet and for review; and
@@ -587,43 +592,194 @@ that leave the unit state machine untouched:
   the aggregate suite; their observations enter the journal and the sidecar,
   and no per-wave record exists in version 1.
 
+A target definition is not yet a materialisation. The reducer preserves each
+committed target array's order and derives its identifier as
+`sce:tgt:<sha256>`, where the digest is RFC 8785 canonical JSON over the domain
+`sce.materialisation-target.v1`, its `unit` or `gate` scope, origin unit ID when
+present, zero-based target ordinal, and complete target definition. At its
+emission point the reducer first journals one `materialisation_resolve` intent
+bound to the run, wave, that target identifier, source OID, canonical source
+pattern, and the remaining item and byte capacities.
+
+Every aggregate gate entry also has a stable `sce:gate:<sha256>` identifier.
+Its RFC 8785 input uses domain `sce.gate-entry.v1`, run and wave IDs, stage,
+and the complete logical stage identity: target ID and source OID for
+resolution; those fields plus resolved path and blob OID for one
+materialisation; or the provenance projection input snapshot, including its
+ordered unit set and stable target-evidence digests, for provenance. The
+attempt-local integration base OID is deliberately excluded from the
+provenance gate-entry identity. Aggregate verify uses the upstream provenance
+entry ID. This `gateEntryId` is required on every aggregate clock, intent,
+observation, refusal, and deferral event and in every aggregate runtime effect's
+typed parameters. The effect journal stores it and includes it in the intent
+commitment; the aggregate idempotency-key derivation binds it; recovery selects
+the exact gate entry by identifier and effect kind before reconstructing the
+parameters hash. A retry retains the logical gate entry ID but has the new
+revision's effect ID and idempotency key. In particular, an observed
+base-advance rejection leaves the provenance entry pending: the replacement
+intent uses the newly observed base OID, the same gate entry ID, and a new
+effect ID and key. No entry is replaced, voided, or migrated, and recovery
+selects the latest unresolved revision within that entry. Unit effects omit
+the field, so existing software keys and recovery remain byte-for-byte
+unchanged.
+
+K2's source-specific Git executor lives under `src/adapters/materialise/`; it
+does not extend the general provenance Git adapter owned by K3. It enumerates
+the exact OID's tree without giving the pattern to Git as a pathspec, applies
+the closed `*` and `?` segment matcher itself, and reads each selected blob by
+OID. Its observation returns byte-sorted, unique regular blobs as `(path, blob
+OID, sha256, byte count)` tuples. A returned path is ASCII and at most 192
+bytes; one blob is at most 16 MiB; one target resolves at most 64 blobs; and one
+wave admits at most 128 outputs totalling 64 MiB. The observation carries no
+blob bytes and remains inside the 131,072-byte aggregate envelope.
+
+One target may match many files; the reducer creates one materialisation gate
+entry per tuple in that exact order. It resolves every target in the unit stage
+and then obtains the validated UTC-second observation and derives the complete
+artifact and sidecar names for every resulting entry before admitting any unit
+materialise intent. It performs the same resolve, clock, and name-preflight
+sequence for every gate target before admitting any gate materialise intent.
+Zero matches, an exceeded item or byte limit, a non-blob match, or an unsafe
+returned path is a positive
+`refused`
+observation with no publication, not a controller-selected subset. Every
+observed path must also be valid UTF-8 and a canonical slash-separated ASCII
+path whose segments match `[A-Za-z0-9][A-Za-z0-9._-]*`; a wildcard that reaches
+any other path refuses the whole result. The reducer likewise refuses the
+whole result if the exact derived artifact and sidecar basenames for all
+entries in the stage are not pairwise distinct within the same destination
+alias and destination subpath. The comparison is over the combined final-name
+set, so it catches artifact/artifact, sidecar/sidecar, and artifact/sidecar
+collisions even when the targets use different naming policies. These checks
+occur after every stage clock is observed but before any materialise intent,
+so a refusal cannot leave a partial publication. It remains pending until a
+later resolved attempt or an explicit controller deferral with a follow-up
+Bead. The controller never supplies a resolved path, digest, clock, or name
+from memory.
+
 A `materialise` intent binds the run, the source OID, the source path in that
-tree, the destination alias with its canonical root, marker file, and mount
-policy from the knowledge contract, the human driver and domain scope, the
-run's pinned harness family as the executor tool, and the **complete destination
-name**, so that every fact the adapter and the sidecar use enters the parameters
-hash. The name is computed inside the intent, not by the adapter: a stable slug,
-the short source OID, and a UTC timestamp taken from a validated clock
-observation event bound to the intent. The idempotency key is derived from those
-journaled facts. A crash after the act therefore resumes against the same name
-and compares bytes; it never mints a second name.
+tree, its observed blob OID, sha256 and byte count, the destination alias with
+its canonical root, marker file, and mount policy from the knowledge contract,
+the human driver and domain scope, the run's pinned harness family as the
+executor tool, and the **complete artifact and sidecar destination names**, so
+that every fact the adapter and the sidecar use enters the parameters hash.
+Before that intent the reducer accepts one validated UTC clock observation for
+the exact resolved entry. The timestamp syntax is `YYYY-MM-DDTHH:MM:SSZ` and
+must round-trip as a real UTC second.
+
+Destination names have one exact grammar. Treat the last non-leading dot as an
+extension separator only when it is followed by one to ten ASCII alphanumeric
+characters; otherwise the whole basename is the stem and the extension is
+empty. Convert ASCII uppercase to lowercase, collapse every non-alphanumeric
+stem run to `-`, trim dashes, take the first 80 ASCII bytes, and trim a trailing
+dash again. Because an admitted source basename begins with an alphanumeric,
+the slug cannot be empty. A retained extension is a dot plus its lower-case
+suffix. The three naming policies produce:
+
+- `source-basename`: `<slug>--<oid12>--<YYYYMMDDTHHMMSSZ><ext>`;
+- `iso-date-prefix`:
+  `<YYYY-MM-DD>--<slug>--<oid12>--<YYYYMMDDTHHMMSSZ><ext>`; and
+- `content-hash-suffix`:
+  `<slug>--<sha256-12>--<oid12>--<YYYYMMDDTHHMMSSZ><ext>`.
+
+The reducer computes and journals that name; the adapter never invents or
+normalises it. The idempotency key is derived from the journaled facts. A crash
+after the act therefore resumes against the same name and compares bytes; it
+never mints a second name. Version 1 requires a provenance sidecar for every
+output. `sidecarRequired: false` is rejected by both the repository manifest
+schema and the runtime contract rather than creating an untraceable artifact.
+The materialise intent journals the artifact name above and the sidecar name,
+which is exactly `<artifact-name>.sce-provenance.json`; both are validated as
+plain basenames and neither may contain a separator.
+
+The sidecar is strict canonical data, not adapter-authored prose. Its schema is
+`sce.materialisation-provenance` version 1 with no unknown keys and the fields
+`runId`, `waveId`, `gateEntryId`, nullable `originUnitId`, `targetId`,
+`sourceOid`, `sourcePath`, `blobOid`, `sha256`, `byteCount`,
+`destinationAlias`, `destinationSubpath`, `artifactName`, `driver`,
+`domainScope`, `executorTool`, and `timestamp`. The reducer derives the exact
+bytes as RFC 8785 canonical JSON encoded as UTF-8 followed by one LF; the
+result is bounded to 8,192 bytes and its SHA-256 and byte count are bound into
+the materialise intent. Before any filesystem write, the adapter reads the
+source blob by its journaled blob OID, enforces the 16 MiB cap, and requires its
+SHA-256 and byte count to equal the resolution observation. Absence before a
+final exists is a positive refusal; any contradictory object bytes are
+ambiguous and publish nothing.
 
 The version 1 adapter is a filesystem adapter against a Drive for Desktop
-folder:
+folder. Its mutating port starts the current Node executable with
+`shell: false`, a fixed bundled helper program, a bounded sanitized environment,
+and the validated destination directory as the child process's `cwd`. The
+parent passes
+the directory's expected device, inode, and canonical path plus plain final and
+temporary basenames; artifact and sidecar bytes use a fixed length-prefixed
+stdin frame bounded by the limits above. The child first requires `stat(".")`
+and `realpath(".")` to equal those expected facts, then performs every final and
+temporary lookup relative to that inode-bound `cwd`; it never resolves the
+original destination path again. It returns only a strict bounded observation.
+The parent validates that observation. This uses the shipped Node runtime, not
+a shell, library, or system helper, and introduces no runtime dependency.
+
+The helper also rechecks the `cwd` device, inode, and canonical path after final
+readback. Failure to start the helper or prove its initial identity fails closed
+before mutation. A later identity change is ambiguous and preserves the exact
+evidence. The engine's merge slot serializes compliant controller writers.
+Version 1 additionally requires exclusive namespace control for the admitted
+destination directory during the helper call: any concurrent process that can
+rename that directory through its parent, including a same-user process or a
+Drive sync client, is outside the supported authority model. Post-act identity
+checking detects such interference as ambiguous but cannot prove that the
+inode was not moved during the publication syscall, just as for Git worktrees.
+
+The complete algorithm is:
 
 1. resolve the destination root from the controller configuration by alias;
-   require that its canonical real path equals the configured path, that it
-   is a directory, and that the manifest-declared marker file for that alias
-   is present in it, because a missing marker means the Drive is not mounted;
-2. if either journaled destination name already exists, read back what is
+   require `lstat` to identify a real directory rather than a symbolic link,
+   require its canonical real path to equal the configured absolute path, and
+   require the manifest-declared marker to be a no-follow regular file in that
+   root, because a missing marker means the Drive is not mounted; every
+   component of the destination subpath must already be a real directory, not
+   a symbolic link, and the final directory's real path must equal the lexical
+   path below the canonical root; version 1 never creates destination
+   directories;
+2. start the helper only after those checks, and use no-follow opens and `fstat`
+   relative to its verified `cwd` for every existing final or temporary path;
+   a symbolic link, directory, device, socket, or other special file is
+   ambiguous and is preserved; if either journaled final name exists, read
+   back what is
    there: artifact and sidecar both identical to the intent facts is an
    already-observed act; artifact identical and sidecar missing completes the
    sidecar from the same intent facts and then observes; sidecar identical
    and artifact missing continues to the artifact write; any other state,
    including different bytes in either file, records `ambiguous` and blocks;
-3. otherwise write the sidecar, then the artifact, each to a temporary name
+3. inside that same helper, otherwise write the sidecar, then the artifact,
+   each to a temporary name
    derived deterministically from its journaled destination name with a dot
-   prefix and a fixed suffix, inside the destination directory; a leftover
-   temporary with exactly that name from a crashed attempt is replaced,
-   because it is never a published object, and nothing else in the directory
-   is touched; fsync each and rename each atomically, sidecar first so an
-   artifact never exists without its provenance; and
-4. read back size and sha256 of both files and record the observation.
+   prefix and the suffix `.sce-tmp`, inside the destination directory; a
+   leftover temporary must be a no-follow regular file with link count one;
+   identical bytes are reused, different bytes are unlinked because that exact
+   reserved name is never a published object, and no other path is touched;
+   create or recreate with `O_CREAT | O_EXCL | O_NOFOLLOW` and mode `0600`,
+   require `fstat` to confirm the same regular inode, write and fsync it, and
+   revalidate the helper's directory identity; atomically publish it with the
+   same-filesystem hard-link operation, require final readback to be the same
+   inode and expected bytes, fsync the directory, and unlink only that exact
+   temporary, sidecar first; an `EEXIST` race at temporary creation is
+   ambiguous rather than retried; and
+4. read back size and sha256 of both files, revalidate the helper's directory
+   identity, and record the strict observation.
 
-Dot-prefixed temporary names keep partial writes out of Drive views. Rename
-and fsync semantics on a synced folder are not those of a local filesystem,
-so the atomicity claim is release-tier evidence on a real mounted Drive (K6),
-not an assumption.
+The link operation is the version 1 no-clobber primitive: it fails when the
+final name already exists and therefore cannot replace another writer's file.
+There is no rename, copy, or direct-write fallback. `EEXIST` triggers an exact
+readback: identical bytes resume or observe, different bytes are ambiguous.
+An unsupported hard-link operation is a positive refusal only when no final
+name was created; any uncertain or partial outcome is ambiguous. Dot-prefixed
+temporary names keep partial writes out of Drive views. Hard-link and fsync
+semantics on a synced folder are not assumed: K6 records them on a disposable
+directory, and real mounted-Drive support remains a release-tier gate before a
+tag. A filesystem that cannot prove this primitive is unsupported by the v1
+adapter and receives no unsafe fallback.
 
 The sidecar names the unit or wave, run identity, source OID, source path,
 sha256, driver, executor tool, and timestamp, so a Drive reader can trace any
@@ -632,7 +788,11 @@ are read from the journaled intent, where the controller configuration placed
 them; the timestamp is the intent's clock observation.
 Generated Drive directories are marked generated in their own instructions;
 reverse edits are never read back into Git. The adapter never overwrites,
-deletes, moves, or lists beyond its destination directory.
+deletes or moves a published object, and never lists beyond its destination
+directory. It may replace or unlink only the two exact journaled temporary
+names that are never published objects. All containment, no-follow, inode, and
+byte checks are repeated during reconciliation; missing evidence never becomes
+permission to act.
 
 A Google Drive API adapter, if ever added, implements the same effect with
 provider object identifiers as its readback. It is a separate decision with
@@ -642,9 +802,9 @@ its own release evidence.
 
 New. At the wave gate the controller emits one `provenance_commit` intent. The
 runtime projects the closure evidence of each unit closed as landed, its
-unit-target materialise observations, and the named run inputs to a canonical
-Markdown
-record with a stable identifier, writes the records under the events
+complete unit-target resolution, materialisation, refusal, and deferral
+evidence, and the named run inputs to a canonical Markdown record with a stable
+identifier, writes the records under the events
 directory, runs the repository's declared rollup generator, and produces one
 deterministic commit on the integration branch.
 
@@ -717,21 +877,27 @@ in the same way.
 The projection's inputs are validated schemas only: closure evidence, which
 K3 extends to retain the task-metadata facts a record needs (owned paths,
 acceptance identifiers, supersessions) after the unit leaves the live map;
-the unit's materialise observations; and the intent's own parameters, which
-carry the human driver, the domain scope, the alias table, the provenance
-contract, and the clock observation. Those values originate in the
-controller configuration but the projection reads them from the journaled
-intent, never from live configuration, so the same run store always projects
-the same bytes. Nothing is read from prose or the conversation.
+the K2-stable target evidence snapshot copied into the provenance intent,
+which retains each target definition, source-resolution observation or
+refusal, each resolved materialisation observation, and every deferral reason
+and follow-up Bead; and the intent's own parameters, which carry the human
+driver, domain scope, alias table, provenance contract, and clock observation.
+Those values originate in the committed task metadata, gate journal, and
+controller configuration, but the projection reads them only from the
+journaled provenance intent, never from live configuration or a later mutable
+gate. The same run store therefore projects the same bytes. Nothing is read
+from prose or the conversation.
 
 A provenance record contains at least the fields DEC-002 requires: a globally
 unique identifier, project and domain scope, human driver, executor tool and
 session identity where available, UTC timestamp, base and landed OIDs, owned
 paths, verification commands and results, review verdict binding, materialised
 destinations and digests each marked observed or deferred, and superseded or
-tombstoned records. It never
-contains secrets, transcripts, or narrative beyond the bounded `WorkerResult`
-summary.
+tombstoned records. A target deferred before source resolution has no invented
+path, digest, or final name: its record carries the target identifier, source
+pattern, destination alias and subpath, refusal code, follow-up Bead, and
+`deferred` disposition. It never contains secrets, transcripts, or narrative
+beyond the bounded `WorkerResult` summary.
 
 The engine's fast suite proves byte-identical output for identical input, and
 the knowledge repository's fast gate proves every committed record still
@@ -740,18 +906,24 @@ validates and binds an OID in the branch history.
 ### 9. Gate the wave
 
 The wave gate gains aggregate state. The repository run carries a `gate`
-field holding, for the current wave, the unit-target materialisations, the
-provenance commit, and the gate-target materialisations, each with its effect
-identifier and a status of `pending`, `observed`, or `voided`. The reducer
-populates them from committed task metadata and from the knowledge contract
-recorded at `wave_planned`; the provenance entry and the gate-target entries
-exist only when the contract declares them, and the controller supplies
-nothing from memory. Ordering within the gate is fixed: unit targets, then
-the provenance commit, then combined verification on its OID, then gate
-targets. Their events are `materialise_intent` and `materialise_observed`, and
-`provenance_commit_intent` and `provenance_commit_observed`, all following the
-existing intent-then-observation pattern with `ambiguous` as a first-class
-outcome. Combined verification is itself a gate entry: the existing `verify`
+field holding, for the current wave, the target definitions and their source
+resolution, the resolved unit-target materialisations, the provenance commit,
+and the resolved gate-target materialisations, each with its stable gate entry
+identifier, optional current or last effect identifier, and a status of
+`pending`, `observed`, or `voided`. The reducer populates target definitions
+from committed task metadata and from the knowledge contract recorded at
+`wave_planned`; resolved paths and digests enter only through the journaled
+source-resolution observation. The provenance entry and gate-target definitions
+exist only when the contract declares them, and the controller supplies nothing
+from memory. Ordering within the gate is fixed: resolve every unit target, then
+run every sorted unit materialisation; emit the provenance commit; run combined
+verification on its OID; resolve every gate target; then run every sorted gate
+materialisation. Their events are `materialisation_resolve_intent` and
+`materialisation_sources_observed`, `materialise_intent` and
+`materialise_observed`, and `provenance_commit_intent` and
+`provenance_commit_observed`, all following the existing
+intent-then-observation pattern with `ambiguous` as a first-class outcome.
+Combined verification is itself a gate entry: the existing `verify`
 effect kind, extended to admit a null unit, emitted at aggregate level with
 the provenance step's journaled detached worktree as its working directory,
 bound to the provenance-commit OID and tree, and reusing
@@ -765,6 +937,17 @@ its commands equal the combined-verification commands recorded with the
 knowledge contract at `wave_planned`. A gate target is admitted only after
 aggregate verification is observed green. The gate-green predicate therefore
 reads observations and never a controller's memory.
+
+K2 owns the complete strict wire shapes and reducer legality for
+`materialisation_resolve`, `materialise`, the gate-facing
+`provenance_commit`, and aggregate `verify`, including refused observations and
+deferral. K3 owns provenance projection, record and rollup bytes, detached
+worktree and provenance Git execution, discovery, and production observation;
+the source-specific Git executor remains in K2's materialise subtree. Between
+the two commits a production knowledge run fails closed as unavailable at the
+provenance adapter boundary; K2 reducer tests use schema-valid synthetic host
+observations to prove the gate transitions. This staging boundary does not
+weaken or version an incomplete wire contract.
 
 A gate entry can never wedge a run, because every way it can fail to be
 observed has a reducer-owned `voided` disposition with a validated reason:
@@ -785,10 +968,11 @@ observed has a reducer-owned `voided` disposition with a validated reason:
   nothing to project or verify; the reducer voids the provenance entry, the
   aggregate verify entry, and the gate targets from aggregate state alone; and
 - `deferred_by_controller`: the entry's own last effect is a positive
-  `refused` observation or a `verification_failed` observation, and the
-  controller has recorded a follow-up Bead for the repair; the event carries
-  that Bead identifier, and the reducer admits it only from those observed
-  states, never from `pending` or `ambiguous`; and
+  `refused` source-resolution, materialisation, or provenance observation, or a
+  `verification_failed` observation, and the controller has recorded a
+  follow-up Bead for the repair; the event carries that Bead identifier, and
+  the reducer admits it only from that same entry's observed failure, never
+  from an unattempted `pending` or `ambiguous` state; and
 - `deferral_cascade`: recording `deferred_by_controller` on the provenance
   entry voids, in the same event, the wave's aggregate verify entry and every
   pending gate target; recording it on the aggregate verify entry voids every
@@ -898,10 +1082,14 @@ the defect is.
 
 ### Engine fast gate
 
-- strict schema tests for the `materialise` and `provenance_commit` effect
-  kinds, their parameter and observation envelopes, and the digest-bound
-  reviewer packet, including unknown-key rejection and byte limits;
+- strict schema tests for the `materialisation_resolve`, `materialise`, and
+  `provenance_commit` effect kinds, their parameter and observation envelopes,
+  and the digest-bound reviewer packet, including unknown-key rejection and
+  byte limits;
 - reducer traces proving no materialise effect before the unit is landed, no
+  controller-selected source path, sorted bounded expansion for multiple
+  matches, positive refusal for zero or excessive matches, exact source digest
+  and filename derivation from a resolved tuple and clock observation,
   provenance commit while a current-wave unit is open or without every unit
   materialisation observed or voided, no `wave_planned` or controller release
   while a gate entry is pending, an aggregate verify intent refused unless its
@@ -934,13 +1122,14 @@ the defect is.
 ### Engine integration and release gates
 
 - filesystem materialise adapter against a disposable directory: ordered
-  sidecar-then-artifact atomic writes, identical-bytes idempotency, missing
-  sidecar completion, sidecar-only crash continuation, leftover temporary
-  replacement, different-bytes ambiguity in either file, required-alias
-  refusal, optional-alias void observation, canonical path refusal, and crash
-  between intent and observation; and, at release
+  sidecar-then-artifact atomic no-clobber links, identical-bytes idempotency,
+  missing sidecar completion, sidecar-only crash continuation, leftover
+  temporary replacement, different-bytes ambiguity in either file,
+  `EEXIST` readback, unsupported-link refusal, required-alias refusal,
+  optional-alias void observation, canonical path refusal, and crash between
+  intent and observation; and, at release
   tier, the same adapter against a real Drive for Desktop folder to establish
-  rename and fsync behaviour on a synced directory;
+  hard-link and fsync behaviour on a synced directory;
 - a knowledge repository fixture with two clones and a local bare remote,
   covering slot contention, task-card packing, boundary-policy failure,
   reproducibility failure, and provenance-commit readback;
@@ -1059,8 +1248,8 @@ exact; conflict domains decide wave packing.
 | Unit | Outcome | Owned paths | Conflict domain | Risk | Verification |
 |---|---|---|---|---|---|
 | K1 | Digest-bound reviewer packets: the reviewer variant carries the committed `candidateDiffHash`, byte count, bounded stat summary (file count, insertions, deletions), canonical reproduction command, and the unit's worktree path in place of diff bytes; the reducer accepts a packet only when its digest equals the committed hash; closes `sce-cfl` | `src/protocol/schemas.ts`, `src/protocol/reducer.ts`, `src/harness/index.ts`, `src/commands/index.ts`, `test/harness/*`, `test/protocol/*`, `test/cli/cli.test.ts`, `test/fast.manifest.json`, `skills/single-controller-engineer/scripts/sce.mjs` | protocol-core | High | `npm run check` (the harness suite is fast tier) |
-| K2 | `materialise` effect kind with clock-bound destination names, parameter and observation schemas, optional `materialisationTargets`, `supersedes`, and `tombstones` on task metadata, the knowledge contract in the controller configuration recorded at `wave_planned`, gate state on the run aggregate with voided dispositions (including empty landed set and controller deferral) and legality rules, unit and gate emission points, recovery admission of the new kind, filesystem adapter, CLI command | `src/protocol/schemas.ts`, `src/protocol/reducer.ts`, `src/protocol/guards.ts`, `src/protocol/actions.ts`, `src/adapters/materialise/**`, `src/commands/index.ts`, `src/commands/recovery.ts`, `src/commands/production-recovery.ts`, `src/cli.ts`, `src/controller-config.ts`, `test/controller-config.test.ts`, `test/commands/recovery.test.ts`, `test/commands/production-recovery.test.ts`, `test/protocol/*`, `test/integration/materialise/*`, `test/fast.manifest.json`, `skills/single-controller-engineer/scripts/sce.mjs` | protocol-core | High | `npm run check`; `npm run test:integration` for the materialise fixture |
-| K3 | Provenance record projection from journaled inputs, closure evidence extended with owned paths, acceptance identifiers, and supersessions, `provenance_commit` effect with deterministic author, dates, and key trailer, allowlisted Git operations for building the commit detached, discovering it by key, and landing it under either integration profile, rejected-push handling, deferred carry-forward, rollup generator invocation, one journaled detached worktree per provenance step, created at the landed OID before records are written and preserved as evidence like unit worktrees, serving record writing, generator run, commit build, reproducibility check, and the aggregate-level `verify` gate entry with its null-unit executor path, with recreation of an absent worktree at the observed provenance-commit OID on resume, and recovery admission of the new kind | `src/protocol/evidence.ts`, `src/protocol/schemas.ts`, `src/protocol/reducer.ts`, `src/protocol/actions.ts`, `src/harness/index.ts`, `src/commands/index.ts`, `src/commands/recovery.ts`, `src/commands/production-recovery.ts`, `src/controller-config.ts`, `src/adapters/git/index.ts`, `test/controller-config.test.ts`, `test/commands/recovery.test.ts`, `test/commands/production-recovery.test.ts`, `test/adapters/git/git.test.ts`, `test/harness/*`, `test/protocol/*`, `test/integration/provenance/*`, `test/fast.manifest.json`, `skills/single-controller-engineer/scripts/sce.mjs` | protocol-core | High | `npm run check`; projection determinism test; `npm run test:integration` for the provenance fixture; the release-tier adapter suite for the Git adapter change |
+| K2 | Journaled bounded source resolution through a source-specific Git executor under `src/adapters/materialise/`; `materialise` with clock-bound exact names and atomic no-clobber filesystem publication; optional target and supersession metadata; recorded knowledge contract; aggregate gate state, voids, deferral and legality; complete gate-facing `provenance_commit` and aggregate-verify protocol scaffolding; recovery and CLI admission | `src/protocol/schemas.ts`, `src/protocol/reducer.ts`, `src/protocol/guards.ts`, `src/protocol/actions.ts`, `src/adapters/materialise/**`, `src/commands/index.ts`, `src/commands/recovery.ts`, `src/commands/production-recovery.ts`, `src/cli.ts`, `src/controller-config.ts`, `test/controller-config.test.ts`, `test/commands/recovery.test.ts`, `test/commands/production-recovery.test.ts`, `test/protocol/*`, `test/integration/materialise/*`, `test/fast.manifest.json`, `skills/single-controller-engineer/scripts/sce.mjs` | protocol-core | High | `npm run check`; `npm run test:integration` for the materialise fixture |
+| K3 | Provenance record projection from journaled inputs, closure evidence extended with owned paths, acceptance identifiers, and supersessions, `provenance_commit` effect with deterministic author, dates, and key trailer, allowlisted provenance Git operations for building the commit detached, discovering it by key, and landing it under either integration profile, rejected-push handling, deferred carry-forward, rollup generator invocation, one journaled detached worktree per provenance step, created at the landed OID before records are written and preserved as evidence like unit worktrees, serving record writing, generator run, commit build, reproducibility check, and the aggregate-level `verify` gate entry with its null-unit executor path, with recreation of an absent worktree at the observed provenance-commit OID on resume, and recovery admission of the new kind | `src/protocol/evidence.ts`, `src/protocol/schemas.ts`, `src/protocol/reducer.ts`, `src/protocol/actions.ts`, `src/harness/index.ts`, `src/commands/index.ts`, `src/commands/recovery.ts`, `src/commands/production-recovery.ts`, `src/controller-config.ts`, `src/adapters/git/index.ts`, `test/controller-config.test.ts`, `test/commands/recovery.test.ts`, `test/commands/production-recovery.test.ts`, `test/adapters/git/git.test.ts`, `test/harness/*`, `test/protocol/*`, `test/integration/provenance/*`, `test/fast.manifest.json`, `skills/single-controller-engineer/scripts/sce.mjs` | protocol-core | High | `npm run check`; projection determinism test; `npm run test:integration` for the provenance fixture; the release-tier adapter suite for the Git adapter change |
 | K4 | Manifest schema and fast-gate templates in the knowledge skill's manifest references, plus a knowledge repository example that uses them: manifest, events and generated directories, instructions | `skills/single-controller-knowledge/references/manifest/**`, `examples/knowledge-repository/**` | examples | Low | Example's own fast gate; `npm run check` |
 | K5 | Third skill package: `SKILL.md`, host descriptors, contract references; engineer `SKILL.md` manifest stop; feedback `SKILL.md` wording from pair to set; installer triple; package allowlist; layout test with description disjointness; README and getting-started | `skills/single-controller-knowledge/SKILL.md`, `skills/single-controller-knowledge/agents/**`, `skills/single-controller-knowledge/references/knowledge-contract.md`, `skills/single-controller-knowledge/references/knowledge-severity.md`, `skills/single-controller-knowledge/references/materialisation.md`, `skills/single-controller-knowledge/references/provenance.md`, `skills/single-controller-knowledge/references/repository-manifest.md`, `skills/single-controller-engineer/SKILL.md`, `skills/single-controller-feedback/SKILL.md`, `skills/single-controller-engineer/scripts/sce.mjs`, `src/install/index.ts`, `scripts/package-check.mjs`, `test/eval/skill-layout.test.ts`, `test/install/*`, `test/cli/cli.test.ts`, `test/integration/installer-smoke.test.ts`, `README.md`, `docs/getting-started.md`, `AGENTS.md`, `CLAUDE.md`, `package.json` | skills-packaging | Medium | `npm run check`; `npm run test:package`; `npm run test:integration` for the installer smoke |
 | K6 | Knowledge repository two-clone fixture, release-tier materialise evidence on a real Drive for Desktop folder, and release-tier live evaluation of the management rehearsal scenario with handoff scoped to completed and unstarted work | `test/integration/knowledge/**`, `test/release/**`, `scripts/release-gates.mjs` | release-evidence | Medium | `npm run test:integration`; release tier before the next tag |
@@ -1084,50 +1273,57 @@ metadata:
   packet generation; `K1-AC4` persisted packet envelopes upcast or refuse
   explicitly; `K1-AC5` fast, typecheck, format, and package gates are green with
   a reproducible bundle.
-- K2: `K2-AC1` the effect kind, parameter, and observation schemas are strict
-  and the parameters carry alias, root, marker, mount policy, driver, scope,
-  pinned harness family, and the complete destination name; `K2-AC2`
-  `materialisationTargets` validate on
-  task metadata and software runs without them are unchanged; `K2-AC3` gate
-  state blocks `wave_planned` and release while pending, voids entries for a
-  unit closed without landing, a handoff boundary, an optional unmounted alias,
-  and an empty projection set (no current-wave landed unit and no earlier
-  landed unit with an uncommitted record), admits controller deferral only from
-  the entry's own refused or verification-failed observation with a follow-up
-  Bead, voids the verify entry with the provenance entry when the projection set
-  is empty and under a handoff boundary, cascades a deferral of the provenance
-  entry or of the verify entry to every dependent pending entry in the same
-  event, keeps a required-alias
-  refusal pending, and admits no provenance commit while a current-wave unit is
-  open or a unit-target entry is pending; `K2-AC4` the adapter fixture covers
-  every listed failure mode including the sidecar-only crash state and leftover
-  temporary replacement;
-  `K2-AC5` resume after a crash reuses the journaled name; `K2-AC6` the
-  knowledge contract validates alias, root, marker, mount policy, driver, scope,
-  provenance contract, combined-verification commands, and gate targets, and is
-  recorded at `wave_planned`; the aggregate verify intent is admitted only when
-  its commands equal those recorded commands; `K2-AC7` gates green with a
-  reproducible bundle.
-- K3: `K3-AC1` the projection is pure and byte-identical for identical input;
-  `K3-AC2` the commit's author, email, dates, tree, and trailer are derived from
-  journaled facts only and its OID is stable across attempts; `K3-AC3` discovery
-  by key observes an existing commit without a second act; `K3-AC4` a rejected
-  push journals a new intent on the new base; `K3-AC5` the reproducibility check
-  runs in the journaled provenance worktree and blocks before any local or
-  remote ref moves, under both integration profiles, the worktree is preserved
-  as evidence, a resume admits an existing worktree only clean at the journaled
-  OID or clean at the keyed commit on the landed OID (resuming at the
-  reproducibility check) and has the aggregate verify executor recreate an
-  absent one from the path and observed provenance-commit OID carried by its
-  journaled intent, and a deferred provenance entry carries its units into the
-  next wave's commit; `K3-AC6` the record carries
-  every DEC-002 field and no secret, reading owned paths, acceptance
-  identifiers, and supersessions from extended closure evidence; `K3-AC7` gates
-  green with a reproducible bundle; `K3-AC8` a run without a knowledge contract
-  has no provenance entry and gates exactly as before; `K3-AC9` the aggregate
-  `verify` gate entry is bound to the provenance-commit OID, runs in the
-  preserved provenance worktree, and its failure qualifies pending gate targets
-  for deferral.
+- K2: `K2-AC1` source-resolution, materialise, gate-facing
+  `provenance_commit`, and aggregate-verify schemas are strict; materialise
+  parameters carry resolved path and blob facts, alias, root, marker, mount
+  policy, driver, scope, pinned harness family, clock, and complete artifact
+  and sidecar destination names, while every aggregate event, effect, journal
+  entry, deferral, and recovery selector carries the stable gate entry ID;
+  `K2-AC2` `materialisationTargets` validate a
+  canonical bounded glob and mandatory v1 sidecar on task metadata, and
+  software runs without a knowledge contract are unchanged; `K2-AC3` gate
+  state enforces fixed ordering and pending blocks, supports unit-not-landed,
+  handoff, optional-unmounted, empty-projection, controller-deferral, and
+  cascade voids, keeps required-alias refusal pending, and admits no provenance
+  commit while a current-wave unit or unit-target entry is pending; `K2-AC4`
+  target and expanded gate entry IDs derive deterministically, source
+  resolution expands every byte-sorted match without controller selection,
+  bounded to 64 matches per target, 128 outputs and 64 MiB per wave,
+  and positively refuses zero, excessive, non-blob, oversized, unsafe-path, or
+  colliding-output results without publication; `K2-AC5` every naming policy
+  and the exact sidecar name follow the fixed grammar and crash recovery reuses
+  both journaled names; `K2-AC6` the materialise fixture covers ordered
+  sidecar/artifact publication, identical bytes, either one-file crash state,
+  exact temporary replacement, different-byte ambiguity, `EEXIST` readback,
+  unsupported hard-link refusal, required and optional alias behavior,
+  canonical-path and symlink refusal, crash between intent and observation,
+  inode-bound helper admission, and proof no final file is overwritten;
+  `K2-AC7` the knowledge contract
+  validates and records alias, root, marker, mount policy, driver, scope,
+  provenance contract, combined-verification commands, and gate targets at
+  `wave_planned`, and aggregate verify accepts only the recorded commands;
+  `K2-AC8` K3 production provenance actions fail closed as unavailable without
+  corrupting software behavior; `K2-AC9` focused tests, the materialise
+  integration fixture, `npm run check`, and a reproducible bundle pass.
+- K3: `K3-AC1` projection is pure and byte-identical for identical journaled
+  input; `K3-AC2` commit author, constant email, dates, tree, and trailer derive
+  only from journaled facts and the OID is stable across attempts; `K3-AC3`
+  discovery by key and byte-identical record readback observes an existing
+  commit without a second act; `K3-AC4` rejected push journals a new intent on
+  the new base and ambiguity blocks; `K3-AC5` the reproducibility check runs in
+  the journaled preserved worktree before any ref move under both profiles,
+  resume admits only clean allowed states and recreates an absent worktree
+  through the journaled aggregate-verify act, and deferred provenance carries
+  units forward; `K3-AC6` each record carries every DEC-002 field and no secret,
+  including closure-owned paths, acceptance identifiers, supersessions, and
+  each target or materialised destination observed or deferred; `K3-AC7` a run
+  without a knowledge contract has no provenance entry and behaves exactly as
+  software; `K3-AC8` aggregate verify runs on the provenance-commit OID and tree
+  in the preserved worktree and failure qualifies pending gate targets for
+  deferral; `K3-AC9` production commands and observations conform to the
+  K2-stable strict wire shapes without a parallel contract; `K3-AC10` focused
+  tests, provenance integration, `npm run check`, and a reproducible bundle
+  pass, while full release Git-adapter evidence remains next-tag only.
 - K4: `K4-AC1` the manifest schema rejects unknown keys and validates the
   example; `K4-AC2` every template check runs hermetically under sixty seconds;
   `K4-AC3` a seeded boundary violation and a seeded reproducibility drift each
@@ -1140,7 +1336,7 @@ metadata:
   three skills; `K5-AC6` check and package gates are green.
 - K6: `K6-AC1` the two-clone fixture is deterministic and tier-discovered;
   `K6-AC2` every listed failure mode has an assertion; `K6-AC3` the real Drive
-  folder evidence records rename and fsync behaviour; `K6-AC4` the live
+  folder evidence records hard-link and fsync behaviour; `K6-AC4` the live
   evaluation records model identities, split timings, and the parity result per
   harness family.
 
@@ -1215,8 +1411,9 @@ installation manifests and documentation for no capability.
 
 ## Consequences
 
-The engine gains two effect kinds with their four events, an aggregate-level use
-of the existing `verify` effect, a clock observation event, a controller
+The engine gains three effect kinds with their six intent/observation events,
+an aggregate-level use of the existing `verify` effect, a clock observation
+event, a controller
 deferral event, a `gate` field on the run aggregate with voided dispositions
 (including the cascading provenance deferral), optional targets and supersession
 fields on task metadata, a knowledge contract in the controller configuration
