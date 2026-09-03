@@ -505,12 +505,15 @@ function configuredKnowledgeContract(
 ): KnowledgeContract {
   return {
     aliases: [],
+    audience: "knowledge-audience",
     combinedVerificationCommands: [["npm", "test"]],
     domainScope: "knowledge",
     gateTargets: [],
     humanDriver,
+    projectId: "knowledge-project",
     provenance: {
       eventsDirectory: "knowledge/events",
+      generatedDirectory: "knowledge/generated",
       recordFormatVersion: 1,
       reproducibilityCommand: ["npm", "run", "reproduce"],
       rollupGeneratorCommand: ["npm", "run", "rollup"],

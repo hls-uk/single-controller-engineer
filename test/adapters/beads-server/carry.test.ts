@@ -268,12 +268,15 @@ function predecessorRun(): RepositoryRun {
     },
     knowledgeContract: {
       aliases: [],
+      audience: "knowledge-audience",
       combinedVerificationCommands: [["npm", "test"]],
       domainScope: "knowledge",
       gateTargets: [],
       humanDriver: "knowledge-owner",
+      projectId: "knowledge-project",
       provenance: {
         eventsDirectory: "knowledge/events",
+        generatedDirectory: "knowledge/generated",
         recordFormatVersion: 1,
         reproducibilityCommand: ["npm", "run", "reproduce"],
         rollupGeneratorCommand: ["npm", "run", "rollup"],

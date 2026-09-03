@@ -44,8 +44,64 @@ export type GitRunner = (
   request: Readonly<{
     argv: readonly string[];
     cwd: string;
+    /** Only the six commit-identity variables; see `commitIdentityEnvironment`. */
+    env?: Readonly<Record<string, string>>;
   }>,
 ) => Promise<GitResult>;
+
+/** Exact deterministic commit identity for a provenance commit. */
+export type GitCommitIdentity = Readonly<{
+  /** Author and committer name: the controller holder string. */
+  name: string;
+  email: string;
+  /** Git date rendering `<unix seconds> +0000`. */
+  date: string;
+}>;
+
+const COMMIT_IDENTITY_KEYS = [
+  "GIT_AUTHOR_NAME",
+  "GIT_AUTHOR_EMAIL",
+  "GIT_AUTHOR_DATE",
+  "GIT_COMMITTER_NAME",
+  "GIT_COMMITTER_EMAIL",
+  "GIT_COMMITTER_DATE",
+] as const;
+const IDENTITY_NAME = /^[^\u0000-\u001f\u007f<>]{1,321}$/u;
+const IDENTITY_EMAIL = /^[A-Za-z0-9._-]{1,64}@[A-Za-z0-9.-]{1,128}$/u;
+const IDENTITY_DATE = /^(?:0|[1-9][0-9]{0,11}) \+0000$/u;
+
+export function commitIdentityEnvironment(
+  identity: GitCommitIdentity,
+): Readonly<Record<string, string>> | undefined {
+  if (
+    !IDENTITY_NAME.test(identity.name) ||
+    !IDENTITY_EMAIL.test(identity.email) ||
+    !IDENTITY_DATE.test(identity.date)
+  )
+    return undefined;
+  return {
+    GIT_AUTHOR_DATE: identity.date,
+    GIT_AUTHOR_EMAIL: identity.email,
+    GIT_AUTHOR_NAME: identity.name,
+    GIT_COMMITTER_DATE: identity.date,
+    GIT_COMMITTER_EMAIL: identity.email,
+    GIT_COMMITTER_NAME: identity.name,
+  };
+}
+
+function allowedRunnerEnvironment(
+  env: Readonly<Record<string, string>> | undefined,
+): boolean {
+  if (env === undefined) return true;
+  return Object.entries(env).every(
+    ([key, value]) =>
+      (COMMIT_IDENTITY_KEYS as readonly string[]).includes(key) &&
+      typeof value === "string" &&
+      value.length > 0 &&
+      value.length <= 512 &&
+      !/[\u0000\r\n]/u.test(value),
+  );
+}
 
 export type GitRepository = Readonly<{
   commonDir: string;
@@ -94,6 +150,19 @@ const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
 const REF = /^(?:[A-Za-z0-9][A-Za-z0-9._/-]*)(?:[A-Za-z0-9._/-])?$/u;
 const REMOTE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 const PATH = /^[^\u0000\r\n]{1,4096}$/u;
+/** Provenance commit message grammar; both lines are bound by the allowlist. */
+const PROVENANCE_SUBJECT =
+  /^sce: provenance for wave [A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u;
+const PROVENANCE_TRAILER =
+  /^SCE-Provenance-Key: [A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u;
+/** Bounded key discovery walks at most this many first-parent commits. */
+export const DISCOVERY_DEPTH = 64;
+const RELATIVE_DIRECTORY =
+  /^(?![A-Za-z]:)(?!.*\/\/)(?!.*(?:^|\/)\.{1,2}(?:\/|$))[A-Za-z0-9][A-Za-z0-9._/-]{0,191}$/u;
+
+function safeRelativeDirectory(value: string): boolean {
+  return RELATIVE_DIRECTORY.test(value) && !value.endsWith("/");
+}
 const MAX_OUTPUT = 65_536;
 const activeHookPaths = new Set<string>();
 
@@ -164,7 +233,9 @@ function allowedGitArgv(argv: readonly string[]): boolean {
         args[0] === "--verify" &&
         (args[1] === "HEAD^{commit}" ||
           args[1] === "HEAD^{tree}" ||
-          /^(?:[0-9a-f]{40}|[0-9a-f]{64})\^\{tree\}$/u.test(args[1] ?? "")))
+          /^(?:[0-9a-f]{40}|[0-9a-f]{64})\^\{(?:tree|commit)\}$/u.test(
+            args[1] ?? "",
+          )))
     );
   if (command === "config")
     return (
@@ -180,8 +251,11 @@ function allowedGitArgv(argv: readonly string[]): boolean {
     return (
       args.length === 2 &&
       args[0] === "--format=%(objectname)" &&
-      args[1]?.startsWith("refs/heads/") === true &&
-      safeRef(args[1].slice(11))
+      ((args[1]?.startsWith("refs/heads/") === true &&
+        safeRef(args[1].slice(11))) ||
+        (args[1]?.startsWith("refs/remotes/") === true &&
+          safeRef(args[1].slice(13)) &&
+          args[1].slice(13).includes("/")))
     );
   if (command === "branch")
     return (
@@ -193,8 +267,68 @@ function allowedGitArgv(argv: readonly string[]): boolean {
       (args.length === 3 &&
         args[0] === "add" &&
         safeAbsolutePath(args[1] ?? "") &&
-        safeRef(args[2] ?? ""))
+        safeRef(args[2] ?? "")) ||
+      (args.length === 4 &&
+        args[0] === "add" &&
+        args[1] === "--detach" &&
+        safeAbsolutePath(args[2] ?? "") &&
+        OID.test(args[3] ?? ""))
     );
+  if (command === "add") return args.length === 1 && args[0] === "--all";
+  if (command === "write-tree") return args.length === 0;
+  if (command === "commit-tree")
+    return (
+      args.length === 7 &&
+      OID.test(args[0] ?? "") &&
+      args[1] === "-p" &&
+      OID.test(args[2] ?? "") &&
+      args[3] === "-m" &&
+      PROVENANCE_SUBJECT.test(args[4] ?? "") &&
+      args[5] === "-m" &&
+      PROVENANCE_TRAILER.test(args[6] ?? "")
+    );
+  if (command === "update-ref")
+    return (
+      args.length === 3 &&
+      args[0] === "--no-deref" &&
+      args[1] === "HEAD" &&
+      OID.test(args[2] ?? "")
+    );
+  if (command === "cat-file")
+    return (
+      args.length === 2 &&
+      (args[0] === "commit" || args[0] === "blob") &&
+      OID.test(args[1] ?? "")
+    );
+  if (command === "rev-list")
+    return (
+      args.length === 2 &&
+      args[0] === `--max-count=${DISCOVERY_DEPTH}` &&
+      OID.test(args[1] ?? "")
+    );
+  if (command === "ls-tree")
+    return (
+      args.length === 5 &&
+      args[0] === "-r" &&
+      args[1] === "-z" &&
+      OID.test(args[2] ?? "") &&
+      args[3] === "--" &&
+      safeRelativeDirectory(args[4] ?? "")
+    );
+  if (command === "fetch") {
+    const refspec = /^\+refs\/heads\/(.+):refs\/remotes\/([^/]+)\/(.+)$/u.exec(
+      args[2] ?? "",
+    );
+    return (
+      args.length === 3 &&
+      args[0] === "--no-tags" &&
+      REMOTE.test(args[1] ?? "") &&
+      refspec !== null &&
+      refspec[2] === args[1] &&
+      refspec[1] === refspec[3] &&
+      safeRef(refspec[1] ?? "")
+    );
+  }
   if (command === "status")
     return (
       args.length === 2 && args[0] === "--porcelain=v1" && args[1] === "-z"
@@ -462,10 +596,12 @@ async function runAt(
   runner: GitRunner,
   cwd: string,
   argv: readonly string[],
+  env?: Readonly<Record<string, string>>,
 ): Promise<GitResult> {
   try {
-    const observed = parseGitResult(await runner({ argv, cwd })) as
-      GitResult | undefined;
+    const observed = parseGitResult(
+      await runner({ argv, cwd, ...(env === undefined ? {} : { env }) }),
+    ) as GitResult | undefined;
     return (
       observed ?? {
         exitCode: null,
@@ -1502,8 +1638,339 @@ export async function discoverRemoteIntegration(
 }
 
 /** Production runner for the adapter; tests normally inject a deterministic seam. */
-export const nodeGitRunner: GitRunner = async ({ argv, cwd }) => {
-  if (!safeAbsolutePath(cwd) || !allowedGitArgv(argv))
+
+export type DetachedWorktreeDiscovery =
+  | Readonly<{ state: "absent" }>
+  | Readonly<{ state: "present"; head: string; clean: boolean }>
+  | Readonly<{ state: "foreign" }>
+  | Readonly<{ state: "unreadable" }>;
+
+/** Read-only: is the exact path a detached worktree of this repository? */
+export async function discoverDetachedWorktree(
+  runner: GitRunner,
+  repository: GitRepository,
+  input: Readonly<{ path: string }>,
+): Promise<DetachedWorktreeDiscovery> {
+  if (!safeAbsolutePath(input.path)) return { state: "foreign" };
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return { state: "unreadable" };
+  const listed = await run(runner, repository, [
+    "worktree",
+    "list",
+    "--porcelain",
+  ]);
+  if (outputResult(listed) !== undefined) return { state: "unreadable" };
+  const records = parseWorktreeList(listed.stdout, repository.objectFormat);
+  const wantedPath = canonicalWorktreePath(input.path);
+  if (records === undefined) return { state: "unreadable" };
+  if (wantedPath === undefined || wantedPath !== input.path)
+    return { state: "foreign" };
+  const existing = records.find((record) => record.path === wantedPath);
+  if (existing === undefined) return { state: "absent" };
+  if (existing.head === undefined || existing.branch !== undefined)
+    return { state: "foreign" };
+  const ownership = await verifyWorktreeOwnership(
+    runner,
+    repository,
+    input.path,
+  );
+  if (ownership.state !== "observed") return { state: "foreign" };
+  const head = await runAt(runner, input.path, [
+    "rev-parse",
+    "--verify",
+    "HEAD^{commit}",
+  ]);
+  const headOid = commandOk(head) ? oneLine(head.stdout) : undefined;
+  if (headOid === undefined || !exactOid(repository.objectFormat, headOid))
+    return { state: "unreadable" };
+  const status = await runAt(runner, input.path, [
+    "status",
+    "--porcelain=v1",
+    "-z",
+  ]);
+  if (!commandOk(status)) return { state: "unreadable" };
+  return { state: "present", head: headOid, clean: status.stdout.length === 0 };
+}
+
+/**
+ * Detached worktree creation at an exact commit. Idempotent only for the same
+ * canonical path already detached at that head with a clean tree.
+ */
+export async function ensureDetachedWorktree(
+  runner: GitRunner,
+  repository: GitRepository,
+  input: Readonly<{ head: string; path: string }>,
+): Promise<GitEffect> {
+  if (
+    !exactOid(repository.objectFormat, input.head) ||
+    !safeAbsolutePath(input.path)
+  )
+    return effect("refused", "GIT_BAD_INPUT");
+  const existing = await discoverDetachedWorktree(runner, repository, input);
+  if (existing.state === "unreadable")
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  if (existing.state === "foreign")
+    return effect("refused", "GIT_FOREIGN_WORKTREE");
+  if (existing.state === "present")
+    return existing.head !== input.head
+      ? effect("refused", "GIT_FOREIGN_WORKTREE")
+      : existing.clean
+        ? effect("observed", "GIT_OK")
+        : effect("refused", "GIT_DIRTY");
+  const added = await run(runner, repository, [
+    "worktree",
+    "add",
+    "--detach",
+    input.path,
+    input.head,
+  ]);
+  const reread = await discoverDetachedWorktree(runner, repository, input);
+  if (reread.state === "present" && reread.head === input.head)
+    return reread.clean
+      ? effect("observed", "GIT_OK")
+      : effect("refused", "GIT_DIRTY");
+  if (reread.state === "absent" && terminalFailure(added) === undefined)
+    return effect("refused", "GIT_REFUSED");
+  return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+}
+
+/** Stage the complete worktree and write its tree object. */
+export async function writeWorktreeTree(
+  runner: GitRunner,
+  repository: GitRepository,
+  worktreePath: string,
+): Promise<string | undefined> {
+  if (!safeAbsolutePath(worktreePath)) return undefined;
+  const staged = await runAt(runner, worktreePath, ["add", "--all"]);
+  if (!commandOk(staged)) return undefined;
+  const tree = await runAt(runner, worktreePath, ["write-tree"]);
+  const oid = commandOk(tree) ? oneLine(tree.stdout) : undefined;
+  return oid !== undefined && exactOid(repository.objectFormat, oid)
+    ? oid
+    : undefined;
+}
+
+/**
+ * Deterministic commit object from journaled facts only: exact tree, exact
+ * parent, constant identity/dates, and the two-line keyed message.
+ */
+export async function createProvenanceCommit(
+  runner: GitRunner,
+  repository: GitRepository,
+  input: Readonly<{
+    identity: GitCommitIdentity;
+    parent: string;
+    subject: string;
+    trailer: string;
+    tree: string;
+    worktreePath: string;
+  }>,
+): Promise<string | undefined> {
+  const env = commitIdentityEnvironment(input.identity);
+  if (
+    env === undefined ||
+    !safeAbsolutePath(input.worktreePath) ||
+    !exactOid(repository.objectFormat, input.parent) ||
+    !exactOid(repository.objectFormat, input.tree) ||
+    !PROVENANCE_SUBJECT.test(input.subject) ||
+    !PROVENANCE_TRAILER.test(input.trailer)
+  )
+    return undefined;
+  const committed = await runAt(
+    runner,
+    input.worktreePath,
+    [
+      "commit-tree",
+      input.tree,
+      "-p",
+      input.parent,
+      "-m",
+      input.subject,
+      "-m",
+      input.trailer,
+    ],
+    env,
+  );
+  const oid = commandOk(committed) ? oneLine(committed.stdout) : undefined;
+  return oid !== undefined && exactOid(repository.objectFormat, oid)
+    ? oid
+    : undefined;
+}
+
+/** Point a detached worktree's own HEAD at the exact commit; no branch moves. */
+export async function setDetachedHead(
+  runner: GitRunner,
+  repository: GitRepository,
+  input: Readonly<{ commit: string; worktreePath: string }>,
+): Promise<GitEffect> {
+  if (
+    !safeAbsolutePath(input.worktreePath) ||
+    !exactOid(repository.objectFormat, input.commit)
+  )
+    return effect("refused", "GIT_BAD_INPUT");
+  const updated = await runAt(runner, input.worktreePath, [
+    "update-ref",
+    "--no-deref",
+    "HEAD",
+    input.commit,
+  ]);
+  const reread = await discoverDetachedWorktree(runner, repository, {
+    path: input.worktreePath,
+  });
+  if (reread.state === "present" && reread.head === input.commit)
+    return effect("observed", "GIT_OK");
+  return commandOk(updated)
+    ? effect("ambiguous", "GIT_UNRESOLVED_EFFECT")
+    : effect("refused", "GIT_REFUSED");
+}
+
+export type CommitObject = Readonly<{
+  message: string;
+  parents: readonly string[];
+  tree: string;
+}>;
+
+/** Parse one raw commit object; only tree, parents, and message are read. */
+export async function readCommit(
+  runner: GitRunner,
+  repository: GitRepository,
+  oid: string,
+): Promise<CommitObject | undefined> {
+  if (!exactOid(repository.objectFormat, oid)) return undefined;
+  const result = await run(runner, repository, ["cat-file", "commit", oid]);
+  if (!commandOk(result)) return undefined;
+  const separator = result.stdout.indexOf("\n\n");
+  if (separator < 0) return undefined;
+  const headers = result.stdout.slice(0, separator).split("\n");
+  const parents: string[] = [];
+  let tree: string | undefined;
+  for (const header of headers) {
+    const space = header.indexOf(" ");
+    const key = header.slice(0, space);
+    const value = header.slice(space + 1);
+    if (key === "tree" && exactOid(repository.objectFormat, value))
+      tree = value;
+    if (key === "parent" && exactOid(repository.objectFormat, value))
+      parents.push(value);
+  }
+  if (tree === undefined) return undefined;
+  return { message: result.stdout.slice(separator + 2), parents, tree };
+}
+
+export type TrailerDiscovery =
+  | Readonly<{ state: "found"; oid: string; commit: CommitObject }>
+  | Readonly<{ state: "absent" }>
+  | Readonly<{ state: "unreadable" }>;
+
+/** Bounded first-parent walk for the commit whose message carries the trailer. */
+export async function findCommitByTrailer(
+  runner: GitRunner,
+  repository: GitRepository,
+  input: Readonly<{ start: string; trailer: string }>,
+): Promise<TrailerDiscovery> {
+  if (
+    !exactOid(repository.objectFormat, input.start) ||
+    !PROVENANCE_TRAILER.test(input.trailer)
+  )
+    return { state: "unreadable" };
+  const listed = await run(runner, repository, [
+    "rev-list",
+    `--max-count=${DISCOVERY_DEPTH}`,
+    input.start,
+  ]);
+  if (!commandOk(listed)) return { state: "unreadable" };
+  const oids = listed.stdout.split("\n").filter((line) => line.length > 0);
+  if (!oids.every((oid) => exactOid(repository.objectFormat, oid)))
+    return { state: "unreadable" };
+  for (const oid of oids) {
+    const commit = await readCommit(runner, repository, oid);
+    if (commit === undefined) return { state: "unreadable" };
+    if (commit.message.split("\n").some((line) => line === input.trailer))
+      return { state: "found", oid, commit };
+  }
+  return { state: "absent" };
+}
+
+/** Exact bytes of every regular file under one directory at one commit. */
+export async function readTreeFiles(
+  runner: GitRunner,
+  repository: GitRepository,
+  input: Readonly<{ commit: string; directory: string; maxFiles: number }>,
+): Promise<ReadonlyMap<string, string> | undefined> {
+  if (
+    !exactOid(repository.objectFormat, input.commit) ||
+    !safeRelativeDirectory(input.directory)
+  )
+    return undefined;
+  const listed = await run(runner, repository, [
+    "ls-tree",
+    "-r",
+    "-z",
+    input.commit,
+    "--",
+    input.directory,
+  ]);
+  if (!commandOk(listed)) return undefined;
+  const entries = listed.stdout
+    .split("\u0000")
+    .filter((entry) => entry.length > 0);
+  if (entries.length > input.maxFiles) return undefined;
+  const files = new Map<string, string>();
+  for (const entry of entries) {
+    const match = /^(\d{6}) (blob|tree|commit) ([0-9a-f]{40,64})\t(.+)$/u.exec(
+      entry,
+    );
+    if (match === null) return undefined;
+    const [, mode, type, blob, path] = match;
+    if (type !== "blob" || mode === "120000" || blob === undefined)
+      return undefined;
+    const content = await run(runner, repository, ["cat-file", "blob", blob]);
+    if (!commandOk(content) || path === undefined) return undefined;
+    files.set(path, content.stdout);
+  }
+  return files;
+}
+
+/** Exact local ref readback for discovery; unreadable is never absent. */
+export async function readRefOid(
+  runner: GitRunner,
+  repository: GitRepository,
+  ref: string,
+): Promise<
+  | Readonly<{ state: "found"; oid: string }>
+  | Readonly<{ state: "missing" }>
+  | Readonly<{ state: "unreadable" }>
+> {
+  return await refOid(runner, repository, ref);
+}
+
+/** Refresh one remote-tracking ref for keyed discovery; never touches heads. */
+export async function fetchIntegrationBranch(
+  runner: GitRunner,
+  repository: GitRepository,
+  input: Readonly<{ branch: string; remote: string }>,
+): Promise<GitEffect> {
+  if (!REMOTE.test(input.remote) || !safeRef(input.branch))
+    return effect("refused", "GIT_BAD_INPUT");
+  const fetched = await run(runner, repository, [
+    "fetch",
+    "--no-tags",
+    input.remote,
+    `+refs/heads/${input.branch}:refs/remotes/${input.remote}/${input.branch}`,
+  ]);
+  if (terminalFailure(fetched) !== undefined)
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  return fetched.exitCode === 0
+    ? effect("observed", "GIT_OK")
+    : effect("refused", "GIT_COMMAND_FAILED");
+}
+
+export const nodeGitRunner: GitRunner = async ({ argv, cwd, env }) => {
+  if (
+    !safeAbsolutePath(cwd) ||
+    !allowedGitArgv(argv) ||
+    !allowedRunnerEnvironment(env)
+  )
     return { exitCode: null, signal: null, stdout: "", unavailable: true };
   return new Promise((done) => {
     const stdoutChunks: Buffer[] = [];
@@ -1513,6 +1980,7 @@ export const nodeGitRunner: GitRunner = async ({ argv, cwd }) => {
     const child = spawn("/usr/bin/git", argv, {
       cwd,
       env: {
+        ...(env ?? {}),
         GIT_CONFIG_GLOBAL: "/dev/null",
         GIT_CONFIG_NOSYSTEM: "1",
         GIT_OPTIONAL_LOCKS: "0",

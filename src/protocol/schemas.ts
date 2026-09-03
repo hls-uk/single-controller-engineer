@@ -468,15 +468,22 @@ export const KnowledgeContractSchema = strictObject({
   aliases: Type.Array(DriveAliasSchema, {
     maxItems: 64,
   }),
+  /** Manifest audience label; every provenance record carries it. */
+  audience: identifier(),
   combinedVerificationCommands: Type.Array(commandVector(), {
     minItems: 1,
     maxItems: 32,
   }),
+  /** The access-domain identifier; records carry it as accessDomainId. */
   domainScope: identifier(),
   gateTargets: Type.Array(MaterialisationTargetSchema, { maxItems: 64 }),
   humanDriver: text(),
+  /** Manifest project identifier; every provenance record carries it. */
+  projectId: identifier(),
   provenance: strictObject({
     eventsDirectory: ownedPath(),
+    /** Rollup output home; the generator receives it as `--output`. */
+    generatedDirectory: ownedPath(),
     recordFormatVersion: Type.Literal(1),
     reproducibilityCommand: commandVector(),
     rollupGeneratorCommand: commandVector(),
@@ -1110,6 +1117,21 @@ const ClosureBaseSchema = {
   unitId: identifier(),
   unitOrdinal: Type.Integer({ minimum: 0, maximum: 63 }),
   baseOid: oid(),
+  // Task-card facts a provenance record needs after the unit leaves the live
+  // map. They are recorded only on a knowledge run, so software closure bytes
+  // are unchanged.
+  ownedPaths: Type.Optional(
+    Type.Array(ownedPath(), { minItems: 1, maxItems: 128, uniqueItems: true }),
+  ),
+  acceptanceIds: Type.Optional(
+    Type.Array(identifier(), { minItems: 1, maxItems: 64, uniqueItems: true }),
+  ),
+  supersedes: Type.Optional(
+    Type.Array(identifier(), { maxItems: 64, uniqueItems: true }),
+  ),
+  tombstones: Type.Optional(
+    Type.Array(identifier(), { maxItems: 64, uniqueItems: true }),
+  ),
   // While the unit is live, its required field is authoritative. At closure
   // the unit leaves the map and this record becomes the sole owner.
   repairCount: Type.Optional(Type.Integer({ minimum: 0, maximum: 16 })),

@@ -6874,9 +6874,9 @@ var require_ajv = __commonJS({
 import { realpathSync as realpathSync7 } from "node:fs";
 import {
   basename as basename4,
-  dirname as dirname6,
+  dirname as dirname7,
   isAbsolute as isAbsolute10,
-  join as join8,
+  join as join9,
   normalize as normalize6,
   resolve as resolve8
 } from "node:path";
@@ -9965,15 +9965,22 @@ var KnowledgeContractSchema = strictObject({
   aliases: Type.Array(DriveAliasSchema, {
     maxItems: 64
   }),
+  /** Manifest audience label; every provenance record carries it. */
+  audience: identifier(),
   combinedVerificationCommands: Type.Array(commandVector(), {
     minItems: 1,
     maxItems: 32
   }),
+  /** The access-domain identifier; records carry it as accessDomainId. */
   domainScope: identifier(),
   gateTargets: Type.Array(MaterialisationTargetSchema, { maxItems: 64 }),
   humanDriver: text(),
+  /** Manifest project identifier; every provenance record carries it. */
+  projectId: identifier(),
   provenance: strictObject({
     eventsDirectory: ownedPath(),
+    /** Rollup output home; the generator receives it as `--output`. */
+    generatedDirectory: ownedPath(),
     recordFormatVersion: Type.Literal(1),
     reproducibilityCommand: commandVector(),
     rollupGeneratorCommand: commandVector()
@@ -10548,6 +10555,21 @@ var ClosureBaseSchema = {
   unitId: identifier(),
   unitOrdinal: Type.Integer({ minimum: 0, maximum: 63 }),
   baseOid: oid(),
+  // Task-card facts a provenance record needs after the unit leaves the live
+  // map. They are recorded only on a knowledge run, so software closure bytes
+  // are unchanged.
+  ownedPaths: Type.Optional(
+    Type.Array(ownedPath(), { minItems: 1, maxItems: 128, uniqueItems: true })
+  ),
+  acceptanceIds: Type.Optional(
+    Type.Array(identifier(), { minItems: 1, maxItems: 64, uniqueItems: true })
+  ),
+  supersedes: Type.Optional(
+    Type.Array(identifier(), { maxItems: 64, uniqueItems: true })
+  ),
+  tombstones: Type.Optional(
+    Type.Array(identifier(), { maxItems: 64, uniqueItems: true })
+  ),
   // While the unit is live, its required field is authoritative. At closure
   // the unit leaves the map and this record becomes the sole owner.
   repairCount: Type.Optional(Type.Integer({ minimum: 0, maximum: 16 })),
@@ -17021,11 +17043,23 @@ function successfulClosureFacts(unit) {
     }
   };
 }
+function closureTaskFacts(state, unit) {
+  const metadata = unit.taskMetadata;
+  if (state.knowledgeContract === void 0 || metadata === void 0)
+    return {};
+  return {
+    ownedPaths: [...metadata.ownedPaths],
+    acceptanceIds: [...metadata.acceptanceIds],
+    ...metadata.supersedes === void 0 ? {} : { supersedes: [...metadata.supersedes] },
+    ...metadata.tombstones === void 0 ? {} : { tombstones: [...metadata.tombstones] }
+  };
+}
 function closureEvidenceFor(state, unit) {
   const base = {
     unitId: unit.id,
     unitOrdinal: unit.ordinal,
     baseOid: unit.baseOid,
+    ...closureTaskFacts(state, unit),
     ...unit.branchRef === void 0 ? {} : { branchRef: unit.branchRef },
     ...unit.worktreePath === void 0 ? {} : { worktreePath: unit.worktreePath },
     ...sessionClosureBindings(unit),
@@ -17160,7 +17194,18 @@ function denseBinding(binding) {
     binding.promptHash
   ];
 }
+function denseTaskFacts(closure) {
+  return closure.ownedPaths === void 0 && closure.acceptanceIds === void 0 ? [] : [
+    [
+      closure.ownedPaths ?? null,
+      closure.acceptanceIds ?? null,
+      closure.supersedes ?? null,
+      closure.tombstones ?? null
+    ]
+  ];
+}
 function denseClosureRecord(closure) {
+  const facts = denseTaskFacts(closure);
   const common = [
     closure.outcome,
     closure.unitId,
@@ -17198,9 +17243,9 @@ function denseClosureRecord(closure) {
       ]
     ];
     if (closure.outcome === "landed")
-      return [...common, [closure.landedOid, ...success2]];
+      return [...common, [closure.landedOid, ...success2], ...facts];
     if (closure.outcome === "branch_handoff")
-      return [...common, [closure.publishedHeadOid, ...success2]];
+      return [...common, [closure.publishedHeadOid, ...success2], ...facts];
     return [
       ...common,
       [
@@ -17214,7 +17259,8 @@ function denseClosureRecord(closure) {
           closure.pullRequest.remoteHeadOid
         ],
         ...success2
-      ]
+      ],
+      ...facts
     ];
   }
   return [
@@ -17239,7 +17285,8 @@ function denseClosureRecord(closure) {
         ])
       ],
       closure.candidate === void 0 ? null : [closure.candidate.headOid, closure.candidate.treeOid]
-    ]
+    ],
+    ...facts
   ];
 }
 function denseClosureLedger(evidence) {
@@ -17332,8 +17379,22 @@ function denseSuccess(value) {
     review: hasPullRequest ? fifth : fourth
   };
 }
+function denseTaskFactsRecord(value) {
+  const values = tuple(value, 4);
+  if (values === void 0) return void 0;
+  const [ownedPaths, acceptanceIds, supersedes, tombstones] = values;
+  const strings = (item) => Array.isArray(item) && item.every((entry) => typeof entry === "string");
+  if (!strings(ownedPaths) || !strings(acceptanceIds) || supersedes !== null && !strings(supersedes) || tombstones !== null && !strings(tombstones))
+    return void 0;
+  return {
+    ownedPaths,
+    acceptanceIds,
+    ...supersedes === null ? {} : { supersedes },
+    ...tombstones === null ? {} : { tombstones }
+  };
+}
 function expandDenseClosure(value) {
-  const values = tuple(value, 12);
+  const values = tuple(value, 12) ?? tuple(value, 13);
   if (values === void 0) return void 0;
   const [
     outcome,
@@ -17347,8 +17408,11 @@ function expandDenseClosure(value) {
     reviewerEncoded,
     reservationsEncoded,
     terminalEncoded,
-    payload
+    payload,
+    factsEncoded
   ] = values;
+  const facts = values.length === 13 ? denseTaskFactsRecord(factsEncoded) : {};
+  if (facts === void 0) return void 0;
   if (repairCount !== null && typeof repairCount !== "number" || branchRef !== null && typeof branchRef !== "string" || worktreePath !== null && typeof worktreePath !== "string")
     return void 0;
   const worker = denseBindingRecord(workerEncoded);
@@ -17361,6 +17425,7 @@ function expandDenseClosure(value) {
     unitId,
     unitOrdinal,
     baseOid,
+    ...facts,
     ...repairCount === null ? {} : { repairCount },
     ...branchRef === null ? {} : { branchRef },
     ...worktreePath === null ? {} : { worktreePath },
@@ -20953,10 +21018,46 @@ function parseGitResult(value) {
 }
 
 // src/adapters/git/index.ts
+var COMMIT_IDENTITY_KEYS = [
+  "GIT_AUTHOR_NAME",
+  "GIT_AUTHOR_EMAIL",
+  "GIT_AUTHOR_DATE",
+  "GIT_COMMITTER_NAME",
+  "GIT_COMMITTER_EMAIL",
+  "GIT_COMMITTER_DATE"
+];
+var IDENTITY_NAME = /^[^\u0000-\u001f\u007f<>]{1,321}$/u;
+var IDENTITY_EMAIL = /^[A-Za-z0-9._-]{1,64}@[A-Za-z0-9.-]{1,128}$/u;
+var IDENTITY_DATE = /^(?:0|[1-9][0-9]{0,11}) \+0000$/u;
+function commitIdentityEnvironment(identity2) {
+  if (!IDENTITY_NAME.test(identity2.name) || !IDENTITY_EMAIL.test(identity2.email) || !IDENTITY_DATE.test(identity2.date))
+    return void 0;
+  return {
+    GIT_AUTHOR_DATE: identity2.date,
+    GIT_AUTHOR_EMAIL: identity2.email,
+    GIT_AUTHOR_NAME: identity2.name,
+    GIT_COMMITTER_DATE: identity2.date,
+    GIT_COMMITTER_EMAIL: identity2.email,
+    GIT_COMMITTER_NAME: identity2.name
+  };
+}
+function allowedRunnerEnvironment(env) {
+  if (env === void 0) return true;
+  return Object.entries(env).every(
+    ([key, value]) => COMMIT_IDENTITY_KEYS.includes(key) && typeof value === "string" && value.length > 0 && value.length <= 512 && !/[\u0000\r\n]/u.test(value)
+  );
+}
 var OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
 var REF = /^(?:[A-Za-z0-9][A-Za-z0-9._/-]*)(?:[A-Za-z0-9._/-])?$/u;
 var REMOTE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/u;
 var PATH = /^[^\u0000\r\n]{1,4096}$/u;
+var PROVENANCE_SUBJECT = /^sce: provenance for wave [A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u;
+var PROVENANCE_TRAILER = /^SCE-Provenance-Key: [A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u;
+var DISCOVERY_DEPTH = 64;
+var RELATIVE_DIRECTORY = /^(?![A-Za-z]:)(?!.*\/\/)(?!.*(?:^|\/)\.{1,2}(?:\/|$))[A-Za-z0-9][A-Za-z0-9._/-]{0,191}$/u;
+function safeRelativeDirectory(value) {
+  return RELATIVE_DIRECTORY.test(value) && !value.endsWith("/");
+}
 var MAX_OUTPUT = 65536;
 var activeHookPaths = /* @__PURE__ */ new Set();
 function exactOid(format, value) {
@@ -20985,18 +21086,38 @@ function allowedGitArgv(argv) {
   if (command === "-c" && args[0] === "core.quotePath=false" && args[1] === "-c" && args[2] === "core.attributesFile=/dev/null" && args[3] === "diff")
     return allowedGitArgv(["diff", ...args.slice(4)]);
   if (command === "rev-parse")
-    return args.length === 1 && ["--git-common-dir", "--show-object-format"].includes(args[0] ?? "") || args.length === 2 && args[0] === "--verify" && (args[1] === "HEAD^{commit}" || args[1] === "HEAD^{tree}" || /^(?:[0-9a-f]{40}|[0-9a-f]{64})\^\{tree\}$/u.test(args[1] ?? ""));
+    return args.length === 1 && ["--git-common-dir", "--show-object-format"].includes(args[0] ?? "") || args.length === 2 && args[0] === "--verify" && (args[1] === "HEAD^{commit}" || args[1] === "HEAD^{tree}" || /^(?:[0-9a-f]{40}|[0-9a-f]{64})\^\{(?:tree|commit)\}$/u.test(
+      args[1] ?? ""
+    ));
   if (command === "config")
     return args.length === 3 && args[0] === "--null" && args[1] === "--get-regexp" && [
       "^remote\\..*\\.url$",
       "^(core\\.(attributesfile|quotepath)|diff\\..*)$"
     ].includes(args[2] ?? "");
   if (command === "for-each-ref")
-    return args.length === 2 && args[0] === "--format=%(objectname)" && args[1]?.startsWith("refs/heads/") === true && safeRef(args[1].slice(11));
+    return args.length === 2 && args[0] === "--format=%(objectname)" && (args[1]?.startsWith("refs/heads/") === true && safeRef(args[1].slice(11)) || args[1]?.startsWith("refs/remotes/") === true && safeRef(args[1].slice(13)) && args[1].slice(13).includes("/"));
   if (command === "branch")
     return args.length === 2 && safeRef(args[0] ?? "") && OID.test(args[1] ?? "");
   if (command === "worktree")
-    return args.length === 2 && args[0] === "list" && args[1] === "--porcelain" || args.length === 3 && args[0] === "add" && safeAbsolutePath(args[1] ?? "") && safeRef(args[2] ?? "");
+    return args.length === 2 && args[0] === "list" && args[1] === "--porcelain" || args.length === 3 && args[0] === "add" && safeAbsolutePath(args[1] ?? "") && safeRef(args[2] ?? "") || args.length === 4 && args[0] === "add" && args[1] === "--detach" && safeAbsolutePath(args[2] ?? "") && OID.test(args[3] ?? "");
+  if (command === "add") return args.length === 1 && args[0] === "--all";
+  if (command === "write-tree") return args.length === 0;
+  if (command === "commit-tree")
+    return args.length === 7 && OID.test(args[0] ?? "") && args[1] === "-p" && OID.test(args[2] ?? "") && args[3] === "-m" && PROVENANCE_SUBJECT.test(args[4] ?? "") && args[5] === "-m" && PROVENANCE_TRAILER.test(args[6] ?? "");
+  if (command === "update-ref")
+    return args.length === 3 && args[0] === "--no-deref" && args[1] === "HEAD" && OID.test(args[2] ?? "");
+  if (command === "cat-file")
+    return args.length === 2 && (args[0] === "commit" || args[0] === "blob") && OID.test(args[1] ?? "");
+  if (command === "rev-list")
+    return args.length === 2 && args[0] === `--max-count=${DISCOVERY_DEPTH}` && OID.test(args[1] ?? "");
+  if (command === "ls-tree")
+    return args.length === 5 && args[0] === "-r" && args[1] === "-z" && OID.test(args[2] ?? "") && args[3] === "--" && safeRelativeDirectory(args[4] ?? "");
+  if (command === "fetch") {
+    const refspec = /^\+refs\/heads\/(.+):refs\/remotes\/([^/]+)\/(.+)$/u.exec(
+      args[2] ?? ""
+    );
+    return args.length === 3 && args[0] === "--no-tags" && REMOTE.test(args[1] ?? "") && refspec !== null && refspec[2] === args[1] && refspec[1] === refspec[3] && safeRef(refspec[1] ?? "");
+  }
   if (command === "status")
     return args.length === 2 && args[0] === "--porcelain=v1" && args[1] === "-z";
   if (command === "ls-files")
@@ -21133,9 +21254,11 @@ async function run(runner, repository, argv) {
     return { exitCode: null, signal: null, stdout: "", unavailable: true };
   }
 }
-async function runAt(runner, cwd, argv) {
+async function runAt(runner, cwd, argv, env) {
   try {
-    const observed2 = parseGitResult(await runner({ argv, cwd }));
+    const observed2 = parseGitResult(
+      await runner({ argv, cwd, ...env === void 0 ? {} : { env } })
+    );
     return observed2 ?? {
       exitCode: null,
       signal: null,
@@ -21795,17 +21918,215 @@ async function discoverRemoteIntegration(runner, repository, input) {
   if (observed2.oid === input.candidate) return effect("observed", "GIT_OK");
   return observed2.oid === input.base ? effect("refused", "GIT_ABSENT") : effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
 }
-var nodeGitRunner = async ({ argv, cwd }) => {
-  if (!safeAbsolutePath(cwd) || !allowedGitArgv(argv))
+async function discoverDetachedWorktree(runner, repository, input) {
+  if (!safeAbsolutePath(input.path)) return { state: "foreign" };
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return { state: "unreadable" };
+  const listed = await run(runner, repository, [
+    "worktree",
+    "list",
+    "--porcelain"
+  ]);
+  if (outputResult(listed) !== void 0) return { state: "unreadable" };
+  const records = parseWorktreeList(listed.stdout, repository.objectFormat);
+  const wantedPath = canonicalWorktreePath(input.path);
+  if (records === void 0) return { state: "unreadable" };
+  if (wantedPath === void 0 || wantedPath !== input.path)
+    return { state: "foreign" };
+  const existing = records.find((record3) => record3.path === wantedPath);
+  if (existing === void 0) return { state: "absent" };
+  if (existing.head === void 0 || existing.branch !== void 0)
+    return { state: "foreign" };
+  const ownership = await verifyWorktreeOwnership(
+    runner,
+    repository,
+    input.path
+  );
+  if (ownership.state !== "observed") return { state: "foreign" };
+  const head3 = await runAt(runner, input.path, [
+    "rev-parse",
+    "--verify",
+    "HEAD^{commit}"
+  ]);
+  const headOid = commandOk(head3) ? oneLine(head3.stdout) : void 0;
+  if (headOid === void 0 || !exactOid(repository.objectFormat, headOid))
+    return { state: "unreadable" };
+  const status = await runAt(runner, input.path, [
+    "status",
+    "--porcelain=v1",
+    "-z"
+  ]);
+  if (!commandOk(status)) return { state: "unreadable" };
+  return { state: "present", head: headOid, clean: status.stdout.length === 0 };
+}
+async function ensureDetachedWorktree(runner, repository, input) {
+  if (!exactOid(repository.objectFormat, input.head) || !safeAbsolutePath(input.path))
+    return effect("refused", "GIT_BAD_INPUT");
+  const existing = await discoverDetachedWorktree(runner, repository, input);
+  if (existing.state === "unreadable")
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  if (existing.state === "foreign")
+    return effect("refused", "GIT_FOREIGN_WORKTREE");
+  if (existing.state === "present")
+    return existing.head !== input.head ? effect("refused", "GIT_FOREIGN_WORKTREE") : existing.clean ? effect("observed", "GIT_OK") : effect("refused", "GIT_DIRTY");
+  const added = await run(runner, repository, [
+    "worktree",
+    "add",
+    "--detach",
+    input.path,
+    input.head
+  ]);
+  const reread = await discoverDetachedWorktree(runner, repository, input);
+  if (reread.state === "present" && reread.head === input.head)
+    return reread.clean ? effect("observed", "GIT_OK") : effect("refused", "GIT_DIRTY");
+  if (reread.state === "absent" && terminalFailure(added) === void 0)
+    return effect("refused", "GIT_REFUSED");
+  return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+}
+async function writeWorktreeTree(runner, repository, worktreePath) {
+  if (!safeAbsolutePath(worktreePath)) return void 0;
+  const staged = await runAt(runner, worktreePath, ["add", "--all"]);
+  if (!commandOk(staged)) return void 0;
+  const tree = await runAt(runner, worktreePath, ["write-tree"]);
+  const oid3 = commandOk(tree) ? oneLine(tree.stdout) : void 0;
+  return oid3 !== void 0 && exactOid(repository.objectFormat, oid3) ? oid3 : void 0;
+}
+async function createProvenanceCommit(runner, repository, input) {
+  const env = commitIdentityEnvironment(input.identity);
+  if (env === void 0 || !safeAbsolutePath(input.worktreePath) || !exactOid(repository.objectFormat, input.parent) || !exactOid(repository.objectFormat, input.tree) || !PROVENANCE_SUBJECT.test(input.subject) || !PROVENANCE_TRAILER.test(input.trailer))
+    return void 0;
+  const committed = await runAt(
+    runner,
+    input.worktreePath,
+    [
+      "commit-tree",
+      input.tree,
+      "-p",
+      input.parent,
+      "-m",
+      input.subject,
+      "-m",
+      input.trailer
+    ],
+    env
+  );
+  const oid3 = commandOk(committed) ? oneLine(committed.stdout) : void 0;
+  return oid3 !== void 0 && exactOid(repository.objectFormat, oid3) ? oid3 : void 0;
+}
+async function setDetachedHead(runner, repository, input) {
+  if (!safeAbsolutePath(input.worktreePath) || !exactOid(repository.objectFormat, input.commit))
+    return effect("refused", "GIT_BAD_INPUT");
+  const updated = await runAt(runner, input.worktreePath, [
+    "update-ref",
+    "--no-deref",
+    "HEAD",
+    input.commit
+  ]);
+  const reread = await discoverDetachedWorktree(runner, repository, {
+    path: input.worktreePath
+  });
+  if (reread.state === "present" && reread.head === input.commit)
+    return effect("observed", "GIT_OK");
+  return commandOk(updated) ? effect("ambiguous", "GIT_UNRESOLVED_EFFECT") : effect("refused", "GIT_REFUSED");
+}
+async function readCommit(runner, repository, oid3) {
+  if (!exactOid(repository.objectFormat, oid3)) return void 0;
+  const result2 = await run(runner, repository, ["cat-file", "commit", oid3]);
+  if (!commandOk(result2)) return void 0;
+  const separator = result2.stdout.indexOf("\n\n");
+  if (separator < 0) return void 0;
+  const headers = result2.stdout.slice(0, separator).split("\n");
+  const parents = [];
+  let tree;
+  for (const header of headers) {
+    const space = header.indexOf(" ");
+    const key = header.slice(0, space);
+    const value = header.slice(space + 1);
+    if (key === "tree" && exactOid(repository.objectFormat, value))
+      tree = value;
+    if (key === "parent" && exactOid(repository.objectFormat, value))
+      parents.push(value);
+  }
+  if (tree === void 0) return void 0;
+  return { message: result2.stdout.slice(separator + 2), parents, tree };
+}
+async function findCommitByTrailer(runner, repository, input) {
+  if (!exactOid(repository.objectFormat, input.start) || !PROVENANCE_TRAILER.test(input.trailer))
+    return { state: "unreadable" };
+  const listed = await run(runner, repository, [
+    "rev-list",
+    `--max-count=${DISCOVERY_DEPTH}`,
+    input.start
+  ]);
+  if (!commandOk(listed)) return { state: "unreadable" };
+  const oids = listed.stdout.split("\n").filter((line) => line.length > 0);
+  if (!oids.every((oid3) => exactOid(repository.objectFormat, oid3)))
+    return { state: "unreadable" };
+  for (const oid3 of oids) {
+    const commit2 = await readCommit(runner, repository, oid3);
+    if (commit2 === void 0) return { state: "unreadable" };
+    if (commit2.message.split("\n").some((line) => line === input.trailer))
+      return { state: "found", oid: oid3, commit: commit2 };
+  }
+  return { state: "absent" };
+}
+async function readTreeFiles(runner, repository, input) {
+  if (!exactOid(repository.objectFormat, input.commit) || !safeRelativeDirectory(input.directory))
+    return void 0;
+  const listed = await run(runner, repository, [
+    "ls-tree",
+    "-r",
+    "-z",
+    input.commit,
+    "--",
+    input.directory
+  ]);
+  if (!commandOk(listed)) return void 0;
+  const entries = listed.stdout.split("\0").filter((entry) => entry.length > 0);
+  if (entries.length > input.maxFiles) return void 0;
+  const files = /* @__PURE__ */ new Map();
+  for (const entry of entries) {
+    const match = /^(\d{6}) (blob|tree|commit) ([0-9a-f]{40,64})\t(.+)$/u.exec(
+      entry
+    );
+    if (match === null) return void 0;
+    const [, mode, type, blob, path2] = match;
+    if (type !== "blob" || mode === "120000" || blob === void 0)
+      return void 0;
+    const content = await run(runner, repository, ["cat-file", "blob", blob]);
+    if (!commandOk(content) || path2 === void 0) return void 0;
+    files.set(path2, content.stdout);
+  }
+  return files;
+}
+async function readRefOid(runner, repository, ref) {
+  return await refOid(runner, repository, ref);
+}
+async function fetchIntegrationBranch(runner, repository, input) {
+  if (!REMOTE.test(input.remote) || !safeRef(input.branch))
+    return effect("refused", "GIT_BAD_INPUT");
+  const fetched = await run(runner, repository, [
+    "fetch",
+    "--no-tags",
+    input.remote,
+    `+refs/heads/${input.branch}:refs/remotes/${input.remote}/${input.branch}`
+  ]);
+  if (terminalFailure(fetched) !== void 0)
+    return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  return fetched.exitCode === 0 ? effect("observed", "GIT_OK") : effect("refused", "GIT_COMMAND_FAILED");
+}
+var nodeGitRunner = async ({ argv, cwd, env }) => {
+  if (!safeAbsolutePath(cwd) || !allowedGitArgv(argv) || !allowedRunnerEnvironment(env))
     return { exitCode: null, signal: null, stdout: "", unavailable: true };
   return new Promise((done) => {
     const stdoutChunks = [];
     let outputBytes = 0;
     let timedOut = false;
-    let unavailable5 = false;
+    let unavailable6 = false;
     const child = spawn("/usr/bin/git", argv, {
       cwd,
       env: {
+        ...env ?? {},
         GIT_CONFIG_GLOBAL: "/dev/null",
         GIT_CONFIG_NOSYSTEM: "1",
         GIT_OPTIONAL_LOCKS: "0",
@@ -21833,7 +22154,7 @@ var nodeGitRunner = async ({ argv, cwd }) => {
       child.kill("SIGKILL");
     }, 15e3);
     child.once("error", () => {
-      unavailable5 = true;
+      unavailable6 = true;
     });
     child.once("close", (exitCode, signal) => {
       clearTimeout(timer);
@@ -21846,7 +22167,7 @@ var nodeGitRunner = async ({ argv, cwd }) => {
       } catch {
         invalidUtf8 = true;
       }
-      done({ exitCode, invalidUtf8, signal, stdout, timedOut, unavailable: unavailable5 });
+      done({ exitCode, invalidUtf8, signal, stdout, timedOut, unavailable: unavailable6 });
     });
   });
 };
@@ -22003,11 +22324,11 @@ var nodeMaterialisationProcess = {
           continue;
         }
         const matched = globStateAccepts(pattern, matcherState);
-        const digest = pathHash.digest("hex");
+        const digest2 = pathHash.digest("hex");
         if (matched) {
           retainedMatches += 1;
           if (pathLength > LIMITS.materialisationPathBytes) {
-            unsafeMatchedPathHash ??= digest;
+            unsafeMatchedPathHash ??= digest2;
           } else if (retained.length <= LIMITS.materialisationMatches) {
             retained.push(
               Buffer.concat([
@@ -22891,6 +23212,682 @@ function createMaterialisationAdapter(repositoryCwd, objectFormat, processPort =
   };
 }
 
+// src/adapters/git/provenance.ts
+import { spawn as spawn3 } from "node:child_process";
+import { lstat as lstat2, mkdir, readFile, writeFile as writeFile2 } from "node:fs/promises";
+import { dirname as dirname2, join as join3, posix as posix2 } from "node:path";
+
+// src/protocol/provenance.ts
+var PROVENANCE_KEY_TRAILER = "SCE-Provenance-Key";
+var PROVENANCE_COMMITTER_EMAIL = "sce@noreply.invalid";
+var PROVENANCE_RECORD_SCHEMA = "sce.knowledge-provenance";
+var RECORD_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$/u;
+var MAX_DRIVER_CHARACTERS = 256;
+var MAX_SUMMARY_CHARACTERS = 8192;
+var MAX_DESTINATIONS = 64;
+function deriveProvenanceRecordId(unitId, landedOid) {
+  const safe = unitId.replaceAll(/[^A-Za-z0-9._-]/gu, "-").slice(0, 140);
+  return `${safe}--${landedOid.slice(0, 12)}`;
+}
+function provenanceCommitSubject(waveId) {
+  return `sce: provenance for wave ${waveId}`;
+}
+function provenanceCommitTrailer(idempotencyKey2) {
+  return `${PROVENANCE_KEY_TRAILER}: ${idempotencyKey2}`;
+}
+function provenanceCommitDate(timestamp) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})Z$/u.exec(
+    timestamp
+  );
+  if (match === null) return void 0;
+  const [, year, month, day, hour, minute, second] = match.map(Number);
+  const unix = Date.UTC(year, month - 1, day, hour, minute, second);
+  if (!Number.isSafeInteger(unix) || unix < 0) return void 0;
+  const rendered = new Date(unix).toISOString().replace(/\.\d{3}Z$/u, "Z");
+  return rendered === timestamp ? `${unix / 1e3} +0000` : void 0;
+}
+function provenanceRecordsCommitment(records) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.provenance-records.v1",
+      records: records.map((record3) => ({
+        path: record3.path,
+        sha256: sha256(record3.bytes)
+      }))
+    })
+  );
+}
+function projectProvenanceRecords(params, executorTool) {
+  const snapshot = params.projectionInputSnapshot;
+  const evidence = decodeClosedUnitEvidence(snapshot.closedUnitEvidence);
+  if (evidence === void 0)
+    return { ok: false, reason: "closure evidence is undecodable" };
+  if (params.knowledgeContract.humanDriver.length > MAX_DRIVER_CHARACTERS)
+    return { ok: false, reason: "human driver exceeds the record bound" };
+  const records = [];
+  const ids = /* @__PURE__ */ new Set();
+  for (const unitId of snapshot.unitIds) {
+    const closure = evidence[unitId];
+    if (closure === void 0 || closure.outcome !== "landed")
+      return { ok: false, reason: `unit ${unitId} has no landed evidence` };
+    const projected = projectUnitRecord(
+      params,
+      snapshot,
+      closure,
+      executorTool
+    );
+    if (!projected.ok) return projected;
+    if (ids.has(projected.record.id))
+      return {
+        ok: false,
+        reason: `duplicate record id ${projected.record.id}`
+      };
+    ids.add(projected.record.id);
+    records.push(projected.record);
+  }
+  records.sort(
+    (left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0
+  );
+  return {
+    ok: true,
+    records,
+    recordsCommitment: provenanceRecordsCommitment(records)
+  };
+}
+function projectUnitRecord(params, snapshot, closure, executorTool) {
+  const contract = params.knowledgeContract;
+  if (closure.ownedPaths === void 0 || closure.acceptanceIds === void 0)
+    return {
+      ok: false,
+      reason: `unit ${closure.unitId} closure lacks task facts`
+    };
+  if (closure.reviewer === void 0)
+    return {
+      ok: false,
+      reason: `unit ${closure.unitId} closure lacks reviewer binding`
+    };
+  const id = deriveProvenanceRecordId(closure.unitId, closure.landedOid);
+  if (!RECORD_ID.test(id))
+    return { ok: false, reason: `record id ${id} is not canonical` };
+  const targets = snapshot.targetEvidence.filter(
+    (target) => target.definition.scope === "unit" && target.definition.originUnitId === closure.unitId
+  ).sort(
+    (left, right) => left.definition.targetOrdinal - right.definition.targetOrdinal
+  );
+  const materialisations = dedupe(targets.flatMap(materialisationEvidence));
+  if (materialisations.length > MAX_DESTINATIONS)
+    return { ok: false, reason: `unit ${closure.unitId} exceeds destinations` };
+  const summary = `Unit ${closure.unitId} landed ${closure.landedOid} on base ${closure.baseOid} in run ${params.runId} wave ${params.waveId}.`;
+  if (summary.length > MAX_SUMMARY_CHARACTERS)
+    return { ok: false, reason: "summary exceeds the record bound" };
+  const commands = closure.verification.commands;
+  const frontmatter = [
+    ["schema", PROVENANCE_RECORD_SCHEMA],
+    ["version", 1],
+    ["id", id],
+    ["projectId", contract.projectId],
+    ["accessDomainId", contract.domainScope],
+    ["audience", contract.audience],
+    ["unitId", closure.unitId],
+    ["humanDriver", contract.humanDriver],
+    ["executorTool", executorTool],
+    ["executorSessionId", closure.worker?.sessionId ?? null],
+    ["timestampUtc", params.timestamp],
+    ["baseOid", closure.baseOid],
+    ["landedOid", closure.landedOid],
+    ["ownedPaths", [...closure.ownedPaths]],
+    ["acceptanceIds", [...closure.acceptanceIds]],
+    ["verificationCommands", [...commands]],
+    ["verificationResults", commands.map(() => "passed")],
+    [
+      "verificationEvidenceHashes",
+      commands.map(() => closure.verification.evidenceHash)
+    ],
+    ["reviewDecision", "approve"],
+    ["reviewBaseOid", closure.review.baseOid],
+    ["reviewHeadOid", closure.review.headOid],
+    ["reviewTreeOid", closure.review.treeOid],
+    ["reviewPromptHash", closure.reviewer.promptHash],
+    ["reviewResponseHash", closure.review.responseHash],
+    [
+      "materialisationDestinations",
+      materialisations.map((item) => item.destination)
+    ],
+    ["materialisationDigests", materialisations.map((item) => item.digest)],
+    ["materialisationStatuses", materialisations.map((item) => item.status)],
+    ["supersedes", [...closure.supersedes ?? []]],
+    ["tombstones", [...closure.tombstones ?? []]],
+    ["summary", summary]
+  ];
+  const lines2 = [
+    "---",
+    ...frontmatter.map(([key, value]) => `${key}: ${JSON.stringify(value)}`),
+    "---",
+    "",
+    "# Provenance record",
+    "",
+    `- Unit \`${closure.unitId}\` (ordinal ${closure.unitOrdinal}) landed`,
+    `  \`${closure.landedOid}\` on base \`${closure.baseOid}\`.`,
+    `- Run \`${params.runId}\`, wave \`${params.waveId}\`, gate entry`,
+    `  \`${params.gateEntryId}\`, provenance base \`${params.baseOid}\`.`,
+    `- Candidate \`${closure.candidate.headOid}\` with tree`,
+    `  \`${closure.candidate.treeOid}\`; repairs: ${closure.repairCount ?? 0}.`,
+    "",
+    "## Materialisation targets",
+    "",
+    ...targets.length === 0 ? ["No materialisation targets were declared."] : [
+      "| Target | Pattern | Destination | Resolution | Outputs |",
+      "| --- | --- | --- | --- | --- |",
+      ...targets.map(targetRow)
+    ]
+  ];
+  const bytes2 = `${lines2.join("\n")}
+`;
+  if (/[\t]|[ \t]$/mu.test(bytes2) || bytes2.includes("\r"))
+    return { ok: false, reason: "record bytes are not canonical Markdown" };
+  return {
+    ok: true,
+    record: {
+      bytes: bytes2,
+      id,
+      path: `${contract.provenance.eventsDirectory}/${id}.md`
+    }
+  };
+}
+function materialisationEvidence(target) {
+  const { destinationAlias, destinationSubpath } = target.definition.target;
+  const home = `${destinationAlias}:${destinationSubpath}`;
+  if (target.materialisations.length === 0)
+    return [{ destination: home, digest: null, status: "deferred" }];
+  return target.materialisations.map(
+    (item) => item.status === "observed" && item.observation !== void 0 && item.artifactName !== void 0 ? {
+      destination: `${home}/${item.artifactName}`,
+      digest: item.observation.artifactSha256,
+      status: "observed"
+    } : {
+      destination: item.artifactName === void 0 ? home : `${home}/${item.artifactName}`,
+      digest: null,
+      status: "deferred"
+    }
+  );
+}
+function dedupe(items) {
+  const seen = /* @__PURE__ */ new Set();
+  return items.filter((item) => {
+    const key = canonicalJson(item);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+function cell(value) {
+  return value.replaceAll("|", "\\|").replaceAll(/[\r\n\t]/gu, " ");
+}
+function targetRow(target) {
+  const definition = target.definition;
+  const resolution = target.resolution === void 0 ? `${target.status}${dispositionSuffix(target.disposition, target.followUpBeadId)}` : target.resolution.status === "observed" ? `observed ${target.resolution.sourceOid.slice(0, 12)}` : `${target.resolution.status}${target.resolution.lastRefusal === void 0 ? "" : ` refused:${target.resolution.lastRefusal.code}`}${dispositionSuffix(
+    target.resolution.disposition ?? target.disposition,
+    target.resolution.followUpBeadId ?? target.followUpBeadId
+  )}`;
+  const outputs = target.materialisations.length === 0 ? "none" : target.materialisations.map(outputCell).join("; ");
+  return `| ${cell(definition.targetId)} | \`${cell(definition.target.sourcePattern)}\` | \`${cell(
+    `${definition.target.destinationAlias}:${definition.target.destinationSubpath}`
+  )}\` | ${cell(resolution)} | ${cell(outputs)} |`;
+}
+function outputCell(item) {
+  const name = item.artifactName ?? item.source.path;
+  const refusal2 = item.lastRefusal === void 0 ? "" : ` refused:${item.lastRefusal.code}`;
+  return `${name} ${item.status}${refusal2}${dispositionSuffix(
+    item.disposition,
+    item.followUpBeadId
+  )}`;
+}
+function dispositionSuffix(disposition, followUpBeadId) {
+  return `${disposition === void 0 ? "" : ` ${disposition}`}${followUpBeadId === void 0 ? "" : ` follow-up:${followUpBeadId}`}`;
+}
+
+// src/adapters/git/provenance.ts
+var COMMAND_TIMEOUT_MS = 6e5;
+var GENERATOR_TIMEOUT_MS = 12e4;
+var MAX_COMMAND_OUTPUT_BYTES = 65536;
+var MAX_RECORD_FILES = 64;
+var nodeProvenanceProcess = {
+  run: async (argv, options) => await new Promise((resolveOutcome) => {
+    let settled = false;
+    const stdout = [];
+    const stderr = [];
+    let outputBytes = 0;
+    let outputExceeded = false;
+    let timedOut = false;
+    let failedToStart = false;
+    const finish = (exitCode, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolveOutcome({
+        exitCode,
+        failedToStart,
+        outputExceeded,
+        signal,
+        stderr: outputExceeded ? Buffer.alloc(0) : Buffer.concat(stderr),
+        stdout: outputExceeded ? Buffer.alloc(0) : Buffer.concat(stdout),
+        timedOut
+      });
+    };
+    const [executable, ...args] = argv;
+    if (executable === void 0) {
+      failedToStart = true;
+      finish(null, null);
+      return;
+    }
+    const child = spawn3(executable, args, {
+      cwd: options.cwd,
+      env: options.env,
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true
+    });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, options.timeoutMs);
+    const collect = (chunks, chunk) => {
+      outputBytes += chunk.byteLength;
+      if (outputBytes > options.maxOutputBytes) {
+        outputExceeded = true;
+        child.kill("SIGKILL");
+        return;
+      }
+      chunks.push(chunk);
+    };
+    child.stdout.on("data", (chunk) => collect(stdout, chunk));
+    child.stderr.on("data", (chunk) => collect(stderr, chunk));
+    child.once("error", () => {
+      failedToStart = true;
+      finish(null, null);
+    });
+    child.once("close", (code, signal) => finish(code, signal));
+  })
+};
+function ambiguous2() {
+  return { status: "ambiguous" };
+}
+function unavailable() {
+  return { status: "unavailable" };
+}
+function digest(value) {
+  return sha256(canonicalJson(value));
+}
+function sanitizedEnvironment(extra) {
+  const inherited = {};
+  for (const key of ["PATH", "TMPDIR", "TEMP", "TMP"]) {
+    const value = process.env[key];
+    if (value !== void 0) inherited[key] = value;
+  }
+  return {
+    ...inherited,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
+    HOME: "/nonexistent",
+    LANG: "C",
+    LC_ALL: "C",
+    TZ: "UTC",
+    ...extra
+  };
+}
+function outcomeDigest(argv, outcome) {
+  return digest({
+    argv: [...argv],
+    exitCode: outcome.exitCode,
+    failedToStart: outcome.failedToStart,
+    outputExceeded: outcome.outputExceeded,
+    signal: outcome.signal,
+    stderrSha256: sha256(outcome.stderr.toString("utf8")),
+    stdoutSha256: sha256(outcome.stdout.toString("utf8")),
+    timedOut: outcome.timedOut
+  });
+}
+function succeeded(outcome) {
+  return outcome.exitCode === 0 && outcome.signal === null && !outcome.timedOut && !outcome.outputExceeded && !outcome.failedToStart;
+}
+async function realDirectory(path2) {
+  try {
+    const stats = await lstat2(path2);
+    return stats.isDirectory();
+  } catch {
+    return false;
+  }
+}
+async function recordsOnDisk(worktreePath, records) {
+  for (const record3 of records) {
+    try {
+      const bytes2 = await readFile(join3(worktreePath, record3.path), "utf8");
+      if (bytes2 !== record3.bytes) return false;
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+function recordsAtCommit(files, records) {
+  return records.every((record3) => files.get(record3.path) === record3.bytes);
+}
+function createProvenanceAdapter(options) {
+  const { repository, runner } = options.git;
+  const processPort = options.process ?? nodeProvenanceProcess;
+  async function integrationHead(run2) {
+    if (run2.integrationProfile === "local-ff") {
+      const head4 = await readRefOid(
+        runner,
+        repository,
+        `refs/heads/${run2.integrationBranch}`
+      );
+      return head4.state === "found" ? head4.oid : void 0;
+    }
+    const remote2 = options.git.remote;
+    if (remote2 === void 0) return void 0;
+    const fetched = await fetchIntegrationBranch(runner, repository, {
+      branch: run2.integrationBranch,
+      remote: remote2
+    });
+    if (fetched.state !== "observed") return void 0;
+    const head3 = await readRefOid(
+      runner,
+      repository,
+      `refs/remotes/${remote2}/${run2.integrationBranch}`
+    );
+    return head3.state === "found" ? head3.oid : void 0;
+  }
+  async function discoverLanded(effect2, run2, records) {
+    const head3 = await integrationHead(run2);
+    if (head3 === void 0) return { state: "unreadable" };
+    const found = await findCommitByTrailer(runner, repository, {
+      start: head3,
+      trailer: provenanceCommitTrailer(effect2.idempotencyKey)
+    });
+    if (found.state === "unreadable") return { state: "unreadable" };
+    if (found.state === "absent") return { state: "absent" };
+    if (found.commit.parents[0] !== effect2.params.baseOid)
+      return { state: "unreadable" };
+    const files = await readTreeFiles(runner, repository, {
+      commit: found.oid,
+      directory: effect2.params.knowledgeContract.provenance.eventsDirectory,
+      maxFiles: MAX_RECORD_FILES
+    });
+    if (files === void 0 || !recordsAtCommit(files, records))
+      return { state: "unreadable" };
+    return {
+      result: {
+        attemptedBaseOid: effect2.params.baseOid,
+        commitOid: found.oid,
+        status: "committed",
+        treeOid: found.commit.tree
+      },
+      state: "found"
+    };
+  }
+  function bound(effect2, run2) {
+    const contract = effect2.params.knowledgeContract;
+    if (run2.knowledgeContract === void 0 || canonicalJson(run2.knowledgeContract) !== canonicalJson(contract) || run2.repositoryIdentity !== repository.identity || run2.gitObjectFormat !== repository.objectFormat)
+      return { ok: false, outcome: ambiguous2() };
+    if (run2.harness === void 0) return { ok: false, outcome: unavailable() };
+    if (effect2.params.worktreePath !== deriveProvenanceWorktreePath(
+      contract.provenanceWorktreeRoot,
+      effect2.idempotencyKey
+    ))
+      return { ok: false, outcome: ambiguous2() };
+    return { ok: true, executorTool: run2.harness.family };
+  }
+  async function reconcileProvenanceCommit(effect2, run2) {
+    const binding = bound(effect2, run2);
+    if (!binding.ok) return binding.outcome;
+    const projection = projectProvenanceRecords(
+      effect2.params,
+      binding.executorTool
+    );
+    if (!projection.ok) return unavailable();
+    if ((await verifyRepository(runner, repository)).state !== "observed")
+      return ambiguous2();
+    const landed = await discoverLanded(effect2, run2, projection.records);
+    if (landed.state === "found")
+      return { result: landed.result, status: "observed" };
+    return landed.state === "absent" ? { status: "absent" } : ambiguous2();
+  }
+  async function executeProvenanceCommit(effect2, run2) {
+    const binding = bound(effect2, run2);
+    if (!binding.ok) return binding.outcome;
+    const params = effect2.params;
+    const contract = params.knowledgeContract;
+    const projection = projectProvenanceRecords(params, binding.executorTool);
+    const date = provenanceCommitDate(params.timestamp);
+    if (!projection.ok || date === void 0) return unavailable();
+    if ((await verifyRepository(runner, repository)).state !== "observed")
+      return ambiguous2();
+    const landed = await discoverLanded(effect2, run2, projection.records);
+    if (landed.state === "found")
+      return { result: landed.result, status: "observed" };
+    if (landed.state === "unreadable") return ambiguous2();
+    if (!await realDirectory(contract.provenanceWorktreeRoot))
+      return unavailable();
+    const worktreePath = params.worktreePath;
+    const trailer = provenanceCommitTrailer(effect2.idempotencyKey);
+    const subject = provenanceCommitSubject(params.waveId);
+    const refusedWorktree = (condition, observedHeadOid) => ({
+      result: {
+        condition,
+        expectedBaseOid: params.baseOid,
+        observedHeadOid,
+        reasonDigest: digest({ condition, observedHeadOid, worktreePath }),
+        status: "worktree_refused"
+      },
+      status: "observed"
+    });
+    let built;
+    const existing = await discoverDetachedWorktree(runner, repository, {
+      path: worktreePath
+    });
+    if (existing.state === "unreadable") return ambiguous2();
+    if (existing.state === "foreign")
+      return refusedWorktree("unexpected_head", null);
+    if (existing.state === "present") {
+      if (!existing.clean)
+        return refusedWorktree("dirty_worktree", existing.head);
+      if (existing.head !== params.baseOid) {
+        const commit2 = await readCommit(runner, repository, existing.head);
+        if (commit2 === void 0 || commit2.parents.length !== 1 || commit2.parents[0] !== params.baseOid || !commit2.message.split("\n").includes(trailer) || !await recordsOnDisk(worktreePath, projection.records))
+          return refusedWorktree("unexpected_head", existing.head);
+        built = { commit: existing.head, tree: commit2.tree };
+      }
+    } else {
+      const created = await ensureDetachedWorktree(runner, repository, {
+        head: params.baseOid,
+        path: worktreePath
+      });
+      if (created.state !== "observed") return ambiguous2();
+    }
+    let generatorFailure;
+    if (built === void 0) {
+      try {
+        for (const record3 of projection.records) {
+          const target = join3(worktreePath, record3.path);
+          await mkdir(dirname2(target), { recursive: true });
+          await writeFile2(target, record3.bytes, "utf8");
+        }
+      } catch {
+        return ambiguous2();
+      }
+      const generatorArgv = [
+        ...contract.provenance.rollupGeneratorCommand,
+        "--output",
+        join3(worktreePath, contract.provenance.generatedDirectory)
+      ];
+      const generated = await processPort.run(generatorArgv, {
+        cwd: worktreePath,
+        env: sanitizedEnvironment({
+          SCE_PROVENANCE_BASE_OID: params.baseOid
+        }),
+        maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
+        timeoutMs: GENERATOR_TIMEOUT_MS
+      });
+      if (!succeeded(generated))
+        generatorFailure = outcomeDigest(generatorArgv, generated);
+      const tree = await writeWorktreeTree(runner, repository, worktreePath);
+      if (tree === void 0) return ambiguous2();
+      const commit2 = await createProvenanceCommit(runner, repository, {
+        identity: {
+          date,
+          email: PROVENANCE_COMMITTER_EMAIL,
+          name: run2.controller.holder
+        },
+        parent: params.baseOid,
+        subject,
+        trailer,
+        tree,
+        worktreePath
+      });
+      if (commit2 === void 0) return ambiguous2();
+      const pointed = await setDetachedHead(runner, repository, {
+        commit: commit2,
+        worktreePath
+      });
+      if (pointed.state !== "observed") return ambiguous2();
+      built = { commit: commit2, tree };
+    }
+    const reproducibilityFailed = (reason) => ({
+      result: {
+        attemptedCommitOid: built.commit,
+        attemptedTreeOid: built.tree,
+        reasonDigest: digest({ reason }),
+        status: "reproducibility_failed"
+      },
+      status: "observed"
+    });
+    if (generatorFailure !== void 0)
+      return reproducibilityFailed(`generator:${generatorFailure}`);
+    const reproducibility = await processPort.run(
+      contract.provenance.reproducibilityCommand,
+      {
+        cwd: worktreePath,
+        env: sanitizedEnvironment({
+          SCE_PROVENANCE_BASE_OID: params.baseOid,
+          SCE_PROVENANCE_COMMIT_OID: built.commit
+        }),
+        maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
+        timeoutMs: COMMAND_TIMEOUT_MS
+      }
+    );
+    if (!succeeded(reproducibility))
+      return reproducibilityFailed(
+        `check:${outcomeDigest(contract.provenance.reproducibilityCommand, reproducibility)}`
+      );
+    const after = await discoverDetachedWorktree(runner, repository, {
+      path: worktreePath
+    });
+    if (after.state !== "present" || after.head !== built.commit)
+      return ambiguous2();
+    if (!after.clean) return reproducibilityFailed("drift:worktree_dirty");
+    if (!await recordsOnDisk(worktreePath, projection.records))
+      return reproducibilityFailed("drift:records_rewritten");
+    const landing = run2.integrationProfile === "local-ff" ? await integrateLocalFastForward(runner, repository, {
+      base: params.baseOid,
+      candidate: built.commit,
+      integrationRef: `refs/heads/${run2.integrationBranch}`
+    }) : options.git.remote === void 0 ? { code: "GIT_REMOTE_MISSING", state: "refused" } : await integrateRemoteFastForward(runner, repository, {
+      base: params.baseOid,
+      candidate: built.commit,
+      integrationBranch: run2.integrationBranch,
+      remote: options.git.remote
+    });
+    if (landing.state === "observed")
+      return {
+        result: {
+          attemptedBaseOid: params.baseOid,
+          commitOid: built.commit,
+          status: "committed",
+          treeOid: built.tree
+        },
+        status: "observed"
+      };
+    if (landing.state === "ambiguous") return ambiguous2();
+    if (landing.code === "GIT_MOVED_BASE") {
+      const advanced = await integrationHead(run2);
+      if (advanced === void 0 || advanced === params.baseOid)
+        return ambiguous2();
+      return {
+        result: {
+          advancedBaseOid: advanced,
+          attemptedCommitOid: built.commit,
+          attemptedTreeOid: built.tree,
+          status: "base_advanced"
+        },
+        status: "observed"
+      };
+    }
+    return {
+      result: {
+        attemptedCommitOid: built.commit,
+        attemptedTreeOid: built.tree,
+        reasonDigest: digest({ code: landing.code }),
+        status: "integration_refused"
+      },
+      status: "observed"
+    };
+  }
+  async function executeAggregateVerify(effect2, run2) {
+    const params = effect2.params;
+    const contract = run2.knowledgeContract;
+    if (contract === void 0 || run2.repositoryIdentity !== repository.identity || run2.gitObjectFormat !== repository.objectFormat || canonicalJson(params.commands) !== canonicalJson(contract.combinedVerificationCommands) || params.candidate.headOid !== params.provenanceOid || !params.worktreePath.startsWith(
+      `${posix2.normalize(contract.provenanceWorktreeRoot)}/sce-provenance-`
+    ))
+      return ambiguous2();
+    if ((await verifyRepository(runner, repository)).state !== "observed")
+      return ambiguous2();
+    const commit2 = await readCommit(runner, repository, params.provenanceOid);
+    if (commit2 === void 0 || commit2.tree !== params.candidate.treeOid || commit2.parents[0] !== params.candidate.baseOid)
+      return ambiguous2();
+    const worktree = await ensureDetachedWorktree(runner, repository, {
+      head: params.provenanceOid,
+      path: params.worktreePath
+    });
+    if (worktree.state !== "observed") return ambiguous2();
+    const results = [];
+    let passed = true;
+    for (const argv of params.commands) {
+      const outcome = await processPort.run(argv, {
+        cwd: params.worktreePath,
+        env: sanitizedEnvironment({
+          SCE_CANDIDATE_BASE_OID: params.candidate.baseOid,
+          SCE_PROVENANCE_COMMIT_OID: params.provenanceOid
+        }),
+        maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
+        timeoutMs: COMMAND_TIMEOUT_MS
+      });
+      results.push(outcomeDigest(argv, outcome));
+      if (!succeeded(outcome)) {
+        passed = false;
+        break;
+      }
+    }
+    return {
+      evidenceDigest: digest({
+        domain: "sce.provenance.aggregate-verify.v1",
+        passed,
+        results,
+        worktreePath: params.worktreePath
+      }),
+      passed,
+      status: "observed"
+    };
+  }
+  return {
+    executeAggregateVerify,
+    executeProvenanceCommit,
+    reconcileAggregateVerify: async () => ({ status: "absent" }),
+    reconcileProvenanceCommit
+  };
+}
+
 // src/fencing/schemas.ts
 var FENCING_SCHEMA_VERSION = 1;
 var MERGE_SLOT_LABEL = "gt:slot";
@@ -23256,7 +24253,7 @@ import {
   unlinkSync,
   writeFileSync
 } from "node:fs";
-import { join as join3 } from "node:path";
+import { join as join4 } from "node:path";
 import { createConnection, createServer } from "node:net";
 var LOCK_DIRECTORY = ".sce-op";
 var SOCKET_NAME = "l";
@@ -23353,7 +24350,7 @@ function paths(commonDir) {
   try {
     if (realpathSync2(commonDir) !== commonDir || !strictDirectory(commonDir))
       return void 0;
-    const directory = join3(commonDir, LOCK_DIRECTORY);
+    const directory = join4(commonDir, LOCK_DIRECTORY);
     try {
       mkdirSync(directory, { mode: 448 });
     } catch (error) {
@@ -23363,8 +24360,8 @@ function paths(commonDir) {
     if (statSync(commonDir).dev !== statSync(directory).dev) return void 0;
     return {
       directory,
-      socket: join3(directory, SOCKET_NAME),
-      state: join3(directory, STATE_NAME)
+      socket: join4(directory, SOCKET_NAME),
+      state: join4(directory, STATE_NAME)
     };
   } catch {
     return void 0;
@@ -24304,10 +25301,10 @@ function planProvenanceCarryFromProjection(predecessorRootIssueId, currentRootIs
     }
   };
 }
-function ambiguous2() {
+function ambiguous3() {
   return { status: "ambiguous" };
 }
-function unavailable() {
+function unavailable2() {
   return { status: "unavailable" };
 }
 function classifyDiscovery(result2) {
@@ -24479,10 +25476,10 @@ function candidateInput(effect2, run2) {
 }
 async function candidateObserved(effect2, run2, git) {
   const input = candidateInput(effect2, run2);
-  if (input === void 0) return ambiguous2();
+  if (input === void 0) return ambiguous3();
   const result2 = await observeCandidate(git.runner, git.repository, input);
   if (result2.state !== "observed" || result2.snapshot === void 0)
-    return ambiguous2();
+    return ambiguous3();
   return {
     observation: {
       ...eventBase2(effect2, run2),
@@ -24495,22 +25492,22 @@ async function candidateObserved(effect2, run2, git) {
   };
 }
 async function verificationRequest(effect2, run2, git) {
-  if (effect2.unitId === null) return ambiguous2();
+  if (effect2.unitId === null) return ambiguous3();
   const unit = run2.units[effect2.unitId];
   if (unit === void 0 || unit.branchRef === void 0 || unit.worktreePath !== effect2.params.worktreePath || unit.candidateHead !== effect2.params.candidate.headOid || unit.candidateTree !== effect2.params.candidate.treeOid || unit.baseOid !== effect2.params.candidate.baseOid)
-    return ambiguous2();
+    return ambiguous3();
   const entry = run2.effectJournal.find(
     (candidate) => candidate.effectId === effect2.effectId && candidate.unitId === effect2.unitId && candidate.kind === "verify"
   );
-  if (entry?.status !== "intended") return ambiguous2();
+  if (entry?.status !== "intended") return ambiguous3();
   const binding = await verifyCandidateWorktree(git.runner, git.repository, {
     branch: unit.branchRef,
     head: effect2.params.candidate.headOid,
     path: effect2.params.worktreePath,
     tree: effect2.params.candidate.treeOid
   });
-  const requested = binding.state === "observed" ? verificationToolRequest(effect2, run2) : ambiguous2();
-  return requested.status === "tool_request" ? { ...requested, delivery: "mark_ambiguous" } : ambiguous2();
+  const requested = binding.state === "observed" ? verificationToolRequest(effect2, run2) : ambiguous3();
+  return requested.status === "tool_request" ? { ...requested, delivery: "mark_ambiguous" } : ambiguous3();
 }
 function canPublish(effect2) {
   return effect2.params.completionBoundary !== "pr-handoff" && effect2.params.authorityProfile !== "local-change-only";
@@ -24539,13 +25536,86 @@ function createProductionRecoveryEffectAdapter(options) {
     git.repository.cwd,
     git.repository.objectFormat
   );
+  const provenance = options.provenance ?? createProvenanceAdapter({
+    git: {
+      repository: git.repository,
+      runner: git.runner,
+      ...git.remote === void 0 ? {} : { remote: git.remote }
+    }
+  });
   const harness = options.harness === void 0 ? void 0 : createHarnessRecoveryEffectAdapter(
     options.harness.support,
     options.harness.port
   );
+  function provenanceObservation(effect2, run2, result2) {
+    return {
+      observation: {
+        ...eventBase2(effect2, run2),
+        observationHash: observationHash2(result2),
+        result: result2,
+        type: "provenance_commit_observed"
+      },
+      status: "observed"
+    };
+  }
+  function aggregateVerification(effect2, run2, passed, evidenceDigest) {
+    return {
+      observation: {
+        ...eventBase2(effect2, run2),
+        baseOid: effect2.params.candidate.baseOid,
+        headOid: effect2.params.candidate.headOid,
+        observationHash: observationHash2({
+          domain: "sce.provenance.aggregate-verify-observation.v1",
+          effectId: effect2.effectId,
+          evidenceDigest,
+          paramsHash: effect2.paramsHash,
+          passed
+        }),
+        treeOid: effect2.params.candidate.treeOid,
+        type: passed ? "verification_observed" : "verification_failed"
+      },
+      status: "observed"
+    };
+  }
+  async function provenanceDiscovery(effect2, run2) {
+    if (!gitMatchesRun(git.repository, run2)) return ambiguous3();
+    try {
+      const outcome = await provenance.reconcileProvenanceCommit(effect2, run2);
+      return outcome.status === "observed" ? provenanceObservation(effect2, run2, outcome.result) : outcome;
+    } catch {
+      return ambiguous3();
+    }
+  }
+  async function provenanceExecution(effect2, run2) {
+    if (!gitMatchesRun(git.repository, run2)) return ambiguous3();
+    try {
+      const outcome = await provenance.executeProvenanceCommit(effect2, run2);
+      return outcome.status === "observed" ? provenanceObservation(effect2, run2, outcome.result) : outcome;
+    } catch {
+      return ambiguous3();
+    }
+  }
+  async function aggregateVerifyExecution(effect2, run2) {
+    if (!gitMatchesRun(git.repository, run2)) return ambiguous3();
+    const entry = run2.effectJournal.find(
+      (candidate) => candidate.effectId === effect2.effectId && candidate.unitId === null && candidate.kind === "verify"
+    );
+    if (entry?.status !== "intended") return ambiguous3();
+    try {
+      const outcome = await provenance.executeAggregateVerify(effect2, run2);
+      return outcome.status === "observed" ? aggregateVerification(
+        effect2,
+        run2,
+        outcome.passed,
+        outcome.evidenceDigest
+      ) : outcome;
+    } catch {
+      return ambiguous3();
+    }
+  }
   async function discover(effect2, run2) {
     if (effect2.kind === "provenance_carry_claim") {
-      if (options.carry === void 0) return unavailable();
+      if (options.carry === void 0) return unavailable2();
       try {
         const result2 = await options.carry.reconcileProvenanceCarryClaim(
           effect2,
@@ -24553,53 +25623,70 @@ function createProductionRecoveryEffectAdapter(options) {
         );
         return result2.status === "observed" ? carryObservation(effect2, run2, result2.result) : result2;
       } catch {
-        return ambiguous2();
+        return ambiguous3();
       }
     }
     if (effect2.kind === "materialisation_resolve" || effect2.kind === "destination_probe" || effect2.kind === "materialise") {
       if (!gitMatchesRun(git.repository, run2) || effect2.params.repositoryIdentity !== git.repository.identity || (await verifyRepository(git.runner, git.repository)).state !== "observed")
-        return ambiguous2();
+        return ambiguous3();
       try {
         return effect2.kind === "materialise" ? await discoveredMaterialisationResult(effect2, run2, materialisation) : await materialisationResult(effect2, run2, materialisation);
       } catch {
-        return ambiguous2();
+        return ambiguous3();
       }
     }
-    if (effect2.kind === "provenance_commit") return unavailable();
+    if (effect2.kind === "provenance_commit")
+      return await provenanceDiscovery(effect2, run2);
     if (effect2.kind === "verify") {
-      if (effect2.unitId === null) return unavailable();
-      if (!gitMatchesRun(git.repository, run2)) return ambiguous2();
+      if (effect2.unitId === null) {
+        if (!gitMatchesRun(git.repository, run2)) return ambiguous3();
+        try {
+          const outcome = await provenance.reconcileAggregateVerify(
+            effect2,
+            run2
+          );
+          return outcome.status === "observed" ? aggregateVerification(
+            effect2,
+            run2,
+            outcome.passed,
+            outcome.evidenceDigest
+          ) : outcome;
+        } catch {
+          return ambiguous3();
+        }
+      }
+      if (!gitMatchesRun(git.repository, run2)) return ambiguous3();
       try {
         return await verificationRequest(effect2, run2, git);
       } catch {
-        return ambiguous2();
+        return ambiguous3();
       }
     }
     if (harness?.canReconcile?.(effect2))
       return await harness.reconcile(effect2, run2);
     if (effect2.kind === "candidate_collect") {
-      if (!gitMatchesRun(git.repository, run2)) return ambiguous2();
+      if (!gitMatchesRun(git.repository, run2)) return ambiguous3();
       try {
         return await candidateObserved(effect2, run2, git);
       } catch {
-        return ambiguous2();
+        return ambiguous3();
       }
     }
     const done = observed(effect2, run2);
-    if (done === void 0) return ambiguous2();
+    if (done === void 0) return ambiguous3();
     if (effect2.kind !== "controller_acquire" && effect2.kind !== "controller_release" && !gitMatchesRun(git.repository, run2) || (effect2.kind === "controller_acquire" || effect2.kind === "controller_release") && !transitionMatchesRun(effect2, run2))
-      return ambiguous2();
+      return ambiguous3();
     try {
       switch (effect2.kind) {
         case "controller_acquire":
         case "controller_release": {
           const transition = controllerTransition(effect2);
           if (transition === void 0 || options.topology === void 0)
-            return ambiguous2();
+            return ambiguous3();
           const result2 = await options.topology.reconcileControllerTransition(transition);
           if (result2.status === "observed") return done;
           if (result2.status === "absent") return { status: "absent" };
-          return result2.status === "unavailable" ? unavailable() : ambiguous2();
+          return result2.status === "unavailable" ? unavailable2() : ambiguous3();
         }
         case "branch_create":
           return discovered(
@@ -24611,7 +25698,7 @@ function createProductionRecoveryEffectAdapter(options) {
           );
         case "worktree_create": {
           const base = worktreeBase(effect2, run2);
-          if (base === void 0) return ambiguous2();
+          if (base === void 0) return ambiguous3();
           return discovered(
             done,
             await discoverWorktree(git.runner, git.repository, {
@@ -24624,7 +25711,7 @@ function createProductionRecoveryEffectAdapter(options) {
         case "publish": {
           const configuredRemote = remote(options);
           if (configuredRemote === void 0 || !canPublish(effect2))
-            return ambiguous2();
+            return ambiguous3();
           return discovered(
             done,
             await discoverPublication(git.runner, git.repository, {
@@ -24648,7 +25735,7 @@ function createProductionRecoveryEffectAdapter(options) {
             );
           const configuredRemote = remote(options);
           if (effect2.params.integrationProfile !== "remote-ff" || configuredRemote === void 0)
-            return ambiguous2();
+            return ambiguous3();
           return discovered(
             done,
             await discoverRemoteIntegration(git.runner, git.repository, {
@@ -24660,15 +25747,15 @@ function createProductionRecoveryEffectAdapter(options) {
           );
         }
         default:
-          return ambiguous2();
+          return ambiguous3();
       }
     } catch {
-      return ambiguous2();
+      return ambiguous3();
     }
   }
   async function execute2(effect2, run2) {
     if (effect2.kind === "provenance_carry_claim") {
-      if (options.carry === void 0) return unavailable();
+      if (options.carry === void 0) return unavailable2();
       try {
         const result2 = await options.carry.executeProvenanceCarryClaim(
           effect2,
@@ -24676,42 +25763,44 @@ function createProductionRecoveryEffectAdapter(options) {
         );
         return result2.status === "observed" ? carryObservation(effect2, run2, result2.result) : result2;
       } catch {
-        return ambiguous2();
+        return ambiguous3();
       }
     }
     if (effect2.kind === "materialisation_resolve" || effect2.kind === "destination_probe" || effect2.kind === "materialise") {
       if (!gitMatchesRun(git.repository, run2) || effect2.params.repositoryIdentity !== git.repository.identity || (await verifyRepository(git.runner, git.repository)).state !== "observed")
-        return ambiguous2();
+        return ambiguous3();
       try {
         return await materialisationResult(effect2, run2, materialisation);
       } catch {
-        return ambiguous2();
+        return ambiguous3();
       }
     }
-    if (effect2.kind === "provenance_commit") return unavailable();
+    if (effect2.kind === "provenance_commit")
+      return await provenanceExecution(effect2, run2);
     if (effect2.kind === "verify") {
-      if (effect2.unitId === null) return unavailable();
-      if (!gitMatchesRun(git.repository, run2)) return ambiguous2();
+      if (effect2.unitId === null)
+        return await aggregateVerifyExecution(effect2, run2);
+      if (!gitMatchesRun(git.repository, run2)) return ambiguous3();
       try {
         return await verificationRequest(effect2, run2, git);
       } catch {
-        return ambiguous2();
+        return ambiguous3();
       }
     }
     if (harness?.canExecute?.(effect2))
       return await harness.execute(effect2, run2);
     if (effect2.kind === "candidate_collect") {
-      if (!gitMatchesRun(git.repository, run2)) return ambiguous2();
+      if (!gitMatchesRun(git.repository, run2)) return ambiguous3();
       try {
         return await candidateObserved(effect2, run2, git);
       } catch {
-        return ambiguous2();
+        return ambiguous3();
       }
     }
     const done = observed(effect2, run2);
-    if (done === void 0) return ambiguous2();
+    if (done === void 0) return ambiguous3();
     if (effect2.kind !== "controller_acquire" && effect2.kind !== "controller_release" && !gitMatchesRun(git.repository, run2) || (effect2.kind === "controller_acquire" || effect2.kind === "controller_release") && !transitionMatchesRun(effect2, run2))
-      return ambiguous2();
+      return ambiguous3();
     try {
       switch (effect2.kind) {
         case "controller_acquire":
@@ -24719,9 +25808,9 @@ function createProductionRecoveryEffectAdapter(options) {
           const transition = controllerTransition(effect2);
           const executor = options.topology?.executeControllerTransition;
           if (transition === void 0 || executor === void 0)
-            return ambiguous2();
+            return ambiguous3();
           const result2 = await executor(transition);
-          return result2.status === "observed" ? done : result2.status === "unavailable" ? unavailable() : ambiguous2();
+          return result2.status === "observed" ? done : result2.status === "unavailable" ? unavailable2() : ambiguous3();
         }
         case "branch_create":
           return executed(
@@ -24733,7 +25822,7 @@ function createProductionRecoveryEffectAdapter(options) {
           );
         case "worktree_create": {
           const base = worktreeBase(effect2, run2);
-          if (base === void 0) return ambiguous2();
+          if (base === void 0) return ambiguous3();
           return executed(
             done,
             await ensureWorktree(git.runner, git.repository, {
@@ -24746,7 +25835,7 @@ function createProductionRecoveryEffectAdapter(options) {
         case "publish": {
           const configuredRemote = remote(options);
           if (configuredRemote === void 0 || !canPublish(effect2))
-            return ambiguous2();
+            return ambiguous3();
           return executed(
             done,
             await publishCandidate(git.runner, git.repository, {
@@ -24770,7 +25859,7 @@ function createProductionRecoveryEffectAdapter(options) {
             );
           const configuredRemote = remote(options);
           if (effect2.params.integrationProfile !== "remote-ff" || configuredRemote === void 0)
-            return ambiguous2();
+            return ambiguous3();
           return executed(
             done,
             await integrateRemoteFastForward(git.runner, git.repository, {
@@ -24782,10 +25871,10 @@ function createProductionRecoveryEffectAdapter(options) {
           );
         }
         default:
-          return ambiguous2();
+          return ambiguous3();
       }
     } catch {
-      return ambiguous2();
+      return ambiguous3();
     }
   }
   return {
@@ -24796,15 +25885,15 @@ function createProductionRecoveryEffectAdapter(options) {
       if (verified !== void 0) {
         if (verified.status !== "observed") return verified;
         const observation = verified.observation;
-        if (!("effectId" in observation)) return ambiguous2();
+        if (!("effectId" in observation)) return ambiguous3();
         const entry = run2.effectJournal.find(
           (candidate) => candidate.effectId === observation.effectId
         );
         const effect2 = entry === void 0 ? void 0 : rehydrateEffect(run2, entry);
         if (effect2?.kind !== "verify" || !gitMatchesRun(git.repository, run2))
-          return ambiguous2();
+          return ambiguous3();
         try {
-          if (effect2.unitId === null) return ambiguous2();
+          if (effect2.unitId === null) return ambiguous3();
           const binding = await verifyCandidateWorktree(
             git.runner,
             git.repository,
@@ -24815,12 +25904,12 @@ function createProductionRecoveryEffectAdapter(options) {
               tree: effect2.params.candidate.treeOid
             }
           );
-          return binding.state === "observed" ? verified : ambiguous2();
+          return binding.state === "observed" ? verified : ambiguous3();
         } catch {
-          return ambiguous2();
+          return ambiguous3();
         }
       }
-      return harness?.acknowledge === void 0 ? ambiguous2() : await harness.acknowledge(acknowledgement, run2);
+      return harness?.acknowledge === void 0 ? ambiguous3() : await harness.acknowledge(acknowledgement, run2);
     },
     execute: execute2,
     reconcile: discover
@@ -24970,10 +26059,10 @@ function createProductionRecoveryRunner(options) {
 }
 function discovered(observedResult, result2) {
   const classification = classifyDiscovery(result2);
-  return classification === "observed" ? observedResult : classification === "absent" ? { status: "absent" } : ambiguous2();
+  return classification === "observed" ? observedResult : classification === "absent" ? { status: "absent" } : ambiguous3();
 }
 function executed(observedResult, result2) {
-  return result2.state === "observed" ? observedResult : ambiguous2();
+  return result2.state === "observed" ? observedResult : ambiguous3();
 }
 
 // src/commands/index.ts
@@ -25261,7 +26350,7 @@ var stateOnlyCommandRunner = (request) => {
       version: 1
     } : invalidStateRequest();
   }
-  if (!isStateCommandRequest(request)) return unavailable2();
+  if (!isStateCommandRequest(request)) return unavailable3();
   if (!("request" in request.options)) return invalidStateRequest();
   const parsedRun = validate(
     RepositoryRunSchema,
@@ -25358,10 +26447,10 @@ function createRecoveryCommandRunner(runner) {
     if (isStateCommandRequest(request)) {
       const outcome2 = await runner();
       if (!("run" in outcome2))
-        return outcome2.status === "unavailable" ? unavailable2() : recoveryBlocked();
+        return outcome2.status === "unavailable" ? unavailable3() : recoveryBlocked();
       return await stateResult(request.command, outcome2.run);
     }
-    if (request.command === "feedback") return unavailable2();
+    if (request.command === "feedback") return unavailable3();
     if (request.command === "claim-provenance-carry") {
       const outcome2 = await runner({
         provenanceCarryClaim: {
@@ -25369,7 +26458,7 @@ function createRecoveryCommandRunner(runner) {
         }
       });
       if (!("revision" in outcome2) || outcome2.revision < 0)
-        return outcome2.status === "unavailable" ? unavailable2() : recoveryBlocked();
+        return outcome2.status === "unavailable" ? unavailable3() : recoveryBlocked();
       return {
         result: { revision: outcome2.revision, state: outcome2.run.state },
         schema: "sce.command.result",
@@ -25393,7 +26482,7 @@ function createRecoveryCommandRunner(runner) {
       acknowledgement === void 0 ? event : { harnessAcknowledgement: acknowledgement }
     );
     if (!("revision" in outcome) || outcome.revision < 0)
-      return outcome.status === "unavailable" ? unavailable2() : recoveryBlocked();
+      return outcome.status === "unavailable" ? unavailable3() : recoveryBlocked();
     return {
       result: {
         revision: outcome.revision,
@@ -25455,7 +26544,7 @@ function invalidStateRequest() {
     version: 1
   };
 }
-function unavailable2() {
+function unavailable3() {
   return { schema: "sce.command.result", status: "unavailable", version: 1 };
 }
 function isCommandName(value) {
@@ -25469,7 +26558,7 @@ function isJsonObject(value) {
 }
 
 // src/controller-config.ts
-import { readFile } from "node:fs/promises";
+import { readFile as readFile2 } from "node:fs/promises";
 import { isAbsolute as isAbsolute8, normalize as normalize5, relative as relative3, resolve as resolve5 } from "node:path";
 
 // src/adapters/beads-embedded/schemas.ts
@@ -25689,10 +26778,10 @@ function validateSlotTransitionIntent(input, prefix, scope, mode, expectedHolder
 }
 
 // src/adapters/beads-embedded/pinned-bd-process.ts
-import { spawn as spawn3 } from "node:child_process";
+import { spawn as spawn4 } from "node:child_process";
 import { createHash as createHash3 } from "node:crypto";
 import { closeSync as closeSync2, openSync as openSync2, readSync, realpathSync as realpathSync3, statSync as statSync2 } from "node:fs";
-import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute5 } from "node:path";
+import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute5 } from "node:path";
 var MAX_OUTPUT_BYTES = 65536;
 var PINNED_BD_VERSION = "1.1.0";
 var PINNED_DOLT_VERSION = "2.2.1";
@@ -26089,7 +27178,7 @@ var PinnedBdEmbeddedProcess = class {
     this.projections = options.projections;
     this.remote = options.remote;
     this.scope = options.scope;
-    const storePath = this.databaseDirectory === "" ? "" : this.canonicalDirectory(dirname2(this.databaseDirectory));
+    const storePath = this.databaseDirectory === "" ? "" : this.canonicalDirectory(dirname3(this.databaseDirectory));
     this.identity = {
       database: this.databaseDirectory === "" ? "" : basename2(this.databaseDirectory),
       databaseDirectory: this.databaseDirectory,
@@ -26861,12 +27950,12 @@ var PinnedBdEmbeddedProcess = class {
       let bytes2 = 0;
       let exceeded = false;
       let settled = false;
-      const child = spawn3(executable, argv, {
+      const child = spawn4(executable, argv, {
         cwd: this.cwd,
         env: {
           LANG: "C",
           LC_ALL: "C",
-          PATH: `${dirname2(this.bdExecutable)}:${dirname2(this.doltExecutable)}:/usr/bin:/bin`,
+          PATH: `${dirname3(this.bdExecutable)}:${dirname3(this.doltExecutable)}:/usr/bin:/bin`,
           TMPDIR: process.env.TMPDIR ?? "/private/tmp",
           DARWIN_USER_TEMP_DIR: process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
           TZ: "UTC"
@@ -26995,11 +28084,11 @@ var PinnedBdEmbeddedProcess = class {
     try {
       const path2 = realpathSync3.native(value);
       const stat3 = statSync2(path2, { throwIfNoEntry: false });
-      const digest = stat3 === void 0 ? void 0 : executableDigest(path2, stat3.size);
-      return stat3 === void 0 || !stat3.isFile() || digest === void 0 ? void 0 : {
+      const digest2 = stat3 === void 0 ? void 0 : executableDigest(path2, stat3.size);
+      return stat3 === void 0 || !stat3.isFile() || digest2 === void 0 ? void 0 : {
         ctimeMs: stat3.ctimeMs,
         dev: stat3.dev,
-        digest,
+        digest: digest2,
         ino: stat3.ino,
         mtimeMs: stat3.mtimeMs,
         mode: stat3.mode,
@@ -27023,12 +28112,12 @@ var PinnedBdEmbeddedProcess = class {
       let bytes2 = 0;
       let exceeded = false;
       let settled = false;
-      const child = spawn3(executable, argv, {
+      const child = spawn4(executable, argv, {
         cwd,
         env: {
           LANG: "C",
           LC_ALL: "C",
-          PATH: `${dirname2(this.bdExecutable)}:${dirname2(this.doltExecutable)}:/usr/bin:/bin`,
+          PATH: `${dirname3(this.bdExecutable)}:${dirname3(this.doltExecutable)}:/usr/bin:/bin`,
           TMPDIR: process.env.TMPDIR ?? "/private/tmp",
           DARWIN_USER_TEMP_DIR: process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
           TZ: "UTC"
@@ -27063,10 +28152,10 @@ var PinnedBdEmbeddedProcess = class {
 };
 
 // src/adapters/beads-embedded/dolt-projections.ts
-import { spawn as spawn4 } from "node:child_process";
+import { spawn as spawn5 } from "node:child_process";
 import { createHash as createHash4 } from "node:crypto";
 import { closeSync as closeSync3, openSync as openSync3, readSync as readSync2, realpathSync as realpathSync4, statSync as statSync3 } from "node:fs";
-import { dirname as dirname3, isAbsolute as isAbsolute6 } from "node:path";
+import { dirname as dirname4, isAbsolute as isAbsolute6 } from "node:path";
 var MAX_OUTPUT_BYTES2 = 262144;
 var TIMEOUT_MS = 15e3;
 var PINNED_DOLT_VERSION2 = "2.2.1";
@@ -27722,7 +28811,7 @@ var DoltProjectionPersistence = class {
       let output = "";
       let bytes2 = 0;
       let settled = false;
-      const child = spawn4(
+      const child = spawn5(
         operational.path,
         ["sql", "-r", "json", "-q", query],
         {
@@ -27730,7 +28819,7 @@ var DoltProjectionPersistence = class {
           env: {
             LANG: "C",
             LC_ALL: "C",
-            PATH: `${dirname3(this.doltExecutable)}:/usr/bin:/bin`,
+            PATH: `${dirname4(this.doltExecutable)}:/usr/bin:/bin`,
             TMPDIR: process.env.TMPDIR ?? "/private/tmp",
             DARWIN_USER_TEMP_DIR: process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
             TZ: "UTC"
@@ -27772,11 +28861,11 @@ var DoltProjectionPersistence = class {
     try {
       const path2 = realpathSync4.native(this.doltExecutable);
       const stat3 = statSync3(path2, { throwIfNoEntry: false });
-      const digest = stat3 === void 0 ? void 0 : executableDigest2(path2, stat3.size);
-      return stat3 === void 0 || !stat3.isFile() || digest === void 0 ? void 0 : {
+      const digest2 = stat3 === void 0 ? void 0 : executableDigest2(path2, stat3.size);
+      return stat3 === void 0 || !stat3.isFile() || digest2 === void 0 ? void 0 : {
         ctimeMs: stat3.ctimeMs,
         dev: stat3.dev,
-        digest,
+        digest: digest2,
         ino: stat3.ino,
         mtimeMs: stat3.mtimeMs,
         mode: stat3.mode,
@@ -27795,13 +28884,13 @@ var DoltProjectionPersistence = class {
     this.versionCheck ??= new Promise((resolve9) => {
       let output = "";
       let settled = false;
-      const child = spawn4(executable.path, ["version"], {
+      const child = spawn5(executable.path, ["version"], {
         cwd: this.directory,
         env: {
           DARWIN_USER_TEMP_DIR: process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
           LANG: "C",
           LC_ALL: "C",
-          PATH: `${dirname3(this.doltExecutable)}:/usr/bin:/bin`,
+          PATH: `${dirname4(this.doltExecutable)}:/usr/bin:/bin`,
           TMPDIR: process.env.TMPDIR ?? "/private/tmp",
           TZ: "UTC"
         },
@@ -28967,12 +30056,12 @@ var EmbeddedBeadsAdapter = class {
     if (claims === void 0 || Object.keys(claims).length > 1) return false;
     const entry = Object.entries(claims)[0];
     if (entry === void 0) return true;
-    const [digest, record3] = entry;
+    const [digest2, record3] = entry;
     const parsed = validate(
       ProvenanceCarryClaimRecordSchema,
       record3
     );
-    return /^[0-9a-f]{64}$/u.test(digest) && parsed.ok && parsed.value !== void 0 && parsed.value.exportId === `sce:carry:${digest}` && Buffer.byteLength(canonicalJson(parsed.value)) <= 4096;
+    return /^[0-9a-f]{64}$/u.test(digest2) && parsed.ok && parsed.value !== void 0 && parsed.value.exportId === `sce:carry:${digest2}` && Buffer.byteLength(canonicalJson(parsed.value)) <= 4096;
   }
   carryPlanMatchesEffect(value, effect2, run2) {
     const plan = value.plan;
@@ -29101,12 +30190,12 @@ var EmbeddedBeadsAdapter = class {
     const entry = Object.entries(claims)[0];
     if (entry === void 0)
       return { status: requireClaim ? "ambiguous" : "absent" };
-    const [digest, candidate] = entry;
+    const [digest2, candidate] = entry;
     const parsed = validate(
       ProvenanceCarryClaimRecordSchema,
       candidate
     );
-    if (digest !== effect2.params.exportId.slice("sce:carry:".length) || !parsed.ok || parsed.value === void 0 || parsed.value.exportId !== effect2.params.exportId || Buffer.byteLength(canonicalJson(parsed.value)) > 4096)
+    if (digest2 !== effect2.params.exportId.slice("sce:carry:".length) || !parsed.ok || parsed.value === void 0 || parsed.value.exportId !== effect2.params.exportId || Buffer.byteLength(canonicalJson(parsed.value)) > 4096)
       return {
         result: this.predecessorRefusal(
           effect2.params.predecessorRootBeadId,
@@ -29201,10 +30290,10 @@ var EmbeddedBeadsAdapter = class {
 };
 
 // src/adapters/beads-server/index.ts
-import { spawn as spawn5 } from "node:child_process";
+import { spawn as spawn6 } from "node:child_process";
 import { createHash as createHash5 } from "node:crypto";
 import { open as open2, realpath as realpath2, stat as stat2 } from "node:fs/promises";
-import { dirname as dirname4, isAbsolute as isAbsolute7, join as join4 } from "node:path";
+import { dirname as dirname5, isAbsolute as isAbsolute7, join as join5 } from "node:path";
 var MAX_ENDPOINT_BYTES = 320;
 var MAX_SCHEMA_BYTES = 160;
 var MAX_FINGERPRINT_BYTES = 160;
@@ -29248,7 +30337,7 @@ async function executableSnapshot(executable) {
       const lastOffset = Math.max(0, information.size - sampleSize);
       const last = Buffer.alloc(sampleSize);
       const lastRead = await handle.read(last, 0, sampleSize, lastOffset);
-      const digest = createHash5("sha256").update("first\0").update(first.subarray(0, firstRead.bytesRead)).update("last\0").update(last.subarray(0, lastRead.bytesRead)).digest("hex");
+      const digest2 = createHash5("sha256").update("first\0").update(first.subarray(0, firstRead.bytesRead)).update("last\0").update(last.subarray(0, lastRead.bytesRead)).digest("hex");
       return {
         canonical: canonical2,
         fingerprint: [
@@ -29259,7 +30348,7 @@ async function executableSnapshot(executable) {
           information.mtimeMs,
           information.ctimeMs,
           information.mode,
-          digest
+          digest2
         ].join(":")
       };
     } finally {
@@ -29424,7 +30513,7 @@ var DoltSqlTransport = class {
         executable,
         env: {
           DOLT_CLI_PASSWORD: this.#password ?? "",
-          PATH: `${dirname4(executable)}:/usr/bin:/bin`
+          PATH: `${dirname5(executable)}:/usr/bin:/bin`
         },
         timeoutMs: DOLT_SQL_TIMEOUT_MS
       });
@@ -29476,7 +30565,7 @@ var DoltSqlTransport = class {
         // the child environment avoids exposing a password through argv.
         env: {
           DOLT_CLI_PASSWORD: this.#password ?? "",
-          PATH: this.#executable === void 0 ? process.env.PATH : dirname4(this.#executable)
+          PATH: this.#executable === void 0 ? process.env.PATH : dirname5(this.#executable)
         },
         timeoutMs: DOLT_SQL_TIMEOUT_MS
       });
@@ -29504,7 +30593,7 @@ var DoltSqlTransport = class {
     const version = await this.#process({
       argv: ["version"],
       executable,
-      env: { PATH: `${dirname4(executable)}:/usr/bin:/bin` },
+      env: { PATH: `${dirname5(executable)}:/usr/bin:/bin` },
       timeoutMs: DOLT_SQL_TIMEOUT_MS
     });
     if (await this.#pinnedDoltExecutable() !== executable) return void 0;
@@ -29530,7 +30619,7 @@ var DoltSqlTransport = class {
 };
 async function runDoltSql(request) {
   return new Promise((resolve9) => {
-    const child = spawn5(request.executable, request.argv, {
+    const child = spawn6(request.executable, request.argv, {
       env: request.env,
       stdio: ["ignore", "pipe", "pipe"]
     });
@@ -29587,10 +30676,10 @@ async function runDoltSql(request) {
 }
 async function runDoltSqlTransaction(input) {
   return new Promise((resolve9) => {
-    const child = spawn5(input.executable, input.argv, {
+    const child = spawn6(input.executable, input.argv, {
       env: {
         DOLT_CLI_PASSWORD: input.password ?? "",
-        PATH: `${dirname4(input.executable)}:/usr/bin:/bin`
+        PATH: `${dirname5(input.executable)}:/usr/bin:/bin`
       },
       stdio: ["pipe", "pipe", "ignore"]
     });
@@ -29947,7 +31036,7 @@ var PinnedBdServerProcess = class {
       return false;
     if (identity2.topology === "managed_local_shared_server" && this.#runtimeEnvironment === void 0 || identity2.topology === "external_server" && this.#credentialEnvironment === void 0)
       return false;
-    return context.beads_dir === join4(workspace, ".beads");
+    return context.beads_dir === join5(workspace, ".beads");
   }
   async #exec(executable, argv, additionalPath = []) {
     const source = this.#credentialEnvironment?.();
@@ -29967,7 +31056,7 @@ var PinnedBdServerProcess = class {
         ...password === void 0 ? {} : { BEADS_DOLT_PASSWORD: password },
         CI: "1",
         ...runtime?.HOME === void 0 ? {} : { HOME: runtime.HOME },
-        PATH: [dirname4(executable), ...additionalPath, "/usr/bin", "/bin"].join(
+        PATH: [dirname5(executable), ...additionalPath, "/usr/bin", "/bin"].join(
           ":"
         ),
         ...runtime?.XDG_CONFIG_HOME === void 0 ? {} : { XDG_CONFIG_HOME: runtime.XDG_CONFIG_HOME }
@@ -29978,7 +31067,7 @@ var PinnedBdServerProcess = class {
 };
 async function runPinnedBd(request) {
   return new Promise((resolve9) => {
-    const child = spawn5(request.executable, request.argv, {
+    const child = spawn6(request.executable, request.argv, {
       env: request.env,
       stdio: ["ignore", "pipe", "ignore"]
     });
@@ -30124,7 +31213,7 @@ var PinnedBdManagedServerProcess = class {
     const result2 = await this.#exec(
       executable,
       ["-C", workspace, "dolt", "start"],
-      [dirname4(dolt)]
+      [dirname5(dolt)]
     );
     if (result2.timedOut || result2.exitCode === void 0)
       return { status: "unavailable" };
@@ -30187,7 +31276,7 @@ var PinnedBdManagedServerProcess = class {
     const result2 = await this.#exec(
       executable,
       ["-C", workspace, "dolt", "status", "--json"],
-      [dirname4(dolt)]
+      [dirname5(dolt)]
     );
     if (result2.timedOut || result2.exitCode !== 0 || Buffer.byteLength(result2.output, "utf8") > BD_PROCESS_MAX_OUTPUT_BYTES)
       return void 0;
@@ -30232,7 +31321,7 @@ var PinnedBdManagedServerProcess = class {
         BD_NON_INTERACTIVE: "1",
         CI: "1",
         ...runtime?.HOME === void 0 ? {} : { HOME: runtime.HOME },
-        PATH: [dirname4(executable), ...additionalPath, "/usr/bin", "/bin"].join(
+        PATH: [dirname5(executable), ...additionalPath, "/usr/bin", "/bin"].join(
           ":"
         ),
         ...runtime?.XDG_CONFIG_HOME === void 0 ? {} : { XDG_CONFIG_HOME: runtime.XDG_CONFIG_HOME }
@@ -31215,12 +32304,12 @@ var BeadsServerAdapter = class {
     if (entries.length > 1) return false;
     const entry = entries[0];
     if (entry === void 0) return true;
-    const [digest, candidate] = entry;
+    const [digest2, candidate] = entry;
     const parsed = validate(
       ProvenanceCarryClaimRecordSchema,
       candidate
     );
-    return /^[0-9a-f]{64}$/u.test(digest) && parsed.ok && parsed.value !== void 0 && parsed.value.exportId === `sce:carry:${digest}` && Buffer.byteLength(canonicalJson(parsed.value)) <= 4096;
+    return /^[0-9a-f]{64}$/u.test(digest2) && parsed.ok && parsed.value !== void 0 && parsed.value.exportId === `sce:carry:${digest2}` && Buffer.byteLength(canonicalJson(parsed.value)) <= 4096;
   }
   #carryPlanMatchesEffect(value, effect2, run2) {
     if (!isSchema(RuntimeEffectSchema, effect2) || effect2.kind !== "provenance_carry_claim")
@@ -31267,12 +32356,12 @@ var BeadsServerAdapter = class {
   #classifyCarryClaims(claims, planned, effect2) {
     const entry = Object.entries(claims)[0];
     if (entry === void 0) return { status: "absent" };
-    const [digest, candidate] = entry;
+    const [digest2, candidate] = entry;
     const parsed = validate(
       ProvenanceCarryClaimRecordSchema,
       candidate
     );
-    if (digest !== effect2.params.exportId.slice("sce:carry:".length) || !parsed.ok || parsed.value === void 0 || parsed.value.exportId !== effect2.params.exportId)
+    if (digest2 !== effect2.params.exportId.slice("sce:carry:".length) || !parsed.ok || parsed.value === void 0 || parsed.value.exportId !== effect2.params.exportId)
       return {
         result: this.#predecessorRefusal(
           effect2.params.predecessorRootBeadId,
@@ -32636,9 +33725,11 @@ function parseServerIdentity(value) {
 function parseKnowledgeContract(input, environment) {
   const value = record(input, [
     "aliases",
+    "audience",
     "domainScope",
     "gateTargets",
     "humanDriver",
+    "projectId",
     "provenance",
     "verification"
   ]);
@@ -32649,6 +33740,7 @@ function parseKnowledgeContract(input, environment) {
   ]);
   const provenance = record(value?.provenance, [
     "eventsDirectory",
+    "generatedDirectory",
     "recordFormatVersion",
     "reproducibilityCommand",
     "rollupGeneratorCommand",
@@ -32705,12 +33797,15 @@ function parseKnowledgeContract(input, environment) {
     return void 0;
   const resolved = {
     aliases,
+    audience: value.audience,
     combinedVerificationCommands,
     domainScope: value.domainScope,
     gateTargets: value.gateTargets,
     humanDriver: value.humanDriver,
+    projectId: value.projectId,
     provenance: {
       eventsDirectory: provenance.eventsDirectory,
+      generatedDirectory: provenance.generatedDirectory,
       recordFormatVersion: provenance.recordFormatVersion,
       reproducibilityCommand: provenance.reproducibilityCommand,
       rollupGeneratorCommand: provenance.rollupGeneratorCommand
@@ -32919,7 +34014,7 @@ async function createControllerConfigRunner(path2, dependencies = {}) {
   if (!isAbsolute8(path2)) return void 0;
   let source;
   try {
-    source = await readFile(path2, "utf8");
+    source = await readFile2(path2, "utf8");
   } catch {
     return void 0;
   }
@@ -33330,9 +34425,9 @@ function authorizes(packet, authority) {
 }
 
 // src/feedback/github.ts
-import { mkdtemp as mkdtemp2, rm as rm2, writeFile as writeFile2 } from "node:fs/promises";
+import { mkdtemp as mkdtemp2, rm as rm2, writeFile as writeFile3 } from "node:fs/promises";
 import { tmpdir as tmpdir2 } from "node:os";
-import { join as join5 } from "node:path";
+import { join as join6 } from "node:path";
 var MAX_PROVIDER_OUTPUT_BYTES = 128 * 1024;
 var PAGE_SIZE = 100;
 var MAX_ISSUES = 1e4;
@@ -33345,18 +34440,18 @@ var GhFeedbackTransport = class {
   executor;
   async discoverExactMarker(target, _marker) {
     if (target.repository !== FIXED_TARGET_NAME || target.repositoryId !== FIXED_TARGET_REPOSITORY_ID)
-      throw unavailable3();
+      throw unavailable4();
     const issues = [];
     let cursor = null;
     while (true) {
       const response = await this.graphql(discoveryQuery, cursor);
       const page = parseIssuePage(response);
-      if (page === void 0) throw unavailable3();
+      if (page === void 0) throw unavailable4();
       issues.push(...page.issues);
-      if (issues.length > MAX_ISSUES) throw unavailable3();
+      if (issues.length > MAX_ISSUES) throw unavailable4();
       if (!page.hasNextPage) break;
       if (page.endCursor === null || page.endCursor.length === 0)
-        throw unavailable3();
+        throw unavailable4();
       cursor = page.endCursor;
     }
     const discovery = {
@@ -33369,10 +34464,10 @@ var GhFeedbackTransport = class {
   async createIssue(request) {
     if (request.target.repository !== FIXED_TARGET_NAME || request.target.repositoryId !== FIXED_TARGET_REPOSITORY_ID)
       throw rejected();
-    const directory = await mkdtemp2(join5(tmpdir2(), "sce-feedback-gh-"));
-    const bodyFile = join5(directory, "body.md");
+    const directory = await mkdtemp2(join6(tmpdir2(), "sce-feedback-gh-"));
+    const bodyFile = join6(directory, "body.md");
     try {
-      await writeFile2(bodyFile, request.body, {
+      await writeFile3(bodyFile, request.body, {
         encoding: "utf8",
         mode: 384
       });
@@ -33387,7 +34482,7 @@ var GhFeedbackTransport = class {
         "--body-file",
         bodyFile
       ]);
-      if (created === void 0) throw unavailable3();
+      if (created === void 0) throw unavailable4();
       const number = issueNumber(created);
       if (number === void 0) throw rejected();
       const readback = await this.invoke("gh", [
@@ -33419,7 +34514,7 @@ var GhFeedbackTransport = class {
       "name=single-controller-engineer",
       ...cursor === null ? [] : ["--raw-field", `cursor=${cursor}`]
     ]);
-    if (result2 === void 0) throw unavailable3();
+    if (result2 === void 0) throw unavailable4();
     return parseJson(result2);
   }
   async hasFixedRepositoryIdentity() {
@@ -33509,7 +34604,7 @@ function exactKeys2(value, keys) {
 function bounded(value) {
   return new TextEncoder().encode(value).byteLength <= MAX_PROVIDER_OUTPUT_BYTES;
 }
-function unavailable3() {
+function unavailable4() {
   return Object.assign(new Error("provider unavailable"), {
     code: "GITHUB_UNAVAILABLE"
   });
@@ -33539,7 +34634,7 @@ import {
   writeFileSync as writeFileSync2
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 
 // src/feedback/submit.ts
 function canonicalIssueUrl(number) {
@@ -33618,7 +34713,7 @@ var FeedbackOutbox = class _FeedbackOutbox {
   constructor(directory, hooks) {
     this.hooks = hooks;
     this.directory = directory;
-    this.lockPath = join6(directory, ".lock");
+    this.lockPath = join7(directory, ".lock");
   }
   hooks;
   directory;
@@ -33667,7 +34762,7 @@ var FeedbackOutbox = class _FeedbackOutbox {
     for (const name of names.filter(
       (entry) => /^[0-9a-f]{64}\.json$/u.test(entry)
     )) {
-      const source = safeFile(join6(this.directory, name));
+      const source = safeFile(join7(this.directory, name));
       const envelope = source === void 0 ? void 0 : parseEnvelope(source);
       if (envelope === void 0 || envelope.packet.telemetry.fingerprint !== name.slice(0, -5))
         return { status: "invalid" };
@@ -33878,7 +34973,7 @@ token=${randomUUID()}
     }
   }
   acquireSubmissionLock(fingerprint) {
-    const path2 = join6(this.directory, `.submit-${fingerprint}.lock`);
+    const path2 = join7(this.directory, `.submit-${fingerprint}.lock`);
     let descriptor;
     let identity2;
     try {
@@ -33938,7 +35033,7 @@ token=${randomUUID()}
     let bytes2 = 0;
     for (const name of names) {
       if (name === ".lock") continue;
-      const stat3 = safeStat(join6(this.directory, name));
+      const stat3 = safeStat(join7(this.directory, name));
       if (stat3 === void 0) return "unavailable";
       bytes2 += stat3.size;
       if (/^[0-9a-f]{64}\.json$/u.test(name)) packets += 1;
@@ -33949,7 +35044,7 @@ token=${randomUUID()}
     const source = sourceFor(envelope);
     if (new TextEncoder().encode(source).byteLength > OUTBOX_MAX_BYTES)
       return { status: "quota" };
-    const temporary = join6(
+    const temporary = join7(
       this.directory,
       `.${envelope.packet.telemetry.fingerprint}.${randomUUID()}.tmp`
     );
@@ -33977,7 +35072,7 @@ token=${randomUUID()}
     }
   }
   packetPath(fingerprint) {
-    return join6(this.directory, `${fingerprint}.json`);
+    return join7(this.directory, `${fingerprint}.json`);
   }
 };
 function outboxDirectory(commonDir) {
@@ -33985,9 +35080,9 @@ function outboxDirectory(commonDir) {
     if (lstatSync2(commonDir).isSymbolicLink()) return void 0;
     const resolved = realpathSync5(commonDir);
     if (!strictDirectory2(resolved)) return void 0;
-    const sce = join6(resolved, "sce");
+    const sce = join7(resolved, "sce");
     createStrictDirectory(sce);
-    const outbox = join6(sce, "feedback-outbox");
+    const outbox = join7(sce, "feedback-outbox");
     createStrictDirectory(outbox);
     return statSync4(resolved).dev === statSync4(outbox).dev ? outbox : void 0;
   } catch {
@@ -34122,7 +35217,7 @@ import { constants as constants4, accessSync, lstatSync as lstatSync3, realpathS
 import { isAbsolute as isAbsolute9, resolve as resolve6 } from "node:path";
 import { promisify } from "node:util";
 var executeFile = promisify(execFile);
-var MAX_COMMAND_OUTPUT_BYTES = 128 * 1024;
+var MAX_COMMAND_OUTPUT_BYTES2 = 128 * 1024;
 var MAX_GIT_COMMON_DIR_BYTES = 4 * 1024;
 var EXECUTABLE_CANDIDATES = {
   gh: ["/usr/bin/gh", "/usr/local/bin/gh", "/opt/homebrew/bin/gh"],
@@ -34137,7 +35232,7 @@ var processFeedbackCommandExecutor = {
         cwd: options.cwd,
         encoding: "utf8",
         env: feedbackEnvironment(file),
-        maxBuffer: MAX_COMMAND_OUTPUT_BYTES,
+        maxBuffer: MAX_COMMAND_OUTPUT_BYTES2,
         shell: false,
         timeout: 15e3,
         windowsHide: true
@@ -34220,7 +35315,7 @@ async function resolveGitCommonDirectory(executor, cwd = process.cwd()) {
     return void 0;
   }
 }
-function boundedText(value, limit = MAX_COMMAND_OUTPUT_BYTES) {
+function boundedText(value, limit = MAX_COMMAND_OUTPUT_BYTES2) {
   if (typeof value !== "string") return void 0;
   return new TextEncoder().encode(value).byteLength <= limit ? value : void 0;
 }
@@ -34271,13 +35366,13 @@ async function submit(request, dependencies) {
   const authority = parseAuthority(source.authority);
   const outbox = await openOutbox(dependencies);
   if (outbox === void 0)
-    return unavailable4(
+    return unavailable5(
       "SCE_FEEDBACK_OUTBOX_UNAVAILABLE",
       "Feedback outbox is unavailable."
     );
   const enqueued = outbox.enqueue(packet);
   if (enqueued.status !== "ok")
-    return unavailable4(
+    return unavailable5(
       "SCE_FEEDBACK_OUTBOX_UNAVAILABLE",
       "Feedback outbox is unavailable."
     );
@@ -34299,7 +35394,7 @@ async function flush(request, dependencies) {
     );
   const outbox = await openOutbox(dependencies);
   if (outbox === void 0)
-    return unavailable4(
+    return unavailable5(
       "SCE_FEEDBACK_OUTBOX_UNAVAILABLE",
       "Feedback outbox is unavailable."
     );
@@ -34307,7 +35402,7 @@ async function flush(request, dependencies) {
   if (loaded.status === "not_found")
     return invalid("SCE_FEEDBACK_NOT_FOUND", "Feedback packet is not queued.");
   if (loaded.status !== "ok")
-    return unavailable4(
+    return unavailable5(
       "SCE_FEEDBACK_OUTBOX_UNAVAILABLE",
       "Feedback outbox is unavailable."
     );
@@ -34334,7 +35429,7 @@ async function executeFlush(outbox, fingerprint, authority, dependencies) {
   try {
     result2 = await outbox.flush(fingerprint, authority, transport);
   } catch {
-    return unavailable4(
+    return unavailable5(
       "SCE_FEEDBACK_QUEUED_UNAVAILABLE",
       "Feedback remains queued."
     );
@@ -34348,11 +35443,11 @@ async function executeFlush(outbox, fingerprint, authority, dependencies) {
   if (result2.status === "unauthorized")
     return queued("SCE_FEEDBACK_QUEUED_AUTHORITY");
   if (result2.status === "ambiguous")
-    return unavailable4(
+    return unavailable5(
       "SCE_FEEDBACK_QUEUED_UNAVAILABLE",
       "Feedback remains queued."
     );
-  return unavailable4(
+  return unavailable5(
     "SCE_FEEDBACK_OUTBOX_UNAVAILABLE",
     "Feedback outbox is unavailable."
   );
@@ -34402,7 +35497,7 @@ function queued(code) {
     ok: false
   };
 }
-function unavailable4(code, message) {
+function unavailable5(code, message) {
   return { code, exitCode: 69, message, ok: false };
 }
 
@@ -34410,17 +35505,17 @@ function unavailable4(code, message) {
 import { createHash as createHash6, randomUUID as randomUUID2 } from "node:crypto";
 import {
   cp,
-  lstat as lstat2,
-  mkdir,
+  lstat as lstat3,
+  mkdir as mkdir2,
   open as open3,
-  readFile as readFile2,
+  readFile as readFile3,
   readdir,
   rename,
   rm as rm3,
   unlink,
-  writeFile as writeFile3
+  writeFile as writeFile4
 } from "node:fs/promises";
-import { basename as basename3, dirname as dirname5, join as join7, resolve as resolve7 } from "node:path";
+import { basename as basename3, dirname as dirname6, join as join8, resolve as resolve7 } from "node:path";
 var INSTALL_MANIFEST = ".sce-skill-install.json";
 var INSTALL_JOURNAL = ".sce-skill-install.transaction.json";
 var INSTALL_LOCK = ".sce-skill-install.lock";
@@ -34519,7 +35614,7 @@ function parseJournal(value) {
   };
 }
 async function sha2563(path2) {
-  return createHash6("sha256").update(await readFile2(path2)).digest("hex");
+  return createHash6("sha256").update(await readFile3(path2)).digest("hex");
 }
 async function fsync(path2) {
   const handle = await open3(path2, "r");
@@ -34530,29 +35625,29 @@ async function fsync(path2) {
   }
 }
 async function fsyncTree(root) {
-  const entry = await lstat2(root);
+  const entry = await lstat3(root);
   if (entry.isSymbolicLink())
     fail2(`symbolic links are not installable: ${root}`);
   if (entry.isFile()) return await fsync(root);
   if (!entry.isDirectory()) fail2(`unsupported install entry: ${root}`);
-  for (const child of await readdir(root)) await fsyncTree(join7(root, child));
+  for (const child of await readdir(root)) await fsyncTree(join8(root, child));
   await fsync(root);
 }
 async function assertSafeExistingAncestors(path2) {
   let current = resolve7(path2);
   while (true) {
-    const entry = await lstat2(current).catch(() => void 0);
+    const entry = await lstat3(current).catch(() => void 0);
     if (entry?.isSymbolicLink() && current !== "/var" && current !== "/tmp")
       fail2(`refusing symlinked install parent: ${current}`);
-    const parent = dirname5(current);
+    const parent = dirname6(current);
     if (parent === current) return;
     current = parent;
   }
 }
 async function assertDirectory(path2, create = false) {
   await assertSafeExistingAncestors(path2);
-  if (create) await mkdir(path2, { recursive: true, mode: 448 });
-  const entry = await lstat2(path2).catch(() => void 0);
+  if (create) await mkdir2(path2, { recursive: true, mode: 448 });
+  const entry = await lstat3(path2).catch(() => void 0);
   if (!entry?.isDirectory() || entry.isSymbolicLink())
     fail2(`refusing non-directory install path: ${path2}`);
 }
@@ -34563,7 +35658,7 @@ async function filesAt(root, prefix = "") {
     (left, right) => left.name.localeCompare(right.name)
   )) {
     const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
-    const fullPath = join7(root, entry.name);
+    const fullPath = join8(root, entry.name);
     if (entry.isSymbolicLink())
       fail2(`symbolic links are not installable: ${relativePath}`);
     if (entry.isDirectory())
@@ -34578,7 +35673,7 @@ async function filesAt(root, prefix = "") {
   return result2;
 }
 async function skillVersion(path2) {
-  const text5 = await readFile2(join7(path2, "SKILL.md"), "utf8").catch(
+  const text5 = await readFile3(join8(path2, "SKILL.md"), "utf8").catch(
     () => fail2(`missing SKILL.md in ${basename3(path2)}`)
   );
   const match = /^<!--\s*sce-skill-version:\s*([^\s#]+)\s*-->\s*$/mu.exec(text5);
@@ -34592,8 +35687,8 @@ async function createSkillInstallManifest(source) {
   const skills = {};
   const files = [];
   for (const name of SKILL_NAMES) {
-    const skillRoot = join7(resolved, name);
-    const entry = await lstat2(skillRoot).catch(() => void 0);
+    const skillRoot = join8(resolved, name);
+    const entry = await lstat3(skillRoot).catch(() => void 0);
     if (!entry?.isDirectory() || entry.isSymbolicLink())
       fail2(`missing regular skill directory: ${name}`);
     skills[name] = await skillVersion(skillRoot);
@@ -34613,32 +35708,32 @@ function stable(value) {
 }
 async function writeDurable(path2, value) {
   const temporary = `${path2}.${randomUUID2()}.tmp`;
-  await writeFile3(temporary, stable(value), { mode: 384 });
+  await writeFile4(temporary, stable(value), { mode: 384 });
   await fsync(temporary);
   await rename(temporary, path2);
-  await fsync(dirname5(path2));
+  await fsync(dirname6(path2));
 }
 async function readManifest(destination) {
-  const path2 = join7(destination, INSTALL_MANIFEST);
-  const entry = await lstat2(path2).catch(() => void 0);
+  const path2 = join8(destination, INSTALL_MANIFEST);
+  const entry = await lstat3(path2).catch(() => void 0);
   if (entry === void 0) return void 0;
   if (!entry.isFile() || entry.isSymbolicLink())
     fail2("invalid existing skill-install manifest");
   try {
-    return parseManifest(JSON.parse(await readFile2(path2, "utf8")));
+    return parseManifest(JSON.parse(await readFile3(path2, "utf8")));
   } catch (error) {
     if (error instanceof SkillInstallError) throw error;
     fail2("invalid existing skill-install manifest");
   }
 }
 async function readJournal(destination) {
-  const path2 = join7(destination, INSTALL_JOURNAL);
-  const entry = await lstat2(path2).catch(() => void 0);
+  const path2 = join8(destination, INSTALL_JOURNAL);
+  const entry = await lstat3(path2).catch(() => void 0);
   if (entry === void 0) return void 0;
   if (!entry.isFile() || entry.isSymbolicLink())
     fail2("invalid skill-install transaction journal");
   try {
-    return parseJournal(JSON.parse(await readFile2(path2, "utf8")));
+    return parseJournal(JSON.parse(await readFile3(path2, "utf8")));
   } catch (error) {
     if (error instanceof SkillInstallError) throw error;
     fail2("invalid skill-install transaction journal");
@@ -34647,19 +35742,19 @@ async function readJournal(destination) {
 function localTransactionPath(parent, name) {
   if (basename3(name) !== name || !name.startsWith(JOURNAL_PREFIX))
     fail2("unsafe skill-install transaction path");
-  return join7(parent, name);
+  return join8(parent, name);
 }
 async function validateTree(root, manifest) {
   for (const name of SKILL_NAMES) {
-    const directory = join7(root, name);
-    const entry = await lstat2(directory).catch(() => void 0);
+    const directory = join8(root, name);
+    const entry = await lstat3(directory).catch(() => void 0);
     if (!entry?.isDirectory() || entry.isSymbolicLink())
       fail2(`installed skill missing: ${name}`);
     if (await skillVersion(directory) !== manifest.skills[name])
       fail2(`installed skill version differs: ${name}`);
   }
   const actual = (await Promise.all(
-    SKILL_NAMES.map((name) => filesAt(join7(root, name), name))
+    SKILL_NAMES.map((name) => filesAt(join8(root, name), name))
   )).flat().sort((left, right) => left.path.localeCompare(right.path));
   const expected = manifest.files;
   if (actual.length !== expected.length)
@@ -34682,13 +35777,13 @@ async function assertOwnedOrAbsent(destination, manifest) {
     SKILL_NAMES.map(
       async (name) => [
         name,
-        await lstat2(join7(destination, name)).catch(() => void 0)
+        await lstat3(join8(destination, name)).catch(() => void 0)
       ]
     )
   );
   const anySkill = entries.some(([, entry]) => entry !== void 0);
   if (manifest === void 0) {
-    if (anySkill || await lstat2(join7(destination, INSTALL_MANIFEST)).catch(() => void 0))
+    if (anySkill || await lstat3(join8(destination, INSTALL_MANIFEST)).catch(() => void 0))
       fail2("refusing unrelated skill collision");
     return;
   }
@@ -34697,17 +35792,17 @@ async function assertOwnedOrAbsent(destination, manifest) {
 async function move(from, to, phase, fault) {
   await fault?.(`before-${phase}`);
   await rename(from, to);
-  await fsync(dirname5(from));
-  if (dirname5(to) !== dirname5(from)) await fsync(dirname5(to));
+  await fsync(dirname6(from));
+  if (dirname6(to) !== dirname6(from)) await fsync(dirname6(to));
   await fault?.(`after-${phase}`);
 }
 async function movePresent(from, to, phase, fault) {
-  if (!await lstat2(from).catch(() => void 0)) return false;
+  if (!await lstat3(from).catch(() => void 0)) return false;
   await move(from, to, phase, fault);
   return true;
 }
 async function removeJournal(destination) {
-  await unlink(join7(destination, INSTALL_JOURNAL));
+  await unlink(join8(destination, INSTALL_JOURNAL));
   await fsync(destination);
 }
 async function cleanCommitted(destination, parent, journal) {
@@ -34719,7 +35814,7 @@ async function cleanCommitted(destination, parent, journal) {
     if (await readManifest(destination))
       fail2("uninstall transaction did not remove manifest");
     for (const name of SKILL_NAMES) {
-      if (await lstat2(join7(destination, name)).catch(() => void 0))
+      if (await lstat3(join8(destination, name)).catch(() => void 0))
         fail2("uninstall transaction did not remove skill pair");
     }
   }
@@ -34729,9 +35824,9 @@ async function cleanCommitted(destination, parent, journal) {
   await removeJournal(destination);
 }
 async function preserveForRecovery(parent, source) {
-  const entry = await lstat2(source).catch(() => void 0);
+  const entry = await lstat3(source).catch(() => void 0);
   if (!entry) return;
-  const preserved = join7(
+  const preserved = join8(
     parent,
     `.sce-recovery-${randomUUID2()}-${basename3(source)}`
   );
@@ -34743,11 +35838,11 @@ async function restoreBackup(destination, parent, journal) {
   try {
     if (journal.previous !== null) {
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
-        const target = join7(destination, name);
-        const source = join7(backup, name);
-        if (await lstat2(source).catch(() => void 0))
+        const target = join8(destination, name);
+        const source = join8(backup, name);
+        if (await lstat3(source).catch(() => void 0))
           await preserveForRecovery(parent, target);
-        else if (await lstat2(target).catch(() => void 0))
+        else if (await lstat3(target).catch(() => void 0))
           await rename(target, source);
         else fail2("recovery-needed: rollback source is incomplete");
       }
@@ -34756,23 +35851,23 @@ async function restoreBackup(destination, parent, journal) {
       await validateInstalled(backup, journal.previous);
     } else {
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
-        await preserveForRecovery(parent, join7(destination, name));
+        await preserveForRecovery(parent, join8(destination, name));
     }
     for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
-      const source = join7(backup, name);
-      if (await lstat2(source).catch(() => void 0))
-        await rename(source, join7(destination, name));
+      const source = join8(backup, name);
+      if (await lstat3(source).catch(() => void 0))
+        await rename(source, join8(destination, name));
     }
     await fsync(destination);
     if (journal.previous === null) {
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
-        if (await lstat2(join7(destination, name)).catch(() => void 0))
+        if (await lstat3(join8(destination, name)).catch(() => void 0))
           fail2(
             "recovery-needed: prior empty installation could not be restored"
           );
       }
     } else await validateInstalled(destination, journal.previous);
-    await writeDurable(join7(destination, INSTALL_JOURNAL), {
+    await writeDurable(join8(destination, INSTALL_JOURNAL), {
       ...journal,
       phase: "committed"
     });
@@ -34783,7 +35878,7 @@ async function restoreBackup(destination, parent, journal) {
 async function validatePrior(destination, journal) {
   if (journal.previous === null) {
     for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
-      if (await lstat2(join7(destination, name)).catch(() => void 0))
+      if (await lstat3(join8(destination, name)).catch(() => void 0))
         fail2("recovery-needed: prior empty installation could not be restored");
     }
   } else await validateInstalled(destination, journal.previous);
@@ -34807,7 +35902,7 @@ async function recover(destination, parent) {
   if (journal.operation === "install") {
     try {
       await validateInstalled(destination, journal.manifest);
-      await writeDurable(join7(destination, INSTALL_JOURNAL), {
+      await writeDurable(join8(destination, INSTALL_JOURNAL), {
         ...journal,
         phase: "committed"
       });
@@ -34834,22 +35929,22 @@ async function recover(destination, parent) {
   await cleanRollback(destination, parent, journal);
 }
 async function acquireLock(destination) {
-  const path2 = join7(destination, INSTALL_LOCK);
-  const reaper = join7(destination, INSTALL_LOCK_REAPER);
+  const path2 = join8(destination, INSTALL_LOCK);
+  const reaper = join8(destination, INSTALL_LOCK_REAPER);
   let handle;
   try {
     handle = await open3(path2, "wx", 384);
   } catch (error) {
     if (error.code !== "EEXIST") throw error;
     try {
-      await mkdir(reaper, { mode: 448 });
+      await mkdir2(reaper, { mode: 448 });
     } catch (guard) {
       if (guard.code === "EEXIST")
         fail2("another skill installation is active");
       throw guard;
     }
     try {
-      const text5 = await readFile2(path2, "utf8").catch(() => "");
+      const text5 = await readFile3(path2, "utf8").catch(() => "");
       const pid = /^pid=(\d+)(?:\ntoken=[0-9a-f-]+)?\n?$/u.exec(text5)?.[1];
       if (!pid) fail2("another skill installation is active");
       try {
@@ -34866,7 +35961,7 @@ async function acquireLock(destination) {
       await fsync(destination);
     }
   }
-  if (await lstat2(reaper).catch(() => void 0)) {
+  if (await lstat3(reaper).catch(() => void 0)) {
     await handle.close();
     await unlink(path2).catch(() => void 0);
     fail2("another skill installation is active");
@@ -34880,8 +35975,8 @@ token=${token}
   await handle.close();
   await fsync(destination);
   return async () => {
-    const current = await lstat2(path2).catch(() => void 0);
-    const text5 = await readFile2(path2, "utf8").catch(() => void 0);
+    const current = await lstat3(path2).catch(() => void 0);
+    const text5 = await readFile3(path2, "utf8").catch(() => void 0);
     if (current?.dev === acquired.dev && current.ino === acquired.ino && text5 === `pid=${process.pid}
 token=${token}
 `)
@@ -34902,7 +35997,7 @@ async function installSkills(options) {
   const destination = resolve7(options.destination);
   const manifest = await createSkillInstallManifest(source);
   if (options.dryRun) {
-    const entry = await lstat2(destination).catch(() => void 0);
+    const entry = await lstat3(destination).catch(() => void 0);
     if (entry !== void 0) {
       await assertDirectory(destination);
       await assertOwnedOrAbsent(destination, await readManifest(destination));
@@ -34922,15 +36017,15 @@ async function installSkills(options) {
     const backup = `${transaction}.backup`;
     const stagePath = localTransactionPath(parent, stage);
     const backupPath = localTransactionPath(parent, backup);
-    await mkdir(stagePath, { mode: 448 });
+    await mkdir2(stagePath, { mode: 448 });
     for (const name of SKILL_NAMES)
-      await cp(join7(source, name), join7(stagePath, name), {
+      await cp(join8(source, name), join8(stagePath, name), {
         recursive: true,
         verbatimSymlinks: true
       });
-    await writeDurable(join7(stagePath, INSTALL_MANIFEST), manifest);
+    await writeDurable(join8(stagePath, INSTALL_MANIFEST), manifest);
     await fsyncTree(stagePath);
-    await mkdir(backupPath, { mode: 448 });
+    await mkdir2(backupPath, { mode: 448 });
     let journal = {
       backup,
       manifest,
@@ -34941,30 +36036,30 @@ async function installSkills(options) {
       stage,
       version: 1
     };
-    await writeDurable(join7(destination, INSTALL_JOURNAL), journal);
+    await writeDurable(join8(destination, INSTALL_JOURNAL), journal);
     try {
       journal = { ...journal, phase: "backing-up" };
-      await writeDurable(join7(destination, INSTALL_JOURNAL), journal);
+      await writeDurable(join8(destination, INSTALL_JOURNAL), journal);
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
         await movePresent(
-          join7(destination, name),
-          join7(backupPath, name),
+          join8(destination, name),
+          join8(backupPath, name),
           "backup",
           options.fault
         );
       journal = { ...journal, phase: "swapping" };
-      await writeDurable(join7(destination, INSTALL_JOURNAL), journal);
+      await writeDurable(join8(destination, INSTALL_JOURNAL), journal);
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
         await move(
-          join7(stagePath, name),
-          join7(destination, name),
+          join8(stagePath, name),
+          join8(destination, name),
           "new",
           options.fault
         );
       await validateInstalled(destination, manifest);
       await options.fault?.("after-post-swap-validation");
       journal = { ...journal, phase: "committed" };
-      await writeDurable(join7(destination, INSTALL_JOURNAL), journal);
+      await writeDurable(join8(destination, INSTALL_JOURNAL), journal);
       await cleanCommitted(destination, parent, journal);
       return { manifest, status: "installed" };
     } catch (error) {
@@ -34994,7 +36089,7 @@ async function uninstallSkills(destinationInput, options = {}) {
     const transaction = `${JOURNAL_PREFIX}${randomUUID2()}`;
     const backup = `${transaction}.backup`;
     const backupPath = localTransactionPath(destination, backup);
-    await mkdir(backupPath, { mode: 448 });
+    await mkdir2(backupPath, { mode: 448 });
     const journal = {
       backup,
       manifest,
@@ -35005,12 +36100,12 @@ async function uninstallSkills(destinationInput, options = {}) {
       stage: `${transaction}.stage`,
       version: 1
     };
-    await writeDurable(join7(destination, INSTALL_JOURNAL), journal);
+    await writeDurable(join8(destination, INSTALL_JOURNAL), journal);
     try {
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
         await move(
-          join7(destination, name),
-          join7(backupPath, name),
+          join8(destination, name),
+          join8(backupPath, name),
           "backup",
           options.fault
         );
@@ -35019,7 +36114,7 @@ async function uninstallSkills(destinationInput, options = {}) {
         ...journal,
         phase: "committed"
       };
-      await writeDurable(join7(destination, INSTALL_JOURNAL), committed);
+      await writeDurable(join8(destination, INSTALL_JOURNAL), committed);
       await cleanCommitted(destination, destination, committed);
     } catch (error) {
       if (error instanceof SimulatedProcessLoss) throw error;
@@ -35493,9 +36588,9 @@ async function runInstaller(invocation, dependencies) {
 }
 function resolvePackagedSkillSource(moduleUrl = import.meta.url) {
   const modulePath = fileURLToPath(moduleUrl);
-  const moduleDirectory = dirname6(modulePath);
+  const moduleDirectory = dirname7(modulePath);
   const packageRoot = basename4(moduleDirectory) === "src" ? resolve8(moduleDirectory, "..") : resolve8(moduleDirectory, "../../..");
-  return join8(packageRoot, "skills");
+  return join9(packageRoot, "skills");
 }
 async function main(argv, dependencies = {}, write = (value) => process.stdout.write(value)) {
   const execution2 = await runCli(argv, dependencies);

@@ -7459,11 +7459,39 @@ function successfulClosureFacts(unit: Unit) {
   };
 }
 
+/**
+ * A provenance record needs the task-card facts after the unit leaves the
+ * live map. They are retained only on a knowledge run so that software
+ * closure bytes, projections, and commitments stay byte-identical.
+ */
+function closureTaskFacts(
+  state: RepositoryRun,
+  unit: Unit,
+): Pick<
+  ClosureEvidence,
+  "ownedPaths" | "acceptanceIds" | "supersedes" | "tombstones"
+> {
+  const metadata = unit.taskMetadata;
+  if (state.knowledgeContract === undefined || metadata === undefined)
+    return {};
+  return {
+    ownedPaths: [...metadata.ownedPaths],
+    acceptanceIds: [...metadata.acceptanceIds],
+    ...(metadata.supersedes === undefined
+      ? {}
+      : { supersedes: [...metadata.supersedes] }),
+    ...(metadata.tombstones === undefined
+      ? {}
+      : { tombstones: [...metadata.tombstones] }),
+  };
+}
+
 function closureEvidenceFor(state: RepositoryRun, unit: Unit): ClosureEvidence {
   const base = {
     unitId: unit.id,
     unitOrdinal: unit.ordinal,
     baseOid: unit.baseOid,
+    ...closureTaskFacts(state, unit),
     ...(unit.branchRef === undefined ? {} : { branchRef: unit.branchRef }),
     ...(unit.worktreePath === undefined
       ? {}
@@ -7651,7 +7679,22 @@ function denseBinding(
       ];
 }
 
+/** Optional trailing tuple: task facts exist only on knowledge closures. */
+function denseTaskFacts(closure: ClosureEvidence): readonly unknown[] {
+  return closure.ownedPaths === undefined && closure.acceptanceIds === undefined
+    ? []
+    : [
+        [
+          closure.ownedPaths ?? null,
+          closure.acceptanceIds ?? null,
+          closure.supersedes ?? null,
+          closure.tombstones ?? null,
+        ],
+      ];
+}
+
 function denseClosureRecord(closure: ClosureEvidence): readonly unknown[] {
+  const facts = denseTaskFacts(closure);
   const common: unknown[] = [
     closure.outcome,
     closure.unitId,
@@ -7695,9 +7738,9 @@ function denseClosureRecord(closure: ClosureEvidence): readonly unknown[] {
       ],
     ];
     if (closure.outcome === "landed")
-      return [...common, [closure.landedOid, ...success]];
+      return [...common, [closure.landedOid, ...success], ...facts];
     if (closure.outcome === "branch_handoff")
-      return [...common, [closure.publishedHeadOid, ...success]];
+      return [...common, [closure.publishedHeadOid, ...success], ...facts];
     return [
       ...common,
       [
@@ -7712,6 +7755,7 @@ function denseClosureRecord(closure: ClosureEvidence): readonly unknown[] {
         ],
         ...success,
       ],
+      ...facts,
     ];
   }
   return [
@@ -7743,6 +7787,7 @@ function denseClosureRecord(closure: ClosureEvidence): readonly unknown[] {
         ? null
         : [closure.candidate.headOid, closure.candidate.treeOid],
     ],
+    ...facts,
   ];
 }
 
@@ -7860,8 +7905,36 @@ function denseSuccess(value: unknown):
   };
 }
 
+function denseTaskFactsRecord(
+  value: unknown,
+):
+  | Pick<
+      ClosureEvidence,
+      "ownedPaths" | "acceptanceIds" | "supersedes" | "tombstones"
+    >
+  | undefined {
+  const values = tuple(value, 4);
+  if (values === undefined) return undefined;
+  const [ownedPaths, acceptanceIds, supersedes, tombstones] = values;
+  const strings = (item: unknown): item is string[] =>
+    Array.isArray(item) && item.every((entry) => typeof entry === "string");
+  if (
+    !strings(ownedPaths) ||
+    !strings(acceptanceIds) ||
+    (supersedes !== null && !strings(supersedes)) ||
+    (tombstones !== null && !strings(tombstones))
+  )
+    return undefined;
+  return {
+    ownedPaths,
+    acceptanceIds,
+    ...(supersedes === null ? {} : { supersedes }),
+    ...(tombstones === null ? {} : { tombstones }),
+  };
+}
+
 function expandDenseClosure(value: unknown): ClosureEvidence | undefined {
-  const values = tuple(value, 12);
+  const values = tuple(value, 12) ?? tuple(value, 13);
   if (values === undefined) return undefined;
   const [
     outcome,
@@ -7876,7 +7949,10 @@ function expandDenseClosure(value: unknown): ClosureEvidence | undefined {
     reservationsEncoded,
     terminalEncoded,
     payload,
+    factsEncoded,
   ] = values;
+  const facts = values.length === 13 ? denseTaskFactsRecord(factsEncoded) : {};
+  if (facts === undefined) return undefined;
   if (
     (repairCount !== null && typeof repairCount !== "number") ||
     (branchRef !== null && typeof branchRef !== "string") ||
@@ -7898,6 +7974,7 @@ function expandDenseClosure(value: unknown): ClosureEvidence | undefined {
     unitId,
     unitOrdinal,
     baseOid,
+    ...facts,
     ...(repairCount === null ? {} : { repairCount }),
     ...(branchRef === null ? {} : { branchRef }),
     ...(worktreePath === null ? {} : { worktreePath }),
@@ -8127,7 +8204,7 @@ function decodeClosedUnitEvidenceDetails(
   };
 }
 
-function decodeClosedUnitEvidence(
+export function decodeClosedUnitEvidence(
   encoded: string,
 ): Readonly<Record<string, ClosureEvidence>> | undefined {
   return decodeClosedUnitEvidenceDetails(encoded)?.evidence;

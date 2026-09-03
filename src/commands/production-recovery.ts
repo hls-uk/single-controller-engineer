@@ -26,6 +26,13 @@ import {
   createMaterialisationAdapter,
   type MaterialisationAdapter,
 } from "../adapters/materialise/index.js";
+import {
+  createProvenanceAdapter,
+  type AggregateVerifyEffect,
+  type ProvenanceAdapter,
+  type ProvenanceCommitEffect,
+  type ProvenanceCommitResult,
+} from "../adapters/git/provenance.js";
 import { canonicalJson, type JsonValue } from "../protocol/canonical.js";
 import { sha256 } from "../protocol/evidence.js";
 import {
@@ -112,6 +119,8 @@ export interface ProductionRecoveryEffectAdapterOptions {
   readonly harness?: Readonly<{ port?: HarnessPort; support: unknown }>;
   /** Injectable only for deterministic adapter fixtures. */
   readonly materialisation?: MaterialisationAdapter;
+  /** Injectable only for deterministic provenance fixtures. */
+  readonly provenance?: ProvenanceAdapter;
   /** Sole configured authority for knowledge-profile events and recovery. */
   readonly knowledgeContract?: KnowledgeContract;
   /** Authoritative Beads-root carry read/CAS/readback surface. */
@@ -721,6 +730,15 @@ export function createProductionRecoveryEffectAdapter(
       git.repository.cwd,
       git.repository.objectFormat,
     );
+  const provenance =
+    options.provenance ??
+    createProvenanceAdapter({
+      git: {
+        repository: git.repository,
+        runner: git.runner,
+        ...(git.remote === undefined ? {} : { remote: git.remote }),
+      },
+    });
   const harness =
     options.harness === undefined
       ? undefined
@@ -728,6 +746,104 @@ export function createProductionRecoveryEffectAdapter(
           options.harness.support,
           options.harness.port,
         );
+
+  function provenanceObservation(
+    effect: ProvenanceCommitEffect,
+    run: RepositoryRun,
+    result: ProvenanceCommitResult,
+  ): Extract<ExecuteResult, { status: "observed" }> {
+    return {
+      observation: {
+        ...eventBase(effect, run),
+        observationHash: observationHash(result as unknown as JsonValue),
+        result,
+        type: "provenance_commit_observed",
+      } as ProtocolEvent,
+      status: "observed",
+    };
+  }
+
+  function aggregateVerification(
+    effect: AggregateVerifyEffect,
+    run: RepositoryRun,
+    passed: boolean,
+    evidenceDigest: string,
+  ): Extract<ExecuteResult, { status: "observed" }> {
+    return {
+      observation: {
+        ...eventBase(effect, run),
+        baseOid: effect.params.candidate.baseOid,
+        headOid: effect.params.candidate.headOid,
+        observationHash: observationHash({
+          domain: "sce.provenance.aggregate-verify-observation.v1",
+          effectId: effect.effectId,
+          evidenceDigest,
+          paramsHash: effect.paramsHash,
+          passed,
+        }),
+        treeOid: effect.params.candidate.treeOid,
+        type: passed ? "verification_observed" : "verification_failed",
+      } as ProtocolEvent,
+      status: "observed",
+    };
+  }
+
+  async function provenanceDiscovery(
+    effect: ProvenanceCommitEffect,
+    run: RepositoryRun,
+  ): Promise<ReconcileResult> {
+    if (!gitMatchesRun(git.repository, run)) return ambiguous();
+    try {
+      const outcome = await provenance.reconcileProvenanceCommit(effect, run);
+      return outcome.status === "observed"
+        ? provenanceObservation(effect, run, outcome.result)
+        : outcome;
+    } catch {
+      return ambiguous();
+    }
+  }
+
+  async function provenanceExecution(
+    effect: ProvenanceCommitEffect,
+    run: RepositoryRun,
+  ): Promise<ExecuteResult> {
+    if (!gitMatchesRun(git.repository, run)) return ambiguous();
+    try {
+      const outcome = await provenance.executeProvenanceCommit(effect, run);
+      return outcome.status === "observed"
+        ? provenanceObservation(effect, run, outcome.result)
+        : outcome;
+    } catch {
+      return ambiguous();
+    }
+  }
+
+  async function aggregateVerifyExecution(
+    effect: AggregateVerifyEffect,
+    run: RepositoryRun,
+  ): Promise<ExecuteResult> {
+    if (!gitMatchesRun(git.repository, run)) return ambiguous();
+    const entry = run.effectJournal.find(
+      (candidate) =>
+        candidate.effectId === effect.effectId &&
+        candidate.unitId === null &&
+        candidate.kind === "verify",
+    );
+    if (entry?.status !== "intended") return ambiguous();
+    try {
+      const outcome = await provenance.executeAggregateVerify(effect, run);
+      return outcome.status === "observed"
+        ? aggregateVerification(
+            effect,
+            run,
+            outcome.passed,
+            outcome.evidenceDigest,
+          )
+        : outcome;
+    } catch {
+      return ambiguous();
+    }
+  }
 
   async function discover(
     effect: ProtocolEffect,
@@ -767,9 +883,28 @@ export function createProductionRecoveryEffectAdapter(
         return ambiguous();
       }
     }
-    if (effect.kind === "provenance_commit") return unavailable();
+    if (effect.kind === "provenance_commit")
+      return await provenanceDiscovery(effect, run);
     if (effect.kind === "verify") {
-      if (effect.unitId === null) return unavailable();
+      if (effect.unitId === null) {
+        if (!gitMatchesRun(git.repository, run)) return ambiguous();
+        try {
+          const outcome = await provenance.reconcileAggregateVerify(
+            effect,
+            run,
+          );
+          return outcome.status === "observed"
+            ? aggregateVerification(
+                effect,
+                run,
+                outcome.passed,
+                outcome.evidenceDigest,
+              )
+            : outcome;
+        } catch {
+          return ambiguous();
+        }
+      }
       if (!gitMatchesRun(git.repository, run)) return ambiguous();
       try {
         return await verificationRequest(effect, run, git);
@@ -916,9 +1051,11 @@ export function createProductionRecoveryEffectAdapter(
         return ambiguous();
       }
     }
-    if (effect.kind === "provenance_commit") return unavailable();
+    if (effect.kind === "provenance_commit")
+      return await provenanceExecution(effect, run);
     if (effect.kind === "verify") {
-      if (effect.unitId === null) return unavailable();
+      if (effect.unitId === null)
+        return await aggregateVerifyExecution(effect, run);
       if (!gitMatchesRun(git.repository, run)) return ambiguous();
       try {
         return await verificationRequest(effect, run, git);

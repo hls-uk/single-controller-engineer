@@ -108,6 +108,7 @@ const knowledgeContract: KnowledgeContract = {
       namespaceControl: "exclusive",
     },
   ],
+  audience: "knowledge-audience",
   combinedVerificationCommands: [
     ["npm", "test"],
     ["npm", "run", "test:integration"],
@@ -115,8 +116,10 @@ const knowledgeContract: KnowledgeContract = {
   domainScope: "knowledge",
   gateTargets: [],
   humanDriver: "knowledge-owner",
+  projectId: "knowledge-project",
   provenance: {
     eventsDirectory: "knowledge/events",
+    generatedDirectory: "knowledge/generated",
     recordFormatVersion: 1,
     reproducibilityCommand: ["npm", "run", "reproduce"],
     rollupGeneratorCommand: ["npm", "run", "rollup"],
@@ -132,9 +135,11 @@ function unresolvedKnowledgeContract() {
         mountPathVariable: "SCE_DRIVE_ROOT",
       }),
     ),
+    audience: knowledgeContract.audience,
     domainScope: knowledgeContract.domainScope,
     gateTargets: knowledgeContract.gateTargets,
     humanDriver: knowledgeContract.humanDriver,
+    projectId: knowledgeContract.projectId,
     provenance: {
       ...knowledgeContract.provenance,
       worktreeRootVariable: "SCE_PROVENANCE_ROOT",

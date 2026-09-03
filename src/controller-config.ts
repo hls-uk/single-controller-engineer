@@ -499,9 +499,11 @@ function parseKnowledgeContract(
 ): KnowledgeContract | undefined {
   const value = record(input, [
     "aliases",
+    "audience",
     "domainScope",
     "gateTargets",
     "humanDriver",
+    "projectId",
     "provenance",
     "verification",
   ]);
@@ -512,6 +514,7 @@ function parseKnowledgeContract(
   ]);
   const provenance = record(value?.provenance, [
     "eventsDirectory",
+    "generatedDirectory",
     "recordFormatVersion",
     "reproducibilityCommand",
     "rollupGeneratorCommand",
@@ -591,12 +594,15 @@ function parseKnowledgeContract(
     return undefined;
   const resolved = {
     aliases,
+    audience: value.audience,
     combinedVerificationCommands,
     domainScope: value.domainScope,
     gateTargets: value.gateTargets,
     humanDriver: value.humanDriver,
+    projectId: value.projectId,
     provenance: {
       eventsDirectory: provenance.eventsDirectory,
+      generatedDirectory: provenance.generatedDirectory,
       recordFormatVersion: provenance.recordFormatVersion,
       reproducibilityCommand: provenance.reproducibilityCommand,
       rollupGeneratorCommand: provenance.rollupGeneratorCommand,
