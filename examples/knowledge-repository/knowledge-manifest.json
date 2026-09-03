@@ -9,10 +9,10 @@
   "driveAliases": [
     {
       "alias": "partner-drive",
-      "canonicalRoot": "Example Partnered Drive",
       "markerFile": ".sce-drive-root",
       "mountPolicy": "optional",
-      "mountPathVariable": "EXAMPLE_PARTNER_DRIVE_ROOT"
+      "mountPathVariable": "EXAMPLE_PARTNER_DRIVE_ROOT",
+      "namespaceControl": "exclusive"
     }
   ],
   "artifactHomes": {
@@ -43,7 +43,8 @@
     "reproducibilityCommand": [
       "node",
       "../../skills/single-controller-knowledge/references/manifest/checks/check-generated.mjs"
-    ]
+    ],
+    "worktreeRootVariable": "EXAMPLE_PROVENANCE_WORKTREE_ROOT"
   },
   "materialisationTargets": [
     {

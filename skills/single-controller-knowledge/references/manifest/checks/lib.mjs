@@ -120,6 +120,12 @@ export function assertSchema(schema, value, at = "$", rootSchema = schema) {
     }
   }
   if (typeof value === "string") {
+    if (
+      schema.canonicalUnicodeScalar === true &&
+      !isCanonicalUnicodeScalar(value)
+    ) {
+      throw new Error(`${at}: string is not canonical Unicode scalar text`);
+    }
     if (schema.minLength !== undefined && value.length < schema.minLength) {
       throw new Error(`${at}: string is shorter than ${schema.minLength}`);
     }
@@ -128,6 +134,14 @@ export function assertSchema(schema, value, at = "$", rootSchema = schema) {
     }
     if (schema.maxLength !== undefined && value.length > schema.maxLength) {
       throw new Error(`${at}: string is longer than ${schema.maxLength}`);
+    }
+    if (
+      schema.maxUtf8Bytes !== undefined &&
+      Buffer.byteLength(value, "utf8") > schema.maxUtf8Bytes
+    ) {
+      throw new Error(
+        `${at}: string exceeds ${schema.maxUtf8Bytes} UTF-8 bytes`,
+      );
     }
   }
   if (
@@ -143,6 +157,15 @@ export function assertSchema(schema, value, at = "$", rootSchema = schema) {
     }
     if (schema.maxItems !== undefined && value.length > schema.maxItems) {
       throw new Error(`${at}: array has more than ${schema.maxItems} items`);
+    }
+    if (
+      schema.maxCanonicalBytes !== undefined &&
+      Buffer.byteLength(JSON.stringify(value), "utf8") >
+        schema.maxCanonicalBytes
+    ) {
+      throw new Error(
+        `${at}: canonical JSON exceeds ${schema.maxCanonicalBytes} UTF-8 bytes`,
+      );
     }
     if (schema.uniqueItems) {
       const values = value.map((item) => JSON.stringify(item));
@@ -177,9 +200,37 @@ export function assertSchema(schema, value, at = "$", rootSchema = schema) {
   }
 }
 
+function isCanonicalUnicodeScalar(value) {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code === 0 || (code >= 0xdc00 && code <= 0xdfff)) return false;
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    }
+  }
+  return true;
+}
+
 function assertManifestSemantics(manifest, root) {
   const aliases = manifest.driveAliases.map(({ alias }) => alias);
   assertUnique(aliases, "drive alias");
+  const combinedVerificationCommands = [
+    ...manifest.verification.fast,
+    ...manifest.verification.integration,
+  ];
+  if (combinedVerificationCommands.length > 32) {
+    throw new Error("combined verification has more than 32 commands");
+  }
+  if (
+    Buffer.byteLength(JSON.stringify(combinedVerificationCommands), "utf8") >
+    32_768
+  ) {
+    throw new Error(
+      "combined verification canonical JSON exceeds 32768 UTF-8 bytes",
+    );
+  }
   for (const target of manifest.materialisationTargets) {
     if (!aliases.includes(target.destinationAlias)) {
       throw new Error(`unknown destination alias: ${target.destinationAlias}`);

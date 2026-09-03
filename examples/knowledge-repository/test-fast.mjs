@@ -95,6 +95,180 @@ function runSelfTests() {
       "unknown key unexpected",
     );
 
+    for (const [name, mutate, expected] of [
+      [
+        "empty verification argument",
+        (manifest) => {
+          manifest.verification.fast[0][0] = "";
+        },
+        "string is shorter than 1",
+      ],
+      [
+        "multibyte verification argument",
+        (manifest) => {
+          manifest.verification.fast[0][0] = "é".repeat(600);
+        },
+        "string exceeds 1024 UTF-8 bytes",
+      ],
+      [
+        "oversize verification argv",
+        (manifest) => {
+          manifest.verification.fast[0] = Array.from({ length: 9 }, () =>
+            "a".repeat(1_000),
+          );
+        },
+        "canonical JSON exceeds 8192 UTF-8 bytes",
+      ],
+      [
+        "oversize verification command set",
+        (manifest) => {
+          manifest.verification.fast = Array.from({ length: 32 }, () => [
+            "a".repeat(1_024),
+          ]);
+        },
+        "canonical JSON exceeds 32768 UTF-8 bytes",
+      ],
+    ]) {
+      const manifest = JSON.parse(
+        readFileSync(join(root, "knowledge-manifest.json"), "utf8"),
+      );
+      mutate(manifest);
+      const manifestPath = join(temporary, `${name.replaceAll(" ", "-")}.json`);
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify(manifest, null, 2)}\n`,
+        "utf8",
+      );
+      expectFailure(
+        name,
+        invoke("validate-manifest.mjs", [
+          "--root",
+          root,
+          "--manifest",
+          manifestPath,
+        ]),
+        expected,
+      );
+    }
+
+    for (const [name, commandLength, argLength, expected] of [
+      [
+        "oversize combined verification count",
+        [17, 16],
+        1,
+        "combined verification has more than 32 commands",
+      ],
+      [
+        "oversize combined verification bytes",
+        [16, 16],
+        1_020,
+        "combined verification canonical JSON exceeds 32768 UTF-8 bytes",
+      ],
+    ]) {
+      const manifest = JSON.parse(
+        readFileSync(join(root, "knowledge-manifest.json"), "utf8"),
+      );
+      manifest.verification.fast = Array.from(
+        { length: commandLength[0] },
+        () => ["a".repeat(argLength)],
+      );
+      manifest.verification.integration = Array.from(
+        { length: commandLength[1] },
+        () => ["b".repeat(argLength)],
+      );
+      const manifestPath = join(temporary, `${name.replaceAll(" ", "-")}.json`);
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify(manifest, null, 2)}\n`,
+        "utf8",
+      );
+      expectFailure(
+        name,
+        invoke("validate-manifest.mjs", [
+          "--root",
+          root,
+          "--manifest",
+          manifestPath,
+        ]),
+        expected,
+      );
+    }
+
+    for (const [context, mutate] of [
+      [
+        "rollup",
+        (manifest, value) => {
+          manifest.provenance.rollupGeneratorCommand[0] = value;
+        },
+      ],
+      [
+        "reproducibility",
+        (manifest, value) => {
+          manifest.provenance.reproducibilityCommand[0] = value;
+        },
+      ],
+      [
+        "combined verification",
+        (manifest, value) => {
+          manifest.verification.fast[0][0] = value;
+        },
+      ],
+    ]) {
+      for (const [invalidName, invalidValue] of [
+        ["NUL", "node\u0000bad"],
+        ["lone high surrogate", "node\ud800"],
+        ["lone low surrogate", "node\udc00"],
+      ]) {
+        const manifest = JSON.parse(
+          readFileSync(join(root, "knowledge-manifest.json"), "utf8"),
+        );
+        mutate(manifest, invalidValue);
+        const manifestPath = join(
+          temporary,
+          `${context}-${invalidName}.json`.replaceAll(" ", "-"),
+        );
+        writeFileSync(
+          manifestPath,
+          `${JSON.stringify(manifest, null, 2)}\n`,
+          "utf8",
+        );
+        expectFailure(
+          `${context} ${invalidName}`,
+          invoke("validate-manifest.mjs", [
+            "--root",
+            root,
+            "--manifest",
+            manifestPath,
+          ]),
+          "string is not canonical Unicode scalar text",
+        );
+      }
+    }
+
+    const missingWorktreeRootVariable = JSON.parse(
+      readFileSync(join(root, "knowledge-manifest.json"), "utf8"),
+    );
+    delete missingWorktreeRootVariable.provenance.worktreeRootVariable;
+    const missingWorktreeRootVariablePath = join(
+      temporary,
+      "missing-worktree-root-variable.json",
+    );
+    writeFileSync(
+      missingWorktreeRootVariablePath,
+      `${JSON.stringify(missingWorktreeRootVariable, null, 2)}\n`,
+      "utf8",
+    );
+    expectFailure(
+      "missing provenance worktree root variable",
+      invoke("validate-manifest.mjs", [
+        "--root",
+        root,
+        "--manifest",
+        missingWorktreeRootVariablePath,
+      ]),
+      "missing required key worktreeRootVariable",
+    );
+
     const unsafePatternManifest = JSON.parse(
       readFileSync(join(root, "knowledge-manifest.json"), "utf8"),
     );
@@ -162,6 +336,35 @@ function runSelfTests() {
       ]),
       "sidecarRequired",
     );
+
+    for (const [name, value] of [
+      ["missing exclusive namespace control", undefined],
+      ["invalid exclusive namespace control", "shared"],
+    ]) {
+      const manifest = JSON.parse(
+        readFileSync(join(root, "knowledge-manifest.json"), "utf8"),
+      );
+      if (value === undefined) delete manifest.driveAliases[0].namespaceControl;
+      else manifest.driveAliases[0].namespaceControl = value;
+      const manifestPath = join(temporary, `${name.replaceAll(" ", "-")}.json`);
+      writeFileSync(
+        manifestPath,
+        `${JSON.stringify(manifest, null, 2)}\n`,
+        "utf8",
+      );
+      expectFailure(
+        name,
+        invoke("validate-manifest.mjs", [
+          "--root",
+          root,
+          "--manifest",
+          manifestPath,
+        ]),
+        value === undefined
+          ? "missing required key namespaceControl"
+          : "expected constant",
+      );
+    }
 
     const boundaryRoot = join(temporary, "boundary-repository");
     copyRepositoryFixture(boundaryRoot);
