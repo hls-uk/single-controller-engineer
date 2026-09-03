@@ -14075,7 +14075,7 @@ function resolutionCapacitiesBindLatestAttempt(state, gate, target) {
   const latest = state.effectJournal.filter(
     (entry) => entry.unitId === null && entry.gateEntryId === resolution.gateEntryId && entry.kind === "materialisation_resolve"
   ).sort((left, right) => right.intentRevision - left.intentRevision)[0];
-  if (latest === void 0) return false;
+  if (latest === void 0) return resolution.currentEffectId === void 0;
   const params = {
     destinationProbeGateEntryId: destinationProbeGateEntryId(
       state,

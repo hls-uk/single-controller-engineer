@@ -2596,6 +2596,92 @@ function completeCandidate(
   return state;
 }
 
+test("a refused and deferred unit target admits the provenance intent after journal compaction", () => {
+  const contract = knowledgeContract();
+  let state = landedKnowledgeRun(contract, {
+    destinationAlias: "drive",
+    destinationSubpath: "unit-published",
+    namingPolicy: "source-basename",
+    sidecarRequired: true,
+    sourcePattern: "docs/file*.md",
+  });
+  const resolution = state.gate!.targets[0]!.resolution!;
+  state = gateIntent(
+    state,
+    "materialisation_resolve_intent",
+    "materialisation_resolve",
+    resolution.gateEntryId,
+  );
+  state = gateObservation(
+    state,
+    "materialisation_sources_observed",
+    resolution.gateEntryId,
+    {
+      result: {
+        refusal: { code: "zero_matches", detailHash: HASH },
+        status: "refused",
+      },
+    },
+  );
+  state = transition(
+    state,
+    {
+      eventId: "resolve-deferred",
+      expectedRevision: state.revision,
+      followUpBeadId: "sce-follow-up",
+      gateEntryId: resolution.gateEntryId,
+      type: "gate_entry_deferred",
+      unitId: null,
+    } as ProtocolEvent,
+    reduce,
+  );
+  const provenance = state.gate!.provenance!;
+  assert.equal(provenance.status, "pending");
+  state = transition(
+    state,
+    {
+      eventId: "provenance-clock",
+      expectedRevision: state.revision,
+      gateEntryId: provenance.gateEntryId,
+      timestamp: "2026-09-03T12:00:01Z",
+      type: "gate_clock_observed",
+      unitId: null,
+    } as ProtocolEvent,
+    reduce,
+  );
+  // The provenance intent compacts every observed journal entry, including
+  // the refused resolution attempt; the settled resolution must stay valid.
+  state = gateIntent(
+    state,
+    "provenance_commit_intent",
+    "provenance_commit",
+    provenance.gateEntryId,
+  );
+  assert.equal(
+    state.effectJournal.some(
+      (entry) => entry.gateEntryId === resolution.gateEntryId,
+    ),
+    false,
+  );
+  assert.deepEqual(runInvariantErrors(state), []);
+  assert.equal(state.gate!.provenance!.currentEffectId !== undefined, true);
+  const tampered = {
+    ...state,
+    gate: {
+      ...state.gate!,
+      targets: state.gate!.targets.map((target) => ({
+        ...target,
+        resolution: { ...target.resolution!, currentEffectId: "event-9:x" },
+      })),
+    },
+  } as RepositoryRun;
+  assert.ok(
+    runInvariantErrors(tampered).some((error) =>
+      error.includes("has invalid capacities"),
+    ),
+  );
+});
+
 test("software verification state and legacy command wire remain byte-identical", () => {
   const candidate = completeCandidate();
   const verification = reduce(

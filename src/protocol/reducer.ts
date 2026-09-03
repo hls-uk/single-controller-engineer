@@ -3507,7 +3507,10 @@ function resolutionCapacitiesBindLatestAttempt(
         entry.kind === "materialisation_resolve",
     )
     .sort((left, right) => right.intentRevision - left.intentRevision)[0];
-  if (latest === undefined) return false;
+  // Checkpointing compacts observed entries; an unresolved attempt is never
+  // compacted, so a settled resolution whose entry is gone stays bound by the
+  // journal commitment chain rather than by a re-derivable entry.
+  if (latest === undefined) return resolution.currentEffectId === undefined;
   const params = {
     destinationProbeGateEntryId: destinationProbeGateEntryId(
       state,
