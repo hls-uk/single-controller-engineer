@@ -1,6 +1,6 @@
 ---
 name: single-controller-engineer
-description: Deliver a bounded software beta through one controller, deterministic protocol checks, isolated workhorse lanes, and serialized frontier review. Use for repository engineering work tracked in Beads; not for unapproved publication or external mutations.
+description: Deliver a bounded software beta through one controller, deterministic protocol checks, isolated workhorse lanes, and serialized frontier review. Use for software delivery in a repository with a test suite and Beads task tracking; not for unapproved publication or external mutations.
 ---
 
 <!-- sce-skill-version: 0.1.0 -->
@@ -15,6 +15,9 @@ send feedback.
 
 1. Read repository agent instructions, its normative design/plan, and its
    source-controlled decision index. The repository's stronger policy wins.
+   If the repository root declares `knowledge-manifest.json`, stop: it is a
+   knowledge repository; use the sibling `single-controller-knowledge` skill,
+   which applies that material's contract and severity table.
 2. Load authoritative Beads state (`bd prime`, then structured `bd show` or
    `bd ready`). A controller-slot artifact or issue labelled `gt:slot` is a
    lock, never user work.

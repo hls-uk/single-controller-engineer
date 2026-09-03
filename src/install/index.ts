@@ -1,4 +1,4 @@
-/** Crash-recoverable, manifest-owned installer for the packaged skill pair. */
+/** Crash-recoverable, manifest-owned installer for the packaged skill set. */
 import { createHash, randomUUID } from "node:crypto";
 import {
   cp,
@@ -18,9 +18,11 @@ export const INSTALL_MANIFEST = ".sce-skill-install.json";
 export const INSTALL_JOURNAL = ".sce-skill-install.transaction.json";
 export const INSTALL_LOCK = ".sce-skill-install.lock";
 const INSTALL_LOCK_REAPER = ".sce-skill-install.lock-reaper";
+/** Alphabetical, so the recorded manifest matches canonical JSON key order. */
 export const SKILL_NAMES = [
   "single-controller-engineer",
   "single-controller-feedback",
+  "single-controller-knowledge",
 ] as const;
 
 const PACKAGE_NAME = "@hls-uk/single-controller-engineer";
@@ -102,7 +104,7 @@ function skillPath(path: string): boolean {
   const segments = path.split("/");
   return (
     segments.length >= 2 &&
-    (segments[0] === SKILL_NAMES[0] || segments[0] === SKILL_NAMES[1]) &&
+    (SKILL_NAMES as readonly string[]).includes(segments[0] ?? "") &&
     segments.every((part) => part.length > 0 && part !== "." && part !== "..")
   );
 }
@@ -134,8 +136,12 @@ function parseManifest(value: unknown): SkillInstallManifest {
       fail("invalid skill-install manifest skill version");
     parsedSkills[name] = version;
   }
-  if (parsedSkills[SKILL_NAMES[0]] !== parsedSkills[SKILL_NAMES[1]])
-    fail("paired skills must declare the same version");
+  if (
+    SKILL_NAMES.some(
+      (name) => parsedSkills[name] !== parsedSkills[SKILL_NAMES[0]],
+    )
+  )
+    fail("packaged skills must declare the same version");
   const files: InstalledFile[] = [];
   const seen = new Set<string>();
   for (const candidate of root.files) {
@@ -157,7 +163,7 @@ function parseManifest(value: unknown): SkillInstallManifest {
     files.length === 0 ||
     SKILL_NAMES.some((name) => !seen.has(`${name}/SKILL.md`))
   )
-    fail("skill-install manifest lacks a complete pair");
+    fail("skill-install manifest lacks a complete set");
   return {
     files: files.sort((left, right) => left.path.localeCompare(right.path)),
     package: PACKAGE_NAME,
@@ -474,7 +480,7 @@ async function cleanCommitted(
       fail("uninstall transaction did not remove manifest");
     for (const name of SKILL_NAMES) {
       if (await lstat(join(destination, name)).catch(() => undefined))
-        fail("uninstall transaction did not remove skill pair");
+        fail("uninstall transaction did not remove skill set");
     }
   }
   await rm(stage, { force: true, recursive: true });
@@ -506,9 +512,9 @@ async function restoreBackup(
   try {
     // Make the backup the sole rollback source before touching it. A crash can
     // leave an old entry in the destination while later entries are already in
-    // backup, or it can leave a complete backup beside a partial new pair. In
+    // backup, or it can leave a complete backup beside a partial new set. In
     // both cases destination entries are moved away from, never over, backup
-    // bytes. A retry can therefore reconstruct and validate the same old pair.
+    // bytes. A retry can therefore reconstruct and validate the same old set.
     if (journal.previous !== null) {
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
         const target = join(destination, name);
@@ -707,7 +713,7 @@ export async function installSkills(
     resolve(options.stagingDirectory) !== destination
   )
     fail("staging must be destination-local for deterministic recovery");
-  // Stage beside the installed pair. A later retry needs no remembered caller
+  // Stage beside the installed set. A later retry needs no remembered caller
   // option to find its journal, backup, or staged bytes, and rename is always
   // same-filesystem by construction.
   const parent = destination;
@@ -782,7 +788,7 @@ export async function installSkills(
   });
 }
 
-/** Uninstall only a complete, exact manifest-owned pair. */
+/** Uninstall only a complete, exact manifest-owned set. */
 export async function uninstallSkills(
   destinationInput: string,
   options: UninstallOptions = {},

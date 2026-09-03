@@ -1,6 +1,6 @@
 # Getting started
 
-This guide installs the Single-Controller Engineer CLI and skill pair into an
+This guide installs the Single-Controller Engineer CLI and skill set into an
 existing repository and takes you to a first controller run. It assumes a
 POSIX shell and a repository you are allowed to change.
 
@@ -35,13 +35,14 @@ Alternatively, skip the global install and run the vendored bundle directly:
 node skills/single-controller-engineer/scripts/sce.mjs --help
 ```
 
-## 2. Install the skill pair
+## 2. Install the skill set
 
-The installer places the primary skill (`single-controller-engineer`) and its
-feedback companion (`single-controller-feedback`) as one manifest-hashed set.
-It stages first, validates hashes and both skill versions, then atomically
-replaces only an installation it previously recorded; unrelated collisions,
-partial pairs, and version mismatches refuse without touching anything.
+The installer places the primary skill (`single-controller-engineer`), the
+knowledge skill (`single-controller-knowledge`), and the feedback companion
+(`single-controller-feedback`) as one manifest-hashed set. It stages first,
+validates hashes and all three skill versions, then atomically replaces only
+an installation it previously recorded; unrelated collisions, partial sets,
+and version mismatches refuse without touching anything.
 
 Pick the destination your host loads skills from:
 
@@ -57,8 +58,8 @@ sce install-skill --destination /path/to/your-repo/.claude/skills --dry-run
 sce install-skill --destination /path/to/your-repo/.claude/skills
 ```
 
-The destination is what decides where the pair lands; the installed files are
-the same pair for either host. Upgrading is the same command from a newer
+The destination is what decides where the set lands; the installed files are
+the same set for either host. Upgrading is the same command from a newer
 checkout; `sce uninstall-skill --destination <path>` removes exactly the
 recorded manifest.
 

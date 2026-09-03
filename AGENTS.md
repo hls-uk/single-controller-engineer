@@ -76,7 +76,7 @@ code changes.
 ## Architecture Overview
 
 The repository is a TypeScript/Node 22 protocol engine plus an installable
-agent-skill pair. "Models decide meaning; code decides state."
+agent-skill set. "Models decide meaning; code decides state."
 
 - `src/protocol/` — the authoritative controller contract: strict TypeBox/Ajv
   schemas at every external boundary, a pure reducer
@@ -92,8 +92,9 @@ agent-skill pair. "Models decide meaning; code decides state."
   integrate, resume, install, feedback). `src/cli.ts` is the entry point.
 - `src/feedback/` — privacy-bounded upstream feedback packets: controlled
   telemetry, fingerprinting, deduplication, and a durable local outbox.
-- `skills/` — the shipped pair: `single-controller-engineer` (primary) and
-  `single-controller-feedback` (companion). `npm run build` bundles the whole
+- `skills/` — the shipped set: `single-controller-engineer` (primary,
+  software), `single-controller-knowledge` (knowledge repositories, no runtime
+  of its own), and `single-controller-feedback` (companion). `npm run build` bundles the whole
   runtime into `skills/single-controller-engineer/scripts/sce.mjs`, the single
   vendored executable that `bin.sce` points at.
 - `test/` — mirrors `src/` and is tiered by `scripts/test-tier.mjs` (fast,

@@ -7,7 +7,7 @@ description: Prepare or refine an explicit, privacy-bounded upstream report for 
 
 # Single-controller feedback
 
-Use the sibling primary skill/runtime from the same installed pair. Refuse a
+Use the sibling primary skill/runtime from the same installed set. Refuse a
 missing sibling, invalid manifest, or version mismatch. This skill is explicit
 only: observing a failure is not authority to contact the upstream project.
 

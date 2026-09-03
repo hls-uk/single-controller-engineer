@@ -6,12 +6,13 @@ import test from "node:test";
 
 import { installSkills } from "../../src/install/index.js";
 
-test("installer smoke proves both public skill directories arrive together", async () => {
+test("installer smoke proves all three public skill directories arrive together", async () => {
   const root = await mkdtemp(join(tmpdir(), "sce-installer-smoke-"));
   try {
     const source = join(root, "source");
     for (const name of [
       "single-controller-engineer",
+      "single-controller-knowledge",
       "single-controller-feedback",
     ]) {
       await mkdir(join(source, name), { recursive: true });

@@ -1,8 +1,9 @@
 # single-controller-engineer
 
 `@hls-uk/single-controller-engineer` ships a deterministic Node 22 CLI (`sce`)
-and a paired set of agent skills — `single-controller-engineer` and
-`single-controller-feedback` — for delivering software through one
+and a set of three agent skills — `single-controller-engineer`,
+`single-controller-knowledge`, and `single-controller-feedback` — for
+delivering software and knowledge work through one
 decision-making AI controller, a Beads-backed work queue, and fresh, bounded
 implementation and review agents.
 
@@ -62,7 +63,7 @@ checks over inference, ship the smallest coherent vertical slice, and expose
 limitations rather than pursuing silent perfection. `P0`/`P1` findings block
 promised core paths; bounded `P2`/`P3` work is recorded as follow-up.
 
-## The CLI and skill pair
+## The CLI and skill set
 
 The TypeScript build produces one self-contained executable,
 `skills/single-controller-engineer/scripts/sce.mjs`, vendored inside the
@@ -77,7 +78,13 @@ and routes to topology-specific references (embedded Dolt with Git-remote
 sync, or a shared Dolt SQL server) proven during preflight. The companion
 skill, `single-controller-feedback`, prepares privacy-bounded upstream bug and
 enhancement reports; preparation and preview are local, and any submission
-requires separate current authority.
+requires separate current authority. The third skill,
+`single-controller-knowledge`, runs the same controller loop for a knowledge
+repository that declares a `knowledge-manifest.json`: Beads task cards,
+deterministic provenance records committed after each wave, and typed
+no-clobber materialisation to a partnered Drive. It ships no runtime of its
+own; it invokes the primary skill's vendored bundle, and its description is
+disjoint from the engineer skill so a host selects exactly one.
 
 ## Development and evidence
 
@@ -102,15 +109,15 @@ For step-by-step setup in an existing repository, see
 [docs/getting-started.md](docs/getting-started.md).
 
 The CLI's `install-skill` integration is intentionally explicit: it installs
-the primary and feedback skills as one manifest-hashed pair, refusing an
-unrelated collision, partial pair, changed owned files, or cross-filesystem
+the primary, knowledge, and feedback skills as one manifest-hashed set,
+refusing an unrelated collision, partial set, changed owned files, or cross-filesystem
 staging. npm has no `postinstall` side effect and does not download a CLI at
 runtime.
 
-Claude Code is a supported install host alongside Codex: both skills ship an
+Claude Code is a supported install host alongside Codex: all three skills ship an
 `agents/claude.yaml` beside `agents/openai.yaml`, and one
 `sce install-skill --destination <absolute path>` installs the same
-manifest-hashed pair for either host. The installer itself is host-agnostic,
+manifest-hashed set for either host. The installer itself is host-agnostic,
 so `--host` is optional — when declared it is validated as exactly `codex` or
 `claude` and recorded in the result, never a separate code path.
 

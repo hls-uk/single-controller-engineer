@@ -5,6 +5,7 @@ import test from "node:test";
 
 const skills = [
   "skills/single-controller-engineer/SKILL.md",
+  "skills/single-controller-knowledge/SKILL.md",
   "skills/single-controller-feedback/SKILL.md",
 ] as const;
 const hostAgents = ["claude.yaml", "openai.yaml"] as const;
@@ -56,5 +57,47 @@ test("feedback skill cannot be selected implicitly on any host", async () => {
       "utf8",
     );
     assert.match(source, /^policy:\n  allow_implicit_invocation: false$/mu);
+  }
+});
+
+async function description(path: string): Promise<string> {
+  const source = await readFile(path, "utf8");
+  return /^---\nname: [a-z0-9-]+\ndescription: ([^\n]+)\n---\n/u.exec(
+    source,
+  )![1]!;
+}
+
+test("engineer and knowledge descriptions are disjoint by material", async () => {
+  const engineer = await description(skills[0]);
+  const knowledge = await description(skills[1]);
+  assert.match(engineer, /software/u);
+  assert.match(engineer, /test suite/u);
+  assert.doesNotMatch(engineer, /knowledge|manifest|drive/iu);
+  assert.match(knowledge, /knowledge repository/u);
+  assert.match(knowledge, /manifest/u);
+  assert.match(knowledge, /Drive/u);
+  assert.doesNotMatch(knowledge, /software|test suite/iu);
+});
+
+test("each implicitly invocable skill stops on the wrong repository kind and names its sibling", async () => {
+  const engineer = await readFile(skills[0], "utf8");
+  const knowledge = await readFile(skills[1], "utf8");
+  assert.match(engineer, /knowledge-manifest\.json/u);
+  assert.match(engineer, /single-controller-knowledge/u);
+  assert.match(knowledge, /no manifest exists, stop/u);
+  assert.match(knowledge, /single-controller-engineer/u);
+  assert.match(
+    knowledge,
+    /\.\.\/single-controller-engineer\/scripts\/sce\.mjs/u,
+  );
+  await assert.rejects(readdir("skills/single-controller-knowledge/scripts"), {
+    code: "ENOENT",
+  });
+  for (const host of hostAgents) {
+    const source = await readFile(
+      `skills/single-controller-knowledge/agents/${host}`,
+      "utf8",
+    );
+    assert.doesNotMatch(source, /allow_implicit_invocation/u);
   }
 });

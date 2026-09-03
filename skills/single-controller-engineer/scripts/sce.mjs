@@ -35527,7 +35527,8 @@ var INSTALL_LOCK = ".sce-skill-install.lock";
 var INSTALL_LOCK_REAPER = ".sce-skill-install.lock-reaper";
 var SKILL_NAMES = [
   "single-controller-engineer",
-  "single-controller-feedback"
+  "single-controller-feedback",
+  "single-controller-knowledge"
 ];
 var PACKAGE_NAME = "@hls-uk/single-controller-engineer";
 var SEMVER2 = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
@@ -35550,7 +35551,7 @@ function hasExactKeys3(value, keys) {
 }
 function skillPath(path2) {
   const segments = path2.split("/");
-  return segments.length >= 2 && (segments[0] === SKILL_NAMES[0] || segments[0] === SKILL_NAMES[1]) && segments.every((part) => part.length > 0 && part !== "." && part !== "..");
+  return segments.length >= 2 && SKILL_NAMES.includes(segments[0] ?? "") && segments.every((part) => part.length > 0 && part !== "." && part !== "..");
 }
 function canonicalRelative(path2) {
   if (path2.startsWith("/") || path2.includes("\\") || !skillPath(path2))
@@ -35571,8 +35572,10 @@ function parseManifest(value) {
       fail2("invalid skill-install manifest skill version");
     parsedSkills[name] = version;
   }
-  if (parsedSkills[SKILL_NAMES[0]] !== parsedSkills[SKILL_NAMES[1]])
-    fail2("paired skills must declare the same version");
+  if (SKILL_NAMES.some(
+    (name) => parsedSkills[name] !== parsedSkills[SKILL_NAMES[0]]
+  ))
+    fail2("packaged skills must declare the same version");
   const files = [];
   const seen = /* @__PURE__ */ new Set();
   for (const candidate of root.files) {
@@ -35585,7 +35588,7 @@ function parseManifest(value) {
     files.push({ path: path2, sha256: file.sha256 });
   }
   if (files.length === 0 || SKILL_NAMES.some((name) => !seen.has(`${name}/SKILL.md`)))
-    fail2("skill-install manifest lacks a complete pair");
+    fail2("skill-install manifest lacks a complete set");
   return {
     files: files.sort((left, right) => left.path.localeCompare(right.path)),
     package: PACKAGE_NAME,
@@ -35820,7 +35823,7 @@ async function cleanCommitted(destination, parent, journal) {
       fail2("uninstall transaction did not remove manifest");
     for (const name of SKILL_NAMES) {
       if (await lstat3(join8(destination, name)).catch(() => void 0))
-        fail2("uninstall transaction did not remove skill pair");
+        fail2("uninstall transaction did not remove skill set");
     }
   }
   await rm3(stage, { force: true, recursive: true });

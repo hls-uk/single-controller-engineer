@@ -783,7 +783,7 @@ test("feedback common-directory refusal and executor failures never leak canarie
   assert.doesNotMatch(execution.stdout, /secret-canary/u);
 });
 
-test("skill commands install an exact pair from deterministic packaged source", async () => {
+test("skill commands install an exact set from deterministic packaged source", async () => {
   const root = await mkdtemp(join(tmpdir(), "sce-cli-install-"));
   const destination = join(root, "skills");
   try {
@@ -823,7 +823,7 @@ test("skill commands install an exact pair from deterministic packaged source", 
   }
 });
 
-test("an undeclared install host installs the same pair and is omitted, not empty", async () => {
+test("an undeclared install host installs the same set and is omitted, not empty", async () => {
   const root = await mkdtemp(join(tmpdir(), "sce-cli-install-hostless-"));
   const destination = join(root, "skills");
   try {
@@ -839,6 +839,7 @@ test("an undeclared install host installs the same pair and is omitted, not empt
     assert.deepEqual(Object.keys(previewed.manifest.skills).sort(), [
       "single-controller-engineer",
       "single-controller-feedback",
+      "single-controller-knowledge",
     ]);
     assert.ok(previewed.manifest.files.length > 0);
 

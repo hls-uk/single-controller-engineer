@@ -41,6 +41,27 @@ try {
     "skills/single-controller-engineer/references/model-routing.md",
     "skills/single-controller-engineer/references/protocol-state.md",
     "skills/single-controller-engineer/scripts/sce.mjs",
+    "skills/single-controller-knowledge/SKILL.md",
+    "skills/single-controller-knowledge/agents/claude.yaml",
+    "skills/single-controller-knowledge/agents/openai.yaml",
+    "skills/single-controller-knowledge/references/knowledge-contract.md",
+    "skills/single-controller-knowledge/references/knowledge-severity.md",
+    "skills/single-controller-knowledge/references/manifest/checks/README.md",
+    "skills/single-controller-knowledge/references/manifest/checks/check-boundary.mjs",
+    "skills/single-controller-knowledge/references/manifest/checks/check-frontmatter.mjs",
+    "skills/single-controller-knowledge/references/manifest/checks/check-generated.mjs",
+    "skills/single-controller-knowledge/references/manifest/checks/check-markdown-format.mjs",
+    "skills/single-controller-knowledge/references/manifest/checks/check-provenance.mjs",
+    "skills/single-controller-knowledge/references/manifest/checks/check-relative-links.mjs",
+    "skills/single-controller-knowledge/references/manifest/checks/check-secrets.mjs",
+    "skills/single-controller-knowledge/references/manifest/checks/check-supersession.mjs",
+    "skills/single-controller-knowledge/references/manifest/checks/lib.mjs",
+    "skills/single-controller-knowledge/references/manifest/checks/validate-manifest.mjs",
+    "skills/single-controller-knowledge/references/manifest/knowledge-manifest.schema.json",
+    "skills/single-controller-knowledge/references/manifest/provenance-record.schema.json",
+    "skills/single-controller-knowledge/references/materialisation.md",
+    "skills/single-controller-knowledge/references/provenance.md",
+    "skills/single-controller-knowledge/references/repository-manifest.md",
     "skills/single-controller-feedback/SKILL.md",
     "skills/single-controller-feedback/agents/claude.yaml",
     "skills/single-controller-feedback/agents/openai.yaml",
@@ -179,10 +200,12 @@ try {
       JSON.stringify(recordedManifest) ||
     recordedManifest.skills?.["single-controller-engineer"] !==
       packageJson.version ||
+    recordedManifest.skills?.["single-controller-knowledge"] !==
+      packageJson.version ||
     recordedManifest.skills?.["single-controller-feedback"] !==
       packageJson.version
   )
-    throw new Error("offline-installed skill pair disagrees with its manifest");
+    throw new Error("offline-installed skill set disagrees with its manifest");
   console.log(
     JSON.stringify(
       {

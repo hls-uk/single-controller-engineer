@@ -24,16 +24,18 @@ import {
 } from "../../src/install/index.js";
 import type { SkillInstallManifest } from "../../src/install/index.js";
 
-/** Host descriptors the shipped pair carries beside every other skill file. */
+/** Host descriptors the shipped set carries beside every other skill file. */
 const hostAgents = ["claude.yaml", "openai.yaml"] as const;
 const claudeDescriptors = [
   "single-controller-engineer/agents/claude.yaml",
+  "single-controller-knowledge/agents/claude.yaml",
   "single-controller-feedback/agents/claude.yaml",
 ] as const;
 
 async function fixture(root: string, version = "0.1.0") {
   for (const name of [
     "single-controller-engineer",
+    "single-controller-knowledge",
     "single-controller-feedback",
   ]) {
     const skill = join(root, name);
@@ -70,7 +72,7 @@ async function inTemporaryDirectory(run: (root: string) => Promise<void>) {
   }
 }
 
-test("installs a version-matched, manifest-verified skill pair and supports dry-run", async () => {
+test("installs a version-matched, manifest-verified skill set and supports dry-run", async () => {
   await inTemporaryDirectory(async (root) => {
     const source = join(root, "source");
     const destination = join(root, "host");
@@ -101,7 +103,7 @@ test("installs a version-matched, manifest-verified skill pair and supports dry-
   });
 });
 
-test("refuses unmanaged collisions, partial pairs, and changed installed files", async () => {
+test("refuses unmanaged collisions, partial sets, and changed installed files", async () => {
   await inTemporaryDirectory(async (root) => {
     const source = join(root, "source");
     const destination = join(root, "host");
@@ -126,7 +128,7 @@ test("refuses unmanaged collisions, partial pairs, and changed installed files",
   });
 });
 
-test("refuses source pairs with different declared versions", async () => {
+test("refuses source sets with different declared versions", async () => {
   await inTemporaryDirectory(async (root) => {
     const source = join(root, "source");
     await fixture(source);
@@ -136,7 +138,7 @@ test("refuses source pairs with different declared versions", async () => {
     );
     await assert.rejects(
       installSkills({ destination: join(root, "host"), source }),
-      /paired skills must declare the same version/,
+      /packaged skills must declare the same version/,
     );
   });
 });
@@ -160,7 +162,7 @@ test("uninstall is manifest-driven and will not remove changed files", async () 
   });
 });
 
-test("upgrade recovers a process loss after partial backup and preserves the exact old pair", async () => {
+test("upgrade recovers a process loss after partial backup and preserves the exact old set", async () => {
   await inTemporaryDirectory(async (root) => {
     const original = join(root, "original");
     const replacement = join(root, "replacement");
@@ -216,6 +218,7 @@ test("upgrade retry restores an intact backup after the first new skill rename",
     assert.equal(result.status, "installed");
     for (const name of [
       "single-controller-engineer",
+      "single-controller-knowledge",
       "single-controller-feedback",
     ])
       assert.match(
@@ -338,7 +341,7 @@ test("interrupted uninstall recovers through the same uninstall entry point", as
   });
 });
 
-test("ordinary partial uninstall failure rolls back the exact owned pair", async () => {
+test("ordinary partial uninstall failure rolls back the exact owned set", async () => {
   await inTemporaryDirectory(async (root) => {
     const source = join(root, "source");
     const destination = join(root, "host");
