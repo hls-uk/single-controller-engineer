@@ -33,6 +33,15 @@ provider, or send feedback.
 6. Establish one controller. Only it writes Beads, holds the controller slot,
    grants authority, freezes candidates, materialises, and integrates.
 
+## Keep Git and Beads synchronized
+
+After preflight, refresh Git and Beads before starting work. The controller
+must sync each completed work unit or tracker update and verify the required
+remote state before reporting completion or selecting the next unit. Follow
+[the synchronization procedure](../single-controller-engineer/references/controller-contract.md#synchronization-after-each-update),
+using existing repository/user authority without repeated approval requests.
+Explicit `local-only`, `no-commit`, and `no-push` instructions still apply.
+
 ## Plan deterministically
 
 Every task card is a child Bead with acceptance identifiers, dependencies,

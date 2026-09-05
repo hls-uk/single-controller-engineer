@@ -45,3 +45,4 @@ may recommend decisions, but the controller records the accepted disposition.
 | [DEC-20260902-011](2026-09-02-011-knowledge-profile-extends-engine.md) | Accepted | The knowledge profile extends the engine; Beads is first class for knowledge repositories | `sce-9f5`, `sce-9f5.1` |
 | [DEC-20260903-012](2026-09-03-012-materialisation-source-and-no-clobber.md) | Accepted | Resolve exact sources before atomic no-clobber materialisation | `sce-085`, `sce-7g9.2`, `sce-7g9.3` |
 | [DEC-20260905-013](2026-09-05-013-automatic-git-and-beads-sync.md) | Accepted | Agents keep Git and Beads synchronized after every completed update | `sce-vrm` |
+| [DEC-20260905-014](2026-09-05-014-delivery-skills-sync-each-update.md) | Accepted | Both delivery skills sync each update under the adopting repository's authority | `sce-36o` |

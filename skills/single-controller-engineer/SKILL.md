@@ -28,6 +28,15 @@ send feedback.
 5. Establish one controller. Only it writes Beads, holds the controller slot,
    grants external authority, freezes candidates, and integrates.
 
+## Keep Git and Beads synchronized
+
+After preflight, refresh Git and Beads before starting work. The controller
+must sync each completed work unit or tracker update and verify the required
+remote state before reporting completion or selecting the next unit. Follow
+[the synchronization procedure](references/controller-contract.md#synchronization-after-each-update),
+using existing repository/user authority without repeated approval requests.
+Explicit `local-only`, `no-commit`, and `no-push` instructions still apply.
+
 ## Plan deterministically
 
 The controller creates or resumes one epic and dependency-linked children.
@@ -69,7 +78,8 @@ Run the adopting repository's declared fast command during implementation
 explicitly; reserve its full release command for tagged-release evidence. Never
 put slow topology, crash, provider, or live-agent evidence into the fast gate.
 Publication, tagging, pushing, issue submission, and other external mutation
-require current explicit authority.
+require current explicit authority; an applicable standing repository/user
+grant is sufficient for routine Git and Beads sync.
 
 Record substantive controller decisions in the adopting repository's
 source-controlled decision records (use `wiki/decisions` when no established
