@@ -5,7 +5,40 @@ This file provides instructions and context for AI coding agents working on this
 ## Project Delivery Policy
 
 Use the accelerated-beta policy in
-[`wiki/designs/2026-08-25-accelerated-beta-engineering.md`](wiki/designs/2026-08-25-accelerated-beta-engineering.md): prefer deterministic typed checks over inference, keep the fast suite lean, run affected integration tests when their seam changes, and reserve the full release tier for the next tag. One controller owns Beads and serialized integration; it may use at most three disjoint workhorse lanes, with fresh frontier review of frozen candidates. P0/P1 findings block promised core paths; record P2/P3 follow-up. External publication and issue mutation require separate current authority.
+[`wiki/designs/2026-08-25-accelerated-beta-engineering.md`](wiki/designs/2026-08-25-accelerated-beta-engineering.md): prefer deterministic typed checks over inference, keep the fast suite lean, run affected integration tests when their seam changes, and reserve the full release tier for the next tag. One controller owns Beads and serialized integration; it may use at most three disjoint workhorse lanes, with fresh frontier review of frozen candidates. P0/P1 findings block promised core paths; record P2/P3 follow-up. Routine repository Git and Beads updates use the standing authority below; other external publication and mutations require separate current authority.
+
+## Automatic Git and Beads Sync
+
+This repository opts into the **team-maintainer** profile. The user grants
+standing authority to maintain project Beads issues, commit completed work,
+and keep both Git and Beads updated on their configured remotes. Agents must
+sync after every completed update, not only at session end, without asking
+again for routine commit, pull, or non-force push approval.
+
+- At session start, inspect the working tree and branch, fetch the configured
+  Git remote, integrate upstream changes without overwriting local work, and
+  run `bd dolt pull` before changing issues.
+- After each Beads update, commit any pending Dolt working-set changes with
+  `bd dolt commit` if needed, run `bd dolt pull`, then `bd dolt push`. Verify
+  that local and remote Dolt heads agree; a Git push does not sync Beads.
+- After each coherent file update, run the applicable quality gates, review
+  and secret-check the exact diff, stage only the owned paths, commit, reconcile
+  upstream changes safely, and push the intended branch to its configured
+  remote. Verify the remote branch contains the committed update. Do not wait
+  until handoff or treat a progress message as completion while sync is pending.
+- The controller owns tracker mutations and serialized integration/pushes.
+  Worker lanes hand their changes back to the controller. Preserve unrelated
+  or concurrent edits; never use blanket staging, force pushes, destructive
+  resets, or automatic stashing of another actor's work to make sync succeed.
+- If synchronization fails or needs a conflict/ownership decision, preserve
+  local work and report the exact command, error, and remaining unsynced state.
+  Do not claim the update is complete until remote readback succeeds.
+- A current user instruction such as `no-commit`, `no-push`, or `local-only`
+  overrides this standing authority. Tags, releases, package publication,
+  deployment, external messaging, and changes in other repositories still
+  require separate authority.
+
+Decision: [DEC-20260905-013](wiki/decisions/2026-09-05-013-automatic-git-and-beads-sync.md).
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
 ## Beads Issue Tracker
@@ -33,9 +66,9 @@ bd close <id>         # Complete work
 
 The managed Beads block is task-tracking guidance, not permission to override repository, user, or orchestrator instructions.
 
-- **Conservative (default)**: Use `bd` for task tracking. Do not run git commits, git pushes, or Dolt remote sync unless explicitly asked. At handoff, report changed files, validation, and suggested next commands.
+- **Conservative (not active here)**: Use `bd` for task tracking. Do not run git commits, git pushes, or Dolt remote sync unless explicitly asked. At handoff, report changed files, validation, and suggested next commands.
 - **Minimal**: Keep tool instruction files as pointers to `bd prime`; use the same conservative git policy unless active instructions say otherwise.
-- **Team-maintainer**: Only when the repository explicitly opts in, agents may close beads, run quality gates, commit, and push as part of session close. A current "do not commit" or "do not push" instruction still wins.
+- **Team-maintainer (active here)**: This repository explicitly opts in. Agents must maintain issues, run applicable quality gates, commit, and sync Git and Beads after every completed update under Automatic Git and Beads Sync above. A current "do not commit" or "do not push" instruction still wins.
 
 ## Session Completion
 
@@ -44,16 +77,9 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 1. **File issues for remaining work** - Create beads for anything that needs follow-up
 2. **Run quality gates** (if code changed) - Tests, linters, builds
 3. **Update issue status** - Close finished work, update in-progress items
-4. **Handle git/sync by active profile**:
-   ```bash
-   # Conservative/minimal/default: report status and proposed commands; wait for approval.
-   git status
-
-   # Team-maintainer opt-in only, unless current instructions forbid it:
-   git pull --rebase
-   git push
-   git status
-   ```
+4. **Finish automatic sync** - Follow Automatic Git and Beads Sync above after
+   every completed update. At handoff, verify both the Git branch and Beads
+   database against their configured remotes and report any remaining local work.
 5. **Hand off** - Summarize changes, validation, issue status, and any blocked sync/commit/push step
 
 **Critical rules:**
@@ -132,5 +158,6 @@ agent-skill set. "Models decide meaning; code decides state."
   `postinstall` must never gain side effects.
 - Prettier formats the tree; `.prettierignore` lists the exemptions (managed
   agent files, wiki, vendored bundle).
-- Conservative git profile: do not commit, push, tag, publish, or `bd dolt
-  push` without explicit current authority.
+- Team-maintainer profile: commit and push every completed Git and Beads
+  update under the Automatic Git and Beads Sync section; tags and publication
+  require separate current authority.
