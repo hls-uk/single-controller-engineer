@@ -5,6 +5,11 @@ import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 
+import {
+  DoltProjectionPersistence,
+  EmbeddedBeadsAdapter,
+  PinnedBdEmbeddedProcess,
+} from "../../../src/adapters/beads-embedded/index.js";
 import { runCli } from "../../../src/cli.js";
 
 // Release-tier evidence for sce-59r on the pinned real bd/Dolt: the first
@@ -116,7 +121,7 @@ async function firstAcquireCompletes(remote: string | undefined, root: string) {
   const document = JSON.parse(await readFile(config, "utf8")) as {
     initialRun: { controller: { holder: string } };
     topology: { mode: string };
-  };
+  } & Record<string, unknown>;
   assert.equal(
     document.topology.mode,
     remote === undefined ? "local-only" : "git-sync",
@@ -171,6 +176,85 @@ async function firstAcquireCompletes(remote: string | undefined, root: string) {
     "SELECT * FROM dolt_status",
   ]);
   assert.deepEqual(JSON.parse(pending.stdout), {});
+
+  // sce-296.1: journal commits land above the slot commit under auto-commit
+  // (an ambiguity record, a checkpoint, an unrelated bd write). The persisted
+  // transition must still be provable afterwards, or an ambiguous act can
+  // never be reconciled and the run blocks forever.
+  await json(repository, [
+    "create",
+    "--id",
+    "sce-after-1",
+    "after 1",
+    "--json",
+  ]);
+  await json(repository, [
+    "create",
+    "--id",
+    "sce-after-2",
+    "after 2",
+    "--json",
+  ]);
+  if (remote !== undefined) await run(repository, BD, ["dolt", "push"]);
+  const shown = (await json(repository, ["show", "sce-root", "--json"])) as
+    readonly Record<string, unknown>[] | Record<string, unknown>;
+  const rootRow = Array.isArray(shown) ? shown[0] : shown;
+  assert.ok(rootRow !== undefined);
+  const journal = (
+    rootRow.metadata as {
+      sce: { projection: { run: { effectJournal: readonly any[] } } };
+    }
+  ).sce.projection.run.effectJournal;
+  assert.equal(journal.length, 1);
+  const entry = journal[0];
+  assert.ok(entry !== undefined);
+  assert.equal(entry.status, "observed");
+  const transition = entry.slotTransition;
+  const topology = document.topology as unknown as {
+    bdExecutable: string;
+    databaseDirectory: string;
+    doltExecutable: string;
+    mode: "local-only" | "git-sync";
+    preflight: never;
+    prefix: string;
+    remote?: { name: string; ref: string; url: string };
+    rootBeadId: string;
+  };
+  const full = document as unknown as {
+    git: { repository: { cwd: string } };
+    scope: never;
+  };
+  const process = new PinnedBdEmbeddedProcess({
+    bdExecutable: topology.bdExecutable,
+    cwd: full.git.repository.cwd,
+    databaseDirectory: topology.databaseDirectory,
+    doltExecutable: topology.doltExecutable,
+    prefix: topology.prefix,
+    projections: new DoltProjectionPersistence({
+      childIssueId: () => undefined,
+      databaseDirectory: topology.databaseDirectory,
+      doltExecutable: topology.doltExecutable,
+      rootIssueId: topology.rootBeadId,
+    }),
+    scope: full.scope,
+    ...(topology.remote === undefined ? {} : { remote: topology.remote }),
+  });
+  assert.deepEqual(
+    await process.execute({ kind: "slot_transition", intent: transition }),
+    { kind: "slot_transition", value: "observed" },
+  );
+  const adapter = new EmbeddedBeadsAdapter({
+    holder: document.initialRun.controller.holder,
+    mode: topology.mode,
+    prefix: topology.prefix,
+    preflight: topology.preflight,
+    process,
+    rootIssueId: topology.rootBeadId,
+    scope: full.scope,
+  });
+  assert.deepEqual(await adapter.reconcileControllerTransition(transition), {
+    status: "observed",
+  });
 }
 
 test("first acquire-controller completes on a fresh local-only embedded store", async () => {

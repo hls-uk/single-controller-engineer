@@ -28457,11 +28457,14 @@ var PinnedBdEmbeddedProcess = class {
     );
     if (head3 === void 0 || workingSet === void 0 || slot === void 0 || canonicalJson(this.slotObservation(slot, intent2.holder)) !== canonicalJson(intent2.after) || workingSet === "clean" && head3 === intent2.before.head)
       return "absent";
-    const base = workingSet === "pending" ? head3 : await this.soleParent(head3);
-    if (base === void 0) return "ambiguous";
-    const lineage = await this.proveSlotLineage(intent2.before.head, base);
+    const located = workingSet === "pending" ? { base: head3, commit: head3 } : await this.latestSlotCommit(head3);
+    if (located === void 0) return "ambiguous";
+    const lineage = await this.proveSlotLineage(
+      intent2.before.head,
+      located.base
+    );
     if (lineage !== "observed") return lineage;
-    const args = workingSet === "pending" ? ["diff", "--data", "-r", "json", base] : ["diff", "--data", "-r", "json", base, head3];
+    const args = workingSet === "pending" ? ["diff", "--data", "-r", "json", located.base] : ["diff", "--data", "-r", "json", located.base, located.commit];
     const diff = await this.runDolt(this.databaseDirectory, args);
     return diff !== void 0 && diff.code === 0 && !diff.exceeded && this.exactSlotDelta(diff.stdout, intent2) ? "observed" : "ambiguous";
   }
@@ -28554,8 +28557,19 @@ var PinnedBdEmbeddedProcess = class {
       return "ambiguous";
     if (from === head3) return "observed";
     if (!await this.isAncestor(from, head3)) return "absent";
+    const touched = await this.slotTouched(from, head3);
+    if (touched === void 0) return "ambiguous";
+    return touched ? "absent" : "observed";
+  }
+  /**
+   * Whether any commit in `from..to` wrote the built-in slot's issue, label,
+   * or event rows. One exact count row decides; any other shape is unknown.
+   */
+  async slotTouched(from, to) {
+    if (safeHead(from) === void 0 || safeHead(to) === void 0)
+      return void 0;
     const slot = `${this.prefix}-merge-slot`;
-    const rowsTouching = (table, column) => `(SELECT COUNT(*) FROM dolt_diff('${from}', '${head3}', '${table}') WHERE from_${column} = '${slot}' OR to_${column} = '${slot}')`;
+    const rowsTouching = (table, column) => `(SELECT COUNT(*) FROM dolt_diff('${from}', '${to}', '${table}') WHERE from_${column} = '${slot}' OR to_${column} = '${slot}')`;
     const capture2 = await this.runDolt(this.databaseDirectory, [
       "sql",
       "-r",
@@ -28564,13 +28578,30 @@ var PinnedBdEmbeddedProcess = class {
       `SELECT ${rowsTouching("issues", "id")} + ${rowsTouching("labels", "issue_id")} + ${rowsTouching("events", "issue_id")} AS touched`
     ]);
     if (capture2 === void 0 || capture2.code !== 0 || capture2.exceeded)
-      return "ambiguous";
+      return void 0;
     const raw = json2(capture2.stdout);
     const rows = raw?.rows;
     const row = Array.isArray(rows) && rows.length === 1 ? object2(rows[0]) : void 0;
     if (raw === void 0 || !hasExactKeys(raw, ["rows"]) || row === void 0 || !hasExactKeys(row, ["touched"]) || typeof row.touched !== "number" || !Number.isInteger(row.touched))
-      return "ambiguous";
-    return row.touched === 0 ? "observed" : "absent";
+      return void 0;
+    return row.touched !== 0;
+  }
+  /**
+   * Walks back from `head` through single-parent commits that never touched
+   * the built-in slot to the newest commit that did. Bounded like clone
+   * lineage; a merge, a root, or an unproved edge is undefined, never guessed.
+   */
+  async latestSlotCommit(head3) {
+    let commit2 = head3;
+    for (let depth = 0; depth < MAX_CLONE_LINEAGE_EDGES; depth += 1) {
+      const base = await this.soleParent(commit2);
+      if (base === void 0) return void 0;
+      const touched = await this.slotTouched(base, commit2);
+      if (touched === void 0) return void 0;
+      if (touched) return { base, commit: commit2 };
+      commit2 = base;
+    }
+    return void 0;
   }
   remoteProof(status) {
     return {
@@ -28599,16 +28630,16 @@ var PinnedBdEmbeddedProcess = class {
     const remoteHead = remoteRef === void 0 ? void 0 : await this.doltRefHead(remoteRef);
     if (localHead === void 0 || workingSet !== "clean" || remoteRef === void 0 || remoteHead === void 0 || remoteHead === intent2.before.remoteHead)
       return this.remoteProof("absent");
-    const effectBase = await this.soleParent(remoteHead);
-    if (effectBase === void 0 || await this.proveSlotLineage(intent2.before.remoteHead, effectBase) !== "observed")
+    const located = await this.latestSlotCommit(remoteHead);
+    if (located === void 0 || await this.proveSlotLineage(intent2.before.remoteHead, located.base) !== "observed")
       return this.remoteProof("ambiguous");
     const effectDiff = await this.runDolt(this.databaseDirectory, [
       "diff",
       "--data",
       "-r",
       "json",
-      effectBase,
-      remoteHead
+      located.base,
+      located.commit
     ]);
     const remoteSlot = await this.remoteSlotAt(remoteRef, intent2.holder);
     if (effectDiff === void 0 || effectDiff.code !== 0 || effectDiff.exceeded || !this.exactSlotDelta(effectDiff.stdout, intent2) || remoteSlot === void 0 || canonicalJson(remoteSlot) !== canonicalJson(intent2.after))
@@ -28625,7 +28656,7 @@ var PinnedBdEmbeddedProcess = class {
         return this.remoteProof("ambiguous");
     }
     return {
-      effectHead: remoteHead,
+      effectHead: located.commit,
       localHead,
       remoteHead,
       schema: "sce.beads-embedded.remote-slot-transition-proof",
@@ -30473,7 +30504,7 @@ var EmbeddedBeadsAdapter = class {
   /** Runtime-checks the semantic cross-clone proof returned by the process. */
   remoteTransitionProofMatches(value, state) {
     const proof = object4(value);
-    return proof !== void 0 && Object.keys(proof).length === 6 && proof.schema === "sce.beads-embedded.remote-slot-transition-proof" && proof.status === "observed" && proof.version === 1 && head2(proof.effectHead) && head2(proof.localHead) && head2(proof.remoteHead) && proof.effectHead === proof.remoteHead && proof.localHead === state.head && proof.remoteHead === state.remoteHead;
+    return proof !== void 0 && Object.keys(proof).length === 6 && proof.schema === "sce.beads-embedded.remote-slot-transition-proof" && proof.status === "observed" && proof.version === 1 && head2(proof.effectHead) && head2(proof.localHead) && head2(proof.remoteHead) && proof.localHead === state.head && proof.remoteHead === state.remoteHead;
   }
   /**
    * Replays an already-pushed transition from another clone only after its

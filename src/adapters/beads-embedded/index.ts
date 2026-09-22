@@ -1514,7 +1514,6 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       head(proof.effectHead) &&
       head(proof.localHead) &&
       head(proof.remoteHead) &&
-      proof.effectHead === proof.remoteHead &&
       proof.localHead === state.head &&
       proof.remoteHead === state.remoteHead
     );
