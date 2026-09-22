@@ -285,6 +285,12 @@ function materialisationEvidence(
   );
 }
 
+/**
+ * Destination evidence dedupes on the whole destination, digest, and status
+ * triple, so two targets deferred before resolution under one
+ * `alias:subpath` home collapse to one entry while the body table still lists
+ * each target on its own row.
+ */
 function dedupe(
   items: readonly MaterialisationEvidence[],
 ): readonly MaterialisationEvidence[] {

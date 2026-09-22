@@ -84,7 +84,12 @@
     "reviewTreeOid": { "$ref": "#/$defs/oid" },
     "reviewPromptHash": { "$ref": "#/$defs/hash" },
     "reviewResponseHash": { "$ref": "#/$defs/hash" },
-    "materialisationDestinations": { "$ref": "#/$defs/strings" },
+    "materialisationDestinations": {
+      "type": "array",
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1, "maxLength": 8192 }
+    },
     "materialisationDigests": {
       "type": "array",
       "maxItems": 64,

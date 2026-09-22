@@ -3574,7 +3574,14 @@ function resolutionCapacitiesBindLatestAttempt(
     .sort((left, right) => right.intentRevision - left.intentRevision)[0];
   // Checkpointing compacts observed entries; an unresolved attempt is never
   // compacted, so a settled resolution whose entry is gone stays bound by the
-  // journal commitment chain rather than by a re-derivable entry.
+  // journal commitment chain rather than by a re-derivable entry. The trust
+  // granted here is exactly that narrow: the stored capacities of an attempt
+  // that is no longer in flight are read as recorded and never re-derived, so
+  // only an out-of-band mutation of the run store can make them disagree with
+  // what the compacted entry committed. Such a copy still cannot widen a
+  // budget, because the next attempt on this entry recomputes its capacities
+  // from live state (`resolutionCapacities`) and a stored copy only ever gates
+  // the sources of the attempt that recorded it. The residue is diagnostic.
   if (latest === undefined) return resolution.currentEffectId === undefined;
   const params = {
     destinationProbeGateEntryId: destinationProbeGateEntryId(
@@ -5782,6 +5789,15 @@ function reduceInternal(
         return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "integrate"))
         return badObservation();
+      // The landed pair is the reviewed pair: base, head, and tree are bound
+      // to the approval by the guard above, and `landedOid` is the integration
+      // OID the observation carries. Every shipped integration profile is a
+      // fast-forward (`local-ff`, `remote-ff`), so that OID is the reviewed
+      // head and a projected record satisfies the knowledge check's
+      // `reviewHeadOid === landedOid`. The reducer records the OID it observed
+      // rather than asserting the equality: a landing that moved the ref to
+      // some other commit is a fact worth journaling exactly, and the
+      // knowledge record check refuses it downstream.
       result = observe(
         state,
         unit,

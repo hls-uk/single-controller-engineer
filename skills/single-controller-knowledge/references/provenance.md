@@ -24,6 +24,14 @@ follow-up Bead. A target deferred before resolution carries only the bound
 target, refusal, and follow-up evidence; no path, digest, or final name is
 invented. Records never contain secrets, transcripts, or narrative.
 
+Destination evidence is deduplicated as a whole destination, digest, and
+status triple, so two targets deferred before resolution that share one
+`alias:subpath` home contribute a single destination entry while the body
+table still lists each target on its own row. The three materialisation
+arrays stay positional and equal in length, destination entries are unique,
+and a unit whose deduplicated destinations exceed sixty-four is refused
+rather than truncated.
+
 ## The provenance commit
 
 After every original unit of the wave and every unit target settles, the
