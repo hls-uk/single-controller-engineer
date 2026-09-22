@@ -4329,7 +4329,7 @@ var require_core = __commonJS({
         uriResolver
       };
     }
-    var Ajv6 = class {
+    var Ajv7 = class {
       constructor(opts = {}) {
         this.schemas = {};
         this.refs = {};
@@ -4699,9 +4699,9 @@ var require_core = __commonJS({
         }
       }
     };
-    Ajv6.ValidationError = validation_error_1.default;
-    Ajv6.MissingRefError = ref_error_1.default;
-    exports.default = Ajv6;
+    Ajv7.ValidationError = validation_error_1.default;
+    Ajv7.MissingRefError = ref_error_1.default;
+    exports.default = Ajv7;
     function checkOptions(checkOpts, options, msg, log = "error") {
       for (const key in checkOpts) {
         const opt = key;
@@ -6812,7 +6812,7 @@ var require_ajv = __commonJS({
     var draft7MetaSchema = require_json_schema_draft_07();
     var META_SUPPORT_DATA = ["/properties"];
     var META_SCHEMA_ID = "http://json-schema.org/draft-07/schema";
-    var Ajv6 = class extends core_1.default {
+    var Ajv7 = class extends core_1.default {
       _addVocabularies() {
         super._addVocabularies();
         draft7_1.default.forEach((v) => this.addVocabulary(v));
@@ -6831,11 +6831,11 @@ var require_ajv = __commonJS({
         return this.opts.defaultMeta = super.defaultMeta() || (this.getSchema(META_SCHEMA_ID) ? META_SCHEMA_ID : void 0);
       }
     };
-    exports.Ajv = Ajv6;
-    module.exports = exports = Ajv6;
-    module.exports.Ajv = Ajv6;
+    exports.Ajv = Ajv7;
+    module.exports = exports = Ajv7;
+    module.exports.Ajv = Ajv7;
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.default = Ajv6;
+    exports.default = Ajv7;
     var validate_1 = require_validate();
     Object.defineProperty(exports, "KeywordCxt", { enumerable: true, get: function() {
       return validate_1.KeywordCxt;
@@ -27711,6 +27711,22 @@ import { readFile as readFile2 } from "node:fs/promises";
 import { isAbsolute as isAbsolute9, normalize as normalize5, relative as relative4, resolve as resolve6 } from "node:path";
 
 // src/adapters/beads-embedded/schemas.ts
+var import_ajv5 = __toESM(require_ajv(), 1);
+var utf88 = new TextEncoder();
+var ajv5 = new import_ajv5.Ajv({
+  allErrors: true,
+  coerceTypes: false,
+  removeAdditional: false,
+  strict: true,
+  useDefaults: false
+});
+ajv5.addKeyword({
+  keyword: "maxUtf8Bytes",
+  type: "string",
+  schemaType: "number",
+  validate: (limit, value) => utf88.encode(value).byteLength <= limit,
+  errors: false
+});
 var PINNED_BD_ISSUE_BASE_KEYS = [
   "acceptance_criteria",
   "actor",
@@ -27827,6 +27843,88 @@ function isPinnedBdIssueRow(value) {
   ) && sqlTimestamp(value.created_at) && sqlTimestamp(value.updated_at) && (!hasStartedAt || sqlTimestamp(value.started_at)) && (!hasClosedAt || sqlTimestamp(value.closed_at));
 }
 var EMBEDDED_ADAPTER_VERSION = 1;
+var REMOTE_FAILURE_TAIL_BYTES = 2048;
+var REMOTE_FAILURE_WINDOW_CHARS = 8192;
+var RemoteFailureTailSchema = Type.Object(
+  {
+    schema: Type.Literal("sce.beads-embedded.remote-failure-tail"),
+    /**
+     * Printable ASCII and newline only. Every other byte is replaced before
+     * validation, so one character is exactly one byte and the character
+     * bound is the byte bound.
+     */
+    text: Type.String({
+      maxLength: REMOTE_FAILURE_TAIL_BYTES,
+      maxUtf8Bytes: REMOTE_FAILURE_TAIL_BYTES,
+      minLength: 1,
+      pattern: "^[\\n\\x20-\\x7E]+$"
+    }),
+    /** Earlier stderr was dropped to hold the bound; this is a tail. */
+    truncated: Type.Boolean(),
+    version: Type.Literal(1)
+  },
+  { additionalProperties: false }
+);
+var validateRemoteFailureTail = ajv5.compile(
+  RemoteFailureTailSchema
+);
+var ANSI_ESCAPE = /\u001B\[[0-9;?]{0,16}[A-Za-z]/gu;
+var UNPRINTABLE = /[^\n\x20-\x7E]/gu;
+var SECRET_SHAPES = [
+  // A complete private key block, then one whose end the window dropped.
+  [
+    /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----[\s\S]{0,8192}?-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----/gu,
+    "[redacted key]"
+  ],
+  [
+    /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----[\s\S]{0,8192}/gu,
+    "[redacted key]"
+  ],
+  // An ssh key blob, and any line that is nothing but base64 (the body of a
+  // key block whose header the window dropped).
+  [
+    /(ssh-(?:rsa|dss|ed25519)|ecdsa-sha2-[a-z0-9-]{1,32})[ \t]+[A-Za-z0-9+/=]{16,}/gu,
+    "$1 [redacted]"
+  ],
+  [/^[A-Za-z0-9+/]{40,}={0,2}$/gmu, "[redacted]"],
+  // Published token shapes.
+  [/\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{8,}/gu, "[redacted]"],
+  [/\bxox[abprs]-[A-Za-z0-9-]{8,}/gu, "[redacted]"],
+  [/\b(?:AKIA|ASIA)[0-9A-Z]{8,}/gu, "[redacted]"],
+  [/\bsk-[A-Za-z0-9_-]{16,}/gu, "[redacted]"],
+  [
+    /\bey[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/gu,
+    "[redacted]"
+  ],
+  // Userinfo in a URL, so a remote keeps only its scheme, host, and path.
+  [/([a-z][a-z0-9+.-]{0,15}:\/\/)[^\s/@]{1,256}@/giu, "$1[redacted]@"],
+  // `Authorization: ...`, `token=...`, and every other named secret, redacted
+  // to the end of its line because the value may itself contain separators.
+  [
+    /\b(api[_-]?key|authorization|bearer|cookie|credentials?|passphrase|passwd|password|private[_-]?key|secret|session[_-]?token|token)([ \t]*[:=][ \t]*)[^\n]+/giu,
+    "$1$2[redacted]"
+  ]
+];
+function redactStderr(value) {
+  let text5 = value.replace(/\r\n?/gu, "\n").replace(ANSI_ESCAPE, "");
+  for (const [shape, replacement] of SECRET_SHAPES)
+    text5 = text5.replace(shape, replacement);
+  return text5.replace(UNPRINTABLE, " ");
+}
+function redactedStderrTail(window, dropped) {
+  const redacted = redactStderr(window).trim();
+  const text5 = redacted.slice(
+    Math.max(0, redacted.length - REMOTE_FAILURE_TAIL_BYTES)
+  );
+  if (text5 === "") return void 0;
+  const value = {
+    schema: "sce.beads-embedded.remote-failure-tail",
+    text: text5,
+    truncated: dropped || text5.length < redacted.length,
+    version: 1
+  };
+  return validateRemoteFailureTail(value) ? value : void 0;
+}
 var EmbeddedResultSchema = Type.Object(
   {
     code: Type.Union([
@@ -27982,6 +28080,27 @@ var MAX_CLONE_LINEAGE_EDGES = 64;
 var SLOT_INITIALIZATION_AUTHORITY = "sce.embedded.slot.initialize.v1";
 function sameExecutable(left, right) {
   return left !== void 0 && left.ctimeMs === right.ctimeMs && left.dev === right.dev && left.digest === right.digest && left.ino === right.ino && left.mtimeMs === right.mtimeMs && left.mode === right.mode && left.path === right.path && left.size === right.size;
+}
+function stderrWindow() {
+  let text5 = "";
+  let dropped = false;
+  return {
+    push(chunk) {
+      text5 += chunk.toString("utf8");
+      if (text5.length > REMOTE_FAILURE_WINDOW_CHARS) {
+        text5 = text5.slice(text5.length - REMOTE_FAILURE_WINDOW_CHARS);
+        dropped = true;
+      }
+    },
+    /** The `Capture` field, or no field at all when nothing survives. */
+    captured() {
+      const stderrTail = redactedStderrTail(text5, dropped);
+      return stderrTail === void 0 ? {} : { stderrTail };
+    }
+  };
+}
+function failureTail(capture2) {
+  return capture2.code === 0 || capture2.stderrTail === void 0 ? {} : { stderrTail: capture2.stderrTail };
 }
 function executableDigest(path2, size) {
   if (!Number.isSafeInteger(size) || size < 0) return void 0;
@@ -28640,6 +28759,7 @@ var PinnedBdEmbeddedProcess = class {
         );
         return {
           kind: "pull",
+          ...failureTail(capture2),
           value: capture2.code === 0 && afterRemote === remote2 && (fastForward ? after === remote2 : after !== void 0 && await this.provePinnedClonePull(
             before,
             remote2,
@@ -28654,6 +28774,7 @@ var PinnedBdEmbeddedProcess = class {
           return { kind: "push", value: "unavailable" };
         return {
           kind: "push",
+          ...failureTail(capture2),
           value: capture2.code === 0 ? "applied" : "conflict"
         };
       }
@@ -29251,7 +29372,7 @@ var PinnedBdEmbeddedProcess = class {
           TZ: "UTC"
         },
         shell: false,
-        stdio: ["ignore", "pipe", "ignore"]
+        stdio: ["ignore", "pipe", "pipe"]
       });
       const timer = setTimeout(() => {
         timedOut = true;
@@ -29264,6 +29385,8 @@ var PinnedBdEmbeddedProcess = class {
           child.kill("SIGKILL");
         } else stdout += chunk.toString("utf8");
       });
+      const stderr = stderrWindow();
+      child.stderr.on("data", (chunk) => stderr.push(chunk));
       child.once("error", () => {
         clearTimeout(timer);
         if (!settled) {
@@ -29275,7 +29398,7 @@ var PinnedBdEmbeddedProcess = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve11({ code, exceeded, stdout, timedOut });
+          resolve11({ code, exceeded, stdout, timedOut, ...stderr.captured() });
         }
       });
     });
@@ -29420,7 +29543,7 @@ var PinnedBdEmbeddedProcess = class {
           TZ: "UTC"
         },
         shell: false,
-        stdio: ["ignore", "pipe", "ignore"]
+        stdio: ["ignore", "pipe", "pipe"]
       });
       const timer = setTimeout(() => {
         timedOut = true;
@@ -29434,6 +29557,8 @@ var PinnedBdEmbeddedProcess = class {
           child.kill("SIGKILL");
         } else stdout += chunk.toString("utf8");
       });
+      const stderr = stderrWindow();
+      child.stderr.on("data", (chunk) => stderr.push(chunk));
       child.once("error", () => {
         clearTimeout(timer);
         if (!settled) {
@@ -29445,7 +29570,7 @@ var PinnedBdEmbeddedProcess = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve11({ code, exceeded, stdout, timedOut });
+          resolve11({ code, exceeded, stdout, timedOut, ...stderr.captured() });
         }
       });
     });
@@ -35405,20 +35530,20 @@ async function createControllerConfigRunner(path2, dependencies = {}) {
 }
 
 // src/feedback/schemas.ts
-var import_ajv5 = __toESM(require_ajv(), 1);
-var utf88 = new TextEncoder();
-var ajv5 = new import_ajv5.Ajv({
+var import_ajv6 = __toESM(require_ajv(), 1);
+var utf89 = new TextEncoder();
+var ajv6 = new import_ajv6.Ajv({
   allErrors: true,
   coerceTypes: false,
   removeAdditional: false,
   strict: true,
   useDefaults: false
 });
-ajv5.addKeyword({
+ajv6.addKeyword({
   keyword: "maxUtf8Bytes",
   type: "string",
   schemaType: "number",
-  validate: (limit, value) => utf88.encode(value).byteLength <= limit,
+  validate: (limit, value) => utf89.encode(value).byteLength <= limit,
   errors: false
 });
 function strictObject6(properties) {
@@ -35519,18 +35644,18 @@ var GitHubCreateRequestSchema = strictObject6({
   body: Type.String({ minLength: 1, maxLength: 16384, maxUtf8Bytes: 16384 })
 });
 function isFeedbackSchema(schema, value) {
-  return ajv5.compile(schema)(value);
+  return ajv6.compile(schema)(value);
 }
 
 // src/feedback/normalize.ts
-var utf89 = new TextEncoder();
+var utf810 = new TextEncoder();
 var MAX_NARRATIVE_BYTES = 4 * 1024;
 var DISALLOWED = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u200e\u200f\u061c\u202a-\u202e\u2066-\u2069]/u;
 function normalizedText(value, maxBytes) {
   if (typeof value !== "string" || value.includes("\r") || hasUnpairedSurrogate(value))
     return void 0;
   const normalized = value.normalize("NFC");
-  if (DISALLOWED.test(normalized) || utf89.encode(normalized).byteLength > maxBytes)
+  if (DISALLOWED.test(normalized) || utf810.encode(normalized).byteLength > maxBytes)
     return void 0;
   return normalized;
 }
