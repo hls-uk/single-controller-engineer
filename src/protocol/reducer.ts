@@ -481,8 +481,8 @@ export function knowledgeContractRuntimeValid(
  * first wave, but it cannot coexist with any unit or gate work.
  */
 /**
- * A run that has not planned its first wave: no units, no wave, no gate and
- * no carry. A configuration knowledge contract may accompany such a run at any
+ * A run that has not planned its first wave: only planned units, no wave, no
+ * gate and no carry. A configuration knowledge contract may accompany such a run at any
  * controller state (composed and unacquired, acquire intended, or acquired)
  * because the contract is frozen only by `wave_planned`.
  */
@@ -497,7 +497,7 @@ export function knowledgeContractAwaitsFirstWave(
     state.provenanceCarryClaim === undefined &&
     state.lastProvenanceCarryRefusal === undefined &&
     state.wave.unitIds.length === 0 &&
-    Object.keys(state.units).length === 0 &&
+    Object.values(state.units).every((unit) => unit.state === "planned") &&
     Object.keys(state.reservations).length === 0 &&
     state.activeModifyingUnitIds.length === 0 &&
     state.qualificationQueue.length === 0 &&
