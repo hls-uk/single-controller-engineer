@@ -64,15 +64,181 @@ export function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
 
+/**
+ * Reads a schema document and refuses it unless every node, including the
+ * ones no value ever reaches, stays inside the supported subset below.  A
+ * keyword this validator does not implement therefore fails at load time
+ * instead of silently constraining nothing.
+ */
+export function readSchema(path) {
+  const schema = readJson(path);
+  assertSchemaSubset(schema, basename(path));
+  return schema;
+}
+
 export function validateManifest(options) {
   const manifest = readJson(options.manifest);
-  const schema = readJson(manifestSchemaPath);
+  const schema = readSchema(manifestSchemaPath);
   assertSchema(schema, manifest, "$", schema);
   assertManifestSemantics(manifest, options.root);
   return manifest;
 }
 
+/**
+ * Version of the JSON Schema subset `assertSchema` implements.  The subset is
+ * declared, not inferred: `assertSchemaSubset` rejects every keyword outside
+ * it, so a schema can never appear to constrain more than this validator
+ * checks.  Raise the version when the evaluated keyword set changes.
+ */
+export const SCHEMA_SUBSET_VERSION = 1;
+
+/** Keywords `assertSchema` evaluates. */
+const EVALUATED_KEYWORDS = new Set([
+  "$ref",
+  "additionalProperties",
+  "anyOf",
+  "canonicalUnicodeScalar",
+  "const",
+  "enum",
+  "items",
+  "maxCanonicalBytes",
+  "maxItems",
+  "maxLength",
+  "maxUtf8Bytes",
+  "maximum",
+  "minItems",
+  "minLength",
+  "pattern",
+  "properties",
+  "required",
+  "type",
+  "uniqueItems",
+]);
+
+/** Keywords that carry documentation or definitions, never a constraint. */
+const ANNOTATION_KEYWORDS = new Set([
+  "$comment",
+  "$defs",
+  "$id",
+  "$schema",
+  "description",
+  "title",
+]);
+
+/** Types the evaluator can decide; `integer` is deliberately not one. */
+const SUPPORTED_TYPES = new Set([
+  "array",
+  "boolean",
+  "null",
+  "number",
+  "object",
+  "string",
+]);
+
+/** Keywords whose branch the evaluator takes instead of its siblings. */
+const BRANCH_KEYWORDS = new Set(["$ref", "anyOf"]);
+
+const BOUND_KEYWORDS = new Set([
+  "maxCanonicalBytes",
+  "maxItems",
+  "maxLength",
+  "maxUtf8Bytes",
+  "minItems",
+  "minLength",
+]);
+
+const FLAG_KEYWORDS = new Set(["canonicalUnicodeScalar", "uniqueItems"]);
+
+/**
+ * Refuses a schema node, and everything below it, unless it stays inside the
+ * supported subset.  Unknown keywords, unevaluated forms of a supported
+ * keyword, and siblings the evaluator would skip past are all rejected.
+ */
+export function assertSchemaSubset(schema, at = "$") {
+  if (schema === null || typeof schema !== "object" || Array.isArray(schema))
+    throw new Error(`${at}: schema node must be an object`);
+  const keywords = Object.keys(schema).filter(
+    (keyword) => !ANNOTATION_KEYWORDS.has(keyword),
+  );
+  for (const keyword of keywords) {
+    if (!EVALUATED_KEYWORDS.has(keyword))
+      throw new Error(
+        `${at}: unsupported schema keyword ${keyword} (subset v${SCHEMA_SUBSET_VERSION})`,
+      );
+    const value = schema[keyword];
+    if (
+      BOUND_KEYWORDS.has(keyword) &&
+      !(Number.isSafeInteger(value) && value >= 0)
+    )
+      throw new Error(`${at}: ${keyword} must be a non-negative integer`);
+    if (FLAG_KEYWORDS.has(keyword) && typeof value !== "boolean")
+      throw new Error(`${at}: ${keyword} must be a boolean`);
+  }
+  const branch = keywords.find((keyword) => BRANCH_KEYWORDS.has(keyword));
+  if (branch !== undefined && keywords.length > 1)
+    throw new Error(
+      `${at}: ${branch} is evaluated alone and cannot carry sibling keywords`,
+    );
+  if (Object.hasOwn(schema, "$ref") && !String(schema.$ref).startsWith("#/"))
+    throw new Error(`${at}: unsupported schema reference ${schema.$ref}`);
+  if (Object.hasOwn(schema, "type") && !SUPPORTED_TYPES.has(schema.type))
+    throw new Error(`${at}: unsupported schema type ${schema.type}`);
+  if (Object.hasOwn(schema, "maximum") && !Number.isFinite(schema.maximum))
+    throw new Error(`${at}: maximum must be a finite number`);
+  if (
+    Object.hasOwn(schema, "enum") &&
+    (!Array.isArray(schema.enum) || schema.enum.length === 0)
+  )
+    throw new Error(`${at}: enum must be a non-empty array`);
+  if (
+    Object.hasOwn(schema, "required") &&
+    (!Array.isArray(schema.required) ||
+      schema.required.some((key) => typeof key !== "string"))
+  )
+    throw new Error(`${at}: required must be an array of property names`);
+  if (Object.hasOwn(schema, "pattern")) {
+    if (typeof schema.pattern !== "string")
+      throw new Error(`${at}: pattern must be a string`);
+    new RegExp(schema.pattern, "u");
+  }
+  if (
+    Object.hasOwn(schema, "additionalProperties") &&
+    schema.additionalProperties !== false
+  )
+    throw new Error(`${at}: additionalProperties must be false`);
+  if (Object.hasOwn(schema, "properties")) {
+    const properties = schema.properties;
+    if (
+      properties === null ||
+      typeof properties !== "object" ||
+      Array.isArray(properties)
+    )
+      throw new Error(`${at}: properties must be an object`);
+    if (schema.additionalProperties !== false)
+      throw new Error(`${at}: properties require additionalProperties: false`);
+    for (const [key, child] of Object.entries(properties))
+      assertSchemaSubset(child, `${at}.${key}`);
+  }
+  if (Object.hasOwn(schema, "items"))
+    assertSchemaSubset(schema.items, `${at}[]`);
+  if (Object.hasOwn(schema, "anyOf")) {
+    if (!Array.isArray(schema.anyOf) || schema.anyOf.length === 0)
+      throw new Error(`${at}: anyOf must be a non-empty array`);
+    schema.anyOf.forEach((candidate, index) =>
+      assertSchemaSubset(candidate, `${at}|${index}`),
+    );
+  }
+  if (Object.hasOwn(schema, "$defs")) {
+    const defs = schema.$defs;
+    if (defs === null || typeof defs !== "object" || Array.isArray(defs))
+      throw new Error(`${at}: $defs must be an object`);
+    for (const [key, child] of Object.entries(defs))
+      assertSchemaSubset(child, `${at}.$defs.${key}`);
+  }
+}
+
 export function assertSchema(schema, value, at = "$", rootSchema = schema) {
+  if (schema === rootSchema) assertSchemaSubset(schema, at);
   if (schema.anyOf) {
     const accepted = schema.anyOf.some((candidate) => {
       try {
@@ -216,6 +382,7 @@ function isCanonicalUnicodeScalar(value) {
 function assertManifestSemantics(manifest, root) {
   const aliases = manifest.driveAliases.map(({ alias }) => alias);
   assertUnique(aliases, "drive alias");
+  assertDriveHomes(manifest.artifactHomes, aliases);
   const combinedVerificationCommands = [
     ...manifest.verification.fast,
     ...manifest.verification.integration,
@@ -236,6 +403,8 @@ function assertManifestSemantics(manifest, root) {
       throw new Error(`unknown destination alias: ${target.destinationAlias}`);
     }
     assertRelativePath(target.destinationSubpath, "destination subpath");
+    assertContainedSubpath(target.destinationSubpath, "destination subpath");
+    assertCanonicalSourcePattern(target.sourcePattern, root, "source pattern");
   }
   const localPaths = [
     ...manifest.artifactHomes.agentInstructions,
@@ -279,6 +448,86 @@ export function assertRelativePath(path, label = "path") {
     path.split("/").includes("..")
   ) {
     throw new Error(`${label} must be a canonical relative path: ${path}`);
+  }
+}
+
+/** A canonical contained subpath: no escape, no glob, no empty segment. */
+const CANONICAL_SUBPATH =
+  /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/u;
+
+/** A bounded single-directory glob; `**` and dot segments stay refused. */
+const CANONICAL_SOURCE_PATTERN =
+  /^(?!.*(?:^|\/)\.\.?(?:\/|$))(?!.*\/\/)(?!.*\\)(?!.*\*\*)[A-Za-z0-9][A-Za-z0-9._*?-]*(?:\/[A-Za-z0-9][A-Za-z0-9._*?-]*)*$/u;
+
+/** An artifact home on a drive: `<declared alias>:<canonical subpath>`. */
+const DRIVE_HOME = /^([a-z][a-z0-9-]{0,62}):([^:]*)$/u;
+
+/** The engine's materialisation path bound; these patterns are ASCII only. */
+const MATERIALISATION_PATH_BYTES = 192;
+
+export function assertContainedSubpath(subpath, label = "subpath") {
+  if (
+    typeof subpath !== "string" ||
+    subpath.length > MATERIALISATION_PATH_BYTES ||
+    !CANONICAL_SUBPATH.test(subpath)
+  ) {
+    throw new Error(
+      `${label} must be a canonical contained subpath: ${subpath}`,
+    );
+  }
+}
+
+export function assertCanonicalSourcePattern(pattern, root, label = "pattern") {
+  if (
+    typeof pattern !== "string" ||
+    pattern.length > MATERIALISATION_PATH_BYTES ||
+    !CANONICAL_SOURCE_PATTERN.test(pattern)
+  ) {
+    throw new Error(`${label} must be a canonical bounded glob: ${pattern}`);
+  }
+  containedPath(root, pattern);
+}
+
+/**
+ * Splits `<alias>:<subpath>`, refusing an undeclared alias and any subpath
+ * that is not contained under that alias root.
+ */
+export function assertDriveHome(value, aliases, label = "drive home") {
+  const match =
+    typeof value === "string" && value.length <= MATERIALISATION_PATH_BYTES
+      ? DRIVE_HOME.exec(value)
+      : null;
+  if (match === null) {
+    throw new Error(`${label} must be <alias>:<subpath>: ${value}`);
+  }
+  const [, alias, subpath] = match;
+  if (!aliases.includes(alias)) {
+    throw new Error(`${label} names an undeclared drive alias: ${alias}`);
+  }
+  assertContainedSubpath(subpath, `${label} subpath`);
+  return { alias, subpath };
+}
+
+function assertDriveHomes(artifactHomes, aliases) {
+  const incoming = assertDriveHome(
+    artifactHomes.driveIncoming,
+    aliases,
+    "driveIncoming",
+  );
+  const rendered = assertDriveHome(
+    artifactHomes.driveRendered,
+    aliases,
+    "driveRendered",
+  );
+  if (
+    incoming.alias === rendered.alias &&
+    (incoming.subpath === rendered.subpath ||
+      incoming.subpath.startsWith(`${rendered.subpath}/`) ||
+      rendered.subpath.startsWith(`${incoming.subpath}/`))
+  ) {
+    throw new Error(
+      "driveIncoming and driveRendered must not overlap on one alias",
+    );
   }
 }
 
@@ -433,7 +682,7 @@ export function checkFrontmatter({ manifest, options }) {
     options.root,
     manifest.frontmatterSchemaPath,
   );
-  const schema = readJson(schemaPath);
+  const schema = readSchema(schemaPath);
   for (const file of knowledgePages(options.root, manifest)) {
     const { data } = parseFrontmatter(file.path);
     assertSchema(schema, data, file.relative, schema);
@@ -798,7 +1047,7 @@ export function checkProvenance({ manifest, options }) {
   if (unexpected)
     throw new Error(`${unexpected.relative}: unexpected provenance file type`);
   const files = eventFiles.filter(({ relative: path }) => path.endsWith(".md"));
-  const schema = readJson(provenanceRecordSchemaPath);
+  const schema = readSchema(provenanceRecordSchemaPath);
   const ids = new Set();
   const records = [];
   for (const file of files) {

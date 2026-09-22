@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
 
@@ -39,14 +39,35 @@ const CHECKS = resolve(
   import.meta.dirname,
   "../../skills/single-controller-knowledge/references/manifest",
 );
+/** The frozen knowledge example: the templates must keep accepting it. */
+const EXAMPLE_MANIFEST = resolve(
+  import.meta.dirname,
+  "../../examples/knowledge-repository/knowledge-manifest.json",
+);
 
 type KnowledgeChecks = Readonly<{
+  SCHEMA_SUBSET_VERSION: number;
+  assertCanonicalSourcePattern(
+    pattern: unknown,
+    root: string,
+    label: string,
+  ): void;
+  assertDriveHome(
+    value: unknown,
+    aliases: readonly string[],
+    label: string,
+  ): Readonly<{ alias: string; subpath: string }>;
   assertSchema(
     schema: unknown,
     value: unknown,
-    at: string,
-    rootSchema: unknown,
+    at?: string,
+    rootSchema?: unknown,
   ): void;
+  assertSchemaSubset(schema: unknown, at?: string): void;
+  readSchema(path: string): unknown;
+  validateManifest(
+    options: Readonly<{ manifest: string; root: string }>,
+  ): unknown;
   parseFrontmatter(path: string): Readonly<{
     data: Record<string, unknown>;
     body: string;
@@ -398,6 +419,236 @@ test("provenance projection is pure, byte-stable, and validates against the reco
     "codex",
   );
   assert.equal(longDriver.ok, false);
+});
+
+test("the knowledge schema validator enforces its versioned keyword subset", async () => {
+  const checks = await knowledgeChecks();
+  assert.equal(checks.SCHEMA_SUBSET_VERSION, 1);
+  for (const name of [
+    "knowledge-manifest.schema.json",
+    "provenance-record.schema.json",
+  ])
+    assert.equal(typeof checks.readSchema(join(CHECKS, name)), "object");
+  const refused: readonly [string, unknown, RegExp][] = [
+    ["format", { type: "string", format: "uri" }, /keyword format/u],
+    ["oneOf", { oneOf: [{ type: "string" }] }, /keyword oneOf/u],
+    ["allOf", { allOf: [{ type: "string" }] }, /keyword allOf/u],
+    ["not", { not: { type: "string" } }, /keyword not/u],
+    [
+      "patternProperties",
+      { type: "object", patternProperties: {} },
+      /keyword patternProperties/u,
+    ],
+    [
+      "keyword below an absent property",
+      {
+        type: "object",
+        additionalProperties: false,
+        properties: { page: { type: "string", format: "uri" } },
+      },
+      /\$\.page: unsupported schema keyword format/u,
+    ],
+    [
+      "keyword below an unreferenced definition",
+      { type: "string", $defs: { spare: { type: "string", format: "uri" } } },
+      /\$\.\$defs\.spare: unsupported schema keyword format/u,
+    ],
+    [
+      "tuple items",
+      { type: "array", items: [{ type: "string" }] },
+      /schema node must be an object/u,
+    ],
+    ["integer type", { type: "integer" }, /unsupported schema type integer/u],
+    ["type union", { type: ["string", "null"] }, /unsupported schema type/u],
+    [
+      "unconstrained object",
+      { type: "object", properties: { page: { type: "string" } } },
+      /properties require additionalProperties: false/u,
+    ],
+    [
+      "permissive additionalProperties",
+      { type: "object", additionalProperties: true },
+      /additionalProperties must be false/u,
+    ],
+    [
+      "remote reference",
+      { $ref: "https://example.invalid/schema.json" },
+      /unsupported schema reference/u,
+    ],
+    [
+      "reference with siblings",
+      { $ref: "#/$defs/hash", minLength: 1 },
+      /\$ref is evaluated alone/u,
+    ],
+    [
+      "branch with siblings",
+      { anyOf: [{ type: "string" }], maxLength: 4 },
+      /anyOf is evaluated alone/u,
+    ],
+    [
+      "negative bound",
+      { type: "string", maxLength: -1 },
+      /maxLength must be a non-negative integer/u,
+    ],
+    [
+      "non-boolean flag",
+      { type: "array", uniqueItems: "yes" },
+      /uniqueItems must be a boolean/u,
+    ],
+    ["empty enum", { enum: [] }, /enum must be a non-empty array/u],
+    [
+      "unusable pattern",
+      { type: "string", pattern: "[" },
+      /Invalid regular expression/u,
+    ],
+  ];
+  for (const [label, schema, expected] of refused)
+    assert.throws(() => checks.assertSchemaSubset(schema), expected, label);
+  // The same refusal reaches every value: an unimplemented keyword can never
+  // validate anything, whether or not a value happens to visit its node.
+  assert.throws(
+    () => checks.assertSchema({ type: "string", format: "uri" }, "page"),
+    /unsupported schema keyword format/u,
+  );
+});
+
+test("knowledge manifest semantics contain every declared target and drive home", async () => {
+  const checks = await knowledgeChecks();
+  const aliases = ["partner-drive"];
+  assert.deepEqual(
+    checks.assertDriveHome("partner-drive:incoming", aliases, "driveIncoming"),
+    { alias: "partner-drive", subpath: "incoming" },
+  );
+  const refusedHomes: readonly [string, unknown, RegExp][] = [
+    ["unqualified", "incoming", /must be <alias>:<subpath>/u],
+    ["undeclared alias", "other-drive:incoming", /undeclared drive alias/u],
+    ["two aliases", "a:b:c", /must be <alias>:<subpath>/u],
+    ["absent", undefined, /must be <alias>:<subpath>/u],
+    ["empty subpath", "partner-drive:", /canonical contained subpath/u],
+    ["escape", "partner-drive:../escape", /canonical contained subpath/u],
+    ["dot segment", "partner-drive:./incoming", /canonical contained subpath/u],
+    ["absolute", "partner-drive:/incoming", /canonical contained subpath/u],
+    ["glob", "partner-drive:incoming/*", /canonical contained subpath/u],
+    [
+      "oversize",
+      `partner-drive:${"a".repeat(200)}`,
+      /must be <alias>:<subpath>/u,
+    ],
+  ];
+  for (const [label, value, expected] of refusedHomes)
+    assert.throws(
+      () => checks.assertDriveHome(value, aliases, "driveIncoming"),
+      expected,
+      label,
+    );
+  const root = "/knowledge-repository";
+  checks.assertCanonicalSourcePattern(
+    "knowledge/current/access-*.md",
+    root,
+    "source pattern",
+  );
+  const refusedPatterns: readonly [string, unknown][] = [
+    ["escape", "../outside/*.md"],
+    ["absolute", "/etc/*.md"],
+    ["recursive glob", "knowledge/**/page.md"],
+    ["dot segment", "knowledge/./page.md"],
+    ["empty segment", "knowledge//page.md"],
+    ["backslash", "knowledge\\page.md"],
+    ["glob-leading segment", "knowledge/*.md"],
+    ["trailing separator", "knowledge/current/"],
+    ["oversize", `knowledge/${"a".repeat(200)}.md`],
+    ["absent", undefined],
+  ];
+  for (const [label, pattern] of refusedPatterns)
+    assert.throws(
+      () =>
+        checks.assertCanonicalSourcePattern(pattern, root, "source pattern"),
+      /canonical bounded glob/u,
+      label,
+    );
+
+  const directory = await mkdtemp(join(tmpdir(), "sce-knowledge-manifest-"));
+  try {
+    const example = checks.readJson(EXAMPLE_MANIFEST) as Record<string, any>;
+    await mkdir(dirname(join(directory, example.frontmatterSchemaPath)), {
+      recursive: true,
+    });
+    await writeFile(
+      join(directory, example.frontmatterSchemaPath),
+      "{}\n",
+      "utf8",
+    );
+    const write = async (name: string, value: unknown): Promise<string> => {
+      const path = join(directory, `${name.replaceAll(" ", "-")}.json`);
+      await writeFile(path, `${JSON.stringify(value)}\n`, "utf8");
+      return path;
+    };
+    assert.equal(
+      typeof checks.validateManifest({
+        manifest: await write("accepted", example),
+        root: directory,
+      }),
+      "object",
+      "the frozen knowledge example stays accepted",
+    );
+    const homes = (overrides: Record<string, string>): unknown => ({
+      ...example,
+      artifactHomes: { ...example.artifactHomes, ...overrides },
+    });
+    const target = (overrides: Record<string, unknown>): unknown => ({
+      ...example,
+      materialisationTargets: [
+        { ...example.materialisationTargets[0], ...overrides },
+      ],
+    });
+    const refusedManifests: readonly [string, unknown, RegExp][] = [
+      [
+        "unqualified drive home",
+        homes({ driveIncoming: "incoming" }),
+        /driveIncoming: string does not match/u,
+      ],
+      [
+        "escaping drive home",
+        homes({ driveIncoming: "partner-drive:../escape" }),
+        /driveIncoming: string does not match/u,
+      ],
+      [
+        "undeclared drive alias",
+        homes({ driveIncoming: "other-drive:incoming" }),
+        /undeclared drive alias/u,
+      ],
+      [
+        "identical drive homes",
+        homes({ driveRendered: "partner-drive:incoming" }),
+        /must not overlap/u,
+      ],
+      [
+        "nested drive homes",
+        homes({ driveRendered: "partner-drive:incoming/rendered" }),
+        /must not overlap/u,
+      ],
+      [
+        "escaping source pattern",
+        target({ sourcePattern: "../outside/*.md" }),
+        /sourcePattern: string does not match/u,
+      ],
+      [
+        "undeclared destination alias",
+        target({ destinationAlias: "other-drive" }),
+        /unknown destination alias/u,
+      ],
+    ];
+    for (const [label, candidate, expected] of refusedManifests) {
+      const manifest = await write(label, candidate);
+      assert.throws(
+        () => checks.validateManifest({ manifest, root: directory }),
+        expected,
+        label,
+      );
+    }
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
 });
 
 test("provenance commit facts derive only from journaled values", () => {

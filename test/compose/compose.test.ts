@@ -29,6 +29,12 @@ import { parseCliArguments, runCli } from "../../src/cli.js";
 const TOP = realpathSync(process.cwd());
 const STORE = "11111111-2222-4333-8444-555555555555";
 const WORKTREE_ROOT = "/srv/sce-provenance";
+const DRIVE_ROOT = "/srv/example-drive";
+/** The manifest's declared mount variables, resolved as the host would. */
+const ENVIRONMENT: Readonly<Record<string, string | undefined>> = {
+  EX_DRIVE_ROOT: DRIVE_ROOT,
+  EX_PROVENANCE_ROOT: WORKTREE_ROOT,
+};
 
 function preflight(
   overrides: Partial<{
@@ -81,14 +87,22 @@ const manifest = {
   audience: "example-internal",
   mode: "git-first",
   humanDriver: "Example Driver",
-  driveAliases: [],
+  driveAliases: [
+    {
+      alias: "example-drive",
+      markerFile: ".sce-drive-root",
+      mountPolicy: "optional",
+      mountPathVariable: "EX_DRIVE_ROOT",
+      namespaceControl: "exclusive",
+    },
+  ],
   artifactHomes: {
     agentInstructions: ["AGENTS.md"],
     knowledge: "knowledge",
     events: "provenance",
     generated: "generated",
-    driveIncoming: "archive",
-    driveRendered: "outbox",
+    driveIncoming: "example-drive:incoming",
+    driveRendered: "example-drive:rendered",
     credentials: "external",
     derivedIndexes: "rebuildable",
   },
@@ -110,9 +124,35 @@ const manifest = {
     reproducibilityCommand: ["node", "scripts/check-generated.mjs"],
     worktreeRootVariable: "EX_PROVENANCE_ROOT",
   },
-  materialisationTargets: [],
+  materialisationTargets: [
+    {
+      sourcePattern: "knowledge/current/access-*.md",
+      destinationAlias: "example-drive",
+      destinationSubpath: "rendered/guidance",
+      namingPolicy: "source-basename",
+      sidecarRequired: true,
+    },
+  ],
   minimumVersions: { root: "0.1.0", playbook: "0.1.0", profile: "0.1.0" },
 };
+
+/** Replaces one manifest artifact home, leaving every other fact intact. */
+function withHomes(homes: Readonly<Record<string, string>>): unknown {
+  return {
+    ...manifest,
+    artifactHomes: { ...manifest.artifactHomes, ...homes },
+  };
+}
+
+/** Replaces the single declared gate target with one candidate definition. */
+function withTarget(target: Readonly<Record<string, unknown>>): unknown {
+  return {
+    ...manifest,
+    materialisationTargets: [
+      { ...manifest.materialisationTargets[0], ...target },
+    ],
+  };
+}
 
 function observation(
   overrides: Partial<RepositoryObservation> = {},
@@ -123,8 +163,7 @@ function observation(
     children: [],
     currentBranch: "main",
     doltExecutable: "/opt/bin/dolt",
-    environment: (name) =>
-      name === "EX_PROVENANCE_ROOT" ? WORKTREE_ROOT : undefined,
+    environment: (name) => ENVIRONMENT[name],
     manifest: undefined,
     manifestPath: undefined,
     preflight: preflight(),
@@ -251,8 +290,7 @@ test("a knowledge repository composes git-sync with the manifest contract and th
       composeEmbedded() {
         return async () => ({ status: "unavailable" }) as never;
       },
-      environment: (name) =>
-        name === "EX_PROVENANCE_ROOT" ? WORKTREE_ROOT : undefined,
+      environment: (name) => ENVIRONMENT[name],
     });
     assert.equal(typeof runner, "function");
     const withoutEnvironment = await createControllerConfigRunner(path, {
@@ -378,11 +416,14 @@ test("composition refuses every ambiguous or unsupported observation with a name
 test("manifest projection carries variable names, not resolved paths", () => {
   const projected = knowledgeContractFromManifest(manifest);
   assert.notEqual(projected, undefined);
-  assert.deepEqual(projected?.variables, ["EX_PROVENANCE_ROOT"]);
+  assert.deepEqual(projected?.variables, [
+    "EX_DRIVE_ROOT",
+    "EX_PROVENANCE_ROOT",
+  ]);
   const contract = projected?.contract as Record<string, any>;
   assert.equal(contract.projectId, "example");
   assert.equal(contract.audience, "example-internal");
-  assert.deepEqual(contract.gateTargets, []);
+  assert.deepEqual(contract.gateTargets, manifest.materialisationTargets);
   assert.equal(contract.provenanceWorktreeRoot, undefined);
   assert.equal(
     knowledgeContractFromManifest({ ...manifest, version: 2 }),
@@ -395,6 +436,66 @@ test("manifest projection carries variable names, not resolved paths", () => {
     }),
     undefined,
   );
+});
+
+test("manifest projection refuses uncontained targets and undeclared drive homes", () => {
+  const refused: readonly [string, unknown][] = [
+    [
+      "escaping source pattern",
+      withTarget({ sourcePattern: "../outside/*.md" }),
+    ],
+    ["absolute source pattern", withTarget({ sourcePattern: "/etc/*.md" })],
+    ["recursive source pattern", withTarget({ sourcePattern: "know/**/x.md" })],
+    [
+      "dot-segment source pattern",
+      withTarget({ sourcePattern: "know/./x.md" }),
+    ],
+    ["backslash source pattern", withTarget({ sourcePattern: "know\\x.md" })],
+    [
+      "empty-segment source pattern",
+      withTarget({ sourcePattern: "know//x.md" }),
+    ],
+    [
+      "oversize source pattern",
+      withTarget({ sourcePattern: `knowledge/${"a".repeat(200)}.md` }),
+    ],
+    ["undeclared destination alias", withTarget({ destinationAlias: "other" })],
+    [
+      "escaping destination subpath",
+      withTarget({ destinationSubpath: "../rendered" }),
+    ],
+    ["unqualified drive home", withHomes({ driveIncoming: "archive" })],
+    [
+      "undeclared drive alias",
+      withHomes({ driveIncoming: "other-drive:incoming" }),
+    ],
+    [
+      "escaping drive subpath",
+      withHomes({ driveIncoming: "example-drive:../escape" }),
+    ],
+    ["empty drive subpath", withHomes({ driveRendered: "example-drive:" })],
+    [
+      "identical drive homes",
+      withHomes({ driveRendered: "example-drive:incoming" }),
+    ],
+    [
+      "nested drive homes",
+      withHomes({ driveRendered: "example-drive:incoming/rendered" }),
+    ],
+    [
+      "duplicate drive alias",
+      {
+        ...manifest,
+        driveAliases: [...manifest.driveAliases, manifest.driveAliases[0]],
+      },
+    ],
+  ];
+  for (const [label, candidate] of refused)
+    assert.equal(knowledgeContractFromManifest(candidate), undefined, label);
+  const accepted = knowledgeContractFromManifest(
+    withHomes({ driveIncoming: "example-drive:incoming/queue" }),
+  );
+  assert.notEqual(accepted, undefined, "a distinct contained home is accepted");
 });
 
 test("slot documents classify as unbound, bound, foreign or unreadable", () => {

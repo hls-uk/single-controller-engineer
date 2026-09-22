@@ -70,6 +70,16 @@ const ZERO_HASH = "0".repeat(64);
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u;
 const HOLDER_PART = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 const ENVIRONMENT_NAME = /^[A-Z_][A-Z0-9_]{0,159}$/u;
+const DRIVE_ALIAS = /^[a-z][a-z0-9-]{0,62}$/u;
+/** An artifact home on a drive: `<declared alias>:<canonical subpath>`. */
+const DRIVE_HOME =
+  /^([a-z][a-z0-9-]{0,62}):([A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*)$/u;
+/** A canonical contained subpath: no escape, no glob, no empty segment. */
+const CANONICAL_SUBPATH =
+  /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/u;
+/** A bounded single-directory glob; `**` and dot segments stay refused. */
+const CANONICAL_SOURCE_PATTERN =
+  /^(?!.*(?:^|\/)\.\.?(?:\/|$))(?!.*\/\/)(?!.*\\)(?!.*\*\*)[A-Za-z0-9][A-Za-z0-9._*?-]*(?:\/[A-Za-z0-9][A-Za-z0-9._*?-]*)*$/u;
 const MAX_MANIFEST_BYTES = 256 * 1024;
 
 /**
@@ -322,6 +332,42 @@ export function harnessSupportFor(
   };
 }
 
+/** These expressions are ASCII, so a code unit is exactly one UTF-8 byte. */
+function bounded(value: unknown, expression: RegExp): string | undefined {
+  return typeof value === "string" &&
+    value.length <= LIMITS.materialisationPathBytes &&
+    expression.test(value)
+    ? value
+    : undefined;
+}
+
+/** Splits a drive home, refusing an alias this manifest never declared. */
+function driveHome(
+  value: unknown,
+  aliases: ReadonlySet<string>,
+): Readonly<{ alias: string; subpath: string }> | undefined {
+  const home = bounded(value, DRIVE_HOME);
+  if (home === undefined) return undefined;
+  const separator = home.indexOf(":");
+  const alias = home.slice(0, separator);
+  return aliases.has(alias)
+    ? { alias, subpath: home.slice(separator + 1) }
+    : undefined;
+}
+
+/** Two homes on one alias may not nest: the namespace is exclusive. */
+function overlapping(
+  left: Readonly<{ alias: string; subpath: string }>,
+  right: Readonly<{ alias: string; subpath: string }>,
+): boolean {
+  return (
+    left.alias === right.alias &&
+    (left.subpath === right.subpath ||
+      left.subpath.startsWith(`${right.subpath}/`) ||
+      right.subpath.startsWith(`${left.subpath}/`))
+  );
+}
+
 type ManifestContract = Readonly<{
   contract: Record<string, unknown>;
   variables: readonly string[];
@@ -330,7 +376,11 @@ type ManifestContract = Readonly<{
 /**
  * Projects the repository manifest onto the unresolved knowledge-contract
  * shape the configuration parser accepts.  Environment variable names are
- * carried as names; the parser resolves them at load time.
+ * carried as names; the parser resolves them at load time.  The projection is
+ * a containment gate as well as a shape gate: every materialisation source
+ * pattern is a canonical bounded glob inside the repository, every
+ * destination names a declared alias with a contained subpath, and the two
+ * drive homes name declared aliases whose subpaths never overlap.
  */
 export function knowledgeContractFromManifest(
   manifest: unknown,
@@ -353,14 +403,19 @@ export function knowledgeContractFromManifest(
     return undefined;
   const variables: string[] = [];
   const aliases: Record<string, unknown>[] = [];
+  const aliasNames = new Set<string>();
   for (const candidate of value.driveAliases) {
     const alias = record(candidate);
     if (
       alias === undefined ||
       typeof alias.mountPathVariable !== "string" ||
-      !ENVIRONMENT_NAME.test(alias.mountPathVariable)
+      !ENVIRONMENT_NAME.test(alias.mountPathVariable) ||
+      typeof alias.alias !== "string" ||
+      !DRIVE_ALIAS.test(alias.alias) ||
+      aliasNames.has(alias.alias)
     )
       return undefined;
+    aliasNames.add(alias.alias);
     variables.push(alias.mountPathVariable);
     aliases.push({
       alias: alias.alias,
@@ -369,6 +424,25 @@ export function knowledgeContractFromManifest(
       mountPolicy: alias.mountPolicy,
       namespaceControl: alias.namespaceControl,
     });
+  }
+  const incoming = driveHome(artifactHomes.driveIncoming, aliasNames);
+  const rendered = driveHome(artifactHomes.driveRendered, aliasNames);
+  if (
+    incoming === undefined ||
+    rendered === undefined ||
+    overlapping(incoming, rendered)
+  )
+    return undefined;
+  for (const candidate of value.materialisationTargets) {
+    const target = record(candidate);
+    if (
+      target === undefined ||
+      bounded(target.sourcePattern, CANONICAL_SOURCE_PATTERN) === undefined ||
+      typeof target.destinationAlias !== "string" ||
+      !aliasNames.has(target.destinationAlias) ||
+      bounded(target.destinationSubpath, CANONICAL_SUBPATH) === undefined
+    )
+      return undefined;
   }
   if (
     typeof provenance.worktreeRootVariable !== "string" ||

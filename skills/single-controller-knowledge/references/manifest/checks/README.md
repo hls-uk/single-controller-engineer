@@ -5,6 +5,30 @@ network access. Copy this directory, `knowledge-manifest.schema.json`, and
 `provenance-record.schema.json` together; each entrypoint resolves the schemas
 from their shared parent.
 
+## Supported JSON Schema subset (version 1)
+
+`lib.mjs` carries its own validator, so it declares exactly what it evaluates and
+rejects everything else. Loading a schema walks the whole document, including
+nodes no value ever reaches, and refuses any keyword outside the subset instead
+of ignoring it. Version 1 evaluates `$ref` (local `#/` pointers only), `anyOf`,
+`const`, `enum`, `type` (`array`, `boolean`, `null`, `number`, `object`, `string`),
+`minLength`, `maxLength`, `maxUtf8Bytes`, `canonicalUnicodeScalar`, `pattern`,
+`maximum`, `minItems`, `maxItems`, `maxCanonicalBytes`, `uniqueItems`, `items`
+(one schema, never a tuple), `required`, `properties`, and
+`additionalProperties`, which must be `false`. `$schema`, `$id`, `$comment`,
+`$defs`, `title`, and `description` are inert annotations. Everything else is a
+refusal: `format`, `oneOf`, `allOf`, `not`, `if`, `patternProperties`, the
+`integer` type, a type union, a tuple `items`, a `$ref` or `anyOf` node carrying
+sibling keywords the evaluator would skip, and a `properties` node without
+`additionalProperties: false`. Raise `SCHEMA_SUBSET_VERSION` when that set
+changes.
+
+Manifest semantics go beyond the schema. Every `materialisationTargets` source
+pattern must be a canonical bounded glob contained in the repository, and
+`driveIncoming` and `driveRendered` must each name a declared drive alias as
+`<alias>:<subpath>` with a contained subpath; the two never overlap on one
+alias.
+
 Run a check with `--root <repository>` and, when needed, `--manifest <path>`.
 The boundary check additionally accepts one `--changed-path <path>` for every
 candidate path. With no changed paths it validates only repository-wide
