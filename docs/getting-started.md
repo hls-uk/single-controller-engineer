@@ -167,6 +167,12 @@ the loop this repository uses on itself:
    rebases the unit branch in its own worktree and discards every binding to
    the old base. Once a unit has landed (or is cancelled, parked, failed, or
    timed out), `close-unit` releases its path reservation and closes it.
+5. Lanes never commit the vendored bundle
+   (`skills/single-controller-engineer/scripts/sce.mjs`): a candidate may
+   touch only its owned paths, and the fast tier builds into temporary
+   directories. After each landing that touches `src/`, the controller runs
+   `npm run build` and commits the rebuilt bundle on the integration branch;
+   the release tier proves the committed bundle is fresh before a tag.
 
 Authority is profiled, never assumed: a run records `local-change-only`,
 `push-branch`, `open-pr`, or `integrate` and stops at its completion

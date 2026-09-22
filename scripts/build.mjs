@@ -5,9 +5,11 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// An explicit first argument builds elsewhere (the reproducibility test uses
+// temporary directories so the fast tier never rewrites the tracked bundle).
 const output = resolve(
   repositoryRoot,
-  "skills/single-controller-engineer/scripts/sce.mjs",
+  process.argv[2] ?? "skills/single-controller-engineer/scripts/sce.mjs",
 );
 
 await mkdir(dirname(output), { recursive: true });

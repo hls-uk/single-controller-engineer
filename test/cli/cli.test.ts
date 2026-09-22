@@ -1345,21 +1345,22 @@ test("oversized runner output is replaced by a bounded sanitized envelope", asyn
 });
 test("vendored CLI bundle is reproducible and executable", async () => {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-  const build = () =>
-    spawnSync(process.execPath, ["scripts/build.mjs"], {
+  // sce-296.17: build into temporary directories. The fast tier must never
+  // rewrite the tracked bundle: a lane's candidate may only touch its owned
+  // paths, and the controller rebuilds the bundle after each landing.
+  const scratch = await mkdtemp(join(tmpdir(), "sce-bundle-"));
+  const build = (name: string) =>
+    spawnSync(process.execPath, ["scripts/build.mjs", join(scratch, name)], {
       cwd: root,
       encoding: "utf8",
     });
-  const output = resolve(
-    root,
-    "skills/single-controller-engineer/scripts/sce.mjs",
-  );
-  assert.equal(build().status, 0);
+  const output = join(scratch, "first.mjs");
+  assert.equal(build("first.mjs").status, 0);
   const first = await readFile(output);
   assert.equal(first.includes(Buffer.from(root)), false);
   assert.doesNotMatch(first.toString("utf8"), /^\/\/ (?:\.\.[/\\])+/mu);
-  assert.equal(build().status, 0);
-  assert.deepEqual(await readFile(output), first);
+  assert.equal(build("second.mjs").status, 0);
+  assert.deepEqual(await readFile(join(scratch, "second.mjs")), first);
   const execution = spawnSync(process.execPath, [output, "--version"], {
     encoding: "utf8",
   });
