@@ -122,8 +122,12 @@ export function isPinnedBdIssueRow(value: Record<string, unknown>): boolean {
     value,
     "started_at",
   );
+  // `bd close` sets the nullable `closed_at`; a unit's child row is its bead,
+  // and a landed unit's bead is closed before its reservation is released.
+  const hasClosedAt = Object.prototype.hasOwnProperty.call(value, "closed_at");
   // Dolt omits nullable `external_ref` from JSON rows when it is NULL. These
-  // two base forms (with/without it), plus optional `started_at`, are pinned.
+  // two base forms (with/without it), plus optional `started_at` and
+  // `closed_at`, are pinned.
   const hasExternalRef = Object.prototype.hasOwnProperty.call(
     value,
     "external_ref",
@@ -131,7 +135,11 @@ export function isPinnedBdIssueRow(value: Record<string, unknown>): boolean {
   const baseKeys = hasExternalRef
     ? PINNED_BD_ISSUE_BASE_KEYS
     : PINNED_BD_ISSUE_BASE_KEYS.filter((key) => key !== "external_ref");
-  const keys = hasStartedAt ? [...baseKeys, "started_at"] : baseKeys;
+  const keys = [
+    ...baseKeys,
+    ...(hasStartedAt ? ["started_at"] : []),
+    ...(hasClosedAt ? ["closed_at"] : []),
+  ];
   return (
     exactKeys(value, keys) &&
     typeof value.id === "string" &&
@@ -150,7 +158,8 @@ export function isPinnedBdIssueRow(value: Record<string, unknown>): boolean {
     ) &&
     sqlTimestamp(value.created_at) &&
     sqlTimestamp(value.updated_at) &&
-    (!hasStartedAt || sqlTimestamp(value.started_at))
+    (!hasStartedAt || sqlTimestamp(value.started_at)) &&
+    (!hasClosedAt || sqlTimestamp(value.closed_at))
   );
 }
 
