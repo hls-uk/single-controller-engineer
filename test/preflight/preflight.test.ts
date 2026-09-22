@@ -792,47 +792,105 @@ test("subprocess classifier is pure, stable, and cannot accept injected commands
   assert.equal(JSON.stringify(exceptionalCwd).includes("SECRET_CANARY"), false);
 });
 
-test("allowlisted subprocess execution enforces caps, timeout, and sanitized environment", async () => {
+/**
+ * Fake `bd` programs run under the real executor, so each budget is proven on
+ * its own: the cap cases leave the timeout nothing to fire on, and the timeout
+ * case leaves the cap nothing to trip on. A loaded machine can then only make
+ * a child slower, never change the outcome it is observed to have. Both
+ * budgets below are the widest the request contract admits.
+ */
+const unreachableTimeoutMs = 15_000;
+const unreachableOutputBytes = 65_536;
+
+const withFakeBd = async (
+  exercise: (
+    writeFakeBd: (program: string) => Promise<void>,
+    directory: string,
+  ) => Promise<void>,
+): Promise<void> => {
   const directory = await mkdtemp(join(tmpdir(), "sce-preflight-"));
   const executable = join(directory, "bd");
   const originalPath = process.env.PATH;
   const originalCanary = process.env.SECRET_CANARY;
-  const request = {
-    command: { executable: "bd" as const, argv: ["--version"] as const },
-    cwd: directory,
-    maxOutputBytes: 32,
-    timeoutMs: 1_000,
-  };
-  const writeFakeBd = async (body: string): Promise<void> => {
-    await writeFile(executable, `#!/usr/bin/env node\n${body}\n`, "utf8");
+  const writeFakeBd = async (program: string): Promise<void> => {
+    await writeFile(executable, `${program}\n`, "utf8");
     await chmod(executable, 0o700);
   };
   try {
     process.env.PATH = `${directory}${delimiter}${originalPath ?? ""}`;
     process.env.SECRET_CANARY = "SECRET_CANARY";
+    await exercise(writeFakeBd, directory);
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    if (originalCanary === undefined) delete process.env.SECRET_CANARY;
+    else process.env.SECRET_CANARY = originalCanary;
+    await rm(directory, { force: true, recursive: true });
+  }
+};
 
-    await writeFakeBd('process.stdout.write("x".repeat(1024));');
-    assert.deepEqual(await executeSanitizedInspection(request), {
-      command: "bd --version",
-      outcome: "output_limit",
-    });
+const inspectBd = (cwd: string, maxOutputBytes: number, timeoutMs: number) => ({
+  command: { executable: "bd", argv: ["--version"] },
+  cwd,
+  maxOutputBytes,
+  timeoutMs,
+});
 
-    await writeFakeBd('process.stderr.write("x".repeat(1024));');
-    assert.deepEqual(await executeSanitizedInspection(request), {
-      command: "bd --version",
-      outcome: "output_limit",
-    });
+test("allowlisted subprocess execution caps output on either stream", async () => {
+  await withFakeBd(async (writeFakeBd, directory) => {
+    const overflow = "x".repeat(1_024);
+    for (const producer of [
+      `#!/bin/sh\nprintf '%s' '${overflow}'`,
+      `#!/bin/sh\nprintf '%s' '${overflow}' >&2`,
+    ]) {
+      // A shell builtin writes far past the cap with no interpreter start-up
+      // between the spawn and the first chunk.
+      await writeFakeBd(producer);
+      // Control: under a cap it cannot reach, the same producer completes well
+      // inside the budget. The cap is therefore the only difference below, and
+      // start-up latency can never be observed as a timeout.
+      assert.deepEqual(
+        await executeSanitizedInspection(
+          inspectBd(directory, unreachableOutputBytes, unreachableTimeoutMs),
+        ),
+        { command: "bd --version", outcome: "ok", exitCode: 0 },
+      );
+      assert.deepEqual(
+        await executeSanitizedInspection(
+          inspectBd(directory, 32, unreachableTimeoutMs),
+        ),
+        { command: "bd --version", outcome: "output_limit" },
+      );
+    }
+  });
+});
 
-    await writeFakeBd("setInterval(() => undefined, 1_000);");
+test("allowlisted subprocess execution times out a silent child", async () => {
+  await withFakeBd(async (writeFakeBd, directory) => {
+    // Silent and non-exiting: no byte can reach the cap, so a slow start only
+    // delays the kill; the timeout stays the single reachable outcome.
+    await writeFakeBd(
+      "#!/usr/bin/env node\nsetInterval(() => undefined, 1_000);",
+    );
     assert.deepEqual(
-      await executeSanitizedInspection({ ...request, timeoutMs: 200 }),
+      await executeSanitizedInspection(
+        inspectBd(directory, unreachableOutputBytes, 200),
+      ),
       { command: "bd --version", outcome: "timeout" },
     );
+  });
+});
 
+test("allowlisted subprocess execution sanitizes the environment", async () => {
+  await withFakeBd(async (writeFakeBd, directory) => {
+    // `${SECRET_CANARY+set}` is non-empty whenever the variable exists at
+    // all, so even an empty-valued leak fails the run.
     await writeFakeBd(
-      "if (process.env.SECRET_CANARY !== undefined) process.exit(9);",
+      '#!/bin/sh\n[ -z "${SECRET_CANARY+set}" ] || exit 9\nexit 0',
     );
-    const sanitized = await executeSanitizedInspection(request);
+    const sanitized = await executeSanitizedInspection(
+      inspectBd(directory, unreachableOutputBytes, unreachableTimeoutMs),
+    );
     assert.deepEqual(sanitized, {
       command: "bd --version",
       outcome: "ok",
@@ -841,24 +899,17 @@ test("allowlisted subprocess execution enforces caps, timeout, and sanitized env
     assert.equal(JSON.stringify(sanitized).includes("SECRET_CANARY"), false);
 
     process.env.PATH = directory;
-    const unavailable = await executeSanitizedInspection({
-      ...request,
-      command: {
-        executable: "git" as const,
-        argv: ["rev-parse", "--show-toplevel"] as const,
-      },
-    });
-    assert.deepEqual(unavailable, {
-      command: "git rev-parse --show-toplevel",
-      outcome: "unavailable",
-    });
-  } finally {
-    if (originalPath === undefined) delete process.env.PATH;
-    else process.env.PATH = originalPath;
-    if (originalCanary === undefined) delete process.env.SECRET_CANARY;
-    else process.env.SECRET_CANARY = originalCanary;
-    await rm(directory, { force: true, recursive: true });
-  }
+    assert.deepEqual(
+      await executeSanitizedInspection({
+        ...inspectBd(directory, unreachableOutputBytes, unreachableTimeoutMs),
+        command: {
+          executable: "git",
+          argv: ["rev-parse", "--show-toplevel"],
+        },
+      }),
+      { command: "git rev-parse --show-toplevel", outcome: "unavailable" },
+    );
+  });
 });
 
 test("preflight envelopes and refusal codes contain no subprocess or secret payload", () => {
