@@ -15496,7 +15496,10 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
             (id) => id !== unit.id
           ),
           ...state.qualificationOwnerUnitId === unit.id ? { qualificationOwnerUnitId: null } : {},
-          units: { [unit.id]: { ...unit, refreshBaseOid: event.baseOid } }
+          units: {
+            ...state.units,
+            [unit.id]: { ...unit, refreshBaseOid: event.baseOid }
+          }
         }
       );
       break;

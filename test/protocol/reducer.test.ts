@@ -5611,9 +5611,11 @@ test("a wave plan that rewrites a unit's binding advances that unit's revision o
 });
 
 test("a base refresh returns a collected, qualified, or approved unit to collected on the new base and discards its bindings", () => {
-  const committed = completeCandidate();
+  // Two units: the sibling must survive the refresh untouched.
+  const committed = completeCandidate(run([unit("unit-1"), unit("unit-2")]));
   const unitId = "unit-1";
   assert.equal(committed.units[unitId]?.state, "candidate_committed");
+  assert.equal(committed.units["unit-2"]?.state, "planned");
   const same = reduce(
     committed,
     event(committed, "refresh_intent", { baseOid: OID_A }, unitId),
@@ -5624,6 +5626,7 @@ test("a base refresh returns a collected, qualified, or approved unit to collect
   });
   const pending = intended.units[unitId]!;
   assert.equal(pending.state, "refresh_intent");
+  assert.deepEqual(intended.units["unit-2"], committed.units["unit-2"]);
   assert.equal(pending.refreshBaseOid, OID_B);
   assert.equal(intended.qualificationQueue.includes(unitId), false);
   const entry = intended.effectJournal.find(
