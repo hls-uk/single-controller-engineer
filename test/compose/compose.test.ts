@@ -15,7 +15,11 @@ import {
 import { createControllerConfigRunner } from "../../src/controller-config.js";
 import { legalActions } from "../../src/protocol/actions.js";
 import { canonicalJson } from "../../src/protocol/canonical.js";
-import { reduce } from "../../src/protocol/reducer.js";
+import {
+  knowledgeContractAwaitsFirstWave,
+  reduce,
+} from "../../src/protocol/reducer.js";
+import { run } from "../protocol/fixtures.js";
 import type { RepositoryRun } from "../../src/protocol/schemas.js";
 import { deriveScopeCommitment } from "../../src/fencing/index.js";
 import type { PreflightEnvelope } from "../../src/preflight/index.js";
@@ -712,4 +716,17 @@ test("an invalid or dangling $.sce_task record refuses the composition", async (
   );
   assert.equal(unbased.ok, false);
   if (!unbased.ok) assert.equal(unbased.code, "SCE_COMPOSE_UNIT_INVALID");
+});
+
+test("a knowledge contract may accompany any run that has not planned its first wave", () => {
+  const pristine = {
+    ...run([]),
+    revision: 0,
+    state: "initializing" as const,
+    wave: { id: "w", unitIds: [] },
+  };
+  pristine.controller = { ...pristine.controller, state: "unacquired" };
+  assert.equal(knowledgeContractAwaitsFirstWave(pristine), true);
+  assert.equal(knowledgeContractAwaitsFirstWave(run([])), true);
+  assert.equal(knowledgeContractAwaitsFirstWave(run()), false);
 });

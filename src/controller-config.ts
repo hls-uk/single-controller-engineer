@@ -59,7 +59,7 @@ import {
 import { canonicalJson, type JsonValue } from "./protocol/canonical.js";
 import {
   canFreezeKnowledgeContractAtFirstWave,
-  isPristineUnacquiredRun,
+  knowledgeContractAwaitsFirstWave,
   knowledgeContractRuntimeValid,
   maximumMaterialisationSidecarBytes,
 } from "./protocol/reducer.js";
@@ -705,7 +705,7 @@ function parseControllerConfig(
       !(
         knowledgeContract !== undefined &&
         (canFreezeKnowledgeContractAtFirstWave(run) ||
-          isPristineUnacquiredRun(run))
+          knowledgeContractAwaitsFirstWave(run))
       )) ||
     (knowledgeContract !== undefined &&
       run.knowledgeContract !== undefined &&
