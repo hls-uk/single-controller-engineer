@@ -15580,6 +15580,10 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
         "repair_required",
         event,
         {
+          // The refresh discarded the candidate binding; the repair judgment
+          // must bind to the exact head that conflicted, so rebind it here.
+          candidateHead: event.headOid,
+          candidateTree: event.treeOid,
           repairContext: {
             baseOid: event.baseOid,
             headOid: event.headOid,

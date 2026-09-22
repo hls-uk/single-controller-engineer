@@ -5903,3 +5903,45 @@ test("an ambiguous candidate refresh marks its entry ambiguous and blocks the ru
     intended.units[unitId]!.revision + 1,
   );
 });
+
+// sce-296.19: a refused refresh routes to repair; the repair judgment binds to
+// the conflicted head, which the refresh intent had discarded from the unit.
+test("a refused refresh leaves a repairable unit bound to the conflicted head", () => {
+  const collected = completeCandidate(run([unit("unit-1")]));
+  const unitId = "unit-1";
+  const intended = stepUnit(collected, unitId, "refresh_intent", {
+    baseOid: OID_B,
+  });
+  const failed = observeUnit(
+    intended,
+    unitId,
+    "refresh_failed",
+    "candidate_refresh",
+    { baseOid: OID_A, headOid: OID_C, treeOid: OID_C },
+  );
+  const repairable = failed.units[unitId]!;
+  assert.equal(repairable.state, "repair_required");
+  assert.equal(repairable.candidateHead, OID_C);
+  assert.equal(repairable.candidateTree, OID_C);
+  assert.equal(repairable.repairContext?.headOid, OID_C);
+  const judgment = {
+    schemaVersion: 1,
+    role: "controller" as const,
+    kind: "repair_disposition" as const,
+    unitId,
+    sessionId: "incarnation-1",
+    requestedModel: "frontier",
+    returnedModel: "frontier-1",
+    aggregateRevision: failed.revision,
+    promptHash: "e".repeat(64),
+    responseHash: HASH,
+    rationale: "rebase onto the integration head and resolve the conflict",
+    factOid: OID_C,
+    decision: "repair" as const,
+    ...repairEvidence(failed),
+  };
+  const result = reduce(failed, event(failed, "repair_intent", { judgment }));
+  assert.equal(result.ok, true, result.ok ? "" : JSON.stringify(result));
+  if (!result.ok) return;
+  assert.equal(result.nextState.units[unitId]?.state, "repair_intent");
+});
