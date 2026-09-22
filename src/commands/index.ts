@@ -34,6 +34,7 @@ export const commandNames = [
   "configure-harness",
   "prepare-wave",
   "dispatch-request",
+  "repair-request",
   "record-dispatch",
   "collect-candidate",
   "refresh-candidate",
@@ -238,6 +239,7 @@ const UnavailableCommandSchema = strictObject({
     Type.Literal("configure-harness"),
     Type.Literal("prepare-wave"),
     Type.Literal("dispatch-request"),
+    Type.Literal("repair-request"),
     Type.Literal("record-dispatch"),
     Type.Literal("collect-candidate"),
     Type.Literal("refresh-candidate"),
@@ -458,6 +460,7 @@ const commandEvent: Readonly<
   "configure-harness": ["harness_configured"],
   "prepare-wave": ["reservation_intent", "branch_intent", "worktree_intent"],
   "dispatch-request": ["dispatch_intent"],
+  "repair-request": ["repair_intent"],
   "record-dispatch": [
     "dispatch_observed",
     "repair_observed",
