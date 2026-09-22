@@ -2923,3 +2923,43 @@ test("production command composition resumes an authoritative branch intent thro
     [`branch sce/unit-1 ${OID_A}`],
   );
 });
+
+test("reservations are journal-only effects: execute observes them and resume finds them absent", async () => {
+  const adapter = createProductionRecoveryEffectAdapter({
+    git: {
+      repository,
+      runner: async () => ({ exitCode: 1, signal: null, stdout: "" }),
+    },
+  });
+  const state = localRun();
+  for (const kind of ["reservation_acquire", "reservation_release"] as const) {
+    const effect = {
+      effectId: `effect-${kind}`,
+      idempotencyKey: `key-${kind}`,
+      kind,
+      params: {},
+      paramsHash: HASH,
+      schemaVersion: 1,
+      unitId: "unit-1",
+    } as unknown as ProtocolEffect;
+    assert.equal(adapter.canExecute?.(effect), true);
+    assert.equal(adapter.canReconcile?.(effect), true);
+    assert.deepEqual(await adapter.reconcile(effect, state), {
+      status: "absent",
+    });
+    const executed = await adapter.execute(effect, state);
+    assert.equal(executed.status, "observed");
+    if (executed.status !== "observed") return;
+    assert.equal(
+      executed.observation.type,
+      kind === "reservation_acquire"
+        ? "reservation_observed"
+        : "reservation_released",
+    );
+    assert.equal(executed.observation.unitId, "unit-1");
+    assert.equal(
+      "effectId" in executed.observation && executed.observation.effectId,
+      effect.effectId,
+    );
+  }
+});

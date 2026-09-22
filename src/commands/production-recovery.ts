@@ -397,6 +397,16 @@ function observed(
         } as ProtocolEvent,
         status: "observed",
       };
+    case "reservation_acquire":
+      return {
+        observation: { ...base, type: "reservation_observed" } as ProtocolEvent,
+        status: "observed",
+      };
+    case "reservation_release":
+      return {
+        observation: { ...base, type: "reservation_released" } as ProtocolEvent,
+        status: "observed",
+      };
     case "branch_create":
       return {
         observation: {
@@ -677,6 +687,18 @@ function remote(
  * recovery.  The Git adapter repeats its own live identity verification for
  * each operation; this binds that verified repository to the loaded run.
  */
+/**
+ * A reservation is durable run state, not an external act: the reducer
+ * records it in the aggregate and the checkpoint commits it. Executing one
+ * is exactly its observation, and an intended one on resume is simply absent.
+ */
+function isReservationEffect(effect: ProtocolEffect): boolean {
+  return (
+    effect.kind === "reservation_acquire" ||
+    effect.kind === "reservation_release"
+  );
+}
+
 function gitMatchesRun(repository: GitRepository, run: RepositoryRun): boolean {
   return (
     repository.identity === run.repositoryIdentity &&
@@ -912,6 +934,7 @@ export function createProductionRecoveryEffectAdapter(
         return ambiguous();
       }
     }
+    if (isReservationEffect(effect)) return { status: "absent" };
     if (harness?.canReconcile?.(effect))
       return await harness.reconcile(effect, run);
     if (effect.kind === "candidate_collect") {
@@ -1063,6 +1086,8 @@ export function createProductionRecoveryEffectAdapter(
         return ambiguous();
       }
     }
+    if (isReservationEffect(effect))
+      return observed(effect, run) ?? ambiguous();
     if (harness?.canExecute?.(effect))
       return await harness.execute(effect, run);
     if (effect.kind === "candidate_collect") {
@@ -1175,6 +1200,7 @@ export function createProductionRecoveryEffectAdapter(
 
   return {
     canExecute: (effect) =>
+      isReservationEffect(effect) ||
       effect.kind === "verify" ||
       effect.kind === "materialisation_resolve" ||
       effect.kind === "destination_probe" ||
@@ -1184,6 +1210,7 @@ export function createProductionRecoveryEffectAdapter(
         options.carry !== undefined) ||
       (harness?.canExecute?.(effect) ?? false),
     canReconcile: (effect) =>
+      isReservationEffect(effect) ||
       effect.kind === "verify" ||
       effect.kind === "materialisation_resolve" ||
       effect.kind === "destination_probe" ||

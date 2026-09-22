@@ -26015,6 +26015,16 @@ function observed(effect2, run2) {
         },
         status: "observed"
       };
+    case "reservation_acquire":
+      return {
+        observation: { ...base, type: "reservation_observed" },
+        status: "observed"
+      };
+    case "reservation_release":
+      return {
+        observation: { ...base, type: "reservation_released" },
+        status: "observed"
+      };
     case "branch_create":
       return {
         observation: {
@@ -26179,6 +26189,9 @@ function canPublish(effect2) {
 function remote(options) {
   return options.git.remote;
 }
+function isReservationEffect(effect2) {
+  return effect2.kind === "reservation_acquire" || effect2.kind === "reservation_release";
+}
 function gitMatchesRun(repository, run2) {
   return repository.identity === run2.repositoryIdentity && repository.objectFormat === run2.gitObjectFormat;
 }
@@ -26326,6 +26339,7 @@ function createProductionRecoveryEffectAdapter(options) {
         return ambiguous3();
       }
     }
+    if (isReservationEffect(effect2)) return { status: "absent" };
     if (harness?.canReconcile?.(effect2))
       return await harness.reconcile(effect2, run2);
     if (effect2.kind === "candidate_collect") {
@@ -26451,6 +26465,8 @@ function createProductionRecoveryEffectAdapter(options) {
         return ambiguous3();
       }
     }
+    if (isReservationEffect(effect2))
+      return observed(effect2, run2) ?? ambiguous3();
     if (harness?.canExecute?.(effect2))
       return await harness.execute(effect2, run2);
     if (effect2.kind === "candidate_collect") {
@@ -26542,8 +26558,8 @@ function createProductionRecoveryEffectAdapter(options) {
     }
   }
   return {
-    canExecute: (effect2) => effect2.kind === "verify" || effect2.kind === "materialisation_resolve" || effect2.kind === "destination_probe" || effect2.kind === "materialise" || effect2.kind === "provenance_commit" || effect2.kind === "provenance_carry_claim" && options.carry !== void 0 || (harness?.canExecute?.(effect2) ?? false),
-    canReconcile: (effect2) => effect2.kind === "verify" || effect2.kind === "materialisation_resolve" || effect2.kind === "destination_probe" || effect2.kind === "materialise" || effect2.kind === "provenance_commit" || effect2.kind === "provenance_carry_claim" && options.carry !== void 0 || (harness?.canReconcile?.(effect2) ?? false),
+    canExecute: (effect2) => isReservationEffect(effect2) || effect2.kind === "verify" || effect2.kind === "materialisation_resolve" || effect2.kind === "destination_probe" || effect2.kind === "materialise" || effect2.kind === "provenance_commit" || effect2.kind === "provenance_carry_claim" && options.carry !== void 0 || (harness?.canExecute?.(effect2) ?? false),
+    canReconcile: (effect2) => isReservationEffect(effect2) || effect2.kind === "verify" || effect2.kind === "materialisation_resolve" || effect2.kind === "destination_probe" || effect2.kind === "materialise" || effect2.kind === "provenance_commit" || effect2.kind === "provenance_carry_claim" && options.carry !== void 0 || (harness?.canReconcile?.(effect2) ?? false),
     acknowledge: async (acknowledgement, run2) => {
       const verified = acknowledgeVerificationTool(acknowledgement, run2);
       if (verified !== void 0) {
