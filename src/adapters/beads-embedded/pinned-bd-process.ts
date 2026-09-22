@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { closeSync, openSync, readSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute } from "node:path";
 
 import {
@@ -2160,6 +2161,9 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       const child = spawn(executable, argv, {
         cwd: this.cwd,
         env: {
+          // bd and ssh resolve `~`; without HOME bd writes its config into a
+          // literal `~/` under the working directory and dirties the tree.
+          HOME: homedir(),
           LANG: "C",
           LC_ALL: "C",
           PATH: `${dirname(this.bdExecutable)}:${dirname(this.doltExecutable)}:/usr/bin:/bin`,
@@ -2410,6 +2414,9 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       const child = spawn(executable, argv, {
         cwd,
         env: {
+          // bd and ssh resolve `~`; without HOME bd writes its config into a
+          // literal `~/` under the working directory and dirties the tree.
+          HOME: homedir(),
           LANG: "C",
           LC_ALL: "C",
           PATH: `${dirname(this.bdExecutable)}:${dirname(this.doltExecutable)}:/usr/bin:/bin`,

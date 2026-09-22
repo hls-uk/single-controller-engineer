@@ -27888,6 +27888,7 @@ function validateSlotTransitionIntent(input, prefix, scope, mode, expectedHolder
 import { spawn as spawn5 } from "node:child_process";
 import { createHash as createHash3 } from "node:crypto";
 import { closeSync as closeSync2, openSync as openSync2, readSync, realpathSync as realpathSync4, statSync as statSync3 } from "node:fs";
+import { homedir } from "node:os";
 import { basename as basename3, dirname as dirname4, isAbsolute as isAbsolute6 } from "node:path";
 
 // src/adapters/beads-embedded/dolt-diff-json.ts
@@ -29179,6 +29180,9 @@ var PinnedBdEmbeddedProcess = class {
       const child = spawn5(executable2, argv, {
         cwd: this.cwd,
         env: {
+          // bd and ssh resolve `~`; without HOME bd writes its config into a
+          // literal `~/` under the working directory and dirties the tree.
+          HOME: homedir(),
           LANG: "C",
           LC_ALL: "C",
           PATH: `${dirname4(this.bdExecutable)}:${dirname4(this.doltExecutable)}:/usr/bin:/bin`,
@@ -29345,6 +29349,9 @@ var PinnedBdEmbeddedProcess = class {
       const child = spawn5(executable2, argv, {
         cwd,
         env: {
+          // bd and ssh resolve `~`; without HOME bd writes its config into a
+          // literal `~/` under the working directory and dirties the tree.
+          HOME: homedir(),
           LANG: "C",
           LC_ALL: "C",
           PATH: `${dirname4(this.bdExecutable)}:${dirname4(this.doltExecutable)}:/usr/bin:/bin`,
