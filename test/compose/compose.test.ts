@@ -728,5 +728,7 @@ test("a knowledge contract may accompany any run that has not planned its first 
   pristine.controller = { ...pristine.controller, state: "unacquired" };
   assert.equal(knowledgeContractAwaitsFirstWave(pristine), true);
   assert.equal(knowledgeContractAwaitsFirstWave(run([])), true);
+  const plannedOnly = { ...run(), wave: { id: "w", unitIds: [] } };
+  assert.equal(knowledgeContractAwaitsFirstWave(plannedOnly), true);
   assert.equal(knowledgeContractAwaitsFirstWave(run()), false);
 });
