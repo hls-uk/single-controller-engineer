@@ -18012,7 +18012,9 @@ function reviewJudgmentError(unit, judgment, revision3) {
 }
 function validRepairJudgment(state, unit, judgment, revision3) {
   const context = unit.repairContext;
-  return context !== void 0 && judgment.role === "controller" && judgment.kind === "repair_disposition" && judgment.unitId === unit.id && judgment.aggregateRevision === revision3 && judgment.sessionId === state.controller.incarnationId && judgment.requestedModel === state.controller.requestedModel && judgment.returnedModel === state.controller.returnedModel && judgment.factOid === (context.headOid ?? context.baseOid) && judgment.currentEvidenceHash === context.responseHash && judgment.findingsContextHash === deriveRepairContextHash(context) && judgment.promptHash === deriveRepairJudgmentPromptHash(state, unit, judgment) && judgment.responseHash === deriveRepairJudgmentResponseHash(judgment) && (context.headOid === void 0 || context.headOid === unit.candidateHead) && judgment.decision === "repair";
+  return context !== void 0 && judgment.role === "controller" && judgment.kind === "repair_disposition" && judgment.unitId === unit.id && judgment.aggregateRevision === revision3 && judgment.sessionId === state.controller.incarnationId && judgment.requestedModel === state.controller.requestedModel && judgment.returnedModel === state.controller.returnedModel && judgment.factOid === (context.headOid ?? context.baseOid) && judgment.currentEvidenceHash === context.responseHash && judgment.findingsContextHash === deriveRepairContextHash(context) && judgment.promptHash === deriveRepairJudgmentPromptHash(state, unit, judgment) && judgment.responseHash === deriveRepairJudgmentResponseHash(judgment) && // A refresh conflict recorded before sce-296.19 left the unit without a
+  // candidate binding; the context head alone binds the disposition then.
+  (context.headOid === void 0 || unit.candidateHead === void 0 || context.headOid === unit.candidateHead) && judgment.decision === "repair";
 }
 function failureRepairContext(unit, responseHash, rationale) {
   if (unit.candidateHead === void 0 || unit.candidateTree === void 0)

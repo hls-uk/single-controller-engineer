@@ -8776,7 +8776,11 @@ function validRepairJudgment(
     judgment.promptHash ===
       deriveRepairJudgmentPromptHash(state, unit, judgment) &&
     judgment.responseHash === deriveRepairJudgmentResponseHash(judgment) &&
-    (context.headOid === undefined || context.headOid === unit.candidateHead) &&
+    // A refresh conflict recorded before sce-296.19 left the unit without a
+    // candidate binding; the context head alone binds the disposition then.
+    (context.headOid === undefined ||
+      unit.candidateHead === undefined ||
+      context.headOid === unit.candidateHead) &&
     judgment.decision === "repair"
   );
 }

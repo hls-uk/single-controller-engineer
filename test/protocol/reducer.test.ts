@@ -5945,3 +5945,58 @@ test("a refused refresh leaves a repairable unit bound to the conflicted head", 
   if (!result.ok) return;
   assert.equal(result.nextState.units[unitId]?.state, "repair_intent");
 });
+
+// A run persisted before sce-296.19 holds a refresh-conflict repair context
+// with no candidate binding on the unit; the context head alone binds it.
+test("a repair context without a candidate binding is still repairable", () => {
+  const repairable = run([
+    {
+      ...unit("unit-1", "repair_required"),
+      branchRef: "sce/unit-1",
+      worktreePath: "/tmp/unit-1",
+      repairContext: {
+        baseOid: OID_A,
+        headOid: OID_C,
+        treeOid: OID_C,
+        responseHash: HASH,
+        rationale: "candidate refresh conflicted with the integration head",
+        findings: [
+          {
+            id: "candidate-refresh-conflict",
+            severity: "blocking",
+            detail: "rebase conflicted",
+          },
+        ],
+      },
+    },
+  ]);
+  assert.equal(repairable.units["unit-1"]?.candidateHead, undefined);
+  const judgment = {
+    schemaVersion: 1,
+    role: "controller" as const,
+    kind: "repair_disposition" as const,
+    unitId: "unit-1",
+    sessionId: "incarnation-1",
+    requestedModel: "frontier",
+    returnedModel: "frontier-1",
+    aggregateRevision: repairable.revision,
+    promptHash: "e".repeat(64),
+    responseHash: HASH,
+    rationale: "rebase and resolve",
+    factOid: OID_C,
+    decision: "repair" as const,
+    ...repairEvidence(repairable),
+  };
+  const result = reduce(
+    repairable,
+    event(repairable, "repair_intent", { judgment }),
+  );
+  assert.equal(result.ok, true, result.ok ? "" : JSON.stringify(result));
+  const wrongHead = reduce(
+    repairable,
+    event(repairable, "repair_intent", {
+      judgment: { ...judgment, factOid: OID_B },
+    }),
+  );
+  assert.equal(wrongHead.ok, false);
+});
