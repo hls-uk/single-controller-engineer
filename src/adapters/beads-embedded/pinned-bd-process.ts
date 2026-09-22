@@ -31,6 +31,7 @@ import type {
   RemoteSlotTransitionProof,
   SlotTransitionIntent,
 } from "./schemas.js";
+import { parseDoltDiff } from "./dolt-diff-json.js";
 import { validateSlotTransitionIntent } from "./slot-transition.js";
 import {
   canonicalLocalBareRepository,
@@ -41,6 +42,21 @@ const MAX_OUTPUT_BYTES = 65_536;
 export const PINNED_BD_VERSION = "1.1.0";
 export const PINNED_DOLT_VERSION = "2.2.1";
 const PROCESS_TIMEOUT_MS = 15_000;
+/**
+ * Remote Dolt traffic (bd dolt push/pull, dolt fetch/push/pull) crosses the
+ * network; a git+ssh remote regularly needs more than the local budget. A
+ * child killed at either budget is a timeout, never a conflict.
+ */
+const NETWORK_TIMEOUT_MS = 120_000;
+function processTimeoutMs(argv: readonly string[]): number {
+  const [first, second] = argv;
+  const network =
+    (first === "dolt" && (second === "push" || second === "pull")) ||
+    first === "fetch" ||
+    first === "push" ||
+    first === "pull";
+  return network ? NETWORK_TIMEOUT_MS : PROCESS_TIMEOUT_MS;
+}
 const EXECUTABLE_SAMPLE_BYTES = 65_536;
 const MAX_CLONE_LINEAGE_EDGES = 64;
 
@@ -103,6 +119,8 @@ type Capture = Readonly<{
   code: number | null;
   exceeded: boolean;
   stdout: string;
+  /** The child was killed at its time budget; its exit code proves nothing. */
+  timedOut: boolean;
 }>;
 
 type Executable = Readonly<{
@@ -296,7 +314,7 @@ function sqlWorkingSet(source: string): "clean" | "pending" | undefined {
  * tolerated in the authoritative remote parent→effect proof.
  */
 export function isPinnedCloneMergeDelta(source: string): boolean {
-  const raw = json(source);
+  const raw = object(parseDoltDiff(source));
   if (
     raw === undefined ||
     Object.keys(raw).length !== 1 ||
@@ -619,7 +637,7 @@ export function isPinnedSlotTransitionDelta(
   prefix: string,
   intent: SlotTransitionIntent,
 ): boolean {
-  const raw = json(source);
+  const raw = object(parseDoltDiff(source));
   if (raw === undefined || !hasExactKeys(raw, ["tables"])) return false;
   const tables = raw.tables;
   if (!Array.isArray(tables) || tables.length !== 2) return false;
@@ -1180,7 +1198,7 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         if (!fastForward && !cloneLineage)
           return { kind: "pull", value: "conflict" };
         const capture = await this.run(["dolt", request.kind, "--json"]);
-        if (capture === undefined || capture.exceeded)
+        if (capture === undefined || capture.exceeded || capture.timedOut)
           return { kind: "pull", value: "unavailable" };
         const after = await this.doltHead(this.databaseDirectory);
         const afterRemote = await this.remoteHead(
@@ -1207,7 +1225,7 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       }
       case "push": {
         const capture = await this.run(["dolt", request.kind, "--json"]);
-        if (capture === undefined || capture.exceeded)
+        if (capture === undefined || capture.exceeded || capture.timedOut)
           return { kind: "push", value: "unavailable" };
         return {
           kind: "push",
@@ -2137,6 +2155,7 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       let stdout = "";
       let bytes = 0;
       let exceeded = false;
+      let timedOut = false;
       let settled = false;
       const child = spawn(executable, argv, {
         cwd: this.cwd,
@@ -2152,7 +2171,10 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         shell: false,
         stdio: ["ignore", "pipe", "ignore"],
       });
-      const timer = setTimeout(() => child.kill("SIGKILL"), PROCESS_TIMEOUT_MS);
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, processTimeoutMs(argv));
       child.stdout.on("data", (chunk: Buffer) => {
         bytes += chunk.byteLength;
         if (bytes > MAX_OUTPUT_BYTES) {
@@ -2171,7 +2193,7 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve({ code, exceeded, stdout });
+          resolve({ code, exceeded, stdout, timedOut });
         }
       });
     });
@@ -2383,6 +2405,7 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       let stdout = "";
       let bytes = 0;
       let exceeded = false;
+      let timedOut = false;
       let settled = false;
       const child = spawn(executable, argv, {
         cwd,
@@ -2398,7 +2421,10 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         shell: false,
         stdio: ["ignore", "pipe", "ignore"],
       });
-      const timer = setTimeout(() => child.kill("SIGKILL"), PROCESS_TIMEOUT_MS);
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, processTimeoutMs(argv));
       child.stdout.on("data", (chunk: Buffer) => {
         bytes += chunk.byteLength;
         if (bytes > MAX_OUTPUT_BYTES) {
@@ -2417,7 +2443,7 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve({ code, exceeded, stdout });
+          resolve({ code, exceeded, stdout, timedOut });
         }
       });
     });

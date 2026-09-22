@@ -647,12 +647,7 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       // after its controller lost or released the built-in slot. This check is
       // deliberately before `durableCheckpoint`, which otherwise can commit.
       const slot = await this.slot("check");
-      if (
-        slot === undefined ||
-        slot.status !== "acquired" ||
-        slot.actor !== this.holder ||
-        slot.holder !== this.holder
-      )
+      if (!this.slotAdmitsBatch(slot, batch))
         return { status: "holder_mismatch" };
       const durable = await this.durableCheckpoint(batch, baseline);
       if (durable.code !== "applied") return this.storeFailure(durable.code);
@@ -687,12 +682,7 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
         discovered.remoteHead === recovery.remoteHead
       ) {
         const slot = await this.slot("check");
-        if (
-          slot === undefined ||
-          slot.status !== "acquired" ||
-          slot.actor !== this.holder ||
-          slot.holder !== this.holder
-        )
+        if (!this.slotAdmitsBatch(slot, batch))
           return { status: "holder_mismatch" };
         const durable = await this.durableCheckpoint(batch, {
           head: discovered.baseHead,
@@ -717,12 +707,7 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     if (prepared.result.code !== "applied")
       return this.storeFailure(prepared.result.code);
     const slot = await this.slot("check");
-    if (
-      slot === undefined ||
-      slot.status !== "acquired" ||
-      slot.actor !== this.holder ||
-      slot.holder !== this.holder
-    )
+    if (!this.slotAdmitsBatch(slot, batch))
       return { status: "holder_mismatch" };
     const baseline = this.checkpointBaseline(prepared.state);
     if (baseline === undefined) return { status: "ambiguous" };
@@ -1139,6 +1124,39 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       same(batch.scope, this.scope) &&
       batch.holder === this.holder &&
       this.isPreOwnershipTransition(undefined, batch.next.root)
+    );
+  }
+
+  /**
+   * An ordinary controller write requires the built-in slot to be held by
+   * this holder. The run's final write is the one exception: the observation
+   * that its own release landed can only be persisted once the slot is
+   * available again, and no other post-ownership write exists.
+   */
+  private slotAdmitsBatch(
+    slot: MergeSlotObservation | undefined,
+    batch: MutationBatch,
+  ): boolean {
+    if (slot === undefined) return false;
+    if (this.isReleaseObservationBatch(batch))
+      return slot.status === "available" && slot.holder === undefined;
+    return (
+      slot.status === "acquired" &&
+      slot.actor === this.holder &&
+      slot.holder === this.holder
+    );
+  }
+
+  private isReleaseObservationBatch(batch: MutationBatch): boolean {
+    const run = batch.next.root.run;
+    const entry = run.effectJournal.at(-1);
+    return (
+      batch.holder === this.holder &&
+      run.controller.holder === this.holder &&
+      run.state === "released" &&
+      run.controller.state === "released" &&
+      entry?.kind === "controller_release" &&
+      entry.status === "observed"
     );
   }
 

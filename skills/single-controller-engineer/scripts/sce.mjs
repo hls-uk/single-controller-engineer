@@ -27443,10 +27443,42 @@ import { spawn as spawn5 } from "node:child_process";
 import { createHash as createHash3 } from "node:crypto";
 import { closeSync as closeSync2, openSync as openSync2, readSync, realpathSync as realpathSync4, statSync as statSync3 } from "node:fs";
 import { basename as basename3, dirname as dirname4, isAbsolute as isAbsolute6 } from "node:path";
+
+// src/adapters/beads-embedded/dolt-diff-json.ts
+var BASE64 = /^[A-Za-z0-9+/]*={0,2}$/u;
+function decodeBuffers(value) {
+  if (Array.isArray(value)) return value.map(decodeBuffers);
+  if (value === null || typeof value !== "object") return value;
+  const record4 = value;
+  const keys = Object.keys(record4).sort();
+  if ((keys.join(",") === "Buf" || keys.join(",") === "Addr,Buf") && typeof record4.Buf === "string" && BASE64.test(record4.Buf)) {
+    const decoded = Buffer.from(record4.Buf, "base64");
+    if (decoded.toString("base64") === record4.Buf)
+      return decoded.toString("utf8");
+  }
+  return Object.fromEntries(
+    keys.map((key) => [key, decodeBuffers(record4[key])])
+  );
+}
+function parseDoltDiff(source) {
+  try {
+    return decodeBuffers(JSON.parse(source));
+  } catch {
+    return void 0;
+  }
+}
+
+// src/adapters/beads-embedded/pinned-bd-process.ts
 var MAX_OUTPUT_BYTES = 65536;
 var PINNED_BD_VERSION = "1.1.0";
 var PINNED_DOLT_VERSION = "2.2.1";
 var PROCESS_TIMEOUT_MS = 15e3;
+var NETWORK_TIMEOUT_MS = 12e4;
+function processTimeoutMs(argv) {
+  const [first, second] = argv;
+  const network = first === "dolt" && (second === "push" || second === "pull") || first === "fetch" || first === "push" || first === "pull";
+  return network ? NETWORK_TIMEOUT_MS : PROCESS_TIMEOUT_MS;
+}
 var EXECUTABLE_SAMPLE_BYTES = 65536;
 var MAX_CLONE_LINEAGE_EDGES = 64;
 var SLOT_INITIALIZATION_AUTHORITY = "sce.embedded.slot.initialize.v1";
@@ -27533,7 +27565,7 @@ function sqlWorkingSet(source) {
   ) ? "pending" : void 0;
 }
 function isPinnedCloneMergeDelta(source) {
-  const raw = json2(source);
+  const raw = object2(parseDoltDiff(source));
   if (raw === void 0 || Object.keys(raw).length !== 1 || Object.keys(raw)[0] !== "tables")
     return false;
   const tables = raw?.tables;
@@ -27720,7 +27752,7 @@ function exactNextEventValue(value, issue, afterHolder) {
   return hasExactKeys(value, ["metadata", "status"]) && value.status === issue.status && typeof value.metadata === "string" && exactSlotMetadata(jsonObjectString(value.metadata), afterHolder);
 }
 function isPinnedSlotTransitionDelta(source, prefix, intent2) {
-  const raw = json2(source);
+  const raw = object2(parseDoltDiff(source));
   if (raw === void 0 || !hasExactKeys(raw, ["tables"])) return false;
   const tables = raw.tables;
   if (!Array.isArray(tables) || tables.length !== 2) return false;
@@ -28092,7 +28124,7 @@ var PinnedBdEmbeddedProcess = class {
         if (!fastForward && !cloneLineage)
           return { kind: "pull", value: "conflict" };
         const capture2 = await this.run(["dolt", request2.kind, "--json"]);
-        if (capture2 === void 0 || capture2.exceeded)
+        if (capture2 === void 0 || capture2.exceeded || capture2.timedOut)
           return { kind: "pull", value: "unavailable" };
         const after = await this.doltHead(this.databaseDirectory);
         const afterRemote = await this.remoteHead(
@@ -28111,7 +28143,7 @@ var PinnedBdEmbeddedProcess = class {
       }
       case "push": {
         const capture2 = await this.run(["dolt", request2.kind, "--json"]);
-        if (capture2 === void 0 || capture2.exceeded)
+        if (capture2 === void 0 || capture2.exceeded || capture2.timedOut)
           return { kind: "push", value: "unavailable" };
         return {
           kind: "push",
@@ -28696,6 +28728,7 @@ var PinnedBdEmbeddedProcess = class {
       let stdout = "";
       let bytes2 = 0;
       let exceeded = false;
+      let timedOut = false;
       let settled = false;
       const child = spawn5(executable2, argv, {
         cwd: this.cwd,
@@ -28710,7 +28743,10 @@ var PinnedBdEmbeddedProcess = class {
         shell: false,
         stdio: ["ignore", "pipe", "ignore"]
       });
-      const timer = setTimeout(() => child.kill("SIGKILL"), PROCESS_TIMEOUT_MS);
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, processTimeoutMs(argv));
       child.stdout.on("data", (chunk) => {
         bytes2 += chunk.byteLength;
         if (bytes2 > MAX_OUTPUT_BYTES) {
@@ -28729,7 +28765,7 @@ var PinnedBdEmbeddedProcess = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve11({ code, exceeded, stdout });
+          resolve11({ code, exceeded, stdout, timedOut });
         }
       });
     });
@@ -28858,6 +28894,7 @@ var PinnedBdEmbeddedProcess = class {
       let stdout = "";
       let bytes2 = 0;
       let exceeded = false;
+      let timedOut = false;
       let settled = false;
       const child = spawn5(executable2, argv, {
         cwd,
@@ -28872,7 +28909,10 @@ var PinnedBdEmbeddedProcess = class {
         shell: false,
         stdio: ["ignore", "pipe", "ignore"]
       });
-      const timer = setTimeout(() => child.kill("SIGKILL"), PROCESS_TIMEOUT_MS);
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, processTimeoutMs(argv));
       child.stdout.on("data", (chunk) => {
         bytes2 += chunk.byteLength;
         if (bytes2 > MAX_OUTPUT_BYTES) {
@@ -28891,7 +28931,7 @@ var PinnedBdEmbeddedProcess = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve11({ code, exceeded, stdout });
+          resolve11({ code, exceeded, stdout, timedOut });
         }
       });
     });
@@ -29181,12 +29221,8 @@ var DoltProjectionPersistence = class {
   }
   matchesCarryDelta(intent2, source) {
     if (!this.validCarryCheckpointIntent(intent2)) return false;
-    let parsed;
-    try {
-      parsed = JSON.parse(source);
-    } catch {
-      return false;
-    }
+    const parsed = parseDoltDiff(source);
+    if (parsed === void 0) return false;
     const tables = object3(parsed)?.tables;
     const table = Array.isArray(tables) ? object3(tables[0]) : void 0;
     const changes = table?.data_diff;
@@ -29304,12 +29340,8 @@ var DoltProjectionPersistence = class {
     const batch = validateMutationBatch(batchInput);
     if (!batch.ok) return false;
     const rows = this.rows(batch.value);
-    let parsed;
-    try {
-      parsed = JSON.parse(source);
-    } catch {
-      return false;
-    }
+    const parsed = parseDoltDiff(source);
+    if (parsed === void 0) return false;
     const root = object3(parsed);
     if (rows === void 0 || root === void 0 || Object.keys(root).length !== 1 || !Object.prototype.hasOwnProperty.call(root, "tables") || !Array.isArray(root.tables) || root.tables.length !== 1)
       return false;
@@ -29334,12 +29366,8 @@ var DoltProjectionPersistence = class {
   /** Complete root+initial-child delta proof used before initial commit/push. */
   matchesInitialDelta(input, source) {
     const rows = this.initialRows(input);
-    let parsed;
-    try {
-      parsed = JSON.parse(source);
-    } catch {
-      return false;
-    }
+    const parsed = parseDoltDiff(source);
+    if (parsed === void 0) return false;
     const table = object3(parsed)?.tables;
     const change = Array.isArray(table) && table.length === 1 ? object3(table[0])?.data_diff : void 0;
     if (rows === void 0 || !Array.isArray(table) || table.length !== 1 || object3(table[0])?.name !== "issues" || !Array.isArray(change) || change.length !== rows.length)
@@ -29988,7 +30016,7 @@ var EmbeddedBeadsAdapter = class {
       if (baseline2 === void 0 || !this.matchesCheckpointBaseline(discovered2, baseline2))
         return { status: "ambiguous" };
       const slot2 = await this.slot("check");
-      if (slot2 === void 0 || slot2.status !== "acquired" || slot2.actor !== this.holder || slot2.holder !== this.holder)
+      if (!this.slotAdmitsBatch(slot2, batch))
         return { status: "holder_mismatch" };
       const durable2 = await this.durableCheckpoint(batch, baseline2);
       if (durable2.code !== "applied") return this.storeFailure(durable2.code);
@@ -30006,7 +30034,7 @@ var EmbeddedBeadsAdapter = class {
       const discovered2 = await this.discover("before_push", batch);
       if (discovered2.status === "observed" && discovered2.head === recovery.head && discovered2.baseHead !== void 0 && discovered2.remoteHead === recovery.remoteHead) {
         const slot2 = await this.slot("check");
-        if (slot2 === void 0 || slot2.status !== "acquired" || slot2.actor !== this.holder || slot2.holder !== this.holder)
+        if (!this.slotAdmitsBatch(slot2, batch))
           return { status: "holder_mismatch" };
         const durable2 = await this.durableCheckpoint(batch, {
           head: discovered2.baseHead,
@@ -30027,7 +30055,7 @@ var EmbeddedBeadsAdapter = class {
     if (prepared.result.code !== "applied")
       return this.storeFailure(prepared.result.code);
     const slot = await this.slot("check");
-    if (slot === void 0 || slot.status !== "acquired" || slot.actor !== this.holder || slot.holder !== this.holder)
+    if (!this.slotAdmitsBatch(slot, batch))
       return { status: "holder_mismatch" };
     const baseline = this.checkpointBaseline(prepared.state);
     if (baseline === void 0) return { status: "ambiguous" };
@@ -30307,6 +30335,23 @@ var EmbeddedBeadsAdapter = class {
   }
   validPreOwnershipBatch(batch) {
     return this.usable && validateMutationBatch(batch).ok && same5(batch.scope, this.scope) && batch.holder === this.holder && this.isPreOwnershipTransition(void 0, batch.next.root);
+  }
+  /**
+   * An ordinary controller write requires the built-in slot to be held by
+   * this holder. The run's final write is the one exception: the observation
+   * that its own release landed can only be persisted once the slot is
+   * available again, and no other post-ownership write exists.
+   */
+  slotAdmitsBatch(slot, batch) {
+    if (slot === void 0) return false;
+    if (this.isReleaseObservationBatch(batch))
+      return slot.status === "available" && slot.holder === void 0;
+    return slot.status === "acquired" && slot.actor === this.holder && slot.holder === this.holder;
+  }
+  isReleaseObservationBatch(batch) {
+    const run2 = batch.next.root.run;
+    const entry = run2.effectJournal.at(-1);
+    return batch.holder === this.holder && run2.controller.holder === this.holder && run2.state === "released" && run2.controller.state === "released" && entry?.kind === "controller_release" && entry.status === "observed";
   }
   isPreOwnershipTransition(before, next) {
     const prior = before?.run;

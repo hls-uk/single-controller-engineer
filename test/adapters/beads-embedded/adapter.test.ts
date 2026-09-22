@@ -1812,3 +1812,112 @@ test("acquire executes on a head advanced only by the journalled intent commit",
     assert.equal(mutating(foreign), false);
   }
 });
+
+test("the store admits exactly one post-ownership write: the observed release of this holder", async () => {
+  // Build the run's final batch: release intended, then released and observed.
+  const base = fixtureRun([]);
+  const acquired = {
+    ...base,
+    controller: {
+      ...base.controller,
+      incarnationId: "incarnation-1",
+      holder,
+      runId: "run-1",
+      state: "acquired" as const,
+    },
+    integrationBranch: scope.integrationBranch,
+    repositoryIdentity: scope.gitRepositoryIdentity,
+    storeIdentity: scope.beadsStoreIdentity,
+    state: "active" as const,
+    units: {},
+    wave: { id: "wave-1", unitIds: [] },
+  };
+  const intent = reduce(acquired, {
+    eventId: "release-intent",
+    expectedRevision: acquired.revision,
+    idempotencyKey: deriveIdempotencyKey(
+      acquired,
+      acquired.revision,
+      null,
+      "controller_release",
+    ),
+    type: "controller_release_intent",
+  });
+  assert.equal(intent.ok, true, intent.ok ? "" : JSON.stringify(intent));
+  if (!intent.ok) throw new Error("unreachable");
+  const effect = intent.effects[0];
+  assert.ok(effect !== undefined);
+  const released = reduce(intent.nextState, {
+    eventId: "released",
+    expectedRevision: intent.nextState.revision,
+    effectId: effect.effectId,
+    effectKind: "controller_release",
+    observationHash: "e".repeat(64),
+    type: "controller_released",
+  });
+  assert.equal(released.ok, true, released.ok ? "" : JSON.stringify(released));
+  if (!released.ok) throw new Error("unreachable");
+  assert.equal(released.nextState.state, "released");
+  const before = makeRootProjection(intent.nextState);
+  const next = withBatchCheckpoint(makeRootProjection(released.nextState), []);
+  const batch = {
+    changedRows: [],
+    checkpoint: next.checkpoint,
+    expectedAggregateCommitment: before.aggregateCommitment,
+    expectedAggregateRevision: before.aggregateRevision,
+    expectedChildren: [],
+    expectedHolder: holder,
+    holder,
+    next: { children: [], root: next },
+    schema: "sce.fencing.batch" as const,
+    scope,
+    version: 1 as const,
+  };
+  const clean = {
+    autoCommit: "on" as const,
+    head: "b".repeat(40),
+    reachable: true,
+    workingSet: "clean" as const,
+  };
+  const admitted = new ScriptedPort([
+    { kind: "state", value: clean },
+    { kind: "state", value: clean },
+    { kind: "slot", value: slot("available") },
+    { kind: "mutation", value: "applied" },
+    { kind: "state", value: clean },
+    { kind: "state", value: clean },
+    { kind: "readback", value: batch.next },
+  ]);
+  const result = await adapter(admitted, "local-only").compareAndSet(batch);
+  assert.equal(result.status, "applied", JSON.stringify(admitted.requests));
+
+  // The same final write is refused while another holder holds the slot, and
+  // an ordinary write is still refused on an available slot.
+  const foreign = new ScriptedPort([
+    { kind: "state", value: clean },
+    { kind: "state", value: clean },
+    { kind: "slot", value: slot("acquired", "run-2/incarnation-1") },
+  ]);
+  assert.equal(
+    (await adapter(foreign, "local-only").compareAndSet(batch)).status,
+    "holder_mismatch",
+  );
+  assert.equal(
+    foreign.requests.some((request) => request.kind === "mutation"),
+    false,
+  );
+  const ordinary = new ScriptedPort([
+    { kind: "state", value: clean },
+    { kind: "state", value: clean },
+    { kind: "slot", value: slot("available") },
+  ]);
+  assert.equal(
+    (await adapter(ordinary, "local-only").compareAndSet(journalBatch()))
+      .status,
+    "holder_mismatch",
+  );
+  assert.equal(
+    ordinary.requests.some((request) => request.kind === "mutation"),
+    false,
+  );
+});

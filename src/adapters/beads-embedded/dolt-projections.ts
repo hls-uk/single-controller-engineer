@@ -13,6 +13,7 @@ import {
   validateMutationBatch,
   validateRootProjection,
 } from "../../fencing/index.js";
+import { parseDoltDiff } from "./dolt-diff-json.js";
 import { canonicalJson, type JsonValue } from "../../protocol/canonical.js";
 import {
   ProvenanceCarryClaimRecordSchema,
@@ -516,12 +517,8 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
     source: string,
   ): boolean {
     if (!this.validCarryCheckpointIntent(intent)) return false;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(source) as unknown;
-    } catch {
-      return false;
-    }
+    const parsed = parseDoltDiff(source);
+    if (parsed === undefined) return false;
     const tables = object(parsed)?.tables;
     const table = Array.isArray(tables) ? object(tables[0]) : undefined;
     const changes = table?.data_diff;
@@ -729,12 +726,8 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
     const batch = validateMutationBatch(batchInput);
     if (!batch.ok) return false;
     const rows = this.rows(batch.value);
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(source) as unknown;
-    } catch {
-      return false;
-    }
+    const parsed = parseDoltDiff(source);
+    if (parsed === undefined) return false;
     const root = object(parsed);
     if (
       rows === undefined ||
@@ -787,12 +780,8 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
     source: string,
   ): boolean {
     const rows = this.initialRows(input);
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(source) as unknown;
-    } catch {
-      return false;
-    }
+    const parsed = parseDoltDiff(source);
+    if (parsed === undefined) return false;
     const table = object(parsed)?.tables;
     const change =
       Array.isArray(table) && table.length === 1
