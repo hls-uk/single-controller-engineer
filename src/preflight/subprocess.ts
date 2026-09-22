@@ -40,6 +40,7 @@ type CapturedProcess = {
   readonly outputExceeded: boolean;
   readonly signal: NodeJS.Signals | null;
   readonly spawnFailed: boolean;
+  readonly stderrBytes: number;
   readonly stdout: string;
   readonly timedOut: boolean;
 };
@@ -203,11 +204,13 @@ async function executeCaptured(
       outputExceeded: false,
       signal: null,
       spawnFailed: true,
+      stderrBytes: 0,
       stdout: "",
       timedOut: false,
     };
   return new Promise((resolveCapture) => {
     let stdout = "";
+    let stderrBytes = 0;
     let outputBytes = 0;
     let outputExceeded = false;
     let timedOut = false;
@@ -227,6 +230,7 @@ async function executeCaptured(
         return;
       }
       if (stream === "stdout") stdout += chunk.toString("utf8");
+      else stderrBytes += chunk.byteLength;
     };
     child.stdout.on("data", (chunk: Buffer) => append("stdout", chunk));
     child.stderr.on("data", (chunk: Buffer) => append("stderr", chunk));
@@ -244,6 +248,7 @@ async function executeCaptured(
         outputExceeded,
         signal,
         spawnFailed,
+        stderrBytes,
         stdout,
         timedOut,
       });
@@ -374,6 +379,45 @@ export function parseGitRemoteConfigOutput(
     urls.push(url);
   }
   return urls;
+}
+
+const remoteUrlQuery: InspectionCommand = {
+  executable: "git",
+  argv: ["config", "--null", "--get-regexp", "^remote\\..*\\.url$"],
+};
+
+/** Proven remote urls, output this layer could not prove, or a refusal. */
+export type RemoteUrlsObservation =
+  | { readonly ok: true; readonly urls: readonly string[] | undefined }
+  | { readonly ok: false; readonly code: RefusalCode };
+
+/**
+ * `git config --get-regexp` exits 1 with no output at all when nothing
+ * matches, which is exactly how a repository with no configured remote
+ * answers this query, so that one silent shape observes an empty remote list.
+ * Any other non-zero exit, signal, timeout, output byte, or stderr byte stays
+ * a refusal, and matching output is still proved by the private parser.
+ */
+export async function observeGitRemoteUrls(
+  cwd: string,
+): Promise<RemoteUrlsObservation> {
+  const captured = await executeCaptured(request(cwd, remoteUrlQuery));
+  if (
+    captured.exitCode === 1 &&
+    captured.signal === null &&
+    !captured.outputExceeded &&
+    !captured.spawnFailed &&
+    !captured.timedOut &&
+    captured.stderrBytes === 0 &&
+    captured.stdout.length === 0
+  )
+    return { ok: true, urls: [] };
+  const code = subprocessRefusalCode(
+    classifySubprocess(remoteUrlQuery, captured),
+  );
+  return code === undefined
+    ? { ok: true, urls: parseGitRemoteConfigOutput(captured.stdout) }
+    : { ok: false, code };
 }
 
 function embeddedStoreProof(
@@ -567,10 +611,7 @@ export async function inspectPreflight(
   });
   const remoteOutput =
     options.providerId === undefined
-      ? await inspectionOutput(safeCwd, {
-          executable: "git",
-          argv: ["config", "--null", "--get-regexp", "^remote\\..*\\.url$"],
-        })
+      ? await observeGitRemoteUrls(safeCwd)
       : undefined;
   if (!topLevelOutput.ok)
     return preflightEnvelope(
@@ -629,7 +670,7 @@ export async function inspectPreflight(
     remoteOutput === undefined
       ? []
       : remoteOutput.ok
-        ? parseGitRemoteConfigOutput(remoteOutput.stdout)
+        ? remoteOutput.urls
         : undefined;
   if (remoteUrls === undefined)
     return preflightEnvelope(

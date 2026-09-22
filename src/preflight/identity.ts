@@ -396,9 +396,12 @@ export function deriveGitIdentity(
   if (inspection.value.providerId !== undefined) {
     if (containsSecretShape(inspection.value.providerId)) return { ok: false };
     identity = `provider:${inspection.value.providerId}`;
+  } else if (aliases.length === 0) {
+    // A repository with no configured remote is identified by its canonical
+    // common directory: the same local identity the Git adapter recomputes
+    // before every mutating effect.
+    identity = `local:${commonDir}`;
   } else {
-    if (aliases.length === 0 || aliases.some((alias) => alias === undefined))
-      return { ok: false };
     const distinct = new Set(aliases);
     if (distinct.size !== 1) return { ok: false };
     identity = [...distinct][0];

@@ -25,6 +25,7 @@ import {
   preflightEnvelope,
   subprocessRefusalCode,
 } from "../../src/preflight/index.js";
+import { observeGitRemoteUrls } from "../../src/preflight/subprocess.js";
 import {
   PreflightEnvelopeSchema,
   DoltObservationSchema,
@@ -593,6 +594,13 @@ test("Git identity normalizes every configured alias and refuses ambiguity or cr
     }).ok,
     true,
   );
+  const withoutRemotes = deriveGitIdentity({
+    ...gitInspection,
+    remoteUrls: [],
+  });
+  assert.equal(withoutRemotes.ok, true);
+  if (withoutRemotes.ok)
+    assert.equal(withoutRemotes.value.identity, "local:/workspace/repo/.git");
   assert.equal(
     normalizeGitRemote("https://github.com/%E0%A4%A.git"),
     undefined,
@@ -910,6 +918,58 @@ test("allowlisted subprocess execution sanitizes the environment", async () => {
       { command: "git rev-parse --show-toplevel", outcome: "unavailable" },
     );
   });
+});
+
+test("the remote-url query reads a silent no-match as an empty remote list", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sce-preflight-remotes-"));
+  const executable = join(directory, "git");
+  const originalPath = process.env.PATH;
+  const writeFakeGit = async (body: string): Promise<void> => {
+    await writeFile(executable, `#!/usr/bin/env node\n${body}\n`, "utf8");
+    await chmod(executable, 0o700);
+  };
+  try {
+    process.env.PATH = `${directory}${delimiter}${originalPath ?? ""}`;
+
+    // A repository with no configured remote: git exits 1 and says nothing.
+    await writeFakeGit("process.exit(1);");
+    assert.deepEqual(await observeGitRemoteUrls(directory), {
+      ok: true,
+      urls: [],
+    });
+
+    await writeFakeGit(
+      'process.stdout.write("remote.origin.url\\ngit@github.com:hls-uk/single-controller-engineer.git\\u0000");',
+    );
+    assert.deepEqual(await observeGitRemoteUrls(directory), {
+      ok: true,
+      urls: ["git@github.com:hls-uk/single-controller-engineer.git"],
+    });
+
+    // Every other terminal shape stays fail-closed.
+    for (const body of [
+      'process.stderr.write("fatal: not a git repository"); process.exit(1);',
+      'process.stdout.write("remote.origin.url"); process.exit(1);',
+      "process.exit(2);",
+    ]) {
+      await writeFakeGit(body);
+      assert.deepEqual(await observeGitRemoteUrls(directory), {
+        ok: false,
+        code: "PF_SUBPROCESS_EXIT",
+      });
+    }
+
+    // A zero exit still has to prove its own output.
+    await writeFakeGit('process.stdout.write("remote.origin.url");');
+    assert.deepEqual(await observeGitRemoteUrls(directory), {
+      ok: true,
+      urls: undefined,
+    });
+  } finally {
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    await rm(directory, { force: true, recursive: true });
+  }
 });
 
 test("preflight envelopes and refusal codes contain no subprocess or secret payload", () => {

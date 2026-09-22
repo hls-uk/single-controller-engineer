@@ -106,7 +106,10 @@ sce compose-config --harness claude --root-bead <epic-id> \
 - The Beads mode follows `bd config sync.remote`: a configured remote means
   `git-sync`, none means `local-only`. In `git-sync` mode the Dolt data must
   already be on the remote (`bd dolt push`), or the first acquire refuses the
-  store as ambiguous; the result's `doltSync` field says where you stand.
+  store as ambiguous; the result's `doltSync` field says where you stand. A
+  repository with no Git remote at all composes in `local-only` mode and is
+  identified by its canonical `.git` directory; only the `push-branch` and
+  `open-pr` authority profiles need a remote.
 - `--bind-slot` performs the one authorized bootstrap the engine's normal
   acquire path never does: it binds the fresh `<prefix>-merge-slot` bead to
   the run's scope (and pushes the Dolt data in `git-sync` mode). Without it
