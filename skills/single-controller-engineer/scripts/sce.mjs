@@ -18041,6 +18041,10 @@ function hasCurrentApproval(unit) {
 function insertSorted(values, value) {
   return values.includes(value) ? [...values] : [...values, value].sort();
 }
+function ownerFirst(queue, owner) {
+  const sorted = [...queue].sort();
+  return owner === void 0 || !sorted.includes(owner) ? sorted : [owner, ...sorted.filter((id) => id !== owner)];
+}
 function updateReservations(state, unitId, next, effectId) {
   return Object.fromEntries(
     Object.entries(state.reservations).map(([id, reservation]) => [
@@ -18179,6 +18183,14 @@ function commit(state, event, effects) {
   const compactedIdempotencyKeys = Math.max(0, idempotencyKeys.length - 256);
   const uncommittedState = {
     ...state,
+    qualificationQueue: ownerFirst(
+      state.qualificationQueue,
+      state.qualificationOwnerUnitId
+    ),
+    integrationQueue: ownerFirst(
+      state.integrationQueue,
+      state.integrationOwnerUnitId
+    ),
     revision: state.revision + 1,
     processedEventIds: eventIds.slice(-256),
     processedIdempotencyKeys: idempotencyKeys.slice(-256),
@@ -18248,8 +18260,11 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
   ])
     if (new Set(queue).size !== queue.length || queue.some((id) => state.units[id] === void 0))
       errors.push("queue contains duplicate or unknown unit");
-  for (const queue of [state.qualificationQueue, state.integrationQueue]) {
-    if (queue.join("\0") !== [...queue].sort().join("\0"))
+  for (const [queue, owner] of [
+    [state.qualificationQueue, state.qualificationOwnerUnitId],
+    [state.integrationQueue, state.integrationOwnerUnitId]
+  ]) {
+    if (queue.join("\0") !== ownerFirst(queue, owner).join("\0"))
       errors.push("queue order is not deterministic");
     if (queue.some((id) => !waveIds.has(id)))
       errors.push("queue contains a unit outside the current wave");
@@ -18834,9 +18849,14 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
       "park_intent",
       "cancel_intent"
     ].includes(unit.state)
-  ).map((unit) => unit.id).sort();
-  const expectedIntegrationQueue = Object.values(state.units).filter((unit) => integrationQueueStates.has(unit.state)).map((unit) => unit.id).sort();
-  if (state.qualificationQueue.join("\0") !== expectedQualificationQueue.join("\0"))
+  ).map((unit) => unit.id);
+  const expectedIntegrationQueue = ownerFirst(
+    Object.values(state.units).filter((unit) => integrationQueueStates.has(unit.state)).map((unit) => unit.id),
+    state.integrationOwnerUnitId
+  );
+  if (state.qualificationQueue.join("\0") !== ownerFirst(expectedQualificationQueue, state.qualificationOwnerUnitId).join(
+    "\0"
+  ))
     errors.push("qualification queue disagrees with unit state");
   if (state.integrationQueue.join("\0") !== expectedIntegrationQueue.join("\0"))
     errors.push("integration queue disagrees with unit state");

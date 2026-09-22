@@ -8824,6 +8824,20 @@ function hasCurrentApproval(unit: Unit): boolean {
 function insertSorted(values: readonly string[], value: string): string[] {
   return values.includes(value) ? [...values] : [...values, value].sort();
 }
+/**
+ * A deterministic queue is sorted, except that its current owner stays at
+ * the head: a newcomer whose id sorts first must wait behind the unit that
+ * already holds the queue's ownership (sce-296.20).
+ */
+function ownerFirst(
+  queue: readonly string[],
+  owner: string | undefined,
+): string[] {
+  const sorted = [...queue].sort();
+  return owner === undefined || !sorted.includes(owner)
+    ? sorted
+    : [owner, ...sorted.filter((id) => id !== owner)];
+}
 function updateReservations(
   state: RepositoryRun,
   unitId: string,
@@ -9171,6 +9185,14 @@ function commit(
   const compactedIdempotencyKeys = Math.max(0, idempotencyKeys.length - 256);
   const uncommittedState = {
     ...state,
+    qualificationQueue: ownerFirst(
+      state.qualificationQueue,
+      state.qualificationOwnerUnitId,
+    ),
+    integrationQueue: ownerFirst(
+      state.integrationQueue,
+      state.integrationOwnerUnitId,
+    ),
     revision: state.revision + 1,
     processedEventIds: eventIds.slice(-256),
     processedIdempotencyKeys: idempotencyKeys.slice(-256),
@@ -9263,8 +9285,11 @@ function runInvariantErrorsWithClosedEvidence(
       queue.some((id) => state.units[id] === undefined)
     )
       errors.push("queue contains duplicate or unknown unit");
-  for (const queue of [state.qualificationQueue, state.integrationQueue]) {
-    if (queue.join("\u0000") !== [...queue].sort().join("\u0000"))
+  for (const [queue, owner] of [
+    [state.qualificationQueue, state.qualificationOwnerUnitId],
+    [state.integrationQueue, state.integrationOwnerUnitId],
+  ] as const) {
+    if (queue.join("\u0000") !== ownerFirst(queue, owner).join("\u0000"))
       errors.push("queue order is not deterministic");
     if (queue.some((id) => !waveIds.has(id)))
       errors.push("queue contains a unit outside the current wave");
@@ -10160,15 +10185,18 @@ function runInvariantErrorsWithClosedEvidence(
             "cancel_intent",
           ].includes(unit.state)),
     )
-    .map((unit) => unit.id)
-    .sort();
-  const expectedIntegrationQueue = Object.values(state.units)
-    .filter((unit) => integrationQueueStates.has(unit.state))
-    .map((unit) => unit.id)
-    .sort();
+    .map((unit) => unit.id);
+  const expectedIntegrationQueue = ownerFirst(
+    Object.values(state.units)
+      .filter((unit) => integrationQueueStates.has(unit.state))
+      .map((unit) => unit.id),
+    state.integrationOwnerUnitId,
+  );
   if (
     state.qualificationQueue.join("\u0000") !==
-    expectedQualificationQueue.join("\u0000")
+    ownerFirst(expectedQualificationQueue, state.qualificationOwnerUnitId).join(
+      "\u0000",
+    )
   )
     errors.push("qualification queue disagrees with unit state");
   if (

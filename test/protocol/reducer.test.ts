@@ -6000,3 +6000,73 @@ test("a repair context without a candidate binding is still repairable", () => {
   );
   assert.equal(wrongHead.ok, false);
 });
+
+// sce-296.20: a newcomer whose id sorts first waits behind the unit that
+// already owns qualification; the owner stays at the head of the queue.
+test("a candidate observed while another unit owns qualification queues behind the owner", () => {
+  let state = completeCandidate(
+    run([unit("unit-b"), unit("unit-a")]),
+    "unit-b",
+  );
+  state = stepUnit(state, "unit-b", "verification_intent", {});
+  assert.equal(state.qualificationOwnerUnitId, "unit-b");
+  assert.deepEqual(state.qualificationQueue, ["unit-b"]);
+  const second = "unit-a";
+  state = stepUnit(state, second, "reservation_intent", {
+    idempotencyKey: "reserve-second",
+    reservations: [{ id: "res-second", namespace: "port", resource: "3002" }],
+  });
+  state = observeUnit(
+    state,
+    second,
+    "reservation_observed",
+    "reservation_acquire",
+  );
+  state = stepUnit(state, second, "branch_intent", {
+    idempotencyKey: "branch-second",
+    branchRef: "sce/unit-a",
+  });
+  state = observeUnit(state, second, "branch_observed", "branch_create", {
+    branchRef: "sce/unit-a",
+  });
+  state = stepUnit(state, second, "worktree_intent", {
+    idempotencyKey: "worktree-second",
+    worktreePath: "/tmp/unit-a",
+  });
+  state = observeUnit(state, second, "worktree_observed", "worktree_create", {
+    worktreePath: "/tmp/unit-a",
+  });
+  state = stepUnit(state, second, "dispatch_intent", {
+    idempotencyKey: "dispatch-second",
+  });
+  state = observeUnit(state, second, "dispatch_observed", "dispatch", {
+    sessionId: "worker-second",
+    requestedModel: "workhorse",
+    returnedModel: "workhorse-1",
+    promptHash: HASH,
+  });
+  state = stepUnit(state, second, "collect_intent", {
+    idempotencyKey: "collect-second",
+  });
+  state = observeUnit(state, second, "worker_collected", "worker_collect", {
+    workerResult: { status: "completed", summary: "done", residualRisks: [] },
+  });
+  state = stepUnit(state, second, "candidate_intent", {
+    idempotencyKey: "candidate-second",
+  });
+  state = observeUnit(
+    state,
+    second,
+    "candidate_observed",
+    "candidate_collect",
+    {
+      headOid: OID_B,
+      treeOid: OID_C,
+    },
+  );
+  assert.equal(state.units[second]?.state, "candidate_committed");
+  assert.deepEqual(state.qualificationQueue, ["unit-b", "unit-a"]);
+  assert.deepEqual(runInvariantErrors(state), []);
+  const early = reduce(state, event(state, "verification_intent", {}, second));
+  assert.equal(early.ok, false);
+});
