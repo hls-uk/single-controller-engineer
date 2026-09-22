@@ -270,6 +270,7 @@ const observationsForEffect: Readonly<Record<EffectKind, readonly string[]>> = {
   dispatch: ["dispatch_observed"],
   worker_collect: ["worker_collected"],
   candidate_collect: ["candidate_observed"],
+  candidate_refresh: ["refresh_observed", "refresh_failed"],
   verify: ["verification_observed", "verification_failed"],
   review_dispatch: ["reviewer_observed"],
   review_collect: ["review_collected"],
@@ -434,16 +435,25 @@ function lifecycleActions(
     case "collected":
       return [
         unitAction(unit, "candidate_intent", "emit", "candidate_collect"),
+        unitAction(unit, "refresh_intent", "emit", "candidate_refresh"),
+      ];
+    case "refresh_intent":
+      return [
+        unitAction(unit, "refresh_observed", "record", "candidate_refresh"),
+        unitAction(unit, "refresh_failed", "record", "candidate_refresh"),
       ];
     case "candidate_intent":
       return [
         unitAction(unit, "candidate_observed", "record", "candidate_collect"),
       ];
     case "candidate_committed":
-      return state.qualificationOwnerUnitId === undefined &&
+      return [
+        ...(state.qualificationOwnerUnitId === undefined &&
         state.qualificationQueue[0] === unit.id
-        ? [unitAction(unit, "verification_intent", "emit", "verify")]
-        : [];
+          ? [unitAction(unit, "verification_intent", "emit", "verify")]
+          : []),
+        unitAction(unit, "refresh_intent", "emit", "candidate_refresh"),
+      ];
     case "verification_intent":
       return state.qualificationOwnerUnitId === unit.id
         ? [
@@ -452,17 +462,20 @@ function lifecycleActions(
           ]
         : [];
     case "qualified":
-      return state.qualificationOwnerUnitId === unit.id &&
+      return [
+        ...(state.qualificationOwnerUnitId === unit.id &&
         state.currentReviewerUnitId === undefined
-        ? [
-            unitAction(
-              unit,
-              "reviewer_dispatch_intent",
-              "emit",
-              "review_dispatch",
-            ),
-          ]
-        : [];
+          ? [
+              unitAction(
+                unit,
+                "reviewer_dispatch_intent",
+                "emit",
+                "review_dispatch",
+              ),
+            ]
+          : []),
+        unitAction(unit, "refresh_intent", "emit", "candidate_refresh"),
+      ];
     case "reviewer_dispatch_intent":
       return state.currentReviewerUnitId === unit.id
         ? [unitAction(unit, "reviewer_observed", "record", "review_dispatch")]
@@ -476,12 +489,15 @@ function lifecycleActions(
         ? [unitAction(unit, "review_collected", "record", "review_collect")]
         : [];
     case "approved":
-      return isCurrentApproval(unit) &&
+      return [
+        ...(isCurrentApproval(unit) &&
         state.qualificationOwnerUnitId === unit.id
-        ? state.completionBoundary === "local-integration"
-          ? [unitAction(unit, "integrate_intent", "emit", "integrate")]
-          : [unitAction(unit, "publish_intent", "emit", "publish")]
-        : [];
+          ? state.completionBoundary === "local-integration"
+            ? [unitAction(unit, "integrate_intent", "emit", "integrate")]
+            : [unitAction(unit, "publish_intent", "emit", "publish")]
+          : []),
+        unitAction(unit, "refresh_intent", "emit", "candidate_refresh"),
+      ];
     case "publish_intent":
       return [unitAction(unit, "publish_observed", "record", "publish")];
     case "published":

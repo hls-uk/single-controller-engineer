@@ -310,6 +310,7 @@ const RECOVERABLE_EFFECT_KINDS = new Set([
   "branch_create",
   "worktree_create",
   "candidate_collect",
+  "candidate_refresh",
   "publish",
   "integrate",
 ] as const);

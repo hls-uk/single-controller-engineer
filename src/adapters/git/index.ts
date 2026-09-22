@@ -377,6 +377,10 @@ function allowedGitArgv(argv: readonly string[]): boolean {
     );
   if (command === "symbolic-ref")
     return args.length === 2 && args[0] === "-q" && args[1] === "HEAD";
+  if (command === "rebase")
+    return (
+      args.length === 1 && (OID.test(args[0] ?? "") || args[0] === "--abort")
+    );
   if (command === "merge")
     return (
       args.length === 2 && args[0] === "--ff-only" && OID.test(args[1] ?? "")
@@ -1222,6 +1226,195 @@ export async function ensureBranch(
   return created.exitCode === 0
     ? effect("ambiguous", "GIT_UNRESOLVED_EFFECT")
     : effect("refused", "GIT_REFUSED");
+}
+
+export type RefreshObservation = GitEffect &
+  Readonly<{
+    /** Exact candidate head and tree after (or, on refusal, before) the act. */
+    head?: string;
+    tree?: string;
+  }>;
+
+async function refreshWorktree(
+  runner: GitRunner,
+  repository: GitRepository,
+  input: Readonly<{
+    base: string;
+    branch: string;
+    previousBase: string;
+    worktreePath: string;
+  }>,
+): Promise<
+  | Readonly<{ ok: true; head: string; path: string; tree: string }>
+  | Readonly<{ ok: false; effect: GitEffect }>
+> {
+  if (
+    !exactOid(repository.objectFormat, input.base) ||
+    !exactOid(repository.objectFormat, input.previousBase) ||
+    input.base === input.previousBase ||
+    !safeRef(input.branch) ||
+    !safeAbsolutePath(input.worktreePath)
+  )
+    return { ok: false, effect: effect("refused", "GIT_BAD_INPUT") };
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return { ok: false, effect: verified };
+  const wantedPath = canonicalWorktreePath(input.worktreePath);
+  if (wantedPath === undefined || wantedPath !== input.worktreePath)
+    return { ok: false, effect: effect("refused", "GIT_FOREIGN_WORKTREE") };
+  const listed = await run(runner, repository, [
+    "worktree",
+    "list",
+    "--porcelain",
+  ]);
+  if (!commandOk(listed))
+    return { ok: false, effect: effect("refused", "GIT_REFUSED") };
+  const worktree = parseWorktreeList(
+    listed.stdout,
+    repository.objectFormat,
+  )?.find((record) => record.path === wantedPath);
+  if (
+    worktree === undefined ||
+    worktree.branch !== `refs/heads/${input.branch}` ||
+    worktree.head === undefined
+  )
+    return { ok: false, effect: effect("refused", "GIT_FOREIGN_WORKTREE") };
+  const ownership = await verifyWorktreeOwnership(
+    runner,
+    repository,
+    wantedPath,
+  );
+  if (ownership.state !== "observed") return { ok: false, effect: ownership };
+  const target = await run(runner, repository, [
+    "cat-file",
+    "commit",
+    input.base,
+  ]);
+  if (!commandOk(target))
+    return { ok: false, effect: effect("refused", "GIT_ABSENT") };
+  const [headResult, statusResult, headRefResult] = await Promise.all([
+    runAt(runner, wantedPath, ["rev-parse", "--verify", "HEAD^{commit}"]),
+    runAt(runner, wantedPath, ["status", "--porcelain=v1", "-z"]),
+    runAt(runner, wantedPath, ["symbolic-ref", "-q", "HEAD"]),
+  ]);
+  for (const result of [headResult, statusResult, headRefResult]) {
+    const failure = terminalFailure(result);
+    if (failure !== undefined) return { ok: false, effect: failure };
+  }
+  const head = oneLine(headResult.stdout);
+  if (
+    !commandOk(headResult) ||
+    !commandOk(statusResult) ||
+    !commandOk(headRefResult) ||
+    head === undefined ||
+    !exactOid(repository.objectFormat, head) ||
+    oneLine(headRefResult.stdout) !== `refs/heads/${input.branch}`
+  )
+    return { ok: false, effect: effect("refused", "GIT_REFUSED") };
+  if (statusResult.stdout.length !== 0)
+    return { ok: false, effect: effect("refused", "GIT_DIRTY") };
+  const lineage = await runAt(runner, wantedPath, [
+    "merge-base",
+    "--is-ancestor",
+    input.previousBase,
+    head,
+  ]);
+  if (lineage.exitCode !== 0)
+    return { ok: false, effect: effect("refused", "GIT_FOREIGN_BRANCH") };
+  const treeResult = await runAt(runner, wantedPath, [
+    "rev-parse",
+    "--verify",
+    `${head}^{tree}`,
+  ]);
+  const tree = oneLine(treeResult.stdout);
+  if (!commandOk(treeResult) || tree === undefined)
+    return { ok: false, effect: effect("refused", "GIT_REFUSED") };
+  return { ok: true, head, path: wantedPath, tree };
+}
+
+async function descendsFrom(
+  runner: GitRunner,
+  path: string,
+  ancestor: string,
+  head: string,
+): Promise<boolean> {
+  const result = await runAt(runner, path, [
+    "merge-base",
+    "--is-ancestor",
+    ancestor,
+    head,
+  ]);
+  return result.exitCode === 0;
+}
+
+/**
+ * Refreshes a candidate on the same identity: the unit branch, checked out
+ * clean in its own worktree and descending from the previous base, is
+ * rebased onto the new integration head. A conflict aborts the rebase and
+ * refuses with the unchanged head, so the controller routes it to repair.
+ * A branch that already descends from the new base is observed as is.
+ */
+export async function refreshCandidate(
+  runner: GitRunner,
+  repository: GitRepository,
+  input: Readonly<{
+    base: string;
+    branch: string;
+    previousBase: string;
+    worktreePath: string;
+  }>,
+): Promise<RefreshObservation> {
+  const ready = await refreshWorktree(runner, repository, input);
+  if (!ready.ok) return ready.effect;
+  if (await descendsFrom(runner, ready.path, input.base, ready.head))
+    return {
+      ...effect("observed", "GIT_OK"),
+      head: ready.head,
+      tree: ready.tree,
+    };
+  const rebased = await runAt(runner, ready.path, ["rebase", input.base]);
+  const failure = terminalFailure(rebased);
+  if (failure !== undefined) return failure;
+  if (rebased.exitCode !== 0) {
+    await runAt(runner, ready.path, ["rebase", "--abort"]);
+    const restored = await refreshWorktree(runner, repository, input);
+    return restored.ok && restored.head === ready.head
+      ? {
+          ...effect("refused", "GIT_NOT_FAST_FORWARD"),
+          head: ready.head,
+          tree: ready.tree,
+        }
+      : effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  }
+  const after = await refreshWorktree(runner, repository, input);
+  if (!after.ok) return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  return (await descendsFrom(runner, after.path, input.base, after.head))
+    ? { ...effect("observed", "GIT_OK"), head: after.head, tree: after.tree }
+    : effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+}
+
+/** Read-only refresh recovery probe; it never calls `git rebase`. */
+export async function discoverRefresh(
+  runner: GitRunner,
+  repository: GitRepository,
+  input: Readonly<{
+    base: string;
+    branch: string;
+    previousBase: string;
+    worktreePath: string;
+  }>,
+): Promise<RefreshObservation> {
+  const ready = await refreshWorktree(runner, repository, input);
+  if (!ready.ok)
+    return ready.effect.code === "GIT_DIRTY"
+      ? effect("ambiguous", "GIT_UNRESOLVED_EFFECT")
+      : ready.effect;
+  return (await descendsFrom(runner, ready.path, input.base, ready.head))
+    ? { ...effect("observed", "GIT_OK"), head: ready.head, tree: ready.tree }
+    : {
+        ...effect("refused", "GIT_ABSENT"),
+        head: ready.head,
+        tree: ready.tree,
+      };
 }
 
 /** Read-only branch recovery probe; it never calls `git branch`. */

@@ -103,6 +103,7 @@ export const EffectKindSchema = Type.Union([
   Type.Literal("dispatch"),
   Type.Literal("worker_collect"),
   Type.Literal("candidate_collect"),
+  Type.Literal("candidate_refresh"),
   Type.Literal("verify"),
   Type.Literal("review_dispatch"),
   Type.Literal("review_collect"),
@@ -245,6 +246,7 @@ export const UnitStateSchema = Type.Union([
   Type.Literal("collected"),
   Type.Literal("candidate_intent"),
   Type.Literal("candidate_committed"),
+  Type.Literal("refresh_intent"),
   Type.Literal("verification_intent"),
   Type.Literal("qualified"),
   Type.Literal("reviewer_dispatch_intent"),
@@ -1019,6 +1021,14 @@ export const UnitSchema = strictObject({
   candidateHead: Type.Optional(oid()),
   candidateTree: Type.Optional(oid()),
   candidateDiffHash: Type.Optional(hash()),
+  /** The integration head a pending base refresh rebases the candidate onto. */
+  refreshBaseOid: Type.Optional(oid()),
+  /**
+   * The base the worker launch packet was bound to, recorded only once a base
+   * refresh moves the unit off it: the packet stays historical launch
+   * evidence while the candidate rests on the refreshed base.
+   */
+  launchBaseOid: Type.Optional(oid()),
   publishedHeadOid: Type.Optional(oid()),
   openPullRequest: Type.Optional(PullRequestObservationSchema),
   workerSessionId: Type.Optional(identifier()),
@@ -1827,6 +1837,31 @@ export const ProtocolEventSchema = Type.Union([
     treeOid: oid(),
     candidateDiffHash: hash(),
   }),
+  // A stale base is refreshed on the same unit identity: the candidate is
+  // rebased onto the current integration head, and every candidate,
+  // verification, and review binding is discarded with the old base.
+  strictObject({
+    ...eventBase,
+    type: Type.Literal("refresh_intent"),
+    ...effectIntent,
+    baseOid: oid(),
+  }),
+  strictObject({
+    ...eventBase,
+    type: Type.Literal("refresh_observed"),
+    ...observedEffect,
+    baseOid: oid(),
+    headOid: oid(),
+    treeOid: oid(),
+  }),
+  strictObject({
+    ...eventBase,
+    type: Type.Literal("refresh_failed"),
+    ...observedEffect,
+    baseOid: oid(),
+    headOid: oid(),
+    treeOid: oid(),
+  }),
   strictObject({
     ...eventBase,
     type: Type.Literal("verification_intent"),
@@ -2090,6 +2125,17 @@ export const RuntimeEffectSchema = Type.Union([
     kind: Type.Literal("candidate_collect"),
     unitId: identifier(),
     params: strictObject({ branchRef: identifier(), worktreePath: text() }),
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    kind: Type.Literal("candidate_refresh"),
+    unitId: identifier(),
+    params: strictObject({
+      baseOid: oid(),
+      branchRef: identifier(),
+      previousBaseOid: oid(),
+      worktreePath: text(),
+    }),
   }),
   strictObject({
     ...runtimeEffectBase,

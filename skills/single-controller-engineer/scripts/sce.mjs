@@ -9653,6 +9653,7 @@ var EffectKindSchema = Type.Union([
   Type.Literal("dispatch"),
   Type.Literal("worker_collect"),
   Type.Literal("candidate_collect"),
+  Type.Literal("candidate_refresh"),
   Type.Literal("verify"),
   Type.Literal("review_dispatch"),
   Type.Literal("review_collect"),
@@ -9769,6 +9770,7 @@ var UnitStateSchema = Type.Union([
   Type.Literal("collected"),
   Type.Literal("candidate_intent"),
   Type.Literal("candidate_committed"),
+  Type.Literal("refresh_intent"),
   Type.Literal("verification_intent"),
   Type.Literal("qualified"),
   Type.Literal("reviewer_dispatch_intent"),
@@ -10458,6 +10460,14 @@ var UnitSchema = strictObject({
   candidateHead: Type.Optional(oid()),
   candidateTree: Type.Optional(oid()),
   candidateDiffHash: Type.Optional(hash()),
+  /** The integration head a pending base refresh rebases the candidate onto. */
+  refreshBaseOid: Type.Optional(oid()),
+  /**
+   * The base the worker launch packet was bound to, recorded only once a base
+   * refresh moves the unit off it: the packet stays historical launch
+   * evidence while the candidate rests on the refreshed base.
+   */
+  launchBaseOid: Type.Optional(oid()),
   publishedHeadOid: Type.Optional(oid()),
   openPullRequest: Type.Optional(PullRequestObservationSchema),
   workerSessionId: Type.Optional(identifier()),
@@ -11237,6 +11247,31 @@ var ProtocolEventSchema = Type.Union([
     treeOid: oid(),
     candidateDiffHash: hash()
   }),
+  // A stale base is refreshed on the same unit identity: the candidate is
+  // rebased onto the current integration head, and every candidate,
+  // verification, and review binding is discarded with the old base.
+  strictObject({
+    ...eventBase,
+    type: Type.Literal("refresh_intent"),
+    ...effectIntent,
+    baseOid: oid()
+  }),
+  strictObject({
+    ...eventBase,
+    type: Type.Literal("refresh_observed"),
+    ...observedEffect,
+    baseOid: oid(),
+    headOid: oid(),
+    treeOid: oid()
+  }),
+  strictObject({
+    ...eventBase,
+    type: Type.Literal("refresh_failed"),
+    ...observedEffect,
+    baseOid: oid(),
+    headOid: oid(),
+    treeOid: oid()
+  }),
   strictObject({
     ...eventBase,
     type: Type.Literal("verification_intent"),
@@ -11492,6 +11527,17 @@ var RuntimeEffectSchema = Type.Union([
     kind: Type.Literal("candidate_collect"),
     unitId: identifier(),
     params: strictObject({ branchRef: identifier(), worktreePath: text() })
+  }),
+  strictObject({
+    ...runtimeEffectBase,
+    kind: Type.Literal("candidate_refresh"),
+    unitId: identifier(),
+    params: strictObject({
+      baseOid: oid(),
+      branchRef: identifier(),
+      previousBaseOid: oid(),
+      worktreePath: text()
+    })
   }),
   strictObject({
     ...runtimeEffectBase,
@@ -11883,7 +11929,7 @@ function launchPacketError(packet, unit, role) {
 ${packet.payload}`) !== packet.hash)
       return "launch packet payload/hash mismatch";
     const value = parsed.value;
-    if (value.role !== role || value.unitId !== unit.id || value.baseOid !== unit.baseOid)
+    if (value.role !== role || value.unitId !== unit.id || value.baseOid !== unit.baseOid && !(role === "worker" && value.baseOid === unit.launchBaseOid))
       return "launch packet is not bound to the exact unit/base/role";
     const metadataError = committedTaskMetadataError(unit);
     if (metadataError !== void 0) return `launch packet ${metadataError}`;
@@ -15429,6 +15475,96 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
         { qualificationQueue: insertSorted(state.qualificationQueue, unit.id) }
       );
       break;
+    case "refresh_intent":
+      if (!["collected", "candidate_committed", "qualified", "approved"].includes(
+        unit.state
+      ))
+        return illegal(unit, event.type);
+      if (event.baseOid === unit.baseOid)
+        return reject("invalid_event", "refresh target equals the unit base");
+      result2 = intent(
+        state,
+        unit,
+        "refresh_intent",
+        event,
+        "candidate_refresh",
+        {
+          integrationQueue: state.integrationQueue.filter(
+            (id) => id !== unit.id
+          ),
+          qualificationQueue: state.qualificationQueue.filter(
+            (id) => id !== unit.id
+          ),
+          ...state.qualificationOwnerUnitId === unit.id ? { qualificationOwnerUnitId: null } : {},
+          units: { [unit.id]: { ...unit, refreshBaseOid: event.baseOid } }
+        }
+      );
+      break;
+    case "refresh_observed": {
+      if (unit.state !== "refresh_intent" || unit.refreshBaseOid === void 0 || event.baseOid !== unit.refreshBaseOid)
+        return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "candidate_refresh"))
+        return badObservation();
+      const {
+        approvalResponseHash: _approval,
+        candidateDiffHash: _diff,
+        candidateHead: _head,
+        candidateTree: _tree,
+        refreshBaseOid: _refresh,
+        reviewBaseOid: _reviewBase,
+        reviewHeadOid: _reviewHead,
+        reviewTree: _reviewTree,
+        verificationBaseOid: _verificationBase,
+        verificationCommands: _commands,
+        verificationEvidenceHash: _evidence,
+        verificationHeadOid: _verificationHead,
+        verificationTree: _verificationTree,
+        ...retained
+      } = unit;
+      result2 = observe(
+        state,
+        unit,
+        "collected",
+        event,
+        {},
+        {},
+        {
+          ...retained,
+          baseOid: event.baseOid,
+          launchBaseOid: retained.launchBaseOid ?? unit.baseOid
+        }
+      );
+      break;
+    }
+    case "refresh_failed":
+      if (unit.state !== "refresh_intent" || event.baseOid !== unit.baseOid)
+        return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "candidate_refresh"))
+        return badObservation();
+      result2 = observe(
+        state,
+        unit,
+        "repair_required",
+        event,
+        {
+          repairContext: {
+            baseOid: event.baseOid,
+            headOid: event.headOid,
+            treeOid: event.treeOid,
+            responseHash: event.observationHash,
+            rationale: "candidate refresh conflicted with the integration head",
+            findings: [
+              {
+                id: "candidate-refresh-conflict",
+                severity: "blocking",
+                detail: "rebasing the candidate onto the integration head conflicted; resolve on the same branch and worktree"
+              }
+            ]
+          }
+        },
+        clearUnitOwners(state, unit.id)
+      );
+      break;
     case "verification_intent":
       if (unit.state !== "candidate_committed")
         return illegal(unit, event.type);
@@ -15927,6 +16063,7 @@ function effectKindForIntent(type) {
     dispatch_intent: "dispatch",
     collect_intent: "worker_collect",
     candidate_intent: "candidate_collect",
+    refresh_intent: "candidate_refresh",
     verification_intent: "verify",
     reviewer_dispatch_intent: "review_dispatch",
     review_collect_intent: "review_collect",
@@ -16678,6 +16815,13 @@ function runtimeEffectParams(state, unitId, kind, slotTransition, gateEntryId) {
     case "candidate_collect":
       return {
         branchRef: required(unit.branchRef, "branch ref", kind),
+        worktreePath: required(unit.worktreePath, "worktree path", kind)
+      };
+    case "candidate_refresh":
+      return {
+        baseOid: required(unit.refreshBaseOid, "refresh base", kind),
+        branchRef: required(unit.branchRef, "branch ref", kind),
+        previousBaseOid: unit.baseOid,
         worktreePath: required(unit.worktreePath, "worktree path", kind)
       };
     case "verify":
@@ -18345,6 +18489,7 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
     dispatch_intent: "dispatch",
     collect_intent: "worker_collect",
     candidate_intent: "candidate_collect",
+    refresh_intent: "candidate_refresh",
     verification_intent: "verify",
     reviewer_dispatch_intent: "review_dispatch",
     review_collect_intent: "review_collect",
@@ -20195,6 +20340,7 @@ var observationsForEffect = {
   dispatch: ["dispatch_observed"],
   worker_collect: ["worker_collected"],
   candidate_collect: ["candidate_observed"],
+  candidate_refresh: ["refresh_observed", "refresh_failed"],
   verify: ["verification_observed", "verification_failed"],
   review_dispatch: ["reviewer_observed"],
   review_collect: ["review_collected"],
@@ -20321,28 +20467,40 @@ function lifecycleActions(state, unit) {
       return [unitAction(unit, "worker_collected", "record", "worker_collect")];
     case "collected":
       return [
-        unitAction(unit, "candidate_intent", "emit", "candidate_collect")
+        unitAction(unit, "candidate_intent", "emit", "candidate_collect"),
+        unitAction(unit, "refresh_intent", "emit", "candidate_refresh")
+      ];
+    case "refresh_intent":
+      return [
+        unitAction(unit, "refresh_observed", "record", "candidate_refresh"),
+        unitAction(unit, "refresh_failed", "record", "candidate_refresh")
       ];
     case "candidate_intent":
       return [
         unitAction(unit, "candidate_observed", "record", "candidate_collect")
       ];
     case "candidate_committed":
-      return state.qualificationOwnerUnitId === void 0 && state.qualificationQueue[0] === unit.id ? [unitAction(unit, "verification_intent", "emit", "verify")] : [];
+      return [
+        ...state.qualificationOwnerUnitId === void 0 && state.qualificationQueue[0] === unit.id ? [unitAction(unit, "verification_intent", "emit", "verify")] : [],
+        unitAction(unit, "refresh_intent", "emit", "candidate_refresh")
+      ];
     case "verification_intent":
       return state.qualificationOwnerUnitId === unit.id ? [
         unitAction(unit, "verification_observed", "record", "verify"),
         unitAction(unit, "verification_failed", "record", "verify")
       ] : [];
     case "qualified":
-      return state.qualificationOwnerUnitId === unit.id && state.currentReviewerUnitId === void 0 ? [
-        unitAction(
-          unit,
-          "reviewer_dispatch_intent",
-          "emit",
-          "review_dispatch"
-        )
-      ] : [];
+      return [
+        ...state.qualificationOwnerUnitId === unit.id && state.currentReviewerUnitId === void 0 ? [
+          unitAction(
+            unit,
+            "reviewer_dispatch_intent",
+            "emit",
+            "review_dispatch"
+          )
+        ] : [],
+        unitAction(unit, "refresh_intent", "emit", "candidate_refresh")
+      ];
     case "reviewer_dispatch_intent":
       return state.currentReviewerUnitId === unit.id ? [unitAction(unit, "reviewer_observed", "record", "review_dispatch")] : [];
     case "reviewer_dispatched":
@@ -20350,7 +20508,10 @@ function lifecycleActions(state, unit) {
     case "review_collect_intent":
       return state.currentReviewerUnitId === unit.id ? [unitAction(unit, "review_collected", "record", "review_collect")] : [];
     case "approved":
-      return isCurrentApproval2(unit) && state.qualificationOwnerUnitId === unit.id ? state.completionBoundary === "local-integration" ? [unitAction(unit, "integrate_intent", "emit", "integrate")] : [unitAction(unit, "publish_intent", "emit", "publish")] : [];
+      return [
+        ...isCurrentApproval2(unit) && state.qualificationOwnerUnitId === unit.id ? state.completionBoundary === "local-integration" ? [unitAction(unit, "integrate_intent", "emit", "integrate")] : [unitAction(unit, "publish_intent", "emit", "publish")] : [],
+        unitAction(unit, "refresh_intent", "emit", "candidate_refresh")
+      ];
     case "publish_intent":
       return [unitAction(unit, "publish_observed", "record", "publish")];
     case "published":
@@ -21791,6 +21952,8 @@ function allowedGitArgv(argv) {
     );
   if (command === "symbolic-ref")
     return args.length === 2 && args[0] === "-q" && args[1] === "HEAD";
+  if (command === "rebase")
+    return args.length === 1 && (OID.test(args[0] ?? "") || args[0] === "--abort");
   if (command === "merge")
     return args.length === 2 && args[0] === "--ff-only" && OID.test(args[1] ?? "");
   if (command === "remote")
@@ -22306,6 +22469,116 @@ async function ensureBranch(runner, repository, input) {
   if (after.state === "unreadable" || terminalFailure(created) !== void 0)
     return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
   return created.exitCode === 0 ? effect("ambiguous", "GIT_UNRESOLVED_EFFECT") : effect("refused", "GIT_REFUSED");
+}
+async function refreshWorktree(runner, repository, input) {
+  if (!exactOid(repository.objectFormat, input.base) || !exactOid(repository.objectFormat, input.previousBase) || input.base === input.previousBase || !safeRef(input.branch) || !safeAbsolutePath(input.worktreePath))
+    return { ok: false, effect: effect("refused", "GIT_BAD_INPUT") };
+  const verified = await verifyRepository(runner, repository);
+  if (verified.state !== "observed") return { ok: false, effect: verified };
+  const wantedPath = canonicalWorktreePath(input.worktreePath);
+  if (wantedPath === void 0 || wantedPath !== input.worktreePath)
+    return { ok: false, effect: effect("refused", "GIT_FOREIGN_WORKTREE") };
+  const listed = await run(runner, repository, [
+    "worktree",
+    "list",
+    "--porcelain"
+  ]);
+  if (!commandOk(listed))
+    return { ok: false, effect: effect("refused", "GIT_REFUSED") };
+  const worktree = parseWorktreeList(
+    listed.stdout,
+    repository.objectFormat
+  )?.find((record4) => record4.path === wantedPath);
+  if (worktree === void 0 || worktree.branch !== `refs/heads/${input.branch}` || worktree.head === void 0)
+    return { ok: false, effect: effect("refused", "GIT_FOREIGN_WORKTREE") };
+  const ownership = await verifyWorktreeOwnership(
+    runner,
+    repository,
+    wantedPath
+  );
+  if (ownership.state !== "observed") return { ok: false, effect: ownership };
+  const target = await run(runner, repository, [
+    "cat-file",
+    "commit",
+    input.base
+  ]);
+  if (!commandOk(target))
+    return { ok: false, effect: effect("refused", "GIT_ABSENT") };
+  const [headResult, statusResult, headRefResult] = await Promise.all([
+    runAt(runner, wantedPath, ["rev-parse", "--verify", "HEAD^{commit}"]),
+    runAt(runner, wantedPath, ["status", "--porcelain=v1", "-z"]),
+    runAt(runner, wantedPath, ["symbolic-ref", "-q", "HEAD"])
+  ]);
+  for (const result2 of [headResult, statusResult, headRefResult]) {
+    const failure2 = terminalFailure(result2);
+    if (failure2 !== void 0) return { ok: false, effect: failure2 };
+  }
+  const head3 = oneLine(headResult.stdout);
+  if (!commandOk(headResult) || !commandOk(statusResult) || !commandOk(headRefResult) || head3 === void 0 || !exactOid(repository.objectFormat, head3) || oneLine(headRefResult.stdout) !== `refs/heads/${input.branch}`)
+    return { ok: false, effect: effect("refused", "GIT_REFUSED") };
+  if (statusResult.stdout.length !== 0)
+    return { ok: false, effect: effect("refused", "GIT_DIRTY") };
+  const lineage = await runAt(runner, wantedPath, [
+    "merge-base",
+    "--is-ancestor",
+    input.previousBase,
+    head3
+  ]);
+  if (lineage.exitCode !== 0)
+    return { ok: false, effect: effect("refused", "GIT_FOREIGN_BRANCH") };
+  const treeResult = await runAt(runner, wantedPath, [
+    "rev-parse",
+    "--verify",
+    `${head3}^{tree}`
+  ]);
+  const tree = oneLine(treeResult.stdout);
+  if (!commandOk(treeResult) || tree === void 0)
+    return { ok: false, effect: effect("refused", "GIT_REFUSED") };
+  return { ok: true, head: head3, path: wantedPath, tree };
+}
+async function descendsFrom(runner, path2, ancestor, head3) {
+  const result2 = await runAt(runner, path2, [
+    "merge-base",
+    "--is-ancestor",
+    ancestor,
+    head3
+  ]);
+  return result2.exitCode === 0;
+}
+async function refreshCandidate(runner, repository, input) {
+  const ready = await refreshWorktree(runner, repository, input);
+  if (!ready.ok) return ready.effect;
+  if (await descendsFrom(runner, ready.path, input.base, ready.head))
+    return {
+      ...effect("observed", "GIT_OK"),
+      head: ready.head,
+      tree: ready.tree
+    };
+  const rebased = await runAt(runner, ready.path, ["rebase", input.base]);
+  const failure2 = terminalFailure(rebased);
+  if (failure2 !== void 0) return failure2;
+  if (rebased.exitCode !== 0) {
+    await runAt(runner, ready.path, ["rebase", "--abort"]);
+    const restored = await refreshWorktree(runner, repository, input);
+    return restored.ok && restored.head === ready.head ? {
+      ...effect("refused", "GIT_NOT_FAST_FORWARD"),
+      head: ready.head,
+      tree: ready.tree
+    } : effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  }
+  const after = await refreshWorktree(runner, repository, input);
+  if (!after.ok) return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  return await descendsFrom(runner, after.path, input.base, after.head) ? { ...effect("observed", "GIT_OK"), head: after.head, tree: after.tree } : effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+}
+async function discoverRefresh(runner, repository, input) {
+  const ready = await refreshWorktree(runner, repository, input);
+  if (!ready.ok)
+    return ready.effect.code === "GIT_DIRTY" ? effect("ambiguous", "GIT_UNRESOLVED_EFFECT") : ready.effect;
+  return await descendsFrom(runner, ready.path, input.base, ready.head) ? { ...effect("observed", "GIT_OK"), head: ready.head, tree: ready.tree } : {
+    ...effect("refused", "GIT_ABSENT"),
+    head: ready.head,
+    tree: ready.tree
+  };
 }
 async function discoverBranch(runner, repository, input) {
   if (!safeRef(input.branch) || !exactOid(repository.objectFormat, input.base))
@@ -25336,6 +25609,7 @@ var RECOVERABLE_EFFECT_KINDS = /* @__PURE__ */ new Set([
   "branch_create",
   "worktree_create",
   "candidate_collect",
+  "candidate_refresh",
   "publish",
   "integrate"
 ]);
@@ -26148,6 +26422,33 @@ function candidateInput(effect2, run2) {
     worktreePath: effect2.params.worktreePath
   };
 }
+function refreshResult(effect2, run2, result2, refusal2) {
+  if (result2.state === "observed" && result2.head !== void 0 && result2.tree !== void 0)
+    return {
+      observation: {
+        ...eventBase2(effect2, run2),
+        baseOid: effect2.params.baseOid,
+        headOid: result2.head,
+        treeOid: result2.tree,
+        type: "refresh_observed"
+      },
+      status: "observed"
+    };
+  if (result2.state === "refused" && result2.head !== void 0 && result2.tree !== void 0) {
+    if (refusal2 === "absent") return { status: "absent" };
+    return {
+      observation: {
+        ...eventBase2(effect2, run2),
+        baseOid: effect2.params.previousBaseOid,
+        headOid: result2.head,
+        treeOid: result2.tree,
+        type: "refresh_failed"
+      },
+      status: "observed"
+    };
+  }
+  return ambiguous3();
+}
 async function candidateObserved(effect2, run2, git) {
   const input = candidateInput(effect2, run2);
   if (input === void 0) return ambiguous3();
@@ -26350,6 +26651,24 @@ function createProductionRecoveryEffectAdapter(options) {
         return ambiguous3();
       }
     }
+    if (effect2.kind === "candidate_refresh") {
+      if (!gitMatchesRun(git.repository, run2)) return ambiguous3();
+      try {
+        return refreshResult(
+          effect2,
+          run2,
+          await discoverRefresh(git.runner, git.repository, {
+            base: effect2.params.baseOid,
+            branch: effect2.params.branchRef,
+            previousBase: effect2.params.previousBaseOid,
+            worktreePath: effect2.params.worktreePath
+          }),
+          "absent"
+        );
+      } catch {
+        return ambiguous3();
+      }
+    }
     const done = observed(effect2, run2);
     if (done === void 0) return ambiguous3();
     if (effect2.kind !== "controller_acquire" && effect2.kind !== "controller_release" && !gitMatchesRun(git.repository, run2) || (effect2.kind === "controller_acquire" || effect2.kind === "controller_release") && !transitionMatchesRun(effect2, run2))
@@ -26473,6 +26792,25 @@ function createProductionRecoveryEffectAdapter(options) {
       if (!gitMatchesRun(git.repository, run2)) return ambiguous3();
       try {
         return await candidateObserved(effect2, run2, git);
+      } catch {
+        return ambiguous3();
+      }
+    }
+    if (effect2.kind === "candidate_refresh") {
+      if (!gitMatchesRun(git.repository, run2)) return ambiguous3();
+      try {
+        const refreshed = refreshResult(
+          effect2,
+          run2,
+          await refreshCandidate(git.runner, git.repository, {
+            base: effect2.params.baseOid,
+            branch: effect2.params.branchRef,
+            previousBase: effect2.params.previousBaseOid,
+            worktreePath: effect2.params.worktreePath
+          }),
+          "failed"
+        );
+        return refreshed.status === "absent" ? ambiguous3() : refreshed;
       } catch {
         return ambiguous3();
       }
@@ -26757,6 +27095,7 @@ var commandNames = [
   "dispatch-request",
   "record-dispatch",
   "collect-candidate",
+  "refresh-candidate",
   "qualify",
   "review-prepare",
   "review-record",
@@ -26933,6 +27272,7 @@ var UnavailableCommandSchema = strictObject5({
     Type.Literal("dispatch-request"),
     Type.Literal("record-dispatch"),
     Type.Literal("collect-candidate"),
+    Type.Literal("refresh-candidate"),
     Type.Literal("qualify"),
     Type.Literal("review-prepare"),
     Type.Literal("review-record"),
@@ -27103,6 +27443,7 @@ var commandEvent = {
     "reviewer_observed"
   ],
   "collect-candidate": ["collect_intent", "candidate_intent"],
+  "refresh-candidate": ["refresh_intent"],
   qualify: ["verification_intent"],
   "review-prepare": ["reviewer_dispatch_intent", "review_collect_intent"],
   "review-record": ["review_collected"],

@@ -16,24 +16,26 @@ import { promisify } from "node:util";
 import test from "node:test";
 
 import {
+  type GitRepository,
+  GitRepositorySchema,
+  type GitResult,
+  GitResultSchema,
+  type GitRunner,
   discoverIntegration,
+  discoverRefresh,
   discoverRemoteIntegration,
   discoverWorktree,
   ensureBranch,
   ensureWorktree,
-  GitRepositorySchema,
-  GitResultSchema,
   integrateLocalFastForward,
   integrateRemoteFastForward,
   isGitSchema,
   nodeGitRunner,
   observeCandidate,
   publishCandidate,
+  refreshCandidate,
   verifyCandidateWorktree,
   verifyRepository,
-  type GitRepository,
-  type GitResult,
-  type GitRunner,
 } from "../../../src/adapters/git/index.js";
 
 const execFile = promisify(execFileCallback);
@@ -1240,4 +1242,80 @@ test("real SHA-256 repository is accepted when this Git supports it", async (t) 
     ).state,
     "observed",
   );
+});
+
+test("refreshCandidate rebases a clean unit worktree onto a moved integration head and refuses conflicts unchanged", async () => {
+  const { base, cwd } = await setupRepository();
+  const repo = await actualRepository(cwd);
+  const worktreePath = await realpath(
+    await mkdtemp(join(tmpdir(), "sce-git-refresh-")),
+  );
+  await rm(worktreePath, { force: true, recursive: true });
+  await git(cwd, "branch", "unit/one", base);
+  await git(cwd, "worktree", "add", worktreePath, "unit/one");
+  await writeFile(join(worktreePath, "unit.txt"), "unit change\n");
+  await git(worktreePath, "add", "unit.txt");
+  await git(worktreePath, "commit", "-m", "unit work");
+  const candidate = (await git(worktreePath, "rev-parse", "HEAD")).trim();
+  // Main moves on independently of the unit.
+  await writeFile(join(cwd, "main.txt"), "main change\n");
+  await git(cwd, "add", "main.txt");
+  await git(cwd, "commit", "-m", "main work");
+  const moved = (await git(cwd, "rev-parse", "HEAD")).trim();
+  const input = {
+    base: moved,
+    branch: "unit/one",
+    previousBase: base,
+    worktreePath,
+  };
+  const probe = await discoverRefresh(nodeGitRunner, repo, input);
+  assert.equal(probe.state, "refused");
+  assert.equal(probe.code, "GIT_ABSENT");
+  assert.equal(probe.head, candidate);
+  const refreshed = await refreshCandidate(nodeGitRunner, repo, input);
+  assert.equal(refreshed.state, "observed", JSON.stringify(refreshed));
+  assert.notEqual(refreshed.head, candidate);
+  assert.equal(
+    await git(worktreePath, "merge-base", "--is-ancestor", moved, "HEAD"),
+    "",
+  );
+  assert.equal(
+    (await git(worktreePath, "rev-parse", "HEAD")).trim(),
+    refreshed.head,
+  );
+  // Idempotent: a branch already on the new base is observed as is.
+  const again = await refreshCandidate(nodeGitRunner, repo, input);
+  assert.equal(again.state, "observed");
+  assert.equal(again.head, refreshed.head);
+  assert.equal(
+    (await discoverRefresh(nodeGitRunner, repo, input)).state,
+    "observed",
+  );
+  // A conflicting move is refused with the unchanged head and a clean tree.
+  await writeFile(join(cwd, "unit.txt"), "conflicting main change\n");
+  await git(cwd, "add", "unit.txt");
+  await git(cwd, "commit", "-m", "main conflict");
+  const conflicting = (await git(cwd, "rev-parse", "HEAD")).trim();
+  const refused = await refreshCandidate(nodeGitRunner, repo, {
+    ...input,
+    base: conflicting,
+    previousBase: moved,
+  });
+  assert.equal(refused.state, "refused", JSON.stringify(refused));
+  assert.equal(refused.code, "GIT_NOT_FAST_FORWARD");
+  assert.equal(refused.head, refreshed.head);
+  assert.equal((await git(worktreePath, "status", "--porcelain")).trim(), "");
+  assert.equal(
+    (await git(worktreePath, "rev-parse", "HEAD")).trim(),
+    refreshed.head,
+  );
+  // A dirty worktree never rebases.
+  await writeFile(join(worktreePath, "dirty.txt"), "x\n");
+  const dirty = await refreshCandidate(nodeGitRunner, repo, {
+    ...input,
+    base: conflicting,
+    previousBase: moved,
+  });
+  assert.equal(dirty.state, "refused");
+  assert.equal(dirty.code, "GIT_DIRTY");
 });

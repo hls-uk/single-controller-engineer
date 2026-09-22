@@ -5,22 +5,25 @@
  * discovery fact.
  */
 import {
+  type GitEffect,
+  type GitRepository,
+  type GitRunner,
+  type RefreshObservation,
   discoverBranch,
   discoverIntegration,
   discoverPublication,
+  discoverRefresh,
   discoverRemoteIntegration,
   discoverWorktree,
   ensureBranch,
   ensureWorktree,
   integrateLocalFastForward,
   integrateRemoteFastForward,
-  publishCandidate,
   observeCandidate,
+  publishCandidate,
+  refreshCandidate,
   verifyCandidateWorktree,
   verifyRepository,
-  type GitEffect,
-  type GitRepository,
-  type GitRunner,
 } from "../adapters/git/index.js";
 import {
   createMaterialisationAdapter,
@@ -597,6 +600,55 @@ function candidateInput(
   };
 }
 
+/**
+ * A refresh observation binds the new base and the rebased head. A refusal
+ * carrying the unchanged head is a conflict on the act, routed to repair, or
+ * plain absence on the read-only probe.
+ */
+function refreshResult(
+  effect: Extract<ProtocolEffect, { kind: "candidate_refresh" }>,
+  run: RepositoryRun,
+  result: RefreshObservation,
+  refusal: "absent" | "failed",
+):
+  | Extract<ReconcileResult, { status: "observed" }>
+  | Readonly<{ status: "absent" }>
+  | Readonly<{ status: "ambiguous" }> {
+  if (
+    result.state === "observed" &&
+    result.head !== undefined &&
+    result.tree !== undefined
+  )
+    return {
+      observation: {
+        ...eventBase(effect, run),
+        baseOid: effect.params.baseOid,
+        headOid: result.head,
+        treeOid: result.tree,
+        type: "refresh_observed",
+      } as ProtocolEvent,
+      status: "observed",
+    };
+  if (
+    result.state === "refused" &&
+    result.head !== undefined &&
+    result.tree !== undefined
+  ) {
+    if (refusal === "absent") return { status: "absent" };
+    return {
+      observation: {
+        ...eventBase(effect, run),
+        baseOid: effect.params.previousBaseOid,
+        headOid: result.head,
+        treeOid: result.tree,
+        type: "refresh_failed",
+      } as ProtocolEvent,
+      status: "observed",
+    };
+  }
+  return ambiguous();
+}
+
 async function candidateObserved(
   effect: Extract<ProtocolEffect, { kind: "candidate_collect" }>,
   run: RepositoryRun,
@@ -945,6 +997,24 @@ export function createProductionRecoveryEffectAdapter(
         return ambiguous();
       }
     }
+    if (effect.kind === "candidate_refresh") {
+      if (!gitMatchesRun(git.repository, run)) return ambiguous();
+      try {
+        return refreshResult(
+          effect,
+          run,
+          await discoverRefresh(git.runner, git.repository, {
+            base: effect.params.baseOid,
+            branch: effect.params.branchRef,
+            previousBase: effect.params.previousBaseOid,
+            worktreePath: effect.params.worktreePath,
+          }),
+          "absent",
+        );
+      } catch {
+        return ambiguous();
+      }
+    }
     const done = observed(effect, run);
     if (done === undefined) return ambiguous();
     if (
@@ -1094,6 +1164,25 @@ export function createProductionRecoveryEffectAdapter(
       if (!gitMatchesRun(git.repository, run)) return ambiguous();
       try {
         return await candidateObserved(effect, run, git);
+      } catch {
+        return ambiguous();
+      }
+    }
+    if (effect.kind === "candidate_refresh") {
+      if (!gitMatchesRun(git.repository, run)) return ambiguous();
+      try {
+        const refreshed = refreshResult(
+          effect,
+          run,
+          await refreshCandidate(git.runner, git.repository, {
+            base: effect.params.baseOid,
+            branch: effect.params.branchRef,
+            previousBase: effect.params.previousBaseOid,
+            worktreePath: effect.params.worktreePath,
+          }),
+          "failed",
+        );
+        return refreshed.status === "absent" ? ambiguous() : refreshed;
       } catch {
         return ambiguous();
       }

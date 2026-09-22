@@ -203,10 +203,15 @@ function launchPacketError(
     )
       return "launch packet payload/hash mismatch";
     const value = parsed.value;
+    // A worker packet binds the base it was launched against. A base refresh
+    // records that launch base and moves the unit on; a later repair binds a
+    // new packet to the current base. A reviewer packet always binds the
+    // current base, because a refresh discards the review outright.
     if (
       value.role !== role ||
       value.unitId !== unit.id ||
-      value.baseOid !== unit.baseOid
+      (value.baseOid !== unit.baseOid &&
+        !(role === "worker" && value.baseOid === unit.launchBaseOid))
     )
       return "launch packet is not bound to the exact unit/base/role";
     const metadataError = committedTaskMetadataError(unit);
@@ -5294,6 +5299,109 @@ function reduceInternal(
         { qualificationQueue: insertSorted(state.qualificationQueue, unit.id) },
       );
       break;
+    case "refresh_intent":
+      // Refresh on the same identity: legal wherever a candidate exists or
+      // is about to, and before the integration act, never during one.
+      if (
+        !["collected", "candidate_committed", "qualified", "approved"].includes(
+          unit.state,
+        )
+      )
+        return illegal(unit, event.type);
+      if (event.baseOid === unit.baseOid)
+        return reject("invalid_event", "refresh target equals the unit base");
+      result = intent(
+        state,
+        unit,
+        "refresh_intent",
+        event,
+        "candidate_refresh",
+        {
+          integrationQueue: state.integrationQueue.filter(
+            (id) => id !== unit.id,
+          ),
+          qualificationQueue: state.qualificationQueue.filter(
+            (id) => id !== unit.id,
+          ),
+          ...(state.qualificationOwnerUnitId === unit.id
+            ? { qualificationOwnerUnitId: null }
+            : {}),
+          units: { [unit.id]: { ...unit, refreshBaseOid: event.baseOid } },
+        },
+      );
+      break;
+    case "refresh_observed": {
+      if (
+        unit.state !== "refresh_intent" ||
+        unit.refreshBaseOid === undefined ||
+        event.baseOid !== unit.refreshBaseOid
+      )
+        return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "candidate_refresh"))
+        return badObservation();
+      // Every binding to the old base is discarded with it; the unit returns
+      // to `collected` and re-observes its candidate on the new base.
+      const {
+        approvalResponseHash: _approval,
+        candidateDiffHash: _diff,
+        candidateHead: _head,
+        candidateTree: _tree,
+        refreshBaseOid: _refresh,
+        reviewBaseOid: _reviewBase,
+        reviewHeadOid: _reviewHead,
+        reviewTree: _reviewTree,
+        verificationBaseOid: _verificationBase,
+        verificationCommands: _commands,
+        verificationEvidenceHash: _evidence,
+        verificationHeadOid: _verificationHead,
+        verificationTree: _verificationTree,
+        ...retained
+      } = unit;
+      result = observe(
+        state,
+        unit,
+        "collected",
+        event,
+        {},
+        {},
+        {
+          ...retained,
+          baseOid: event.baseOid,
+          launchBaseOid: retained.launchBaseOid ?? unit.baseOid,
+        },
+      );
+      break;
+    }
+    case "refresh_failed":
+      if (unit.state !== "refresh_intent" || event.baseOid !== unit.baseOid)
+        return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "candidate_refresh"))
+        return badObservation();
+      result = observe(
+        state,
+        unit,
+        "repair_required",
+        event,
+        {
+          repairContext: {
+            baseOid: event.baseOid,
+            headOid: event.headOid,
+            treeOid: event.treeOid,
+            responseHash: event.observationHash,
+            rationale: "candidate refresh conflicted with the integration head",
+            findings: [
+              {
+                id: "candidate-refresh-conflict",
+                severity: "blocking",
+                detail:
+                  "rebasing the candidate onto the integration head conflicted; resolve on the same branch and worktree",
+              },
+            ],
+          },
+        },
+        clearUnitOwners(state, unit.id),
+      );
+      break;
     case "verification_intent":
       if (unit.state !== "candidate_committed")
         return illegal(unit, event.type);
@@ -5902,6 +6010,7 @@ function effectKindForIntent(
     dispatch_intent: "dispatch",
     collect_intent: "worker_collect",
     candidate_intent: "candidate_collect",
+    refresh_intent: "candidate_refresh",
     verification_intent: "verify",
     reviewer_dispatch_intent: "review_dispatch",
     review_collect_intent: "review_collect",
@@ -7061,6 +7170,13 @@ function runtimeEffectParams(
     case "candidate_collect":
       return {
         branchRef: required(unit.branchRef, "branch ref", kind),
+        worktreePath: required(unit.worktreePath, "worktree path", kind),
+      };
+    case "candidate_refresh":
+      return {
+        baseOid: required(unit.refreshBaseOid, "refresh base", kind),
+        branchRef: required(unit.branchRef, "branch ref", kind),
+        previousBaseOid: unit.baseOid,
         worktreePath: required(unit.worktreePath, "worktree path", kind),
       };
     case "verify":
@@ -9538,6 +9654,7 @@ function runInvariantErrorsWithClosedEvidence(
     dispatch_intent: "dispatch",
     collect_intent: "worker_collect",
     candidate_intent: "candidate_collect",
+    refresh_intent: "candidate_refresh",
     verification_intent: "verify",
     reviewer_dispatch_intent: "review_dispatch",
     review_collect_intent: "review_collect",

@@ -8,6 +8,7 @@ import {
   makeRootProjection,
 } from "../../src/fencing/index.js";
 import {
+  compareProtocolText,
   deriveClosedUnitEvidenceCommitment,
   deriveGateEntryId,
   deriveIdempotencyKey,
@@ -22,11 +23,11 @@ import {
   deriveSessionLineageRoot,
   hasUsedSession,
   maximumMaterialisationSidecarBytes,
-  compareProtocolText,
   provenanceCarryAncestorDigest,
   provenanceCarryLineageCommitment,
   provenanceCarrySnapshotCommitment,
   reduce,
+  rehydrateEffect,
   runInvariantErrors,
   sessionLineageCount,
 } from "../../src/protocol/reducer.js";
@@ -5607,4 +5608,72 @@ test("a wave plan that rewrites a unit's binding advances that unit's revision o
     mandatoryVerification: ["npm run lint", "npm test"],
     ownedPaths: ["src", "test"],
   });
+});
+
+test("a base refresh returns a collected, qualified, or approved unit to collected on the new base and discards its bindings", () => {
+  const committed = completeCandidate();
+  const unitId = "unit-1";
+  assert.equal(committed.units[unitId]?.state, "candidate_committed");
+  const same = reduce(
+    committed,
+    event(committed, "refresh_intent", { baseOid: OID_A }, unitId),
+  );
+  assert.equal(same.ok, false);
+  const intended = stepUnit(committed, unitId, "refresh_intent", {
+    baseOid: OID_B,
+  });
+  const pending = intended.units[unitId]!;
+  assert.equal(pending.state, "refresh_intent");
+  assert.equal(pending.refreshBaseOid, OID_B);
+  assert.equal(intended.qualificationQueue.includes(unitId), false);
+  const entry = intended.effectJournal.find(
+    (item) => item.kind === "candidate_refresh" && item.status === "intended",
+  );
+  assert.ok(entry !== undefined);
+  assert.deepEqual(rehydrateEffect(intended, entry)?.params, {
+    baseOid: OID_B,
+    branchRef: pending.branchRef,
+    previousBaseOid: OID_A,
+    worktreePath: pending.worktreePath,
+  });
+
+  const observed = observeUnit(
+    intended,
+    unitId,
+    "refresh_observed",
+    "candidate_refresh",
+    { baseOid: OID_B, headOid: OID_C, treeOid: OID_C },
+  );
+  const refreshed = observed.units[unitId]!;
+  assert.equal(refreshed.state, "collected");
+  assert.equal(refreshed.baseOid, OID_B);
+  assert.equal(refreshed.refreshBaseOid, undefined);
+  assert.equal(refreshed.candidateHead, undefined);
+  assert.equal(refreshed.candidateDiffHash, undefined);
+  assert.deepEqual(
+    legalActions(observed)
+      .filter((action) => action.unitId === unitId && action.mode === "emit")
+      .map((action) => action.type)
+      .filter(
+        (type) =>
+          ![
+            "cancel_intent",
+            "failure_intent",
+            "park_intent",
+            "timeout_intent",
+          ].includes(type),
+      )
+      .sort(),
+    ["candidate_intent", "refresh_intent"],
+  );
+
+  const failed = observeUnit(
+    intended,
+    unitId,
+    "refresh_failed",
+    "candidate_refresh",
+    { baseOid: OID_A, headOid: OID_C, treeOid: OID_C },
+  );
+  assert.equal(failed.units[unitId]?.state, "repair_required");
+  assert.equal(failed.units[unitId]?.baseOid, OID_A);
 });

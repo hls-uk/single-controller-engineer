@@ -163,6 +163,7 @@ export function event(
     dispatch_intent: "dispatch",
     collect_intent: "worker_collect",
     candidate_intent: "candidate_collect",
+    refresh_intent: "candidate_refresh",
     verification_intent: "verify",
     reviewer_dispatch_intent: "review_dispatch",
     review_collect_intent: "review_collect",
