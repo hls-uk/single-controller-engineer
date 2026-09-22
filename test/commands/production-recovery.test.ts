@@ -2414,6 +2414,8 @@ test("local integration treats only the durable base as positive pre-act absence
           return { exitCode: 0, signal: null, stdout: "refs/heads/main\n" };
         if (argv[0] === "status")
           return { exitCode: 0, signal: null, stdout: "" };
+        if (argv[0] === "merge-base")
+          return { exitCode: 1, signal: null, stdout: "" };
         if (argv[0] === "merge") {
           head = OID_B;
           return { exitCode: 0, signal: null, stdout: "" };
@@ -2446,13 +2448,25 @@ test("local integration treats only the durable base as positive pre-act absence
     [`merge --ff-only ${OID_B}`],
   );
 
-  for (const invalid of [OID_A.replace(/^a/u, "c"), ""] as const) {
-    head = invalid;
+  // A readable ref that moved past the base, with the candidate provably not
+  // beneath it, is an exact refusal bound to that head; an unreadable ref is
+  // still ambiguous. Neither runs a merge.
+  head = OID_A.replace(/^a/u, "c");
+  const refused = await adapter.reconcile(localIntegrationEffect(), localRun());
+  assert.equal(refused.status, "observed");
+  if (refused.status === "observed") {
+    assert.equal(refused.observation.type, "integrate_refused");
     assert.equal(
-      (await adapter.reconcile(localIntegrationEffect(), localRun())).status,
-      "ambiguous",
+      "integrationOid" in refused.observation &&
+        refused.observation.integrationOid,
+      head,
     );
   }
+  head = "";
+  assert.equal(
+    (await adapter.reconcile(localIntegrationEffect(), localRun())).status,
+    "ambiguous",
+  );
   assert.deepEqual(
     calls.filter((call) => call.startsWith("merge ")),
     [`merge --ff-only ${OID_B}`],

@@ -1934,6 +1934,16 @@ export const ProtocolEventSchema = Type.Union([
     type: Type.Literal("integrate_intent"),
     ...effectIntent,
   }),
+  // An exact refusal: the integration ref moved past the unit base and the
+  // candidate is provably not landed. Nothing happened; the unit returns to
+  // approved so the controller can refresh it on the same identity.
+  strictObject({
+    ...eventBase,
+    type: Type.Literal("integrate_refused"),
+    ...observedEffect,
+    baseOid: oid(),
+    integrationOid: oid(),
+  }),
   strictObject({
     ...eventBase,
     type: Type.Literal("integrate_observed"),

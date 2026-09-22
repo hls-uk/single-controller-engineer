@@ -11344,6 +11344,16 @@ var ProtocolEventSchema = Type.Union([
     type: Type.Literal("integrate_intent"),
     ...effectIntent
   }),
+  // An exact refusal: the integration ref moved past the unit base and the
+  // candidate is provably not landed. Nothing happened; the unit returns to
+  // approved so the controller can refresh it on the same identity.
+  strictObject({
+    ...eventBase,
+    type: Type.Literal("integrate_refused"),
+    ...observedEffect,
+    baseOid: oid(),
+    integrationOid: oid()
+  }),
   strictObject({
     ...eventBase,
     type: Type.Literal("integrate_observed"),
@@ -15820,6 +15830,20 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
       result2 = intent(state, unit, "integrate_intent", event, "integrate", {
         integrationOwnerUnitId: unit.id
       });
+      break;
+    case "integrate_refused":
+      if (unit.state !== "integrate_intent" || state.integrationOwnerUnitId !== unit.id || event.baseOid !== unit.baseOid || event.integrationOid === unit.reviewHeadOid)
+        return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "integrate"))
+        return badObservation();
+      result2 = observe(
+        state,
+        unit,
+        "approved",
+        event,
+        {},
+        { integrationOwnerUnitId: null }
+      );
       break;
     case "integrate_observed":
       if (unit.state !== "integrate_intent" || state.integrationOwnerUnitId !== unit.id || event.controllerFencingToken !== state.controllerFencingToken || event.baseOid !== unit.reviewBaseOid || event.headOid !== unit.reviewHeadOid || event.treeOid !== unit.reviewTree)
@@ -20351,7 +20375,7 @@ var observationsForEffect = {
   review_dispatch: ["reviewer_observed"],
   review_collect: ["review_collected"],
   publish: ["publish_observed"],
-  integrate: ["integrate_observed"],
+  integrate: ["integrate_observed", "integrate_refused"],
   reservation_release: ["reservation_released"],
   repair: ["repair_observed"],
   failure: ["failure_observed"],
@@ -20523,7 +20547,10 @@ function lifecycleActions(state, unit) {
     case "published":
       return hasCurrentApproval2(unit) && state.completionBoundary === "remote-integration" && state.qualificationOwnerUnitId === unit.id && (state.integrationOwnerUnitId === void 0 || state.integrationOwnerUnitId === unit.id) && state.integrationQueue[0] === unit.id ? [unitAction(unit, "integrate_intent", "emit", "integrate")] : [];
     case "integrate_intent":
-      return state.integrationOwnerUnitId === unit.id ? [unitAction(unit, "integrate_observed", "record", "integrate")] : [];
+      return state.integrationOwnerUnitId === unit.id ? [
+        unitAction(unit, "integrate_observed", "record", "integrate"),
+        unitAction(unit, "integrate_refused", "record", "integrate")
+      ] : [];
     case "landed":
     case "handoff":
     case "cancelled":
@@ -22720,7 +22747,21 @@ async function discoverIntegration(runner, repository, input) {
   if (current.state !== "found")
     return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
   if (current.oid === input.candidate) return effect("observed", "GIT_OK");
-  return current.oid === input.base ? effect("refused", "GIT_ABSENT") : effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+  if (current.oid === input.base) return effect("refused", "GIT_ABSENT");
+  const landed = await run(runner, repository, [
+    "merge-base",
+    "--is-ancestor",
+    input.candidate,
+    current.oid
+  ]);
+  const failure2 = terminalFailure(landed);
+  if (failure2 !== void 0) return failure2;
+  return landed.exitCode === 1 ? effect("refused", "GIT_MOVED_BASE") : effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+}
+async function integrationRefHead(runner, repository, integrationRef) {
+  if (!safeRef(integrationRef)) return void 0;
+  const current = await refOid(runner, repository, integrationRef);
+  return current.state === "found" ? current.oid : void 0;
 }
 async function integrateLocalFastForward(runner, repository, input) {
   if (!safeRef(input.integrationRef) || !exactOid(repository.objectFormat, input.base) || !exactOid(repository.objectFormat, input.candidate))
@@ -26733,17 +26774,20 @@ function createProductionRecoveryEffectAdapter(options) {
           );
         }
         case "integrate": {
-          if (effect2.params.integrationProfile === "local-ff")
-            return discovered(
-              done,
-              await discoverIntegration(git.runner, git.repository, {
+          if (effect2.params.integrationProfile === "local-ff") {
+            const probe = await discoverIntegration(
+              git.runner,
+              git.repository,
+              {
                 base: effect2.params.candidate.baseOid,
                 candidate: effect2.params.candidate.headOid,
                 integrationRef: localIntegrationRef(
                   effect2.params.integrationBranch
                 )
-              })
+              }
             );
+            return await integrationRefused(effect2, run2, probe, git) ?? discovered(done, probe);
+          }
           const configuredRemote = remote(options);
           if (effect2.params.integrationProfile !== "remote-ff" || configuredRemote === void 0)
             return ambiguous3();
@@ -26878,17 +26922,20 @@ function createProductionRecoveryEffectAdapter(options) {
           );
         }
         case "integrate": {
-          if (effect2.params.integrationProfile === "local-ff")
-            return executed(
-              done,
-              await integrateLocalFastForward(git.runner, git.repository, {
+          if (effect2.params.integrationProfile === "local-ff") {
+            const landed = await integrateLocalFastForward(
+              git.runner,
+              git.repository,
+              {
                 base: effect2.params.candidate.baseOid,
                 candidate: effect2.params.candidate.headOid,
                 integrationRef: localIntegrationRef(
                   effect2.params.integrationBranch
                 )
-              })
+              }
             );
+            return await integrationRefused(effect2, run2, landed, git) ?? executed(done, landed);
+          }
           const configuredRemote = remote(options);
           if (effect2.params.integrationProfile !== "remote-ff" || configuredRemote === void 0)
             return ambiguous3();
@@ -27092,6 +27139,26 @@ function createProductionRecoveryRunner(options) {
 function discovered(observedResult, result2) {
   const classification = classifyDiscovery(result2);
   return classification === "observed" ? observedResult : classification === "absent" ? { status: "absent" } : ambiguous3();
+}
+async function integrationRefused(effect2, run2, result2, git) {
+  if (result2.state !== "refused" || result2.code !== "GIT_MOVED_BASE")
+    return void 0;
+  const integrationOid = await integrationRefHead(
+    git.runner,
+    git.repository,
+    localIntegrationRef(effect2.params.integrationBranch)
+  );
+  if (integrationOid === void 0 || integrationOid === effect2.params.candidate.baseOid || integrationOid === effect2.params.candidate.headOid)
+    return void 0;
+  return {
+    observation: {
+      ...eventBase2(effect2, run2),
+      baseOid: effect2.params.candidate.baseOid,
+      integrationOid,
+      type: "integrate_refused"
+    },
+    status: "observed"
+  };
 }
 function executed(observedResult, result2) {
   return result2.state === "observed" ? observedResult : ambiguous3();

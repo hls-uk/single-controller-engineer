@@ -5718,6 +5718,27 @@ function reduceInternal(
         integrationOwnerUnitId: unit.id,
       });
       break;
+    case "integrate_refused":
+      if (
+        unit.state !== "integrate_intent" ||
+        state.integrationOwnerUnitId !== unit.id ||
+        event.baseOid !== unit.baseOid ||
+        event.integrationOid === unit.reviewHeadOid
+      )
+        return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "integrate"))
+        return badObservation();
+      // The approval and its exact pair survive: nothing landed. The unit
+      // waits at the head of the integration queue for a refresh.
+      result = observe(
+        state,
+        unit,
+        "approved",
+        event,
+        {},
+        { integrationOwnerUnitId: null },
+      );
+      break;
     case "integrate_observed":
       if (
         unit.state !== "integrate_intent" ||

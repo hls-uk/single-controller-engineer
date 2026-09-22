@@ -1627,9 +1627,31 @@ export async function discoverIntegration(
   // Only an exact durable base can authorize the coordinator's one local
   // fast-forward attempt. Missing, foreign, and unreadable refs are never
   // positive absence because they cannot prove the persisted precondition.
-  return current.oid === input.base
-    ? effect("refused", "GIT_ABSENT")
+  if (current.oid === input.base) return effect("refused", "GIT_ABSENT");
+  // The ref moved. If the candidate is not beneath it, nothing of this act
+  // landed and the base is simply stale: an exact refusal, not ambiguity.
+  const landed = await run(runner, repository, [
+    "merge-base",
+    "--is-ancestor",
+    input.candidate,
+    current.oid,
+  ]);
+  const failure = terminalFailure(landed);
+  if (failure !== undefined) return failure;
+  return landed.exitCode === 1
+    ? effect("refused", "GIT_MOVED_BASE")
     : effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
+}
+
+/** Exact head of an integration ref, or undefined when it cannot be read. */
+export async function integrationRefHead(
+  runner: GitRunner,
+  repository: GitRepository,
+  integrationRef: string,
+): Promise<string | undefined> {
+  if (!safeRef(integrationRef)) return undefined;
+  const current = await refOid(runner, repository, integrationRef);
+  return current.state === "found" ? current.oid : undefined;
 }
 
 /** local-ff checks the approved base immediately before merge and reads its result back. */

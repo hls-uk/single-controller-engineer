@@ -5708,3 +5708,60 @@ test("marking a unit effect ambiguous advances that unit's revision so the check
   assert.equal(after.revision, before.revision + 1);
   assert.equal(blocked.nextState.state, "blocked");
 });
+
+test("a refused fast-forward returns the approved unit to approved with its exact pair intact", () => {
+  const approved = approvedCandidate("integrate", "local-ff");
+  const unitId = "unit-1";
+  assert.equal(approved.units[unitId]?.state, "approved");
+  const intended = stepUnit(approved, unitId, "integrate_intent");
+  assert.equal(intended.units[unitId]?.state, "integrate_intent");
+  const refused = observeUnit(
+    intended,
+    unitId,
+    "integrate_refused",
+    "integrate",
+    {
+      baseOid: intended.units[unitId]!.baseOid,
+      integrationOid: OID_C,
+    },
+  );
+  const unit = refused.units[unitId]!;
+  assert.equal(unit.state, "approved");
+  assert.equal(refused.integrationOwnerUnitId, undefined);
+  assert.equal(unit.reviewHeadOid, intended.units[unitId]!.reviewHeadOid);
+  assert.equal(unit.landedOid, undefined);
+  assert.deepEqual(
+    legalActions(refused)
+      .filter((action) => action.unitId === unitId && action.mode === "emit")
+      .map((action) => action.type)
+      .filter(
+        (type) =>
+          ![
+            "cancel_intent",
+            "failure_intent",
+            "park_intent",
+            "timeout_intent",
+          ].includes(type),
+      )
+      .sort(),
+    ["integrate_intent", "refresh_intent"],
+  );
+  // A refusal claiming the ref sits at the candidate head is not a refusal.
+  const contradiction = reduce(
+    intended,
+    event(
+      intended,
+      "integrate_refused",
+      {
+        effectId: intended.effectJournal.find((e) => e.kind === "integrate")!
+          .effectId,
+        effectKind: "integrate",
+        observationHash: HASH,
+        baseOid: intended.units[unitId]!.baseOid,
+        integrationOid: intended.units[unitId]!.reviewHeadOid ?? OID_B,
+      },
+      unitId,
+    ),
+  );
+  assert.equal(contradiction.ok, false);
+});

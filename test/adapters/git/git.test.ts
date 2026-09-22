@@ -30,6 +30,7 @@ import {
   ensureWorktree,
   integrateLocalFastForward,
   integrateRemoteFastForward,
+  integrationRefHead,
   integrationTreeClean,
   isGitSchema,
   nodeGitRunner,
@@ -348,10 +349,23 @@ test("local fast-forward refuses a moved approved base and discovers crash outco
     ).code,
     "GIT_ABSENT",
   );
+  // A moved ref with the candidate provably not beneath it is an exact
+  // refusal; a probe that cannot answer keeps it ambiguous.
+  const movedRef = await discoverIntegration(
+    scripted(...identityResults(), ok(`${sha1("3")}\n`), failed()),
+    repository(),
+    { base, candidate, integrationRef: "refs/heads/main" },
+  );
+  assert.equal(movedRef.state, "refused");
+  assert.equal(movedRef.code, "GIT_MOVED_BASE");
   assert.equal(
     (
       await discoverIntegration(
-        scripted(...identityResults(), ok(`${sha1("3")}\n`)),
+        scripted(...identityResults(), ok(`${sha1("3")}\n`), {
+          exitCode: 128,
+          signal: null,
+          stdout: "",
+        }),
         repository(),
         { base, candidate, integrationRef: "refs/heads/main" },
       )
@@ -1370,4 +1384,38 @@ test("a modified bd passive export never blocks local fast-forward integration; 
     candidate,
   );
   assert.notEqual(base, candidate);
+});
+
+test("discoverIntegration reports a moved base as an exact refusal when the candidate is not beneath the ref", async () => {
+  const { base, cwd } = await setupRepository();
+  const repo = await actualRepository(cwd);
+  await git(cwd, "branch", "unit/probe", base);
+  await writeFile(join(cwd, "main.txt"), "main moved\n");
+  await git(cwd, "add", "main.txt");
+  await git(cwd, "commit", "-m", "main moved");
+  const moved = (await git(cwd, "rev-parse", "HEAD")).trim();
+  const worktreePath = await realpath(
+    await mkdtemp(join(tmpdir(), "sce-git-probe-")),
+  );
+  await rm(worktreePath, { force: true, recursive: true });
+  await git(cwd, "worktree", "add", worktreePath, "unit/probe");
+  await writeFile(join(worktreePath, "unit.txt"), "candidate\n");
+  await git(worktreePath, "add", "unit.txt");
+  await git(worktreePath, "commit", "-m", "candidate");
+  const candidate = (await git(worktreePath, "rev-parse", "HEAD")).trim();
+  const probe = await discoverIntegration(nodeGitRunner, repo, {
+    base,
+    candidate,
+    integrationRef: "refs/heads/main",
+  });
+  assert.equal(probe.state, "refused");
+  assert.equal(probe.code, "GIT_MOVED_BASE");
+  assert.equal(
+    await integrationRefHead(nodeGitRunner, repo, "refs/heads/main"),
+    moved,
+  );
+  assert.equal(
+    await integrationRefHead(nodeGitRunner, repo, "refs/heads/missing"),
+    undefined,
+  );
 });

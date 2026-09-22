@@ -19,6 +19,7 @@ import {
   ensureWorktree,
   integrateLocalFastForward,
   integrateRemoteFastForward,
+  integrationRefHead,
   observeCandidate,
   publishCandidate,
   refreshCandidate,
@@ -1073,17 +1074,23 @@ export function createProductionRecoveryEffectAdapter(
           );
         }
         case "integrate": {
-          if (effect.params.integrationProfile === "local-ff")
-            return discovered(
-              done,
-              await discoverIntegration(git.runner, git.repository, {
+          if (effect.params.integrationProfile === "local-ff") {
+            const probe = await discoverIntegration(
+              git.runner,
+              git.repository,
+              {
                 base: effect.params.candidate.baseOid,
                 candidate: effect.params.candidate.headOid,
                 integrationRef: localIntegrationRef(
                   effect.params.integrationBranch,
                 ),
-              }),
+              },
             );
+            return (
+              (await integrationRefused(effect, run, probe, git)) ??
+              discovered(done, probe)
+            );
+          }
           const configuredRemote = remote(options);
           if (
             effect.params.integrationProfile !== "remote-ff" ||
@@ -1252,17 +1259,23 @@ export function createProductionRecoveryEffectAdapter(
           );
         }
         case "integrate": {
-          if (effect.params.integrationProfile === "local-ff")
-            return executed(
-              done,
-              await integrateLocalFastForward(git.runner, git.repository, {
+          if (effect.params.integrationProfile === "local-ff") {
+            const landed = await integrateLocalFastForward(
+              git.runner,
+              git.repository,
+              {
                 base: effect.params.candidate.baseOid,
                 candidate: effect.params.candidate.headOid,
                 integrationRef: localIntegrationRef(
                   effect.params.integrationBranch,
                 ),
-              }),
+              },
             );
+            return (
+              (await integrationRefused(effect, run, landed, git)) ??
+              executed(done, landed)
+            );
+          }
           const configuredRemote = remote(options);
           if (
             effect.params.integrationProfile !== "remote-ff" ||
@@ -1575,6 +1588,42 @@ function discovered(
     : classification === "absent"
       ? { status: "absent" }
       : ambiguous();
+}
+
+/**
+ * A fast-forward refused because the integration ref moved past the base,
+ * with the candidate provably not beneath it, is an exact fact: nothing
+ * landed. It is observed as `integrate_refused` bound to the current ref
+ * head, so the unit returns to approved for a refresh.
+ */
+async function integrationRefused(
+  effect: Extract<ProtocolEffect, { kind: "integrate" }>,
+  run: RepositoryRun,
+  result: GitEffect,
+  git: ProductionRecoveryEffectAdapterOptions["git"],
+): Promise<Extract<ReconcileResult, { status: "observed" }> | undefined> {
+  if (result.state !== "refused" || result.code !== "GIT_MOVED_BASE")
+    return undefined;
+  const integrationOid = await integrationRefHead(
+    git.runner,
+    git.repository,
+    localIntegrationRef(effect.params.integrationBranch),
+  );
+  if (
+    integrationOid === undefined ||
+    integrationOid === effect.params.candidate.baseOid ||
+    integrationOid === effect.params.candidate.headOid
+  )
+    return undefined;
+  return {
+    observation: {
+      ...eventBase(effect, run),
+      baseOid: effect.params.candidate.baseOid,
+      integrationOid,
+      type: "integrate_refused",
+    } as ProtocolEvent,
+    status: "observed",
+  };
 }
 
 function executed(

@@ -275,7 +275,7 @@ const observationsForEffect: Readonly<Record<EffectKind, readonly string[]>> = {
   review_dispatch: ["reviewer_observed"],
   review_collect: ["review_collected"],
   publish: ["publish_observed"],
-  integrate: ["integrate_observed"],
+  integrate: ["integrate_observed", "integrate_refused"],
   reservation_release: ["reservation_released"],
   repair: ["repair_observed"],
   failure: ["failure_observed"],
@@ -511,7 +511,10 @@ function lifecycleActions(
         : [];
     case "integrate_intent":
       return state.integrationOwnerUnitId === unit.id
-        ? [unitAction(unit, "integrate_observed", "record", "integrate")]
+        ? [
+            unitAction(unit, "integrate_observed", "record", "integrate"),
+            unitAction(unit, "integrate_refused", "record", "integrate"),
+          ]
         : [];
     case "landed":
     case "handoff":
