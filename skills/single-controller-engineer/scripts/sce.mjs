@@ -12712,6 +12712,16 @@ function reduceWavePlan(state, event) {
     []
   );
 }
+function workerPacketBase(unit) {
+  if (unit.workerPacket === void 0) return void 0;
+  try {
+    const decoded = JSON.parse(unit.workerPacket.payload);
+    const base = decoded !== null && typeof decoded === "object" ? decoded.baseOid : void 0;
+    return typeof base === "string" ? base : void 0;
+  } catch {
+    return void 0;
+  }
+}
 function canonicalTaskMetadata(task) {
   return {
     ...task,
@@ -15549,7 +15559,10 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
         {
           ...retained,
           baseOid: event.baseOid,
-          launchBaseOid: retained.launchBaseOid ?? unit.baseOid
+          // The launch base is the base the current worker packet binds: a
+          // repair since the last refresh launched a new packet on the base
+          // being left now, an untouched packet keeps its recorded base.
+          launchBaseOid: workerPacketBase(unit) ?? unit.baseOid
         }
       );
       break;

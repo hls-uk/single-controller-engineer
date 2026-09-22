@@ -1448,6 +1448,21 @@ function reduceWavePlan(
   );
 }
 
+/** The base the unit's current worker packet was launched against, if any. */
+function workerPacketBase(unit: Unit): string | undefined {
+  if (unit.workerPacket === undefined) return undefined;
+  try {
+    const decoded = JSON.parse(unit.workerPacket.payload) as unknown;
+    const base =
+      decoded !== null && typeof decoded === "object"
+        ? (decoded as { readonly baseOid?: unknown }).baseOid
+        : undefined;
+    return typeof base === "string" ? base : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The exact at-rest form of a task; a planned unit stores nothing else. */
 export function canonicalTaskMetadata(
   task: WaveTaskMetadata,
@@ -5375,7 +5390,10 @@ function reduceInternal(
         {
           ...retained,
           baseOid: event.baseOid,
-          launchBaseOid: retained.launchBaseOid ?? unit.baseOid,
+          // The launch base is the base the current worker packet binds: a
+          // repair since the last refresh launched a new packet on the base
+          // being left now, an untouched packet keeps its recorded base.
+          launchBaseOid: workerPacketBase(unit) ?? unit.baseOid,
         },
       );
       break;

@@ -9,6 +9,7 @@ import {
 } from "../../src/fencing/index.js";
 import {
   compareProtocolText,
+  deriveCandidateDiffHash,
   deriveClosedUnitEvidenceCommitment,
   deriveGateEntryId,
   deriveIdempotencyKey,
@@ -50,6 +51,7 @@ import {
 import { canonicalJson, type JsonValue } from "../../src/protocol/canonical.js";
 import { sha256 } from "../../src/protocol/evidence.js";
 import {
+  CANDIDATE_DIFF,
   HASH,
   OID_A,
   OID_B,
@@ -5788,4 +5790,79 @@ test("a refused fast-forward returns the approved unit to approved with its exac
     ),
   );
   assert.equal(contradiction.ok, false);
+});
+
+test("a refresh after a repair binds the launch base to the repair packet, not the first refresh", () => {
+  const unitId = "unit-1";
+  // First refresh moves the unit off OID_A; the original packet stays bound to OID_A.
+  const committed = completeCandidate();
+  const first = observeUnit(
+    stepUnit(committed, unitId, "refresh_intent", { baseOid: OID_B }),
+    unitId,
+    "refresh_observed",
+    "candidate_refresh",
+    { baseOid: OID_B, headOid: OID_C, treeOid: OID_C },
+  );
+  assert.equal(first.units[unitId]?.launchBaseOid, OID_A);
+  // A failed verification on the new base, then a repair packet bound to OID_B.
+  let state = stepUnit(first, unitId, "candidate_intent", {});
+  state = observeUnit(
+    state,
+    unitId,
+    "candidate_observed",
+    "candidate_collect",
+    {
+      headOid: OID_C,
+      treeOid: OID_C,
+      candidateDiffHash: deriveCandidateDiffHash(CANDIDATE_DIFF),
+    },
+  );
+  state = stepUnit(state, unitId, "verification_intent", {
+    commands: state.units[unitId]!.taskMetadata!.mandatoryVerification,
+  });
+  state = observeUnit(state, unitId, "verification_failed", "verify", {
+    baseOid: OID_B,
+    headOid: OID_C,
+    treeOid: OID_C,
+  });
+  assert.equal(state.units[unitId]?.state, "repair_required");
+  const context = state.units[unitId]!.repairContext!;
+  const judgmentBase = {
+    schemaVersion: 1 as const,
+    role: "controller" as const,
+    kind: "repair_disposition" as const,
+    unitId,
+    sessionId: state.controller.incarnationId,
+    requestedModel: state.controller.requestedModel,
+    returnedModel: state.controller.returnedModel,
+    aggregateRevision: state.revision,
+    rationale: "repair",
+    factOid: context.headOid ?? context.baseOid,
+    decision: "repair" as const,
+    ...repairEvidence(state, unitId),
+  };
+  state = stepUnit(state, unitId, "repair_intent", { judgment: judgmentBase });
+  assert.equal(state.units[unitId]?.state, "repair_intent");
+  state = observeUnit(state, unitId, "repair_observed", "repair", {
+    sessionId: "worker-repair-1",
+    returnedModel: "workhorse-1",
+  });
+  state = stepUnit(state, unitId, "collect_intent", {});
+  state = observeUnit(state, unitId, "worker_collected", "worker_collect", {
+    sessionId: "worker-repair-1",
+    returnedModel: "workhorse-1",
+    workerResult: { status: "completed", summary: "done", residualRisks: [] },
+  });
+  assert.equal(state.units[unitId]?.state, "collected");
+  // Second refresh: the repair packet binds OID_B, so the launch base follows it.
+  const second = observeUnit(
+    stepUnit(state, unitId, "refresh_intent", { baseOid: OID_C }),
+    unitId,
+    "refresh_observed",
+    "candidate_refresh",
+    { baseOid: OID_C, headOid: OID_B, treeOid: OID_B },
+  );
+  assert.equal(second.units[unitId]?.baseOid, OID_C);
+  assert.equal(second.units[unitId]?.launchBaseOid, OID_B);
+  assert.deepEqual(runInvariantErrors(second), []);
 });
