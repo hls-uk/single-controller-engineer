@@ -84,7 +84,56 @@ externally managed `dolt sql-server` instead. Choose one topology and keep
 it; the skill's preflight refuses ambiguous or mixed configurations rather
 than guessing.
 
-## 4. Run the loop
+## 4. Compose the controller configuration
+
+Every run is driven by one explicit `sce.controller-config` document: the
+repository's Git identity, the fencing scope, the harness capability matrix
+with its commitment, a pristine initial run, the embedded Beads topology with
+its preflight envelope and, for a knowledge repository, the contract derived
+from `knowledge-manifest.json`. `compose-config` observes the repository and
+writes that document, self-validated through the same strict parser the
+engine uses, so nothing is typed by hand:
+
+```sh
+export HLS_PROVENANCE_WORKTREE_ROOT=/abs/path/outside/the/repo   # knowledge repositories only
+sce compose-config --harness claude --root-bead <epic-id> \
+  --output /abs/path/controller-config.json --bind-slot --json
+```
+
+- `--harness` is `claude` or `codex`; the default model routes for the family
+  are starting points, override them with `--controller-model`,
+  `--frontier-model` and `--workhorse-model` if your host returns other ids.
+- The Beads mode follows `bd config sync.remote`: a configured remote means
+  `git-sync`, none means `local-only`. In `git-sync` mode the Dolt data must
+  already be on the remote (`bd dolt push`), or the first acquire refuses the
+  store as ambiguous; the result's `doltSync` field says where you stand.
+- `--bind-slot` performs the one authorized bootstrap the engine's normal
+  acquire path never does: it binds the fresh `<prefix>-merge-slot` bead to
+  the run's scope (and pushes the Dolt data in `git-sync` mode). Without it
+  the result warns and the first `acquire-controller` is quarantined. A slot
+  already bound to a different scope is reported as `foreign` and never
+  rebound.
+- A `knowledge-manifest.json` at the repository root is projected into the
+  knowledge contract automatically; `--no-knowledge` ignores it and
+  `--knowledge` requires it. Every mount-path variable and the provenance
+  worktree-root variable must be exported as canonical absolute paths first.
+- The engine pins `bd` 1.1.0 and `dolt` 2.2.1 exactly. A mismatch is refused
+  with `SCE_COMPOSE_EXECUTABLE_VERSION`; install the pinned release and pass
+  `--bd-executable` or `--dolt-executable`.
+- The result's `firstRequest` is the exact `acquire-controller` request the
+  fresh run accepts (its idempotency key is derived from the run identities),
+  so the first command is:
+
+```sh
+sce acquire-controller --controller-config /abs/path/controller-config.json \
+  --json --request '<firstRequest.request>'
+```
+
+Compose once per run: the document carries the run and incarnation ids, and
+recomposing after a run has started produces a different holder that the
+store refuses.
+
+## 5. Run the loop
 
 Open your agent host in the target repository and invoke the
 `single-controller-engineer` skill. The skill walks the controller through

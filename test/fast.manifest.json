@@ -4,6 +4,7 @@
   "roots": [
     "test/cli/cli.test.ts",
     "test/commands/recovery.test.ts",
+    "test/compose",
     "test/controller-config.test.ts",
     "test/eval",
     "test/feedback",
@@ -20,6 +21,7 @@
   "expectedFiles": [
     "test/cli/cli.test.ts",
     "test/commands/recovery.test.ts",
+    "test/compose/compose.test.ts",
     "test/controller-config.test.ts",
     "test/eval/controller-config-example.test.ts",
     "test/eval/distribution-support.test.ts",

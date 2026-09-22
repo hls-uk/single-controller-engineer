@@ -22,6 +22,12 @@ provider, or send feedback.
    knowledge contract exactly as [the knowledge contract](references/knowledge-contract.md)
    describes: alias roots and the provenance worktree root come only from the
    named environment variables; the contract is recorded at `wave_planned`.
+   For a repository's first run, export those variables and run
+   `sce compose-config --harness <family> --root-bead <epic> --output <abs>
+--bind-slot --json` from the shared runtime; it projects the manifest
+   into the contract, self-validates the document, binds the fresh merge
+   slot, and prints the exact first `acquire-controller` request. Reuse the
+   document for the rest of the run; recomposing changes the holder.
 3. Load authoritative Beads state (`bd prime`, then structured `bd show` or
    `bd ready`). The merge slot bead is a lock, never user work.
 4. Run pure preflight with the shared runtime,

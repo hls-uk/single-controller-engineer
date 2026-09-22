@@ -1,0 +1,1106 @@
+/**
+ * Controller-configuration onboarding.  `composeControllerConfig` is a pure
+ * function from an explicit repository observation to a candidate
+ * `sce.controller-config` document; `observeRepository` is the only part that
+ * touches the host (read-only preflight, Git remote inspection, executable
+ * lookup, manifest read).  The composed document is self-validated through the
+ * same strict parser the CLI uses before it is written, so a caller never
+ * receives a configuration the engine would later refuse.
+ */
+import { randomUUID } from "node:crypto";
+import { access, constants, readFile, stat, writeFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
+
+import {
+  HARNESS_VERSION,
+  harnessSupportCommitment,
+  parseHarnessSupport,
+  type HarnessSupport,
+  type HarnessTrustClassification,
+} from "../harness/index.js";
+import { canonicalJson, type JsonValue } from "../protocol/canonical.js";
+import {
+  deriveIdempotencyKey,
+  runInvariantErrors,
+} from "../protocol/reducer.js";
+import {
+  RepositoryRunSchema,
+  validate,
+  type AuthorityProfile,
+  type CompletionBoundary,
+  type IntegrationProfile,
+  type RepositoryRun,
+} from "../protocol/schemas.js";
+import {
+  canonicalLocalBareRepository,
+  containsSecretShape,
+  inspectPreflight,
+  normalizeGitRemote,
+  parseGitRemoteConfigOutput,
+  type PreflightEnvelope,
+} from "../preflight/index.js";
+import { validateControllerConfigDocument } from "../controller-config.js";
+import {
+  DoltProjectionPersistence,
+  PINNED_BD_VERSION,
+  PINNED_DOLT_VERSION,
+  PinnedBdEmbeddedProcess,
+  SLOT_INITIALIZATION_AUTHORITY,
+} from "../adapters/beads-embedded/index.js";
+import {
+  MERGE_SLOT_LABEL,
+  MERGE_SLOT_TITLE,
+  deriveScopeCommitment,
+  type FencingScope,
+} from "../fencing/index.js";
+
+export const COMPOSE_SCHEMA = "sce.compose-config" as const;
+export const KNOWLEDGE_MANIFEST_FILE = "knowledge-manifest.json";
+export const harnessFamilies = ["claude", "codex"] as const;
+export type HarnessFamily = (typeof harnessFamilies)[number];
+export type BeadsMode = "local-only" | "git-sync";
+
+const ZERO_HASH = "0".repeat(64);
+const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u;
+const HOLDER_PART = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
+const ENVIRONMENT_NAME = /^[A-Z_][A-Z0-9_]{0,159}$/u;
+const MAX_MANIFEST_BYTES = 256 * 1024;
+
+/**
+ * Default model routes per harness family.  They are starting points a caller
+ * overrides explicitly; the engine records requested and returned identities
+ * and never substitutes silently, so a wrong default fails at dispatch rather
+ * than degrading.
+ */
+export const defaultModelRoutes: Readonly<
+  Record<
+    HarnessFamily,
+    Readonly<{ controller: string; frontier: string; workhorse: string }>
+  >
+> = {
+  claude: {
+    controller: "claude-fable-5-1",
+    frontier: "claude-fable-5-1",
+    workhorse: "claude-opus-5",
+  },
+  codex: {
+    controller: "gpt-5.6-sol",
+    frontier: "gpt-5.6-sol",
+    workhorse: "gpt-5.6-terra",
+  },
+};
+
+/** Capability matrices as classified by DEC-20260901-008/009. */
+const familyOperations: Readonly<
+  Record<HarnessFamily, HarnessSupport["capabilities"]["operations"]>
+> = {
+  claude: {
+    cancel: true,
+    collect: true,
+    controllerIdentity: false,
+    inspect: true,
+    launch: true,
+    lookupByClientKey: false,
+    poll: true,
+    returnedModelIdentity: true,
+  },
+  codex: {
+    cancel: true,
+    collect: true,
+    controllerIdentity: true,
+    inspect: true,
+    launch: true,
+    lookupByClientKey: true,
+    poll: true,
+    returnedModelIdentity: true,
+  },
+};
+
+const authorityShape: Readonly<
+  Record<
+    AuthorityProfile,
+    Readonly<{
+      completionBoundary: CompletionBoundary;
+      integrationProfile: IntegrationProfile;
+      needsRemote: boolean;
+    }>
+  >
+> = {
+  "local-change-only": {
+    completionBoundary: "local-integration",
+    integrationProfile: "local-ff",
+    needsRemote: false,
+  },
+  "push-branch": {
+    completionBoundary: "branch-handoff",
+    integrationProfile: "none",
+    needsRemote: true,
+  },
+  "open-pr": {
+    completionBoundary: "pr-handoff",
+    integrationProfile: "none",
+    needsRemote: true,
+  },
+  integrate: {
+    completionBoundary: "remote-integration",
+    integrationProfile: "remote-ff",
+    needsRemote: true,
+  },
+};
+
+/**
+ * A configured Git remote with the same normalized identity preflight derives
+ * (local bare paths are realpath-proven by the observer, never by the pure
+ * composer), so `bd`'s `sync.remote` can be matched by identity.
+ */
+export type GitRemoteObservation = Readonly<{
+  name: string;
+  normalized: string | undefined;
+  url: string;
+}>;
+
+/** Everything the composer needs, observed once and passed in explicitly. */
+export type RepositoryObservation = Readonly<{
+  bdExecutable: string;
+  currentBranch: string | undefined;
+  doltExecutable: string;
+  environment: (name: string) => string | undefined;
+  /** Parsed `knowledge-manifest.json`, or undefined when the file is absent. */
+  manifest: unknown;
+  manifestPath: string | undefined;
+  preflight: PreflightEnvelope;
+  remotes: readonly GitRemoteObservation[];
+}>;
+
+export type ComposeOptions = Readonly<{
+  authorityProfile?: AuthorityProfile;
+  beadsMode?: BeadsMode;
+  harnessFamily: HarnessFamily;
+  /** Test seams; production callers leave them unset. */
+  identities?: Readonly<{
+    fencingToken?: string;
+    incarnationId?: string;
+    nonce?: string;
+    runId?: string;
+  }>;
+  integrationBranch?: string;
+  /** `true` requires a manifest, `false` ignores one, unset means "if present". */
+  knowledge?: boolean;
+  models?: Readonly<{
+    controller?: string;
+    frontier?: string;
+    workhorse?: string;
+  }>;
+  rootBeadId: string;
+}>;
+
+export type ComposeFailureCode =
+  | "SCE_COMPOSE_BRANCH_MISSING"
+  | "SCE_COMPOSE_CONFIG_REJECTED"
+  | "SCE_COMPOSE_ENVIRONMENT_MISSING"
+  | "SCE_COMPOSE_HARNESS_INVALID"
+  | "SCE_COMPOSE_MANIFEST_INVALID"
+  | "SCE_COMPOSE_MANIFEST_MISSING"
+  | "SCE_COMPOSE_OPTION_INVALID"
+  | "SCE_COMPOSE_PREFLIGHT_REFUSED"
+  | "SCE_COMPOSE_PREFLIGHT_UNINITIALIZED"
+  | "SCE_COMPOSE_REMOTE_MISSING"
+  | "SCE_COMPOSE_STORE_IDENTITY_MISSING"
+  | "SCE_COMPOSE_SYNC_MODE_MISMATCH"
+  | "SCE_COMPOSE_TOPOLOGY_UNSUPPORTED";
+
+/** The exact first command a fresh run accepts; the engine adds the slot plan. */
+export type FirstAcquireRequest = Readonly<{
+  command: "acquire-controller";
+  request: Readonly<{
+    event: Readonly<{
+      eventId: string;
+      expectedRevision: 0;
+      idempotencyKey: string;
+      type: "controller_acquire_intent";
+    }>;
+  }>;
+}>;
+
+export type ComposeSummary = Readonly<{
+  authorityProfile: AuthorityProfile;
+  beadsMode: BeadsMode;
+  classification: HarnessTrustClassification;
+  firstRequest: FirstAcquireRequest;
+  harnessFamily: HarnessFamily;
+  integrationBranch: string;
+  knowledge: boolean;
+  models: Readonly<{ controller: string; frontier: string; workhorse: string }>;
+  repositoryIdentity: string;
+  rootBeadId: string;
+  storeIdentity: string;
+  warnings: readonly string[];
+}>;
+
+export type ComposeResult =
+  | Readonly<{
+      config: JsonValue;
+      ok: true;
+      summary: ComposeSummary;
+    }>
+  | Readonly<{ code: ComposeFailureCode; message: string; ok: false }>;
+
+function fail(code: ComposeFailureCode, message: string): ComposeResult {
+  return { code, message, ok: false };
+}
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function identifier(value: unknown): string | undefined {
+  return typeof value === "string" && IDENTIFIER.test(value)
+    ? value
+    : undefined;
+}
+
+function shortRandom(): string {
+  return randomUUID().replaceAll("-", "").slice(0, 12);
+}
+
+function dateStamp(): string {
+  return new Date().toISOString().slice(0, 10).replaceAll("-", "");
+}
+
+/** Builds the harness support matrix for a family with explicit model routes. */
+export function harnessSupportFor(
+  family: HarnessFamily,
+  models: Readonly<{ controller: string; frontier: string; workhorse: string }>,
+): HarnessSupport {
+  return {
+    capabilities: {
+      adapterVersion: HARNESS_VERSION,
+      family,
+      harnessVersion: HARNESS_VERSION,
+      operations: familyOperations[family],
+      schema: "sce.harness-capabilities",
+      version: HARNESS_VERSION,
+    },
+    controller: {
+      acceptedReturnedModels: [models.controller],
+      requestedModel: models.controller,
+    },
+    frontier: {
+      acceptedReturnedModels: [models.frontier],
+      requestedModel: models.frontier,
+    },
+    schema: "sce.harness-support",
+    version: HARNESS_VERSION,
+    workhorse: {
+      acceptedReturnedModels: [models.workhorse],
+      requestedModel: models.workhorse,
+    },
+  };
+}
+
+type ManifestContract = Readonly<{
+  contract: Record<string, unknown>;
+  variables: readonly string[];
+}>;
+
+/**
+ * Projects the repository manifest onto the unresolved knowledge-contract
+ * shape the configuration parser accepts.  Environment variable names are
+ * carried as names; the parser resolves them at load time.
+ */
+export function knowledgeContractFromManifest(
+  manifest: unknown,
+): ManifestContract | undefined {
+  const value = record(manifest);
+  const provenance = record(value?.provenance);
+  const verification = record(value?.verification);
+  const artifactHomes = record(value?.artifactHomes);
+  if (
+    value === undefined ||
+    value.schema !== "sce.knowledge-manifest" ||
+    value.version !== 1 ||
+    provenance === undefined ||
+    verification === undefined ||
+    artifactHomes === undefined ||
+    typeof artifactHomes.generated !== "string" ||
+    !Array.isArray(value.driveAliases) ||
+    !Array.isArray(value.materialisationTargets)
+  )
+    return undefined;
+  const variables: string[] = [];
+  const aliases: Record<string, unknown>[] = [];
+  for (const candidate of value.driveAliases) {
+    const alias = record(candidate);
+    if (
+      alias === undefined ||
+      typeof alias.mountPathVariable !== "string" ||
+      !ENVIRONMENT_NAME.test(alias.mountPathVariable)
+    )
+      return undefined;
+    variables.push(alias.mountPathVariable);
+    aliases.push({
+      alias: alias.alias,
+      markerFile: alias.markerFile,
+      mountPathVariable: alias.mountPathVariable,
+      mountPolicy: alias.mountPolicy,
+      namespaceControl: alias.namespaceControl,
+    });
+  }
+  if (
+    typeof provenance.worktreeRootVariable !== "string" ||
+    !ENVIRONMENT_NAME.test(provenance.worktreeRootVariable)
+  )
+    return undefined;
+  variables.push(provenance.worktreeRootVariable);
+  return {
+    contract: {
+      aliases,
+      audience: value.audience,
+      domainScope: value.accessDomainId,
+      gateTargets: value.materialisationTargets,
+      humanDriver: value.humanDriver,
+      projectId: value.projectId,
+      provenance: {
+        eventsDirectory: provenance.eventsDirectory,
+        generatedDirectory: artifactHomes.generated,
+        recordFormatVersion: provenance.recordFormatVersion,
+        reproducibilityCommand: provenance.reproducibilityCommand,
+        rollupGeneratorCommand: provenance.rollupGeneratorCommand,
+        worktreeRootVariable: provenance.worktreeRootVariable,
+      },
+      verification: {
+        fast: verification.fast,
+        integration: verification.integration,
+        release: verification.release,
+      },
+    },
+    variables,
+  };
+}
+
+/** The pristine run a first `acquire-controller` starts from. */
+export function pristineInitialRun(
+  input: Readonly<{
+    authorityProfile: AuthorityProfile;
+    fencingToken: string;
+    gitObjectFormat: "sha1" | "sha256";
+    harness: Readonly<{ family: string; supportCommitment: string }>;
+    incarnationId: string;
+    integrationBranch: string;
+    repositoryIdentity: string;
+    requestedModel: string;
+    runId: string;
+    storeIdentity: string;
+  }>,
+): RepositoryRun {
+  const shape = authorityShape[input.authorityProfile];
+  return {
+    revision: 0,
+    state: "initializing",
+    storeIdentity: input.storeIdentity,
+    repositoryIdentity: input.repositoryIdentity,
+    integrationBranch: input.integrationBranch,
+    authorityProfile: input.authorityProfile,
+    completionBoundary: shape.completionBoundary,
+    integrationProfile: shape.integrationProfile,
+    gitObjectFormat: input.gitObjectFormat,
+    controllerFencingToken: input.fencingToken,
+    controller: {
+      runId: input.runId,
+      incarnationId: input.incarnationId,
+      holder: `${input.runId}/${input.incarnationId}`,
+      requestedModel: input.requestedModel,
+      returnedModel: input.requestedModel,
+      promptHash: ZERO_HASH,
+      state: "unacquired",
+    },
+    harness: {
+      adapterVersion: HARNESS_VERSION,
+      family: input.harness.family,
+      harnessVersion: HARNESS_VERSION,
+      supportCommitment: input.harness.supportCommitment,
+    },
+    units: {},
+    reservations: {},
+    activeModifyingUnitIds: [],
+    wave: { id: `${input.runId}-wave-0`, unitIds: [] },
+    qualificationQueue: [],
+    integrationQueue: [],
+    effectJournal: [],
+    processedEventIds: [],
+    processedIdempotencyKeys: [],
+    usedSessionCount: 0,
+    sessionLineage: "",
+    sessionLineageRoot: ZERO_HASH,
+    closedUnitEvidence: "",
+    closedUnitEvidenceCommitment: ZERO_HASH,
+    journalCheckpoint: {
+      revision: 0,
+      compactedEffects: 0,
+      compactedEvents: 0,
+      compactedIdempotencyKeys: 0,
+      commitment: ZERO_HASH,
+    },
+    journalCommitment: ZERO_HASH,
+  };
+}
+
+/** Pure composition: observation plus options to a self-validated document. */
+export function composeControllerConfig(
+  observation: RepositoryObservation,
+  options: ComposeOptions,
+): ComposeResult {
+  const warnings: string[] = [];
+  const preflight = observation.preflight.payload;
+  if (preflight.status === "refused")
+    return fail(
+      "SCE_COMPOSE_PREFLIGHT_REFUSED",
+      `Preflight refused the repository (${preflight.code}).`,
+    );
+  if (preflight.status === "uninitialized")
+    return fail(
+      "SCE_COMPOSE_PREFLIGHT_UNINITIALIZED",
+      "Beads is not initialized here; run bd init and bd merge-slot create first.",
+    );
+  const beads = preflight.beads;
+  if (beads.mode !== "embedded")
+    return fail(
+      "SCE_COMPOSE_TOPOLOGY_UNSUPPORTED",
+      `compose-config supports the embedded Beads topology only (observed ${beads.mode}); compose a shared-server configuration by hand.`,
+    );
+  if (
+    beads.projectId === undefined ||
+    beads.storePath === undefined ||
+    beads.database === undefined ||
+    beads.prefix === undefined
+  )
+    return fail(
+      "SCE_COMPOSE_STORE_IDENTITY_MISSING",
+      "bd context did not report a project id, store path, database and prefix.",
+    );
+  const rootBeadId = identifier(options.rootBeadId);
+  if (rootBeadId === undefined || !rootBeadId.startsWith(`${beads.prefix}-`))
+    return fail(
+      "SCE_COMPOSE_OPTION_INVALID",
+      `--root-bead must be an issue id with the ${beads.prefix} prefix.`,
+    );
+  const integrationBranch =
+    options.integrationBranch ?? observation.currentBranch;
+  if (
+    integrationBranch === undefined ||
+    identifier(integrationBranch) === undefined
+  )
+    return fail(
+      "SCE_COMPOSE_BRANCH_MISSING",
+      "The integration branch could not be observed; pass --branch.",
+    );
+  const authorityProfile = options.authorityProfile ?? "local-change-only";
+  const syncConfigured = beads.syncRemote !== undefined;
+  const beadsMode: BeadsMode =
+    options.beadsMode ?? (syncConfigured ? "git-sync" : "local-only");
+  if (beadsMode === "git-sync" && !syncConfigured)
+    return fail(
+      "SCE_COMPOSE_SYNC_MODE_MISMATCH",
+      "git-sync mode needs bd config sync.remote; none is configured, use --beads-mode local-only.",
+    );
+  if (beadsMode === "local-only" && syncConfigured)
+    return fail(
+      "SCE_COMPOSE_SYNC_MODE_MISMATCH",
+      "bd config sync.remote is set, so the embedded adapter requires git-sync mode; omit --beads-mode or pass git-sync.",
+    );
+  const syncRemote =
+    beads.syncRemote === undefined
+      ? undefined
+      : observation.remotes.find(
+          (remote) => remote.normalized === beads.syncRemote,
+        );
+  if (beadsMode === "git-sync" && syncRemote === undefined)
+    return fail(
+      "SCE_COMPOSE_REMOTE_MISSING",
+      "No Git remote matches bd's configured sync.remote.",
+    );
+  const remoteName =
+    syncRemote?.name ??
+    observation.remotes.find((remote) => remote.name === "origin")?.name ??
+    observation.remotes[0]?.name;
+  if (authorityShape[authorityProfile].needsRemote && remoteName === undefined)
+    return fail(
+      "SCE_COMPOSE_REMOTE_MISSING",
+      `The ${authorityProfile} authority profile needs a Git remote; none is configured.`,
+    );
+
+  const models = {
+    controller:
+      options.models?.controller ??
+      defaultModelRoutes[options.harnessFamily].controller,
+    frontier:
+      options.models?.frontier ??
+      defaultModelRoutes[options.harnessFamily].frontier,
+    workhorse:
+      options.models?.workhorse ??
+      defaultModelRoutes[options.harnessFamily].workhorse,
+  };
+  const harnessSupport = harnessSupportFor(options.harnessFamily, models);
+  const parsedHarness = parseHarnessSupport(harnessSupport);
+  const commitment = harnessSupportCommitment(harnessSupport);
+  if (!parsedHarness.ok || !commitment.ok)
+    return fail(
+      "SCE_COMPOSE_HARNESS_INVALID",
+      parsedHarness.ok
+        ? "harness support cannot be committed"
+        : parsedHarness.reason,
+    );
+  if (parsedHarness.classification.dispatchRecovery === "at-most-once-manual")
+    warnings.push(
+      "The harness family is classified at-most-once-manual: an ambiguous author launch blocks for a human observation.",
+    );
+  if (parsedHarness.classification.tierEnforcement === "unavailable")
+    warnings.push(
+      "Tier enforcement is unavailable for this harness family: paths that need a proven controller tier fail explicitly.",
+    );
+
+  let knowledgeContract: Record<string, unknown> | undefined;
+  const wantsKnowledge =
+    options.knowledge ?? observation.manifest !== undefined;
+  if (wantsKnowledge) {
+    if (observation.manifest === undefined)
+      return fail(
+        "SCE_COMPOSE_MANIFEST_MISSING",
+        `--knowledge was requested but ${KNOWLEDGE_MANIFEST_FILE} is absent.`,
+      );
+    const projected = knowledgeContractFromManifest(observation.manifest);
+    if (projected === undefined)
+      return fail(
+        "SCE_COMPOSE_MANIFEST_INVALID",
+        `${KNOWLEDGE_MANIFEST_FILE} is not a version 1 sce.knowledge-manifest the composer can project.`,
+      );
+    const missing = projected.variables.filter((name) => {
+      const value = observation.environment(name);
+      return (
+        value === undefined ||
+        !isAbsolute(value) ||
+        resolve(value) !== value ||
+        containsSecretShape(value)
+      );
+    });
+    if (missing.length > 0)
+      return fail(
+        "SCE_COMPOSE_ENVIRONMENT_MISSING",
+        `Set these variables to canonical absolute paths before composing: ${missing.join(", ")}.`,
+      );
+    knowledgeContract = projected.contract;
+  } else if (observation.manifest !== undefined)
+    warnings.push(
+      `${KNOWLEDGE_MANIFEST_FILE} is present but ignored (--no-knowledge); the run will be a software run.`,
+    );
+
+  const runId =
+    options.identities?.runId ?? `run-${dateStamp()}-${shortRandom()}`;
+  const incarnationId =
+    options.identities?.incarnationId ?? `inc-${shortRandom()}`;
+  const fencingToken =
+    options.identities?.fencingToken ?? `fence-${shortRandom()}`;
+  const nonce = options.identities?.nonce ?? `nonce-${shortRandom()}`;
+  for (const [name, value] of [
+    ["runId", runId],
+    ["incarnationId", incarnationId],
+  ] as const)
+    if (!HOLDER_PART.test(value))
+      return fail(
+        "SCE_COMPOSE_OPTION_INVALID",
+        `${name} is not a valid holder part.`,
+      );
+  if (identifier(fencingToken) === undefined || identifier(nonce) === undefined)
+    return fail(
+      "SCE_COMPOSE_OPTION_INVALID",
+      "identities must be identifiers.",
+    );
+
+  const initialRun = pristineInitialRun({
+    authorityProfile,
+    fencingToken,
+    gitObjectFormat: preflight.git.objectFormat,
+    harness: {
+      family: options.harnessFamily,
+      supportCommitment: commitment.value,
+    },
+    incarnationId,
+    integrationBranch,
+    repositoryIdentity: preflight.git.identity,
+    requestedModel: models.controller,
+    runId,
+    storeIdentity: beads.projectId,
+  });
+  const runValidation = validate<RepositoryRun>(
+    RepositoryRunSchema,
+    initialRun,
+  );
+  const invariantErrors = runValidation.ok
+    ? runInvariantErrors(initialRun)
+    : ["schema"];
+  if (!runValidation.ok || invariantErrors.length > 0)
+    return fail(
+      "SCE_COMPOSE_CONFIG_REJECTED",
+      `The pristine run failed its own invariants: ${invariantErrors.join("; ")}.`,
+    );
+
+  const config: Record<string, unknown> = {
+    schema: "sce.controller-config",
+    version: 1,
+    nonce,
+    git: {
+      ...(authorityShape[authorityProfile].needsRemote &&
+      remoteName !== undefined
+        ? { remote: remoteName }
+        : {}),
+      repository: {
+        commonDir: preflight.git.commonDir,
+        cwd: preflight.git.topLevel,
+        identity: preflight.git.identity,
+        objectFormat: preflight.git.objectFormat,
+        remoteUrls: observation.remotes.map((remote) => remote.url),
+      },
+    },
+    scope: {
+      beadsStoreIdentity: beads.projectId,
+      gitRepositoryIdentity: preflight.git.identity,
+      integrationBranch,
+    },
+    harnessSupport,
+    initialRun,
+    ...(knowledgeContract === undefined ? {} : { knowledgeContract }),
+    topology: {
+      kind: "embedded",
+      mode: beadsMode,
+      bdExecutable: observation.bdExecutable,
+      doltExecutable: observation.doltExecutable,
+      databaseDirectory: join(beads.storePath, beads.database),
+      prefix: beads.prefix,
+      rootBeadId,
+      childBeadIds: {},
+      ...(beadsMode === "git-sync" &&
+      syncRemote !== undefined &&
+      beads.syncRemote !== undefined
+        ? {
+            remote: {
+              name: syncRemote.name,
+              ref: "refs/dolt/data",
+              url: beads.syncRemote,
+            },
+          }
+        : {}),
+      preflight: observation.preflight,
+    },
+  };
+  if (
+    !validateControllerConfigDocument(
+      JSON.parse(canonicalJson(config as JsonValue)) as unknown,
+      observation.environment,
+    )
+  )
+    return fail(
+      "SCE_COMPOSE_CONFIG_REJECTED",
+      "The composed document was refused by the strict controller-config parser.",
+    );
+  return {
+    config: config as JsonValue,
+    ok: true,
+    summary: {
+      authorityProfile,
+      beadsMode,
+      classification: parsedHarness.classification,
+      firstRequest: {
+        command: "acquire-controller",
+        request: {
+          event: {
+            eventId: `${runId}-acquire-1`,
+            expectedRevision: 0,
+            idempotencyKey: deriveIdempotencyKey(
+              initialRun,
+              0,
+              null,
+              "controller_acquire",
+            ),
+            type: "controller_acquire_intent",
+          },
+        },
+      },
+      harnessFamily: options.harnessFamily,
+      integrationBranch,
+      knowledge: knowledgeContract !== undefined,
+      models,
+      repositoryIdentity: preflight.git.identity,
+      rootBeadId,
+      storeIdentity: beads.projectId,
+      warnings,
+    },
+  };
+}
+
+type Captured = Readonly<{ ok: boolean; stdout: string }>;
+
+function capture(
+  cwd: string,
+  executable: string,
+  argv: readonly string[],
+): Promise<Captured> {
+  return new Promise((resolveCapture) => {
+    const child = spawn(executable, argv, {
+      cwd,
+      env: process.env,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const chunks: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
+    child.on("error", () => resolveCapture({ ok: false, stdout: "" }));
+    child.on("close", (code) =>
+      resolveCapture({
+        ok: code === 0,
+        stdout: Buffer.concat(chunks).toString("utf8"),
+      }),
+    );
+  });
+}
+
+/** Resolves an executable on PATH to an absolute path, or undefined. */
+export async function findExecutable(
+  name: string,
+  environmentPath: string | undefined = process.env.PATH,
+): Promise<string | undefined> {
+  if (isAbsolute(name)) return (await executable(name)) ? name : undefined;
+  for (const directory of (environmentPath ?? "").split(delimiter)) {
+    if (directory.length === 0 || !isAbsolute(directory)) continue;
+    const candidate = join(directory, name);
+    if (await executable(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+async function executable(path: string): Promise<boolean> {
+  try {
+    await access(path, constants.X_OK);
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+export type ObserveOptions = Readonly<{
+  bdExecutable?: string;
+  doltExecutable?: string;
+  environment?: (name: string) => string | undefined;
+}>;
+
+export type ObserveResult =
+  | Readonly<{ observation: RepositoryObservation; ok: true }>
+  | Readonly<{
+      code:
+        | "SCE_COMPOSE_EXECUTABLE_MISSING"
+        | "SCE_COMPOSE_EXECUTABLE_VERSION"
+        | "SCE_COMPOSE_MANIFEST_INVALID";
+      message: string;
+      ok: false;
+    }>;
+
+/**
+ * The engine's Beads adapter pins exact tool versions and refuses silently at
+ * run time; onboarding names the mismatch instead so it is fixed up front.
+ */
+export function executableVersionProblem(
+  bdVersionOutput: string,
+  doltVersionOutput: string,
+): string | undefined {
+  const bdOk = new RegExp(
+    `^bd version ${PINNED_BD_VERSION.replaceAll(".", "\\.")}(?: \\(Homebrew\\))?\\n?$`,
+    "u",
+  ).test(bdVersionOutput);
+  const doltLine = doltVersionOutput.split("\n", 1)[0];
+  const doltOk = doltLine === `dolt version ${PINNED_DOLT_VERSION}`;
+  if (bdOk && doltOk) return undefined;
+  const problems = [
+    ...(bdOk
+      ? []
+      : [
+          `bd reports "${bdVersionOutput.trim().split("\n", 1)[0]}" but the engine pins ${PINNED_BD_VERSION}`,
+        ]),
+    ...(doltOk
+      ? []
+      : [
+          `dolt reports "${doltLine ?? ""}" but the engine pins ${PINNED_DOLT_VERSION} (install that release and pass --dolt-executable)`,
+        ]),
+  ];
+  return problems.join("; ");
+}
+
+/** Read-only host observation; every fact the composer uses enters here. */
+export async function observeRepository(
+  cwd: string,
+  options: ObserveOptions = {},
+): Promise<ObserveResult> {
+  const bdExecutable = await findExecutable(options.bdExecutable ?? "bd");
+  const doltExecutable = await findExecutable(options.doltExecutable ?? "dolt");
+  if (bdExecutable === undefined || doltExecutable === undefined)
+    return {
+      code: "SCE_COMPOSE_EXECUTABLE_MISSING",
+      message: `bd and dolt must be on PATH or passed explicitly (bd: ${bdExecutable ?? "missing"}, dolt: ${doltExecutable ?? "missing"}).`,
+      ok: false,
+    };
+  const bdVersion = await capture(cwd, bdExecutable, ["--version"]);
+  const doltVersion = await capture(cwd, doltExecutable, ["version"]);
+  const versionProblem = executableVersionProblem(
+    bdVersion.ok ? bdVersion.stdout : "",
+    doltVersion.ok ? doltVersion.stdout : "",
+  );
+  if (versionProblem !== undefined)
+    return {
+      code: "SCE_COMPOSE_EXECUTABLE_VERSION",
+      message: `Pinned tool versions do not match: ${versionProblem}.`,
+      ok: false,
+    };
+  const preflight = await inspectPreflight(cwd);
+  const remotes: GitRemoteObservation[] = [];
+  const remoteOutput = await capture(cwd, "git", [
+    "config",
+    "--null",
+    "--get-regexp",
+    "^remote\\..*\\.url$",
+  ]);
+  if (remoteOutput.ok) {
+    const urls = parseGitRemoteConfigOutput(remoteOutput.stdout) ?? [];
+    const names = remoteOutput.stdout
+      .slice(0, -1)
+      .split("\u0000")
+      .map((entry) =>
+        entry
+          .slice("remote.".length, entry.indexOf("\n"))
+          .replace(/\.url$/u, ""),
+      );
+    urls.forEach((url, index) => {
+      const name = names[index];
+      if (name !== undefined && name.length > 0)
+        remotes.push({
+          name,
+          normalized: normalizeGitRemote(url, canonicalLocalBareRepository),
+          url,
+        });
+    });
+  }
+  const branchOutput = await capture(cwd, "git", ["branch", "--show-current"]);
+  const currentBranch =
+    branchOutput.ok && branchOutput.stdout.trim().length > 0
+      ? branchOutput.stdout.trim()
+      : undefined;
+  const topLevel =
+    preflight.payload.status === "ready" ? preflight.payload.git.topLevel : cwd;
+  const manifestPath = join(topLevel, KNOWLEDGE_MANIFEST_FILE);
+  let manifest: unknown;
+  let manifestPresent = false;
+  try {
+    const source = await readFile(manifestPath, "utf8");
+    manifestPresent = true;
+    if (Buffer.byteLength(source, "utf8") > MAX_MANIFEST_BYTES)
+      throw new Error("too large");
+    manifest = JSON.parse(source) as unknown;
+  } catch (error) {
+    if (manifestPresent)
+      return {
+        code: "SCE_COMPOSE_MANIFEST_INVALID",
+        message: `${KNOWLEDGE_MANIFEST_FILE} could not be read as JSON (${error instanceof Error ? error.message : "unknown"}).`,
+        ok: false,
+      };
+  }
+  return {
+    observation: {
+      bdExecutable,
+      currentBranch,
+      doltExecutable,
+      environment: options.environment ?? ((name) => process.env[name]),
+      manifest,
+      manifestPath: manifestPresent ? manifestPath : undefined,
+      preflight,
+      remotes,
+    },
+    ok: true,
+  };
+}
+
+export type WriteResult =
+  | Readonly<{ ok: true; path: string }>
+  | Readonly<{
+      code: "SCE_COMPOSE_OUTPUT_EXISTS" | "SCE_COMPOSE_OUTPUT_FAILED";
+      message: string;
+      ok: false;
+    }>;
+
+/** Writes the document with no-clobber semantics unless overwrite is explicit. */
+export async function writeComposedConfig(
+  path: string,
+  config: JsonValue,
+  overwrite: boolean,
+): Promise<WriteResult> {
+  try {
+    await writeFile(path, `${JSON.stringify(config, null, 2)}\n`, {
+      encoding: "utf8",
+      flag: overwrite ? "w" : "wx",
+    });
+    return { ok: true, path };
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    return code === "EEXIST"
+      ? {
+          code: "SCE_COMPOSE_OUTPUT_EXISTS",
+          message: `${path} exists; pass --overwrite to replace it.`,
+          ok: false,
+        }
+      : {
+          code: "SCE_COMPOSE_OUTPUT_FAILED",
+          message: `${path} could not be written.`,
+          ok: false,
+        };
+  }
+}
+
+/**
+ * The merge-slot bead that `bd merge-slot create` makes is unbound: it carries
+ * no scope. The engine's normal acquire, check and release paths refuse an
+ * unbound slot, and only an explicitly authorized bootstrap binds it, so
+ * onboarding inspects the slot and, on request, performs that one bootstrap.
+ */
+export type SlotScopeState = "bound" | "foreign" | "unbound" | "unreadable";
+
+export function classifySlotDocument(
+  source: string,
+  prefix: string,
+  scope: FencingScope,
+): SlotScopeState {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source) as unknown;
+  } catch {
+    return "unreadable";
+  }
+  const issue =
+    Array.isArray(parsed) && parsed.length === 1
+      ? record(parsed[0])
+      : undefined;
+  if (
+    issue === undefined ||
+    issue.id !== `${prefix}-merge-slot` ||
+    issue.title !== MERGE_SLOT_TITLE ||
+    !Array.isArray(issue.labels) ||
+    issue.labels.length !== 1 ||
+    issue.labels[0] !== MERGE_SLOT_LABEL
+  )
+    return "unreadable";
+  const empty = (value: unknown) =>
+    value === undefined || value === null || value === "";
+  if (empty(issue.external_ref) && empty(issue.design)) return "unbound";
+  return issue.external_ref ===
+    `sce-scope:v1:${deriveScopeCommitment(scope)}` &&
+    issue.design === canonicalJson(scope as unknown as JsonValue)
+    ? "bound"
+    : "foreign";
+}
+
+export async function inspectSlotScope(
+  cwd: string,
+  bdExecutable: string,
+  prefix: string,
+  scope: FencingScope,
+): Promise<SlotScopeState> {
+  const shown = await capture(cwd, bdExecutable, [
+    "show",
+    `${prefix}-merge-slot`,
+    "--long",
+    "--json",
+  ]);
+  return shown.ok
+    ? classifySlotDocument(shown.stdout, prefix, scope)
+    : "unreadable";
+}
+
+export type ComposedTopology = Readonly<{
+  bdExecutable: string;
+  databaseDirectory: string;
+  doltExecutable: string;
+  prefix: string;
+  remote?: Readonly<{ name: string; ref: string; url: string }>;
+  rootBeadId: string;
+}>;
+
+/** The one authorized bootstrap: binds an unbound slot to this run's scope. */
+export async function bindSlotScope(
+  cwd: string,
+  topology: ComposedTopology,
+  scope: FencingScope,
+): Promise<"applied" | "ambiguous" | "quarantined" | "unavailable"> {
+  const result = await pinnedProcess(cwd, topology, scope).initializeSlotScope(
+    SLOT_INITIALIZATION_AUTHORITY,
+  );
+  return result.code === "applied" ||
+    result.code === "ambiguous" ||
+    result.code === "quarantined"
+    ? result.code
+    : "unavailable";
+}
+
+export type DoltSyncState =
+  "in-sync" | "local-ahead" | "remote-missing" | "local-only" | "unreachable";
+
+function pinnedProcess(
+  cwd: string,
+  topology: ComposedTopology,
+  scope: FencingScope,
+): PinnedBdEmbeddedProcess {
+  const projections = new DoltProjectionPersistence({
+    childIssueId: () => undefined,
+    databaseDirectory: topology.databaseDirectory,
+    doltExecutable: topology.doltExecutable,
+    rootIssueId: topology.rootBeadId,
+  });
+  return new PinnedBdEmbeddedProcess({
+    bdExecutable: topology.bdExecutable,
+    cwd,
+    databaseDirectory: topology.databaseDirectory,
+    doltExecutable: topology.doltExecutable,
+    prefix: topology.prefix,
+    projections,
+    scope,
+    ...(topology.remote === undefined ? {} : { remote: topology.remote }),
+  });
+}
+
+/**
+ * Whether the embedded store the run will drive is reachable through the
+ * pinned process and, in git-sync mode, whether its Dolt head is already on
+ * the remote: the first acquire refuses anything else as ambiguous.
+ */
+export async function inspectDoltSync(
+  cwd: string,
+  topology: ComposedTopology,
+  scope: FencingScope,
+): Promise<DoltSyncState> {
+  const state = await pinnedProcess(cwd, topology, scope).execute({
+    kind: "state",
+  });
+  if (state.kind !== "state" || !state.value.reachable) return "unreachable";
+  if (topology.remote === undefined) return "local-only";
+  if (state.value.remoteHead === undefined) return "remote-missing";
+  return state.value.remoteHead === state.value.head
+    ? "in-sync"
+    : "local-ahead";
+}
+
+/** Pushes Dolt data after an onboarding write and reads the remote head back. */
+export async function pushDoltData(
+  cwd: string,
+  topology: ComposedTopology,
+  scope: FencingScope,
+): Promise<DoltSyncState> {
+  const pushed = await capture(cwd, topology.bdExecutable, ["dolt", "push"]);
+  if (!pushed.ok) return "local-ahead";
+  return inspectDoltSync(cwd, topology, scope);
+}

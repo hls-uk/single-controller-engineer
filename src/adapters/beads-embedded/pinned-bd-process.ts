@@ -32,10 +32,14 @@ import type {
   SlotTransitionIntent,
 } from "./schemas.js";
 import { validateSlotTransitionIntent } from "./slot-transition.js";
+import {
+  canonicalLocalBareRepository,
+  normalizeGitRemote,
+} from "../../preflight/index.js";
 
 const MAX_OUTPUT_BYTES = 65_536;
-const PINNED_BD_VERSION = "1.1.0";
-const PINNED_DOLT_VERSION = "2.2.1";
+export const PINNED_BD_VERSION = "1.1.0";
+export const PINNED_DOLT_VERSION = "2.2.1";
 const PROCESS_TIMEOUT_MS = 15_000;
 const EXECUTABLE_SAMPLE_BYTES = 65_536;
 const MAX_CLONE_LINEAGE_EDGES = 64;
@@ -206,6 +210,20 @@ export function parsePinnedBdState(source: string): EmbeddedState | undefined {
     return undefined;
   // This engine envelope alone cannot prove the complete state contract.
   return undefined;
+}
+
+/**
+ * A configured Dolt remote matches the run's remote when the raw URL is equal
+ * or when both reduce to the same identity preflight derives for `bd`'s
+ * `sync.remote` (Dolt prints `git+` schemes that preflight normalizes away).
+ */
+function sameRemoteIdentity(configuredUrl: string, expected: string): boolean {
+  if (configuredUrl === expected) return true;
+  const plain = configuredUrl.startsWith("git+file://")
+    ? configuredUrl.slice("git+".length)
+    : configuredUrl;
+  const normalized = normalizeGitRemote(plain, canonicalLocalBareRepository);
+  return normalized !== undefined && normalized === expected;
 }
 
 function doltShow(
@@ -2169,7 +2187,8 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         return (
           parts.length === 2 &&
           parts[0] === remote.name &&
-          parts[1] === remote.url
+          parts[1] !== undefined &&
+          sameRemoteIdentity(parts[1], remote.url)
         );
       })
     );

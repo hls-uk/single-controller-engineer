@@ -46,3 +46,4 @@ may recommend decisions, but the controller records the accepted disposition.
 | [DEC-20260903-012](2026-09-03-012-materialisation-source-and-no-clobber.md) | Accepted | Resolve exact sources before atomic no-clobber materialisation | `sce-085`, `sce-7g9.2`, `sce-7g9.3` |
 | [DEC-20260905-013](2026-09-05-013-automatic-git-and-beads-sync.md) | Accepted | Agents keep Git and Beads synchronized after every completed update | `sce-vrm` |
 | [DEC-20260905-014](2026-09-05-014-delivery-skills-sync-each-update.md) | Accepted | Both delivery skills sync each update under the adopting repository's authority | `sce-36o` |
+| [DEC-20260922-015](2026-09-22-015-compose-config-onboarding.md) | Accepted | `sce compose-config` composes and self-validates the controller configuration; pristine knowledge runs admitted | `sce-bih` |

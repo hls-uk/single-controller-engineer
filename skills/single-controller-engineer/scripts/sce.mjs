@@ -246,13 +246,13 @@ var require_scope = __commonJS({
       }
     };
     exports.ValueScopeName = ValueScopeName;
-    var line = (0, code_1._)`\n`;
+    var line2 = (0, code_1._)`\n`;
     var ValueScope = class extends Scope {
       constructor(opts) {
         super(opts);
         this._values = {};
         this._scope = opts.scope;
-        this.opts = { ...opts, _n: opts.lines ? line : code_1.nil };
+        this.opts = { ...opts, _n: opts.lines ? line2 : code_1.nil };
       }
       get() {
         return this._scope;
@@ -410,11 +410,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants6) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants5);
+          this.rhs = optimizeExpr(this.rhs, names, constants6);
         return this;
       }
       get names() {
@@ -431,10 +431,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants6) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants5);
+        this.rhs = optimizeExpr(this.rhs, names, constants6);
         return this;
       }
       get names() {
@@ -495,8 +495,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants5) {
-        this.code = optimizeExpr(this.code, names, constants5);
+      optimizeNames(names, constants6) {
+        this.code = optimizeExpr(this.code, names, constants6);
         return this;
       }
       get names() {
@@ -525,12 +525,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants6) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants5))
+          if (n.optimizeNames(names, constants6))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -583,12 +583,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants6) {
         var _a;
-        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants5);
-        if (!(super.optimizeNames(names, constants5) || this.else))
+        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants6);
+        if (!(super.optimizeNames(names, constants6) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants5);
+        this.condition = optimizeExpr(this.condition, names, constants6);
         return this;
       }
       get names() {
@@ -611,10 +611,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants5) {
-        if (!super.optimizeNames(names, constants5))
+      optimizeNames(names, constants6) {
+        if (!super.optimizeNames(names, constants6))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants5);
+        this.iteration = optimizeExpr(this.iteration, names, constants6);
         return this;
       }
       get names() {
@@ -650,10 +650,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants5) {
-        if (!super.optimizeNames(names, constants5))
+      optimizeNames(names, constants6) {
+        if (!super.optimizeNames(names, constants6))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants5);
+        this.iterable = optimizeExpr(this.iterable, names, constants6);
         return this;
       }
       get names() {
@@ -695,11 +695,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants5) {
+      optimizeNames(names, constants6) {
         var _a, _b;
-        super.optimizeNames(names, constants5);
-        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants5);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants5);
+        super.optimizeNames(names, constants6);
+        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants6);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants6);
         return this;
       }
       get names() {
@@ -1000,7 +1000,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants5) {
+    function optimizeExpr(expr, names, constants6) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -1015,14 +1015,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants5[n.str];
+        const c = constants6[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants5[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants6[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -2984,7 +2984,7 @@ var require_compile = __commonJS({
       const schOrFunc = root.refs[ref];
       if (schOrFunc)
         return schOrFunc;
-      let _sch = resolve9.call(this, root, ref);
+      let _sch = resolve11.call(this, root, ref);
       if (_sch === void 0) {
         const schema = (_a = root.localRefs) === null || _a === void 0 ? void 0 : _a[ref];
         const { schemaId } = this.opts;
@@ -3011,7 +3011,7 @@ var require_compile = __commonJS({
     function sameSchemaEnv(s1, s2) {
       return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
     }
-    function resolve9(root, ref) {
+    function resolve11(root, ref) {
       let sch;
       while (typeof (sch = this.refs[ref]) == "string")
         ref = sch;
@@ -3836,7 +3836,7 @@ var require_fast_uri = __commonJS({
       }
       return uri;
     }
-    function resolve9(baseURI, relativeURI, options) {
+    function resolve11(baseURI, relativeURI, options) {
       const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
       const {
         parsed: baseParsed,
@@ -3869,49 +3869,49 @@ var require_fast_uri = __commonJS({
       schemelessOptions.skipEscape = true;
       return serialize(resolved, schemelessOptions);
     }
-    function resolveComponent(base, relative5, options, skipNormalization) {
+    function resolveComponent(base, relative6, options, skipNormalization) {
       const target = {};
       if (!skipNormalization) {
         base = parse(serialize(base, options), options);
-        relative5 = parse(serialize(relative5, options), options);
+        relative6 = parse(serialize(relative6, options), options);
       }
       options = options || {};
-      if (!options.tolerant && relative5.scheme) {
-        target.scheme = relative5.scheme;
-        target.userinfo = relative5.userinfo;
-        target.host = relative5.host;
-        target.port = relative5.port;
-        target.path = removeDotSegments(relative5.path || "");
-        target.query = relative5.query;
+      if (!options.tolerant && relative6.scheme) {
+        target.scheme = relative6.scheme;
+        target.userinfo = relative6.userinfo;
+        target.host = relative6.host;
+        target.port = relative6.port;
+        target.path = removeDotSegments(relative6.path || "");
+        target.query = relative6.query;
       } else {
-        if (relative5.userinfo !== void 0 || relative5.host !== void 0 || relative5.port !== void 0) {
-          target.userinfo = relative5.userinfo;
-          target.host = relative5.host;
-          target.port = relative5.port;
-          target.path = removeDotSegments(relative5.path || "");
-          target.query = relative5.query;
+        if (relative6.userinfo !== void 0 || relative6.host !== void 0 || relative6.port !== void 0) {
+          target.userinfo = relative6.userinfo;
+          target.host = relative6.host;
+          target.port = relative6.port;
+          target.path = removeDotSegments(relative6.path || "");
+          target.query = relative6.query;
         } else {
-          if (!relative5.path) {
+          if (!relative6.path) {
             target.path = base.path;
-            if (relative5.query !== void 0) {
-              target.query = relative5.query;
+            if (relative6.query !== void 0) {
+              target.query = relative6.query;
             } else {
               target.query = base.query;
             }
           } else {
-            if (relative5.path[0] === "/") {
-              target.path = removeDotSegments(relative5.path);
+            if (relative6.path[0] === "/") {
+              target.path = removeDotSegments(relative6.path);
             } else {
               if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) {
-                target.path = "/" + relative5.path;
+                target.path = "/" + relative6.path;
               } else if (!base.path) {
-                target.path = relative5.path;
+                target.path = relative6.path;
               } else {
-                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative5.path;
+                target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative6.path;
               }
               target.path = removeDotSegments(target.path);
             }
-            target.query = relative5.query;
+            target.query = relative6.query;
           }
           target.userinfo = base.userinfo;
           target.host = base.host;
@@ -3919,7 +3919,7 @@ var require_fast_uri = __commonJS({
         }
         target.scheme = base.scheme;
       }
-      target.fragment = relative5.fragment;
+      target.fragment = relative6.fragment;
       return target;
     }
     function equal2(uriA, uriB, options) {
@@ -4198,7 +4198,7 @@ var require_fast_uri = __commonJS({
     var fastUri = {
       SCHEMES,
       normalize: normalize7,
-      resolve: resolve9,
+      resolve: resolve11,
       resolveComponent,
       equal: equal2,
       serialize,
@@ -6871,14 +6871,14 @@ var require_ajv = __commonJS({
 });
 
 // src/cli.ts
-import { realpathSync as realpathSync7 } from "node:fs";
+import { realpathSync as realpathSync8 } from "node:fs";
 import {
-  basename as basename4,
-  dirname as dirname7,
-  isAbsolute as isAbsolute10,
-  join as join9,
+  basename as basename5,
+  dirname as dirname8,
+  isAbsolute as isAbsolute12,
+  join as join11,
   normalize as normalize6,
-  resolve as resolve8
+  resolve as resolve10
 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -8796,8 +8796,8 @@ function FromNumberKey(_, type, options) {
 function Record(key, type, options = {}) {
   return IsUnion(key) ? FromUnionKey(key.anyOf, type, options) : IsTemplateLiteral(key) ? FromTemplateLiteralKey(key, type, options) : IsLiteral(key) ? FromLiteralKey(key.const, type, options) : IsBoolean2(key) ? FromBooleanKey(key, type, options) : IsInteger(key) ? FromIntegerKey(key, type, options) : IsNumber3(key) ? FromNumberKey(key, type, options) : IsRegExp2(key) ? FromRegExpKey(key, type, options) : IsString2(key) ? FromStringKey(key, type, options) : IsAny(key) ? FromAnyKey(key, type, options) : IsNever(key) ? FromNeverKey(key, type, options) : Never(options);
 }
-function RecordPattern(record3) {
-  return globalThis.Object.getOwnPropertyNames(record3.patternProperties)[0];
+function RecordPattern(record4) {
+  return globalThis.Object.getOwnPropertyNames(record4.patternProperties)[0];
 }
 function RecordKey2(type) {
   const pattern = RecordPattern(type);
@@ -12040,6 +12040,9 @@ function knowledgeContractRuntimeValid(contract, harness) {
     )
   ) && commands.length >= 1 && commands.length <= 32 && commands.every(canonicalCommandVector) && canonicalCommandVector(contract.provenance.rollupGeneratorCommand) && canonicalCommandVector(contract.provenance.reproducibilityCommand) && utf82.encode(canonicalJson(commands)).byteLength <= 32768 && maximumMaterialisationSidecarBytes(contract, harness) <= LIMITS.materialisationSidecarBytes;
 }
+function isPristineUnacquiredRun(state) {
+  return state.revision === 0 && state.state === "initializing" && state.controller.state === "unacquired" && state.knowledgeContract === void 0 && state.gate === void 0 && state.pendingProvenanceCarry === void 0 && state.provenanceCarryClaim === void 0 && state.lastProvenanceCarryRefusal === void 0 && state.wave.unitIds.length === 0 && Object.keys(state.units).length === 0 && Object.keys(state.reservations).length === 0 && state.activeModifyingUnitIds.length === 0 && state.qualificationQueue.length === 0 && state.integrationQueue.length === 0 && state.effectJournal.length === 0 && state.processedEventIds.length === 0 && state.usedSessionCount === 0 && state.closedUnitEvidence === "" && runInvariantErrors(state).length === 0;
+}
 function canFreezeKnowledgeContractAtFirstWave(state) {
   const carryLifecycle = [
     state.provenanceCarryClaim,
@@ -12946,11 +12949,11 @@ function matchesMaterialisationPattern(pattern, path2) {
   });
 }
 function materialisationName(source, policy, timestamp) {
-  const basename5 = source.path.split("/").at(-1);
-  const dot = basename5.lastIndexOf(".");
-  const suffix = dot > 0 ? basename5.slice(dot + 1) : "";
+  const basename6 = source.path.split("/").at(-1);
+  const dot = basename6.lastIndexOf(".");
+  const suffix = dot > 0 ? basename6.slice(dot + 1) : "";
   const retainExtension = /^[A-Za-z0-9]{1,10}$/u.test(suffix);
-  const rawStem = retainExtension ? basename5.slice(0, dot) : basename5;
+  const rawStem = retainExtension ? basename6.slice(0, dot) : basename6;
   const stem = rawStem.toLowerCase().replace(/[^a-z0-9]+/gu, "-").replace(/^-+|-+$/gu, "").slice(0, 80).replace(/-+$/u, "");
   const extension = retainExtension ? `.${suffix.toLowerCase()}` : "";
   const compactClock = timestamp.replace(/[-:]/gu, "");
@@ -17596,17 +17599,17 @@ function decodeClosedUnitEvidence(encoded) {
 }
 function updateClosureReleaseEvidence(state, unitId) {
   const evidence = decodeClosedUnitEvidence(state.closedUnitEvidence);
-  const record3 = evidence?.[unitId];
+  const record4 = evidence?.[unitId];
   const release = [...state.effectJournal].reverse().find(
     (entry) => entry.unitId === unitId && entry.kind === "reservation_release"
   );
-  if (evidence === void 0 || record3 === void 0 || release === void 0)
+  if (evidence === void 0 || record4 === void 0 || release === void 0)
     throw new Error(`missing closure release lineage for ${unitId}`);
   return encodeClosedUnitEvidence({
     ...evidence,
     [unitId]: {
-      ...record3,
-      reservations: record3.reservations.map((reservation) => ({
+      ...record4,
+      reservations: record4.reservations.map((reservation) => ({
         ...reservation,
         release
       }))
@@ -17619,11 +17622,11 @@ function closeUnitAfterRelease(state, unitId) {
     throw new Error(`missing released unit ${unitId}`);
   const releasedEvidence = updateClosureReleaseEvidence(state, unitId);
   const evidence = decodeClosedUnitEvidence(releasedEvidence);
-  const record3 = evidence?.[unitId];
-  if (evidence === void 0 || record3 === void 0)
+  const record4 = evidence?.[unitId];
+  if (evidence === void 0 || record4 === void 0)
     throw new Error(`missing final closure evidence for ${unitId}`);
   const finalRecord = {
-    ...record3,
+    ...record4,
     repairCount: closedUnit.repairCount
   };
   const closedUnitEvidence = encodeClosedUnitEvidence({
@@ -17639,7 +17642,7 @@ function closeUnitAfterRelease(state, unitId) {
   );
   const gate = state.gate === void 0 ? void 0 : {
     ...state.gate,
-    provenanceUnitAccounting: record3.outcome === "landed" ? [
+    provenanceUnitAccounting: record4.outcome === "landed" ? [
       ...state.gate.provenanceUnitAccounting,
       {
         closureEvidenceCommitment: unitClosureEvidenceCommitment(finalRecord),
@@ -18724,13 +18727,13 @@ function gateInvariantErrors(state) {
     ...gate.aggregateVerifyPromise === void 0 ? [] : [gate.aggregateVerifyPromise],
     ...gate.aggregateVerify === void 0 ? [] : [gate.aggregateVerify]
   ];
-  if (settlementRecords.some((record3) => !settlementMetadataIsCoherent(record3)))
+  if (settlementRecords.some((record4) => !settlementMetadataIsCoherent(record4)))
     errors.push("knowledge gate has incoherent settlement metadata");
-  if (gate.targetPromises.some((record3) => !targetPromiseIsCoherent(record3)) || gate.targets.some((record3) => !targetRecordIsCoherent(record3)) || gate.destinationProbes.some(
-    (record3) => !destinationProbeRecordIsCoherent(record3)
+  if (gate.targetPromises.some((record4) => !targetPromiseIsCoherent(record4)) || gate.targets.some((record4) => !targetRecordIsCoherent(record4)) || gate.destinationProbes.some(
+    (record4) => !destinationProbeRecordIsCoherent(record4)
   ) || gate.targets.some(
     (target) => target.resolution !== void 0 && !resolutionRecordIsCoherent(target.resolution) || target.materialisations.some(
-      (record3) => !materialisationRecordIsCoherent(record3)
+      (record4) => !materialisationRecordIsCoherent(record4)
     )
   ) || gate.provenancePromise !== void 0 && !gatePlaceholderIsCoherent(gate.provenancePromise) || gate.aggregateVerifyPromise !== void 0 && !gatePlaceholderIsCoherent(gate.aggregateVerifyPromise) || gate.provenance !== void 0 && !provenanceRecordIsCoherent(gate.provenance) || gate.aggregateVerify !== void 0 && !aggregateVerifyRecordIsCoherent(gate.aggregateVerify))
     errors.push("knowledge gate has incoherent record-specific evidence");
@@ -19597,13 +19600,13 @@ async function execute(effect2, run2, support, port) {
   if (effect2.kind === "dispatch" || effect2.kind === "repair" || effect2.kind === "review_dispatch") {
     if (!checked.value.capabilities.operations.launch)
       return { status: "ambiguous" };
-    const request = launchRequest(effect2, run2, checked.value);
-    if (!request.ok) return { status: "ambiguous" };
+    const request2 = launchRequest(effect2, run2, checked.value);
+    if (!request2.ok) return { status: "ambiguous" };
     try {
-      const acknowledgement = await port.launch(request.value);
+      const acknowledgement = await port.launch(request2.value);
       const launched = exactSession(
         checked.value,
-        request.value,
+        request2.value,
         acknowledgement
       );
       if (!launched.ok) return { status: "ambiguous" };
@@ -19613,7 +19616,7 @@ async function execute(effect2, run2, support, port) {
         effect2,
         run2,
         checked.value,
-        request.value,
+        request2.value,
         inspected
       );
     } catch {
@@ -19647,9 +19650,9 @@ async function reconcile(effect2, run2, support, port) {
     try {
       const found = await port.lookupByClientKey(effect2.idempotencyKey);
       if (found === void 0) return { status: "ambiguous" };
-      const request = launchRequest(effect2, run2, checked.value);
-      if (!request.ok) return { status: "ambiguous" };
-      const launched = exactSession(checked.value, request.value, found);
+      const request2 = launchRequest(effect2, run2, checked.value);
+      if (!request2.ok) return { status: "ambiguous" };
+      const launched = exactSession(checked.value, request2.value, found);
       if (!launched.ok) return { status: "ambiguous" };
       const inspected = await port.inspect(launched.value.sessionId);
       return inspected === void 0 ? { status: "ambiguous" } : asReconcile(
@@ -19657,7 +19660,7 @@ async function reconcile(effect2, run2, support, port) {
           effect2,
           run2,
           checked.value,
-          request.value,
+          request2.value,
           inspected
         )
       );
@@ -19705,10 +19708,10 @@ function launchRequest(effect2, run2, support) {
     worktreePath
   });
 }
-function observationForLaunch(effect2, run2, support, request, raw) {
-  const session2 = exactSession(support, request, raw);
+function observationForLaunch(effect2, run2, support, request2, raw) {
+  const session2 = exactSession(support, request2, raw);
   if (!session2.ok) return { status: "ambiguous" };
-  const type = request.role === "reviewer" ? "reviewer_observed" : effect2.kind === "repair" ? "repair_observed" : "dispatch_observed";
+  const type = request2.role === "reviewer" ? "reviewer_observed" : effect2.kind === "repair" ? "repair_observed" : "dispatch_observed";
   const event = {
     effectId: effect2.effectId,
     effectKind: effect2.kind,
@@ -19739,7 +19742,7 @@ function sessionForEffect(effect2, run2, support) {
     return fail("durable session binding is incomplete");
   if (promptHash !== packet.hash)
     return fail("durable prompt hash is not bound to the exact packet");
-  const request = {
+  const request2 = {
     clientKey: launchClientKey(run2, unit.id, reviewer ? "reviewer" : "worker"),
     packet,
     promptHash: packet.hash,
@@ -19749,18 +19752,18 @@ function sessionForEffect(effect2, run2, support) {
     unitId: unit.id,
     worktreePath
   };
-  return exactSession(support, request, {
-    clientKey: request.clientKey,
+  return exactSession(support, request2, {
+    clientKey: request2.clientKey,
     fresh: true,
     harnessFamily: support.capabilities.family,
     harnessVersion: support.capabilities.harnessVersion,
-    promptHash: request.promptHash,
-    readOnly: request.readOnly,
-    requestedModel: request.requestedModel,
+    promptHash: request2.promptHash,
+    readOnly: request2.readOnly,
+    requestedModel: request2.requestedModel,
     returnedModel,
-    role: request.role,
+    role: request2.role,
     sessionId,
-    worktreePath: request.worktreePath
+    worktreePath: request2.worktreePath
   });
 }
 function acknowledgeHarnessTool(raw, run2, support, expectedEffectId) {
@@ -19788,11 +19791,11 @@ function acknowledgeHarnessTool(raw, run2, support, expectedEffectId) {
   if (acknowledgement.kind === "launch") {
     if (!["dispatch", "repair", "review_dispatch"].includes(effect2.kind))
       return { status: "ambiguous" };
-    const request = launchRequest(effect2, run2, support);
-    if (!request.ok) return { status: "ambiguous" };
+    const request2 = launchRequest(effect2, run2, support);
+    if (!request2.ok) return { status: "ambiguous" };
     const launched = exactSession(
       support,
-      request.value,
+      request2.value,
       acknowledgement.session
     );
     return launched.ok ? recoveryToolRequest(effect2, run2, support) : { status: "ambiguous" };
@@ -19802,12 +19805,12 @@ function acknowledgeHarnessTool(raw, run2, support, expectedEffectId) {
       return { status: "ambiguous" };
     if (acknowledgement.lookupSessionId !== acknowledgement.session.sessionId)
       return { status: "ambiguous" };
-    const request = launchRequest(effect2, run2, support);
-    return request.ok ? observationForLaunch(
+    const request2 = launchRequest(effect2, run2, support);
+    return request2.ok ? observationForLaunch(
       effect2,
       run2,
       support,
-      request.value,
+      request2.value,
       acknowledgement.session
     ) : { status: "ambiguous" };
   }
@@ -19871,8 +19874,8 @@ function toolRequest(effect2, run2, support, recovery = false) {
   const launch = ["dispatch", "repair", "review_dispatch"].includes(
     effect2.kind
   );
-  const request = launch ? launchRequest(effect2, run2, support) : void 0;
-  if (launch && !request?.ok) return { status: "ambiguous" };
+  const request2 = launch ? launchRequest(effect2, run2, support) : void 0;
+  if (launch && !request2?.ok) return { status: "ambiguous" };
   const session2 = launch ? void 0 : sessionForEffect(effect2, run2, support);
   if (!launch && !session2?.ok) return { status: "ambiguous" };
   const raw = {
@@ -19880,7 +19883,7 @@ function toolRequest(effect2, run2, support, recovery = false) {
     effectKind: effect2.kind,
     idempotencyKey: effect2.idempotencyKey,
     operation: launch ? recovery ? "lookup_inspect" : "launch" : recovery ? "poll" : effect2.kind === "cancel" ? "cancel" : "collect",
-    ...request?.ok ? { request: request.value } : {},
+    ...request2?.ok ? { request: request2.value } : {},
     schema: "sce.harness-tool-request",
     ...session2?.ok ? { session: session2.value } : {},
     version: HARNESS_VERSION
@@ -19932,12 +19935,12 @@ async function trustedController(run2, support, port) {
     return false;
   }
 }
-function exactSession(support, request, raw) {
+function exactSession(support, request2, raw) {
   const parsed = parseSession(raw);
   if (!parsed.ok) return parsed;
   const session2 = parsed.value;
-  const route = request.role === "reviewer" ? support.frontier : support.workhorse;
-  if (session2.harnessFamily !== support.capabilities.family || session2.harnessVersion !== support.capabilities.harnessVersion || session2.clientKey !== request.clientKey || session2.promptHash !== request.promptHash || session2.readOnly !== request.readOnly || session2.requestedModel !== request.requestedModel || session2.role !== request.role || session2.worktreePath !== request.worktreePath || route.requestedModel !== session2.requestedModel || !route.acceptedReturnedModels.includes(session2.returnedModel))
+  const route = request2.role === "reviewer" ? support.frontier : support.workhorse;
+  if (session2.harnessFamily !== support.capabilities.family || session2.harnessVersion !== support.capabilities.harnessVersion || session2.clientKey !== request2.clientKey || session2.promptHash !== request2.promptHash || session2.readOnly !== request2.readOnly || session2.requestedModel !== request2.requestedModel || session2.role !== request2.role || session2.worktreePath !== request2.worktreePath || route.requestedModel !== session2.requestedModel || !route.acceptedReturnedModels.includes(session2.returnedModel))
     return fail(
       "session acknowledgement does not bind trusted launch identity"
     );
@@ -20099,24 +20102,24 @@ function actionsForGate(state) {
         type: "gate_clock_observed"
       }
     ];
-  const refused = materialisations.find(
+  const refused2 = materialisations.find(
     (entry) => entry.lastRefusal !== void 0
   );
-  if (refused !== void 0) {
-    const retry = refused.lastRefusal?.code === "output_name_collision" ? {
-      gateEntryId: refused.gateEntryId,
+  if (refused2 !== void 0) {
+    const retry = refused2.lastRefusal?.code === "output_name_collision" ? {
+      gateEntryId: refused2.gateEntryId,
       mode: "record",
       type: "gate_clock_observed"
     } : {
       effectKind: "materialise",
-      gateEntryId: refused.gateEntryId,
+      gateEntryId: refused2.gateEntryId,
       mode: "emit",
       type: "materialise_intent"
     };
     return [
       retry,
       {
-        gateEntryId: refused.gateEntryId,
+        gateEntryId: refused2.gateEntryId,
         mode: "record",
         type: "gate_entry_deferred"
       }
@@ -20465,18 +20468,18 @@ function sortActions(actions) {
 }
 
 // src/adapters/git/index.ts
-import { spawn } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { spawn as spawn2 } from "node:child_process";
+import { existsSync, realpathSync as realpathSync2 } from "node:fs";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
-  basename,
-  dirname,
-  isAbsolute as isAbsolute3,
-  join,
+  basename as basename2,
+  dirname as dirname2,
+  isAbsolute as isAbsolute4,
+  join as join2,
   normalize as normalize3,
-  relative,
-  resolve as resolve3
+  relative as relative2,
+  resolve as resolve4
 } from "node:path";
 
 // src/preflight/identity.ts
@@ -20835,13 +20838,86 @@ function containsSecretShape(value) {
     ([key, nested2]) => secretKeyShape.test(key) || containsSecretShape(nested2)
   );
 }
+function parseJson(value) {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return void 0;
+  }
+}
+function parseBdContextJson(source) {
+  const parsed = parseJson(source);
+  if (parsed === void 0 || containsSecretShape(parsed) || !isSchema(BdContextObservationSchema, parsed))
+    return { ok: false };
+  return { ok: true, value: parsed };
+}
+function parseBdDoltShowJson(source) {
+  const parsed = parseJson(source);
+  if (parsed === void 0 || containsSecretShape(parsed) || !isSchema(BdDoltShowObservationSchema, parsed))
+    return { ok: false };
+  return { ok: true, value: parsed };
+}
+function parseBdConfigValueJson(source, expectedKey) {
+  const parsed = parseJson(source);
+  if (parsed === void 0 || containsSecretShape(parsed) || !isSchema(BdConfigValueObservationSchema, parsed))
+    return { ok: false };
+  const observation = parsed;
+  if (observation.key !== expectedKey || observation.schema_version !== BD_CONTEXT_SCHEMA_VERSION)
+    return { ok: false };
+  return { ok: true, value: observation };
+}
+function parseBootstrapPlanJson(source) {
+  const parsed = parseJson(source);
+  if (parsed === void 0 || containsSecretShape(parsed) || !isSchema(BdBootstrapRawSchema, parsed))
+    return { ok: false };
+  const raw = parsed;
+  if (raw.schema_version !== BD_CONTEXT_SCHEMA_VERSION) return { ok: false };
+  const plan = {
+    action: raw.action,
+    ...raw.beads_dir === void 0 ? {} : { beadsDir: raw.beads_dir },
+    ...raw.database === void 0 ? {} : { database: raw.database }
+  };
+  return { ok: true, value: plan };
+}
+function parseGitInspection(value) {
+  if (containsSecretShape(value) || !isSchema(GitInspectionSchema, value))
+    return { ok: false };
+  return { ok: true, value };
+}
 
 // src/preflight/identity.ts
+var localServerHosts = /* @__PURE__ */ new Set(["127.0.0.1", "::1", "localhost"]);
+var DOLT_SYNC_TRANSPORT_REF = "refs/dolt/data";
+function refused(code) {
+  return { status: "refused", code };
+}
 function canonicalAbsolutePath2(value) {
   if (value.includes("\0") || value.length === 0 || !isAbsolute2(value) || containsSecretShape(value))
     return void 0;
   const canonical2 = normalize2(resolve2(value));
   return canonical2 === "/" ? void 0 : canonical2;
+}
+function canonicalServer(value) {
+  if (value.length === 0 || value.includes("\0") || containsSecretShape(value) || /[@/?#\s]/u.test(value))
+    return void 0;
+  const bracketed = /^\[([0-9A-Fa-f:]+)\](?::([0-9]{1,5}))?$/u.exec(value);
+  if (bracketed !== null) {
+    const host2 = bracketed[1]?.toLowerCase();
+    const port2 = bracketed[2];
+    if (host2 === void 0) return void 0;
+    return port2 === void 0 ? `[${host2}]` : `[${host2}]:${port2}`;
+  }
+  const match = /^([A-Za-z0-9.-]+)(?::([0-9]{1,5}))?$/u.exec(value);
+  if (match === null) return void 0;
+  const host = match[1]?.toLowerCase();
+  const port = match[2];
+  if (host === void 0 || host.startsWith(".") || host.endsWith(".") || port !== void 0 && Number(port) > 65535)
+    return void 0;
+  return port === void 0 ? host : `${host}:${port}`;
+}
+function serverHost(server) {
+  if (server.startsWith("[")) return server.slice(1, server.indexOf("]"));
+  return server.split(":", 1)[0] ?? server;
 }
 function canonicalRemotePath(value) {
   if (value.length === 0 || value.includes("\0") || containsSecretShape(value))
@@ -20900,27 +20976,603 @@ function normalizeGitRemote(value, localBareCanonicalizer) {
   const remotePath = decodedPath === void 0 ? void 0 : canonicalRemotePath(decodedPath.replace(/^\/+/, ""));
   return remotePath === void 0 ? void 0 : `${parsed.hostname.toLowerCase()}/${remotePath}`;
 }
+function normalizedSyncRemote(value, localBareCanonicalizer) {
+  if (value === void 0) return void 0;
+  return normalizeGitRemote(value, localBareCanonicalizer);
+}
+function validPrefix(value) {
+  return /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u.test(value);
+}
+function baseIdentity(context, localBareCanonicalizer, configuration) {
+  const beadsDir = context.beads_dir === void 0 ? void 0 : canonicalAbsolutePath2(context.beads_dir);
+  if (configuration === void 0 || !validPrefix(configuration.prefix))
+    return void 0;
+  if (context.prefix !== void 0 && context.prefix !== configuration.prefix)
+    return void 0;
+  const configuredSyncRemote = normalizedSyncRemote(
+    configuration.syncRemote,
+    localBareCanonicalizer
+  );
+  const contextualSyncRemote = normalizedSyncRemote(
+    context.sync_remote,
+    localBareCanonicalizer
+  );
+  const hasConfiguredSync = configuration.syncRemote.length > 0;
+  if (context.beads_dir !== void 0 && beadsDir === void 0 || context.sync_remote !== void 0 && contextualSyncRemote === void 0 || hasConfiguredSync && configuredSyncRemote === void 0 || !hasConfiguredSync && (context.sync_remote !== void 0 || context.sync_ref !== void 0) || hasConfiguredSync && context.sync_remote !== void 0 && contextualSyncRemote !== configuredSyncRemote || hasConfiguredSync && context.sync_ref !== void 0 && context.sync_ref !== DOLT_SYNC_TRANSPORT_REF)
+    return void 0;
+  return {
+    ...beadsDir === void 0 ? {} : { beadsDir },
+    ...context.database === void 0 ? {} : { database: context.database },
+    prefix: configuration.prefix,
+    ...context.project_id === void 0 ? {} : { projectId: context.project_id },
+    ...context.rig === void 0 ? {} : { rig: context.rig },
+    ...hasConfiguredSync && configuredSyncRemote !== void 0 ? {
+      syncRef: DOLT_SYNC_TRANSPORT_REF,
+      syncRemote: configuredSyncRemote
+    } : {},
+    contextSchemaVersion: BD_CONTEXT_SCHEMA_VERSION,
+    toolVersion: BD_VERSION
+  };
+}
+function classifyTopology(context, bootstrap, embeddedStore, localBareCanonicalizer, configuration) {
+  if (context.bd_version !== BD_VERSION)
+    return refused("PF_BD_VERSION_UNSUPPORTED");
+  if (context.schema_version !== BD_CONTEXT_SCHEMA_VERSION)
+    return refused("PF_BD_CONTEXT_SCHEMA_UNSUPPORTED");
+  const uninitialized = context.backend === "none" || context.backend === "uninitialized" || context.dolt_mode === "uninitialized";
+  if (uninitialized) {
+    if (context.backend === "dolt" && context.dolt_mode !== "uninitialized" || context.server !== void 0 || context.server_source !== void 0 || context.database !== void 0 || context.beads_dir !== void 0 || bootstrap === void 0)
+      return refused("PF_TOPOLOGY_CONTRADICTORY");
+    return { status: "uninitialized", bootstrap };
+  }
+  if (context.backend !== "dolt" || context.global === true || context.proxied === true || context.dolt_mode === "global" || context.dolt_mode === "proxy" || context.server_source === "global" || context.server_source === "proxy")
+    return refused("PF_TOPOLOGY_REFUSED");
+  const base = baseIdentity(context, localBareCanonicalizer, configuration);
+  if (base === void 0 || base.beadsDir === void 0 || base.database === void 0)
+    return refused("PF_TOPOLOGY_CONTRADICTORY");
+  if (context.dolt_mode === "embedded" && context.server === void 0 && context.server_source === void 0 && context.is_redirected !== true) {
+    if (embeddedStore === void 0 || embeddedStore.backend !== "dolt" || embeddedStore.embedded !== true || embeddedStore.database !== base.database || embeddedStore.schemaVersion !== BD_CONTEXT_SCHEMA_VERSION)
+      return refused("PF_TOPOLOGY_CONTRADICTORY");
+    const storePath = canonicalAbsolutePath2(embeddedStore.dataDir);
+    if (storePath === void 0) return refused("PF_TOPOLOGY_CONTRADICTORY");
+    return {
+      status: "ready",
+      beads: {
+        ...base,
+        mode: "embedded",
+        provenance: "embedded_config",
+        storePath
+      }
+    };
+  }
+  const server = context.server === void 0 ? void 0 : canonicalServer(context.server);
+  if (server === void 0) return refused("PF_TOPOLOGY_CONTRADICTORY");
+  const source = context.server_source;
+  if (context.dolt_mode === "shared-server" && source === "shared-server" && localServerHosts.has(serverHost(server)) && context.is_redirected !== true)
+    return {
+      status: "ready",
+      beads: {
+        ...base,
+        mode: "managed_local_shared_server",
+        provenance: "shared_server_flag",
+        server
+      }
+    };
+  if (["external", "server", "shared-server"].includes(context.dolt_mode ?? "") && (source === "server" || source === "external") && context.is_redirected !== true)
+    return {
+      status: "ready",
+      beads: {
+        ...base,
+        mode: "external_server",
+        provenance: "external_server_flag",
+        server
+      }
+    };
+  return refused("PF_TOPOLOGY_CONTRADICTORY");
+}
+function deriveGitIdentity(input, localBareCanonicalizer) {
+  const inspection = parseGitInspection(input);
+  if (!inspection.ok) return { ok: false };
+  const topLevel = canonicalAbsolutePath2(inspection.value.topLevel);
+  const commonDir = canonicalAbsolutePath2(inspection.value.commonDir);
+  if (topLevel === void 0 || commonDir === void 0) return { ok: false };
+  const aliases = inspection.value.remoteUrls.map(
+    (remote2) => normalizeGitRemote(remote2, localBareCanonicalizer)
+  );
+  if (aliases.some((alias) => alias === void 0)) return { ok: false };
+  let identity2;
+  if (inspection.value.providerId !== void 0) {
+    if (containsSecretShape(inspection.value.providerId)) return { ok: false };
+    identity2 = `provider:${inspection.value.providerId}`;
+  } else {
+    if (aliases.length === 0 || aliases.some((alias) => alias === void 0))
+      return { ok: false };
+    const distinct = new Set(aliases);
+    if (distinct.size !== 1) return { ok: false };
+    identity2 = [...distinct][0];
+  }
+  if (identity2 === void 0) return { ok: false };
+  return {
+    ok: true,
+    value: {
+      commonDir,
+      identity: identity2,
+      objectFormat: inspection.value.objectFormat,
+      topLevel
+    }
+  };
+}
+function preflightEnvelope(topology, git) {
+  if (topology.status === "refused")
+    return {
+      schema: "sce.preflight",
+      version: 1,
+      payload: { status: "refused", code: topology.code }
+    };
+  if (topology.status === "uninitialized")
+    return {
+      schema: "sce.preflight",
+      version: 1,
+      payload: { status: "uninitialized", bootstrap: topology.bootstrap }
+    };
+  if (git === void 0)
+    return {
+      schema: "sce.preflight",
+      version: 1,
+      payload: { status: "refused", code: "PF_GIT_INSPECTION_INVALID" }
+    };
+  return {
+    schema: "sce.preflight",
+    version: 1,
+    payload: { status: "ready", beads: topology.beads, git }
+  };
+}
 
 // src/preflight/subprocess.ts
+import { realpathSync, statSync } from "node:fs";
+import {
+  basename,
+  dirname,
+  isAbsolute as isAbsolute3,
+  join,
+  relative,
+  resolve as resolve3
+} from "node:path";
+import { spawn } from "node:child_process";
+function commandLabel(command) {
+  return [command.executable, ...command.argv].join(" ");
+}
+function normalizedSignal(signal) {
+  if (signal === null) return void 0;
+  return signal === "SIGINT" || signal === "SIGTERM" || signal === "SIGKILL" ? signal : "other";
+}
+function classifySubprocess(command, result2) {
+  const commandName = commandLabel(command);
+  if (result2.outputExceeded)
+    return { command: commandName, outcome: "output_limit" };
+  if (result2.timedOut) return { command: commandName, outcome: "timeout" };
+  if (result2.spawnFailed)
+    return { command: commandName, outcome: "unavailable" };
+  if (result2.signal !== null)
+    return {
+      command: commandName,
+      outcome: "signal",
+      signal: normalizedSignal(result2.signal) ?? "other"
+    };
+  if (result2.exitCode === 0)
+    return { command: commandName, outcome: "ok", exitCode: 0 };
+  return {
+    command: commandName,
+    outcome: "exit",
+    exitCode: Math.max(0, Math.min(255, result2.exitCode ?? 255))
+  };
+}
+function subprocessRefusalCode(observation) {
+  switch (observation.outcome) {
+    case "ok":
+      return void 0;
+    case "exit":
+      return "PF_SUBPROCESS_EXIT";
+    case "signal":
+      return "PF_SUBPROCESS_SIGNAL";
+    case "timeout":
+      return "PF_SUBPROCESS_TIMEOUT";
+    case "output_limit":
+      return "PF_SUBPROCESS_OUTPUT_LIMIT";
+    case "unavailable":
+      return "PF_SUBPROCESS_UNAVAILABLE";
+  }
+}
+function canonicalCwd(cwd) {
+  const lexical = canonicalAbsolutePath2(cwd);
+  if (lexical === void 0) return void 0;
+  try {
+    const real = realpathSync(lexical);
+    return statSync(real).isDirectory() ? real : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function canonicalObservedDirectory(path2) {
+  const lexical = canonicalAbsolutePath2(path2);
+  if (lexical === void 0) return void 0;
+  try {
+    const real = realpathSync(lexical);
+    return statSync(real).isDirectory() ? real : void 0;
+  } catch {
+    return void 0;
+  }
+}
+function canonicalizeContextDirectories(context, canonicalize) {
+  const cwdRepoRoot = canonicalize(context.cwd_repo_root);
+  const repoRoot = context.repo_root === void 0 ? void 0 : canonicalize(context.repo_root);
+  const beadsDir = context.beads_dir === void 0 ? void 0 : canonicalize(context.beads_dir);
+  if (cwdRepoRoot === void 0 || context.repo_root !== void 0 && repoRoot === void 0 || context.beads_dir !== void 0 && beadsDir === void 0)
+    return void 0;
+  return {
+    ...context,
+    ...beadsDir === void 0 ? {} : { beads_dir: beadsDir },
+    cwd_repo_root: cwdRepoRoot,
+    ...repoRoot === void 0 ? {} : { repo_root: repoRoot }
+  };
+}
+function canonicalLocalBareRepository(path2) {
+  const lexical = canonicalAbsolutePath2(path2);
+  if (lexical === void 0) return void 0;
+  try {
+    const real = realpathSync(lexical);
+    if (!statSync(real).isDirectory()) return void 0;
+    if (!statSync(join(real, "HEAD")).isFile()) return void 0;
+    if (!statSync(join(real, "objects")).isDirectory()) return void 0;
+    if (!statSync(join(real, "refs")).isDirectory()) return void 0;
+    return real;
+  } catch {
+    return void 0;
+  }
+}
+var localBareRemoteCanonicalizer = canonicalLocalBareRepository;
+function sanitizedEnvironment() {
+  const path2 = process.env.PATH;
+  if (path2 === void 0 || path2.length === 0 || path2.length > 8192 || path2.includes("\0"))
+    return void 0;
+  return { LANG: "C", LC_ALL: "C", PATH: path2, TZ: "UTC" };
+}
+async function executeCaptured(request2) {
+  const cwd = canonicalCwd(request2.cwd);
+  const env = sanitizedEnvironment();
+  if (cwd === void 0 || env === void 0)
+    return {
+      exitCode: null,
+      outputExceeded: false,
+      signal: null,
+      spawnFailed: true,
+      stdout: "",
+      timedOut: false
+    };
+  return new Promise((resolveCapture) => {
+    let stdout = "";
+    let outputBytes = 0;
+    let outputExceeded = false;
+    let timedOut = false;
+    let spawnFailed = false;
+    const child = spawn(request2.command.executable, request2.command.argv, {
+      cwd,
+      env,
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true
+    });
+    const append = (stream, chunk) => {
+      outputBytes += chunk.byteLength;
+      if (outputBytes > request2.maxOutputBytes) {
+        outputExceeded = true;
+        child.kill("SIGKILL");
+        return;
+      }
+      if (stream === "stdout") stdout += chunk.toString("utf8");
+    };
+    child.stdout.on("data", (chunk) => append("stdout", chunk));
+    child.stderr.on("data", (chunk) => append("stderr", chunk));
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, request2.timeoutMs);
+    child.once("error", () => {
+      spawnFailed = true;
+    });
+    child.once("close", (exitCode, signal) => {
+      clearTimeout(timer);
+      resolveCapture({
+        exitCode,
+        outputExceeded,
+        signal,
+        spawnFailed,
+        stdout,
+        timedOut
+      });
+    });
+  });
+}
+async function captureInspection(request2) {
+  const captured = await executeCaptured(request2);
+  const observation = classifySubprocess(request2.command, captured);
+  return {
+    observation,
+    ...observation.outcome === "ok" ? { stdout: captured.stdout } : {}
+  };
+}
+function request(cwd, command) {
+  return { command, cwd, maxOutputBytes: 65536, timeoutMs: 1e4 };
+}
+async function inspectionOutput(cwd, command) {
+  const captured = await captureInspection(request(cwd, command));
+  const code = subprocessRefusalCode(captured.observation);
+  if (code !== void 0 || captured.stdout === void 0)
+    return { ok: false, code: code ?? "PF_SUBPROCESS_UNAVAILABLE" };
+  return { ok: true, stdout: captured.stdout };
+}
+function line(source) {
+  const value = source.trim();
+  return value.length === 0 || value.includes("\n") ? void 0 : value;
+}
+function isCanonicalSubdirectory(root, path2) {
+  const relation = relative(root, path2);
+  return relation === "" || !isAbsolute3(relation) && relation !== ".." && !relation.startsWith("../");
+}
+function matchesCanonicalGitContext(context, git) {
+  if (context.repo_root === void 0 || context.beads_dir === void 0 || context.is_worktree === void 0 || context.cwd_repo_root !== git.topLevel || basename(git.commonDir) !== ".git")
+    return false;
+  const primaryRoot = dirname(git.commonDir);
+  if (context.repo_root !== primaryRoot || context.beads_dir !== join(primaryRoot, ".beads"))
+    return false;
+  return context.is_worktree ? git.topLevel !== primaryRoot : git.topLevel === primaryRoot;
+}
 var remoteConfigKey = /^remote\.([A-Za-z0-9][A-Za-z0-9._-]*)\.url$/u;
 var secretRemoteName = /(?:^|[_.-])(?:api[_-]?(?:key|token)|authorization|bearer|cookie|credentials?|passwd|password|private[_-]?key|secret|session[_-]?token|token)(?:$|[_.-])/iu;
 function parseGitRemoteConfigOutput(source) {
   if (source.includes("\uFFFD") || !source.endsWith("\0")) return void 0;
   const records = source.slice(0, -1).split("\0");
-  if (records.length === 0 || records.some((record3) => record3.length === 0))
+  if (records.length === 0 || records.some((record4) => record4.length === 0))
     return void 0;
   const urls = [];
-  for (const record3 of records) {
-    const separator = record3.indexOf("\n");
-    if (separator <= 0 || record3.indexOf("\n", separator + 1) !== -1)
+  for (const record4 of records) {
+    const separator = record4.indexOf("\n");
+    if (separator <= 0 || record4.indexOf("\n", separator + 1) !== -1)
       return void 0;
-    const key = record3.slice(0, separator);
-    const url = record3.slice(separator + 1);
+    const key = record4.slice(0, separator);
+    const url = record4.slice(separator + 1);
     if (!remoteConfigKey.test(key) || secretRemoteName.test(key) || url.length === 0 || url.length > 1024 || /[\u0000\r\n\uFFFD]/u.test(url))
       return void 0;
     urls.push(url);
   }
   return urls;
+}
+function embeddedStoreProof(observation) {
+  if (observation.backend !== "dolt" || observation.embedded !== true || observation.schema_version !== 1)
+    return void 0;
+  const dataDir = canonicalObservedDirectory(observation.data_dir);
+  if (dataDir === void 0) return void 0;
+  return {
+    backend: "dolt",
+    dataDir,
+    database: observation.database,
+    embedded: true,
+    schemaVersion: 1
+  };
+}
+async function inspectPreflight(cwd, options = {}) {
+  const safeCwd = canonicalCwd(cwd);
+  if (safeCwd === void 0)
+    return preflightEnvelope(
+      { status: "refused", code: "PF_SUBPROCESS_UNAVAILABLE" },
+      void 0
+    );
+  const version = await inspectionOutput(safeCwd, {
+    executable: "bd",
+    argv: ["--version"]
+  });
+  if (!version.ok)
+    return preflightEnvelope(
+      { status: "refused", code: version.code },
+      void 0
+    );
+  if (!new RegExp(
+    `^bd version ${BD_VERSION.replaceAll(".", "\\.")}(?:\\s|$)`,
+    "u"
+  ).test(version.stdout))
+    return preflightEnvelope(
+      { status: "refused", code: "PF_BD_VERSION_UNSUPPORTED" },
+      void 0
+    );
+  const contextOutput = await inspectionOutput(safeCwd, {
+    executable: "bd",
+    argv: ["context", "--json"]
+  });
+  if (!contextOutput.ok)
+    return preflightEnvelope(
+      { status: "refused", code: contextOutput.code },
+      void 0
+    );
+  const context = parseBdContextJson(contextOutput.stdout);
+  if (!context.ok)
+    return preflightEnvelope(
+      { status: "refused", code: "PF_BD_CONTEXT_INVALID" },
+      void 0
+    );
+  const canonicalContext = canonicalizeContextDirectories(
+    context.value,
+    canonicalObservedDirectory
+  );
+  if (canonicalContext === void 0)
+    return preflightEnvelope(
+      { status: "refused", code: "PF_BD_CONTEXT_INVALID" },
+      void 0
+    );
+  const needsBootstrap = canonicalContext.backend === "none" || canonicalContext.backend === "uninitialized" || canonicalContext.dolt_mode === "uninitialized";
+  let bootstrap;
+  if (needsBootstrap) {
+    const bootstrapOutput = await inspectionOutput(safeCwd, {
+      executable: "bd",
+      argv: ["bootstrap", "--dry-run", "--json"]
+    });
+    if (!bootstrapOutput.ok)
+      return preflightEnvelope(
+        { status: "refused", code: bootstrapOutput.code },
+        void 0
+      );
+    const plan = parseBootstrapPlanJson(bootstrapOutput.stdout);
+    if (!plan.ok)
+      return preflightEnvelope(
+        { status: "refused", code: "PF_BOOTSTRAP_PLAN_INVALID" },
+        void 0
+      );
+    bootstrap = plan.value;
+  }
+  let configuration;
+  if (!needsBootstrap) {
+    const syncRemoteOutput = await inspectionOutput(safeCwd, {
+      executable: "bd",
+      argv: ["config", "get", "sync.remote", "--json"]
+    });
+    const prefixOutput = await inspectionOutput(safeCwd, {
+      executable: "bd",
+      argv: ["config", "get", "issue_prefix", "--json"]
+    });
+    if (!syncRemoteOutput.ok)
+      return preflightEnvelope(
+        { status: "refused", code: syncRemoteOutput.code },
+        void 0
+      );
+    if (!prefixOutput.ok)
+      return preflightEnvelope(
+        { status: "refused", code: prefixOutput.code },
+        void 0
+      );
+    const syncRemote = parseBdConfigValueJson(
+      syncRemoteOutput.stdout,
+      "sync.remote"
+    );
+    const prefix = parseBdConfigValueJson(prefixOutput.stdout, "issue_prefix");
+    if (!syncRemote.ok || !prefix.ok || syncRemote.value.value.length > 0 && syncRemote.value.location === void 0)
+      return preflightEnvelope(
+        { status: "refused", code: "PF_BD_CONFIG_INVALID" },
+        void 0
+      );
+    configuration = {
+      prefix: prefix.value.value,
+      syncRemote: syncRemote.value.value
+    };
+  }
+  let embeddedStore;
+  if (canonicalContext.backend === "dolt" && canonicalContext.dolt_mode === "embedded") {
+    const doltShowOutput = await inspectionOutput(safeCwd, {
+      executable: "bd",
+      argv: ["dolt", "show", "--json"]
+    });
+    if (!doltShowOutput.ok)
+      return preflightEnvelope(
+        { status: "refused", code: doltShowOutput.code },
+        void 0
+      );
+    const doltShow2 = parseBdDoltShowJson(doltShowOutput.stdout);
+    if (!doltShow2.ok)
+      return preflightEnvelope(
+        { status: "refused", code: "PF_TOPOLOGY_CONTRADICTORY" },
+        void 0
+      );
+    embeddedStore = embeddedStoreProof(doltShow2.value);
+    if (embeddedStore === void 0)
+      return preflightEnvelope(
+        { status: "refused", code: "PF_TOPOLOGY_CONTRADICTORY" },
+        void 0
+      );
+  }
+  const topology = classifyTopology(
+    canonicalContext,
+    bootstrap,
+    embeddedStore,
+    localBareRemoteCanonicalizer,
+    configuration
+  );
+  if (topology.status !== "ready")
+    return preflightEnvelope(topology, void 0);
+  const topLevelOutput = await inspectionOutput(safeCwd, {
+    executable: "git",
+    argv: ["rev-parse", "--show-toplevel"]
+  });
+  const commonDirOutput = await inspectionOutput(safeCwd, {
+    executable: "git",
+    argv: ["rev-parse", "--git-common-dir"]
+  });
+  const objectFormatOutput = await inspectionOutput(safeCwd, {
+    executable: "git",
+    argv: ["rev-parse", "--show-object-format"]
+  });
+  const remoteOutput = options.providerId === void 0 ? await inspectionOutput(safeCwd, {
+    executable: "git",
+    argv: ["config", "--null", "--get-regexp", "^remote\\..*\\.url$"]
+  }) : void 0;
+  if (!topLevelOutput.ok)
+    return preflightEnvelope(
+      { status: "refused", code: topLevelOutput.code },
+      void 0
+    );
+  if (!commonDirOutput.ok)
+    return preflightEnvelope(
+      { status: "refused", code: commonDirOutput.code },
+      void 0
+    );
+  if (!objectFormatOutput.ok)
+    return preflightEnvelope(
+      { status: "refused", code: objectFormatOutput.code },
+      void 0
+    );
+  if (remoteOutput !== void 0 && !remoteOutput.ok)
+    return preflightEnvelope(
+      { status: "refused", code: remoteOutput.code },
+      void 0
+    );
+  const topLevel = line(topLevelOutput.stdout);
+  const commonDirValue = line(commonDirOutput.stdout);
+  const objectFormat = line(objectFormatOutput.stdout);
+  if (topLevel === void 0 || commonDirValue === void 0 || objectFormat === void 0)
+    return preflightEnvelope(
+      { status: "refused", code: "PF_GIT_INSPECTION_INVALID" },
+      void 0
+    );
+  const commonDirInput = isAbsolute3(commonDirValue) ? commonDirValue : resolve3(topLevel, commonDirValue);
+  const canonicalTopLevel = canonicalObservedDirectory(topLevel);
+  const commonDir = canonicalObservedDirectory(commonDirInput);
+  if (canonicalTopLevel === void 0 || commonDir === void 0)
+    return preflightEnvelope(
+      { status: "refused", code: "PF_GIT_INSPECTION_INVALID" },
+      void 0
+    );
+  if (!matchesCanonicalGitContext(canonicalContext, {
+    commonDir,
+    topLevel: canonicalTopLevel
+  }) || !isCanonicalSubdirectory(canonicalTopLevel, safeCwd))
+    return preflightEnvelope(
+      { status: "refused", code: "PF_BD_CONTEXT_INVALID" },
+      void 0
+    );
+  const remoteUrls = remoteOutput === void 0 ? [] : remoteOutput.ok ? parseGitRemoteConfigOutput(remoteOutput.stdout) : void 0;
+  if (remoteUrls === void 0)
+    return preflightEnvelope(
+      { status: "refused", code: "PF_GIT_INSPECTION_INVALID" },
+      void 0
+    );
+  const git = deriveGitIdentity(
+    {
+      commonDir,
+      objectFormat,
+      ...options.providerId === void 0 ? {} : { providerId: options.providerId },
+      remoteUrls,
+      topLevel: canonicalTopLevel
+    },
+    localBareRemoteCanonicalizer
+  );
+  return preflightEnvelope(topology, git.ok ? git.value : void 0);
 }
 
 // src/adapters/git/schemas.ts
@@ -21072,14 +21724,14 @@ function safePath(value) {
   return PATH.test(value) && !value.startsWith("-") && !value.includes("../");
 }
 function safeAbsolutePath(value) {
-  return isAbsolute3(value) && safePath(value) && normalize3(resolve3(value)) !== "/";
+  return isAbsolute4(value) && safePath(value) && normalize3(resolve4(value)) !== "/";
 }
 function scopedHookPath(value) {
   if (!safeAbsolutePath(value)) return false;
-  const root = normalize3(resolve3(tmpdir()));
-  const candidate = normalize3(resolve3(value));
-  const suffix = relative(root, candidate);
-  return !isAbsolute3(suffix) && !suffix.startsWith("../") && suffix.startsWith("sce-git-pre-push-") && !suffix.includes("/") && activeHookPaths.has(candidate);
+  const root = normalize3(resolve4(tmpdir()));
+  const candidate = normalize3(resolve4(value));
+  const suffix = relative2(root, candidate);
+  return !isAbsolute4(suffix) && !suffix.startsWith("../") && suffix.startsWith("sce-git-pre-push-") && !suffix.includes("/") && activeHookPaths.has(candidate);
 }
 function allowedGitArgv(argv) {
   const [command, ...args] = argv;
@@ -21156,10 +21808,10 @@ function allowedGitArgv(argv) {
 function canonicalWorktreePath(value) {
   if (!safeAbsolutePath(value)) return void 0;
   try {
-    return normalize3(realpathSync(value));
+    return normalize3(realpathSync2(value));
   } catch {
     try {
-      return join(normalize3(realpathSync(dirname(value))), basename(value));
+      return join2(normalize3(realpathSync2(dirname2(value))), basename2(value));
     } catch {
       return void 0;
     }
@@ -21167,9 +21819,9 @@ function canonicalWorktreePath(value) {
 }
 function canonicalExistingOrLexical(value) {
   try {
-    return normalize3(realpathSync(value));
+    return normalize3(realpathSync2(value));
   } catch {
-    return normalize3(resolve3(value));
+    return normalize3(resolve4(value));
   }
 }
 function effect(state, code) {
@@ -21194,7 +21846,7 @@ function lines(value) {
   const output = value.trimEnd();
   if (output.length === 0) return [];
   const result2 = output.split("\n");
-  return result2.some((line) => line.length === 0 || line.includes("\r")) ? void 0 : result2;
+  return result2.some((line2) => line2.length === 0 || line2.includes("\r")) ? void 0 : result2;
 }
 function oneLine(value) {
   const result2 = lines(value);
@@ -21226,7 +21878,7 @@ function localIdentity(repository) {
   return `local:${canonicalExistingOrLexical(repository.commonDir)}`;
 }
 function validScope(value) {
-  return safePath(value) && !isAbsolute3(value) && value !== "." && !value.endsWith("/") && value.split("/").every((part) => part.length > 0 && part !== "." && part !== "..");
+  return safePath(value) && !isAbsolute4(value) && value !== "." && !value.endsWith("/") && value.split("/").every((part) => part.length > 0 && part !== "." && part !== "..");
 }
 function disjointScopes(scopes) {
   return scopes.every(
@@ -21293,9 +21945,9 @@ async function remoteRefOid(runner, repository, remote2, ref) {
   if (result2.exitCode === 2 && result2.signal === null)
     return { state: "missing" };
   if (!commandOk(result2)) return { state: "unreadable" };
-  const record3 = oneLine(result2.stdout);
-  if (record3 === void 0) return { state: "unreadable" };
-  const fields = record3.split("	");
+  const record4 = oneLine(result2.stdout);
+  if (record4 === void 0) return { state: "unreadable" };
+  const fields = record4.split("	");
   return fields.length === 2 && fields[0] !== void 0 && fields[1] === ref && exactOid(repository.objectFormat, fields[0]) ? { state: "found", oid: fields[0] } : { state: "unreadable" };
 }
 function containedBy(scope, path2) {
@@ -21308,7 +21960,7 @@ async function verifyWorktreeOwnership(runner, repository, path2) {
   const observed2 = oneLine(result2.stdout);
   if (observed2 === void 0 || !safePath(observed2))
     return effect("refused", "GIT_FOREIGN_WORKTREE");
-  const commonDir = isAbsolute3(observed2) ? normalize3(resolve3(observed2)) : normalize3(resolve3(path2, observed2));
+  const commonDir = isAbsolute4(observed2) ? normalize3(resolve4(observed2)) : normalize3(resolve4(path2, observed2));
   return canonicalExistingOrLexical(commonDir) === canonicalExistingOrLexical(repository.commonDir) ? effect("observed", "GIT_OK") : effect("refused", "GIT_FOREIGN_WORKTREE");
 }
 async function verifyCleanWorktree(runner, repository, path2) {
@@ -21329,7 +21981,7 @@ async function verifyOrdinaryTrackedIndex(runner, path2) {
 }
 async function candidateDiffEnvironment(runner, repository, worktreePath) {
   if (existsSync(
-    join(
+    join2(
       canonicalExistingOrLexical(repository.commonDir),
       "info",
       "attributes"
@@ -21372,8 +22024,8 @@ async function verifySinglePushRemote(runner, repository, remote2) {
 async function guardedPush(runner, repository, input) {
   let directory;
   try {
-    directory = await mkdtemp(join(tmpdir(), "sce-git-pre-push-"));
-    const hook = join(directory, "pre-push");
+    directory = await mkdtemp(join2(tmpdir(), "sce-git-pre-push-"));
+    const hook = join2(directory, "pre-push");
     await writeFile(
       hook,
       `#!/bin/sh
@@ -21387,7 +22039,7 @@ exit 0
       { encoding: "utf8", mode: 448 }
     );
     await chmod(hook, 448);
-    activeHookPaths.add(normalize3(resolve3(directory)));
+    activeHookPaths.add(normalize3(resolve4(directory)));
     return await run(runner, repository, [
       "-c",
       `core.hooksPath=${directory}`,
@@ -21399,7 +22051,7 @@ exit 0
     return { exitCode: null, signal: null, stdout: "", unavailable: true };
   } finally {
     if (directory !== void 0) {
-      activeHookPaths.delete(normalize3(resolve3(directory)));
+      activeHookPaths.delete(normalize3(resolve4(directory)));
       await rm(directory, { force: true, recursive: true }).catch(
         () => void 0
       );
@@ -21426,7 +22078,7 @@ async function verifyRepository(runner, repository) {
   const objectFormat = oneLine(format.stdout);
   if (commonDir === void 0 || objectFormat === void 0 || !safePath(commonDir) || objectFormat !== repository.objectFormat)
     return effect("refused", "GIT_UNSUPPORTED_OBJECT_FORMAT");
-  const canonicalCommon = isAbsolute3(commonDir) ? normalize3(resolve3(commonDir)) : normalize3(resolve3(repository.cwd, commonDir));
+  const canonicalCommon = isAbsolute4(commonDir) ? normalize3(resolve4(commonDir)) : normalize3(resolve4(repository.cwd, commonDir));
   if (canonicalExistingOrLexical(canonicalCommon) !== canonicalExistingOrLexical(repository.commonDir))
     return effect("refused", "GIT_IDENTITY_MISMATCH");
   const noConfiguredRemotes = remotes.exitCode === 1 && remotes.signal === null && remotes.stdout.length === 0;
@@ -21460,7 +22112,7 @@ async function observeCandidate(runner, repository, input) {
   const worktree = parseWorktreeList(
     listed.stdout,
     repository.objectFormat
-  )?.find((record3) => record3.path === wantedPath);
+  )?.find((record4) => record4.path === wantedPath);
   if (worktree === void 0 || worktree.branch !== `refs/heads/${input.branch}` || worktree.head === void 0)
     return effect("refused", "GIT_FOREIGN_WORKTREE");
   const ownership = await verifyWorktreeOwnership(
@@ -21599,11 +22251,11 @@ async function verifyCandidateWorktree(runner, repository, input) {
     "--porcelain"
   ]);
   if (!commandOk(listed)) return effect("refused", "GIT_REFUSED");
-  const record3 = parseWorktreeList(
+  const record4 = parseWorktreeList(
     listed.stdout,
     repository.objectFormat
   )?.find((candidate) => candidate.path === path2);
-  if (record3?.branch !== `refs/heads/${input.branch}` || record3.head !== input.head)
+  if (record4?.branch !== `refs/heads/${input.branch}` || record4.head !== input.head)
     return effect("refused", "GIT_FOREIGN_WORKTREE");
   const ownership = await verifyWorktreeOwnership(runner, repository, path2);
   if (ownership.state !== "observed") return ownership;
@@ -21670,21 +22322,21 @@ function parseWorktreeList(source, format) {
   const records = [];
   for (const block of blocks) {
     const fields = /* @__PURE__ */ new Map();
-    for (const line of block.split("\n")) {
-      const position = line.indexOf(" ");
+    for (const line2 of block.split("\n")) {
+      const position = line2.indexOf(" ");
       if (position === -1) {
-        if (!["bare", "detached", "locked", "prunable"].includes(line))
+        if (!["bare", "detached", "locked", "prunable"].includes(line2))
           return void 0;
-        if (fields.has(line)) return void 0;
-        fields.set(line, "");
+        if (fields.has(line2)) return void 0;
+        fields.set(line2, "");
         continue;
       }
-      if (position < 1 || fields.has(line.slice(0, position))) return void 0;
+      if (position < 1 || fields.has(line2.slice(0, position))) return void 0;
       if (!["worktree", "HEAD", "branch", "locked", "prunable"].includes(
-        line.slice(0, position)
+        line2.slice(0, position)
       ))
         return void 0;
-      fields.set(line.slice(0, position), line.slice(position + 1));
+      fields.set(line2.slice(0, position), line2.slice(position + 1));
     }
     const path2 = fields.get("worktree");
     const head3 = fields.get("HEAD");
@@ -21716,11 +22368,11 @@ async function ensureWorktree(runner, repository, input) {
   const wantedPath = canonicalWorktreePath(input.path);
   if (wantedPath === void 0 || wantedPath !== input.path)
     return effect("refused", "GIT_FOREIGN_WORKTREE");
-  const existing = records.find((record3) => record3.path === wantedPath);
+  const existing = records.find((record4) => record4.path === wantedPath);
   const wantedBranch = `refs/heads/${input.branch}`;
   if (existing !== void 0)
     return existing.head === input.head && existing.branch === wantedBranch ? verifyCleanWorktree(runner, repository, input.path) : effect("refused", "GIT_FOREIGN_WORKTREE");
-  if (records.some((record3) => record3.branch === wantedBranch))
+  if (records.some((record4) => record4.branch === wantedBranch))
     return effect("refused", "GIT_FOREIGN_WORKTREE");
   const added = await run(runner, repository, [
     "worktree",
@@ -21737,7 +22389,7 @@ async function ensureWorktree(runner, repository, input) {
   const discovered2 = parseWorktreeList(
     reread.stdout,
     repository.objectFormat
-  )?.find((record3) => record3.path === wantedPath);
+  )?.find((record4) => record4.path === wantedPath);
   if (discovered2?.head !== input.head || discovered2.branch !== wantedBranch)
     return terminalFailure(added) === void 0 && added.exitCode !== 0 ? effect("refused", "GIT_REFUSED") : effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
   return verifyCleanWorktree(runner, repository, input.path);
@@ -21759,7 +22411,7 @@ async function discoverWorktree(runner, repository, input) {
   if (records === void 0) return effect("refused", "GIT_REFUSED");
   if (wantedPath === void 0 || wantedPath !== input.path)
     return effect("refused", "GIT_FOREIGN_WORKTREE");
-  const existing = records.find((record3) => record3.path === wantedPath);
+  const existing = records.find((record4) => record4.path === wantedPath);
   if (existing === void 0) return effect("refused", "GIT_ABSENT");
   return existing.head === input.head && existing.branch === `refs/heads/${input.branch}` ? verifyCleanWorktree(runner, repository, input.path) : effect("refused", "GIT_FOREIGN_WORKTREE");
 }
@@ -21933,7 +22585,7 @@ async function discoverDetachedWorktree(runner, repository, input) {
   if (records === void 0) return { state: "unreadable" };
   if (wantedPath === void 0 || wantedPath !== input.path)
     return { state: "foreign" };
-  const existing = records.find((record3) => record3.path === wantedPath);
+  const existing = records.find((record4) => record4.path === wantedPath);
   if (existing === void 0) return { state: "absent" };
   if (existing.head === void 0 || existing.branch !== void 0)
     return { state: "foreign" };
@@ -22059,13 +22711,13 @@ async function findCommitByTrailer(runner, repository, input) {
     input.start
   ]);
   if (!commandOk(listed)) return { state: "unreadable" };
-  const oids = listed.stdout.split("\n").filter((line) => line.length > 0);
+  const oids = listed.stdout.split("\n").filter((line2) => line2.length > 0);
   if (!oids.every((oid3) => exactOid(repository.objectFormat, oid3)))
     return { state: "unreadable" };
   for (const oid3 of oids) {
     const commit2 = await readCommit(runner, repository, oid3);
     if (commit2 === void 0) return { state: "unreadable" };
-    if (commit2.message.split("\n").some((line) => line === input.trailer))
+    if (commit2.message.split("\n").some((line2) => line2 === input.trailer))
       return { state: "found", oid: oid3, commit: commit2 };
   }
   return { state: "absent" };
@@ -22123,7 +22775,7 @@ var nodeGitRunner = async ({ argv, cwd, env }) => {
     let outputBytes = 0;
     let timedOut = false;
     let unavailable6 = false;
-    const child = spawn("/usr/bin/git", argv, {
+    const child = spawn2("/usr/bin/git", argv, {
       cwd,
       env: {
         ...env ?? {},
@@ -22179,7 +22831,7 @@ var nodeGitRunner = async ({ argv, cwd, env }) => {
 function canonicalGitCommonDir(path2) {
   if (!safeAbsolutePath(path2)) return void 0;
   try {
-    const canonical2 = realpathSync(path2);
+    const canonical2 = realpathSync2(path2);
     return safeAbsolutePath(canonical2) ? canonical2 : void 0;
   } catch {
     return void 0;
@@ -22187,18 +22839,18 @@ function canonicalGitCommonDir(path2) {
 }
 
 // src/adapters/materialise/index.ts
-import { spawn as spawn2 } from "node:child_process";
+import { spawn as spawn3 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, realpath, stat } from "node:fs/promises";
-import { isAbsolute as isAbsolute4, join as join2, normalize as normalize4, relative as relative2, resolve as resolve4 } from "node:path";
+import { isAbsolute as isAbsolute5, join as join3, normalize as normalize4, relative as relative3, resolve as resolve5 } from "node:path";
 async function readNoFollow(root, name, maximumBytes) {
   try {
-    const first = await lstat(join2(root, name), { bigint: true });
+    const first = await lstat(join3(root, name), { bigint: true });
     if (!first.isFile() || first.isSymbolicLink() || first.size > BigInt(maximumBytes))
       return { status: "ambiguous" };
     const handle = await open(
-      join2(root, name),
+      join3(root, name),
       constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)
     );
     try {
@@ -22223,7 +22875,7 @@ function hashBytes(value) {
   return createHash2("sha256").update(value).digest("hex");
 }
 var nodeMaterialisationProcess = {
-  run: async (executable, argv, options) => await new Promise((resolveResult) => {
+  run: async (executable2, argv, options) => await new Promise((resolveResult) => {
     let settled = false;
     const finish = (result2) => {
       if (settled) return;
@@ -22231,7 +22883,7 @@ var nodeMaterialisationProcess = {
       clearTimeout(timer);
       resolveResult(result2);
     };
-    const child = spawn2(executable, argv, {
+    const child = spawn3(executable2, argv, {
       cwd: options.cwd,
       env: options.env,
       shell: false,
@@ -22274,7 +22926,7 @@ var nodeMaterialisationProcess = {
     if (options.input === void 0) child.stdin.end();
     else child.stdin.end(options.input);
   }),
-  runTree: async (executable, argv, options, sourcePattern) => await new Promise((resolveResult) => {
+  runTree: async (executable2, argv, options, sourcePattern) => await new Promise((resolveResult) => {
     let settled = false;
     let parsingValid = true;
     let retainedMatches = 0;
@@ -22295,7 +22947,7 @@ var nodeMaterialisationProcess = {
       clearTimeout(timer);
       resolveResult(result2);
     };
-    const child = spawn2(executable, argv, {
+    const child = spawn3(executable2, argv, {
       cwd: options.cwd,
       env: options.env,
       shell: false,
@@ -22452,17 +23104,17 @@ function parseTree(data) {
       start += 1;
       continue;
     }
-    const record3 = data.subarray(start, end);
-    const tab = record3.indexOf(9);
+    const record4 = data.subarray(start, end);
+    const tab = record4.indexOf(9);
     if (tab < 0) return { valid: false };
-    const headerBytes = record3.subarray(0, tab);
+    const headerBytes = record4.subarray(0, tab);
     if ([...headerBytes].some((byte) => byte > 127)) return { valid: false };
     const raw = headerBytes.toString("ascii");
     const match = /^([0-7]{6}) ([a-z]+) ([0-9a-f]{40}|[0-9a-f]{64})$/u.exec(
       raw
     );
     if (match === null) return { valid: false };
-    const path2 = record3.subarray(tab + 1);
+    const path2 = record4.subarray(tab + 1);
     if (path2.byteLength === 0) return { valid: false };
     entries.push({
       blobOid: match[3],
@@ -22905,7 +23557,7 @@ function frame(metadata, sidecar, artifact) {
 }
 async function admittedDestination(destination, destinationSubpath) {
   const root = destination.canonicalRoot;
-  if (!isAbsolute4(root) || normalize4(resolve4(root)) !== root || root === "/")
+  if (!isAbsolute5(root) || normalize4(resolve5(root)) !== root || root === "/")
     return { reason: "invalid_destination", status: "refused" };
   try {
     let rootLink;
@@ -22920,7 +23572,7 @@ async function admittedDestination(destination, destinationSubpath) {
       return { reason: "invalid_destination", status: "refused" };
     let marker;
     try {
-      marker = await lstat(join2(root, destination.markerFile), {
+      marker = await lstat(join3(root, destination.markerFile), {
         bigint: true
       });
     } catch (error) {
@@ -22930,7 +23582,7 @@ async function admittedDestination(destination, destinationSubpath) {
       return { reason: "invalid_destination", status: "refused" };
     let current = root;
     for (const segment of destinationSubpath.split("/")) {
-      current = join2(current, segment);
+      current = join3(current, segment);
       let component;
       try {
         component = await lstat(current, { bigint: true });
@@ -22939,8 +23591,8 @@ async function admittedDestination(destination, destinationSubpath) {
       }
       if (!component.isDirectory() || component.isSymbolicLink())
         return { reason: "invalid_destination", status: "refused" };
-      const suffix = relative2(root, current);
-      if (suffix.startsWith("../") || isAbsolute4(suffix))
+      const suffix = relative3(root, current);
+      if (suffix.startsWith("../") || isAbsolute5(suffix))
         return { reason: "invalid_destination", status: "refused" };
     }
     const canonical2 = await realpath(current);
@@ -23218,9 +23870,9 @@ function createMaterialisationAdapter(repositoryCwd, objectFormat, processPort =
 }
 
 // src/adapters/git/provenance.ts
-import { spawn as spawn3 } from "node:child_process";
+import { spawn as spawn4 } from "node:child_process";
 import { lstat as lstat2, mkdir, readFile, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname2, join as join3, posix as posix2 } from "node:path";
+import { dirname as dirname3, join as join4, posix as posix2 } from "node:path";
 
 // src/protocol/provenance.ts
 var PROVENANCE_KEY_TRAILER = "SCE-Provenance-Key";
@@ -23255,9 +23907,9 @@ function provenanceRecordsCommitment(records) {
   return sha256(
     canonicalJson({
       domain: "sce.provenance-records.v1",
-      records: records.map((record3) => ({
-        path: record3.path,
-        sha256: sha256(record3.bytes)
+      records: records.map((record4) => ({
+        path: record4.path,
+        sha256: sha256(record4.bytes)
       }))
     })
   );
@@ -23479,13 +24131,13 @@ var nodeProvenanceProcess = {
         timedOut
       });
     };
-    const [executable, ...args] = argv;
-    if (executable === void 0) {
+    const [executable2, ...args] = argv;
+    if (executable2 === void 0) {
       failedToStart = true;
       finish(null, null);
       return;
     }
-    const child = spawn3(executable, args, {
+    const child = spawn4(executable2, args, {
       cwd: options.cwd,
       env: options.env,
       shell: false,
@@ -23523,7 +24175,7 @@ function unavailable() {
 function digest(value) {
   return sha256(canonicalJson(value));
 }
-function sanitizedEnvironment(extra) {
+function sanitizedEnvironment2(extra) {
   const inherited = {};
   for (const key of ["PATH", "TMPDIR", "TEMP", "TMP"]) {
     const value = process.env[key];
@@ -23565,10 +24217,10 @@ async function realDirectory(path2) {
   }
 }
 async function recordsOnDisk(worktreePath, records) {
-  for (const record3 of records) {
+  for (const record4 of records) {
     try {
-      const bytes2 = await readFile(join3(worktreePath, record3.path), "utf8");
-      if (bytes2 !== record3.bytes) return false;
+      const bytes2 = await readFile(join4(worktreePath, record4.path), "utf8");
+      if (bytes2 !== record4.bytes) return false;
     } catch {
       return false;
     }
@@ -23576,7 +24228,7 @@ async function recordsOnDisk(worktreePath, records) {
   return true;
 }
 function recordsAtCommit(files, records) {
-  return records.every((record3) => files.get(record3.path) === record3.bytes);
+  return records.every((record4) => files.get(record4.path) === record4.bytes);
 }
 function createProvenanceAdapter(options) {
   const { repository, runner } = options.git;
@@ -23714,10 +24366,10 @@ function createProvenanceAdapter(options) {
     let generatorFailure;
     if (built === void 0) {
       try {
-        for (const record3 of projection.records) {
-          const target = join3(worktreePath, record3.path);
-          await mkdir(dirname2(target), { recursive: true });
-          await writeFile2(target, record3.bytes, "utf8");
+        for (const record4 of projection.records) {
+          const target = join4(worktreePath, record4.path);
+          await mkdir(dirname3(target), { recursive: true });
+          await writeFile2(target, record4.bytes, "utf8");
         }
       } catch {
         return ambiguous2();
@@ -23725,11 +24377,11 @@ function createProvenanceAdapter(options) {
       const generatorArgv = [
         ...contract.provenance.rollupGeneratorCommand,
         "--output",
-        join3(worktreePath, contract.provenance.generatedDirectory)
+        join4(worktreePath, contract.provenance.generatedDirectory)
       ];
       const generated = await processPort.run(generatorArgv, {
         cwd: worktreePath,
-        env: sanitizedEnvironment({
+        env: sanitizedEnvironment2({
           SCE_PROVENANCE_BASE_OID: params.baseOid
         }),
         maxOutputBytes: MAX_COMMAND_OUTPUT_BYTES,
@@ -23774,7 +24426,7 @@ function createProvenanceAdapter(options) {
       contract.provenance.reproducibilityCommand,
       {
         cwd: worktreePath,
-        env: sanitizedEnvironment({
+        env: sanitizedEnvironment2({
           SCE_PROVENANCE_BASE_OID: params.baseOid,
           SCE_PROVENANCE_COMMIT_OID: built.commit
         }),
@@ -23861,7 +24513,7 @@ function createProvenanceAdapter(options) {
     for (const argv of params.commands) {
       const outcome = await processPort.run(argv, {
         cwd: params.worktreePath,
-        env: sanitizedEnvironment({
+        env: sanitizedEnvironment2({
           SCE_CANDIDATE_BASE_OID: params.candidate.baseOid,
           SCE_PROVENANCE_COMMIT_OID: params.provenanceOid
         }),
@@ -24253,12 +24905,12 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
-  realpathSync as realpathSync2,
-  statSync,
+  realpathSync as realpathSync3,
+  statSync as statSync2,
   unlinkSync,
   writeFileSync
 } from "node:fs";
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 import { createConnection, createServer } from "node:net";
 var LOCK_DIRECTORY = ".sce-op";
 var SOCKET_NAME = "l";
@@ -24269,12 +24921,12 @@ var utf86 = new TextEncoder();
 function ownerMatches(uid) {
   return typeof process.getuid !== "function" || uid === process.getuid();
 }
-function identity(stat3) {
+function identity(stat4) {
   return {
-    dev: stat3.dev,
-    ino: stat3.ino,
-    mode: stat3.mode & 511,
-    uid: stat3.uid
+    dev: stat4.dev,
+    ino: stat4.ino,
+    mode: stat4.mode & 511,
+    uid: stat4.uid
   };
 }
 function sameIdentity(left, right) {
@@ -24285,18 +24937,18 @@ function absentError(error) {
 }
 function strictDirectory(path2, expectedMode) {
   try {
-    const stat3 = lstatSync(path2);
-    return stat3.isDirectory() && !stat3.isSymbolicLink() && ownerMatches(stat3.uid) && (expectedMode === void 0 || (stat3.mode & 511) === expectedMode);
+    const stat4 = lstatSync(path2);
+    return stat4.isDirectory() && !stat4.isSymbolicLink() && ownerMatches(stat4.uid) && (expectedMode === void 0 || (stat4.mode & 511) === expectedMode);
   } catch {
     return false;
   }
 }
 function captureSocket(path2) {
   try {
-    const stat3 = lstatSync(path2);
-    if (!stat3.isSocket() || stat3.isSymbolicLink() || !ownerMatches(stat3.uid) || (stat3.mode & 511) !== 384)
+    const stat4 = lstatSync(path2);
+    if (!stat4.isSocket() || stat4.isSymbolicLink() || !ownerMatches(stat4.uid) || (stat4.mode & 511) !== 384)
       return { kind: "invalid" };
-    return { kind: "valid", value: { identity: identity(stat3) } };
+    return { kind: "valid", value: { identity: identity(stat4) } };
   } catch (error) {
     return absentError(error) ? { kind: "absent" } : { kind: "invalid" };
   }
@@ -24353,56 +25005,56 @@ function writeState(path2, state) {
 }
 function paths(commonDir) {
   try {
-    if (realpathSync2(commonDir) !== commonDir || !strictDirectory(commonDir))
+    if (realpathSync3(commonDir) !== commonDir || !strictDirectory(commonDir))
       return void 0;
-    const directory = join4(commonDir, LOCK_DIRECTORY);
+    const directory = join5(commonDir, LOCK_DIRECTORY);
     try {
       mkdirSync(directory, { mode: 448 });
     } catch (error) {
       if (error.code !== "EEXIST") return void 0;
     }
     if (!strictDirectory(directory, 448)) return void 0;
-    if (statSync(commonDir).dev !== statSync(directory).dev) return void 0;
+    if (statSync2(commonDir).dev !== statSync2(directory).dev) return void 0;
     return {
       directory,
-      socket: join4(directory, SOCKET_NAME),
-      state: join4(directory, STATE_NAME)
+      socket: join5(directory, SOCKET_NAME),
+      state: join5(directory, STATE_NAME)
     };
   } catch {
     return void 0;
   }
 }
 function listen(socket) {
-  return new Promise((resolve9) => {
+  return new Promise((resolve11) => {
     const server = createServer((connection) => connection.destroy());
-    const fail3 = (error) => {
-      resolve9({ code: error.code ?? "UNKNOWN" });
+    const fail4 = (error) => {
+      resolve11({ code: error.code ?? "UNKNOWN" });
     };
-    server.once("error", fail3);
+    server.once("error", fail4);
     server.listen(socket, () => {
-      server.removeListener("error", fail3);
-      resolve9({ server });
+      server.removeListener("error", fail4);
+      resolve11({ server });
     });
   });
 }
 function socketIsLive(socketPath) {
-  return new Promise((resolve9) => {
+  return new Promise((resolve11) => {
     const socket = createConnection(socketPath);
     socket.once("connect", () => {
       socket.destroy();
-      resolve9(true);
+      resolve11(true);
     });
     socket.once("error", (error) => {
       socket.destroy();
       if (error.code === "ECONNREFUSED" || error.code === "ENOENT")
-        resolve9(false);
-      else resolve9(void 0);
+        resolve11(false);
+      else resolve11(void 0);
     });
   });
 }
 async function closeServer(server) {
-  return new Promise((resolve9) => {
-    server.close((error) => resolve9(error === void 0));
+  return new Promise((resolve11) => {
+    server.close((error) => resolve11(error === void 0));
   });
 }
 function removeSocket(path2, expected) {
@@ -26339,10 +26991,10 @@ function validateCommandRunnerResult(input) {
 function validateCommandPayload(input) {
   return isJsonObject(input) && ajv4.validate(JsonObjectSchema, input);
 }
-var stateOnlyCommandRunner = (request) => {
-  if (!validateCommandRequest(request)) return invalidStateRequest();
-  if (isHarnessPacketCommandRequest(request)) {
-    const packet = createPacket(request.options.request);
+var stateOnlyCommandRunner = (request2) => {
+  if (!validateCommandRequest(request2)) return invalidStateRequest();
+  if (isHarnessPacketCommandRequest(request2)) {
+    const packet = createPacket(request2.options.request);
     return packet.ok ? {
       result: {
         hash: packet.hash,
@@ -26355,11 +27007,11 @@ var stateOnlyCommandRunner = (request) => {
       version: 1
     } : invalidStateRequest();
   }
-  if (!isStateCommandRequest(request)) return unavailable3();
-  if (!("request" in request.options)) return invalidStateRequest();
+  if (!isStateCommandRequest(request2)) return unavailable3();
+  if (!("request" in request2.options)) return invalidStateRequest();
   const parsedRun = validate(
     RepositoryRunSchema,
-    request.options.request.run
+    request2.options.request.run
   );
   if (!parsedRun.ok || parsedRun.value === void 0)
     return invalidStateRequest();
@@ -26375,7 +27027,7 @@ var stateOnlyCommandRunner = (request) => {
       }
     ]
   );
-  if (request.command === "inspect") {
+  if (request2.command === "inspect") {
     return {
       schema: "sce.command.result",
       version: 1,
@@ -26390,7 +27042,7 @@ var stateOnlyCommandRunner = (request) => {
       }
     };
   }
-  if (request.command === "status") {
+  if (request2.command === "status") {
     return {
       schema: "sce.command.result",
       version: 1,
@@ -26445,21 +27097,21 @@ var commandEvent = {
   "release-controller": ["controller_release_intent"]
 };
 function createRecoveryCommandRunner(runner) {
-  return async (request) => {
-    if (!validateCommandRequest(request)) return invalidStateRequest();
-    if (isHarnessPacketCommandRequest(request))
-      return stateOnlyCommandRunner(request);
-    if (isStateCommandRequest(request)) {
+  return async (request2) => {
+    if (!validateCommandRequest(request2)) return invalidStateRequest();
+    if (isHarnessPacketCommandRequest(request2))
+      return stateOnlyCommandRunner(request2);
+    if (isStateCommandRequest(request2)) {
       const outcome2 = await runner();
       if (!("run" in outcome2))
         return outcome2.status === "unavailable" ? unavailable3() : recoveryBlocked();
-      return await stateResult(request.command, outcome2.run);
+      return await stateResult(request2.command, outcome2.run);
     }
-    if (request.command === "feedback") return unavailable3();
-    if (request.command === "claim-provenance-carry") {
+    if (request2.command === "feedback") return unavailable3();
+    if (request2.command === "claim-provenance-carry") {
       const outcome2 = await runner({
         provenanceCarryClaim: {
-          predecessorRootBeadId: request.options.request.predecessorRootBeadId
+          predecessorRootBeadId: request2.options.request.predecessorRootBeadId
         }
       });
       if (!("revision" in outcome2) || outcome2.revision < 0)
@@ -26471,17 +27123,17 @@ function createRecoveryCommandRunner(runner) {
         version: 1
       };
     }
-    const payload = request.options.request;
+    const payload = request2.options.request;
     const event = payload !== void 0 && "event" in payload ? payload.event : void 0;
     const acknowledgement = payload !== void 0 && "harnessAcknowledgement" in payload ? payload.harnessAcknowledgement : void 0;
-    const expected = commandEvent[request.command];
-    if (acknowledgement !== void 0 && !allowsAcknowledgement(request.command, acknowledgement))
+    const expected = commandEvent[request2.command];
+    if (acknowledgement !== void 0 && !allowsAcknowledgement(request2.command, acknowledgement))
       return invalidStateRequest();
     if (expected !== void 0 && acknowledgement === void 0 && (event === void 0 || !expected.includes(event.type)))
       return invalidStateRequest();
     if (expected === void 0 && (event !== void 0 || acknowledgement !== void 0))
       return invalidStateRequest();
-    if (event !== void 0 && (request.options.expectedRevision !== void 0 && request.options.expectedRevision !== event.expectedRevision || request.options.idempotencyKey !== void 0 && (!("idempotencyKey" in event) || request.options.idempotencyKey !== event.idempotencyKey)))
+    if (event !== void 0 && (request2.options.expectedRevision !== void 0 && request2.options.expectedRevision !== event.expectedRevision || request2.options.idempotencyKey !== void 0 && (!("idempotencyKey" in event) || request2.options.idempotencyKey !== event.idempotencyKey)))
       return invalidStateRequest();
     const outcome = await runner(
       acknowledgement === void 0 ? event : { harnessAcknowledgement: acknowledgement }
@@ -26527,19 +27179,19 @@ function recoveryBlocked() {
   };
 }
 async function stateResult(command, run2) {
-  const request = {
+  const request2 = {
     command,
     options: { json: true, request: { run: run2 } },
     schema: "sce.command.request",
     version: 1
   };
-  return await stateOnlyCommandRunner(request);
+  return await stateOnlyCommandRunner(request2);
 }
-function isStateCommandRequest(request) {
-  return request.command === "inspect" || request.command === "next" || request.command === "status";
+function isStateCommandRequest(request2) {
+  return request2.command === "inspect" || request2.command === "next" || request2.command === "status";
 }
-function isHarnessPacketCommandRequest(request) {
-  return request.command === "harness-packet";
+function isHarnessPacketCommandRequest(request2) {
+  return request2.command === "harness-packet";
 }
 function invalidStateRequest() {
   return {
@@ -26564,7 +27216,7 @@ function isJsonObject(value) {
 
 // src/controller-config.ts
 import { readFile as readFile2 } from "node:fs/promises";
-import { isAbsolute as isAbsolute8, normalize as normalize5, relative as relative3, resolve as resolve5 } from "node:path";
+import { isAbsolute as isAbsolute9, normalize as normalize5, relative as relative4, resolve as resolve6 } from "node:path";
 
 // src/adapters/beads-embedded/schemas.ts
 var PINNED_BD_ISSUE_BASE_KEYS = [
@@ -26783,10 +27435,10 @@ function validateSlotTransitionIntent(input, prefix, scope, mode, expectedHolder
 }
 
 // src/adapters/beads-embedded/pinned-bd-process.ts
-import { spawn as spawn4 } from "node:child_process";
+import { spawn as spawn5 } from "node:child_process";
 import { createHash as createHash3 } from "node:crypto";
-import { closeSync as closeSync2, openSync as openSync2, readSync, realpathSync as realpathSync3, statSync as statSync2 } from "node:fs";
-import { basename as basename2, dirname as dirname3, isAbsolute as isAbsolute5 } from "node:path";
+import { closeSync as closeSync2, openSync as openSync2, readSync, realpathSync as realpathSync4, statSync as statSync3 } from "node:fs";
+import { basename as basename3, dirname as dirname4, isAbsolute as isAbsolute6 } from "node:path";
 var MAX_OUTPUT_BYTES = 65536;
 var PINNED_BD_VERSION = "1.1.0";
 var PINNED_DOLT_VERSION = "2.2.1";
@@ -26839,6 +27491,12 @@ function json2(source) {
   } catch {
     return void 0;
   }
+}
+function sameRemoteIdentity(configuredUrl, expected) {
+  if (configuredUrl === expected) return true;
+  const plain = configuredUrl.startsWith("git+file://") ? configuredUrl.slice("git+".length) : configuredUrl;
+  const normalized = normalizeGitRemote(plain, canonicalLocalBareRepository);
+  return normalized !== void 0 && normalized === expected;
 }
 function doltShow(source) {
   const raw = json2(source);
@@ -27183,9 +27841,9 @@ var PinnedBdEmbeddedProcess = class {
     this.projections = options.projections;
     this.remote = options.remote;
     this.scope = options.scope;
-    const storePath = this.databaseDirectory === "" ? "" : this.canonicalDirectory(dirname3(this.databaseDirectory));
+    const storePath = this.databaseDirectory === "" ? "" : this.canonicalDirectory(dirname4(this.databaseDirectory));
     this.identity = {
-      database: this.databaseDirectory === "" ? "" : basename2(this.databaseDirectory),
+      database: this.databaseDirectory === "" ? "" : basename3(this.databaseDirectory),
       databaseDirectory: this.databaseDirectory,
       prefix: this.prefix,
       ...this.remote === void 0 ? {} : { remote: this.remote },
@@ -27227,8 +27885,8 @@ var PinnedBdEmbeddedProcess = class {
       this.scope
     ) !== void 0 ? this.result("applied") : this.result("ambiguous");
   }
-  async execute(request) {
-    switch (request.kind) {
+  async execute(request2) {
+    switch (request2.kind) {
       case "state": {
         const engine = await this.run(["dolt", "status", "--json"]);
         const show = await this.run(["dolt", "show", "--json"]);
@@ -27278,39 +27936,39 @@ var PinnedBdEmbeddedProcess = class {
           value: this.projections.load === void 0 ? { status: "unavailable" } : await this.projections.load()
         };
       case "carry_read":
-        return this.projections.readCarry === void 0 ? { kind: "carry_read", value: { status: "unavailable" } } : await this.projections.readCarry(request.predecessorRootIssueId);
+        return this.projections.readCarry === void 0 ? { kind: "carry_read", value: { status: "unavailable" } } : await this.projections.readCarry(request2.predecessorRootIssueId);
       case "carry_claim":
-        return this.projections.claimCarry === void 0 ? { kind: "carry_claim", value: { status: "unavailable" } } : await this.projections.claimCarry(request);
+        return this.projections.claimCarry === void 0 ? { kind: "carry_claim", value: { status: "unavailable" } } : await this.projections.claimCarry(request2);
       case "carry_discover": {
-        const value = await this.projections.discoverCarry?.(request);
+        const value = await this.projections.discoverCarry?.(request2);
         if (value === void 0)
           throw new Error("carry checkpoint discovery failed");
         return {
           kind: "carry_discover",
-          value: request.point === "after_push" && this.remote !== void 0 ? await this.proveRemoteCarryCheckpoint(request, value) : await this.proveCarryCheckpoint(request, value)
+          value: request2.point === "after_push" && this.remote !== void 0 ? await this.proveRemoteCarryCheckpoint(request2, value) : await this.proveCarryCheckpoint(request2, value)
         };
       }
       case "slot": {
-        if (request.source === "remote") {
-          if (request.action !== "check" || this.remote === void 0)
+        if (request2.source === "remote") {
+          if (request2.action !== "check" || this.remote === void 0)
             throw new Error("invalid remote slot request");
           const remoteRef = await this.fetchRemoteMain(this.remote);
-          const slot2 = remoteRef === void 0 ? void 0 : await this.remoteSlotAt(remoteRef, request.actor);
+          const slot2 = remoteRef === void 0 ? void 0 : await this.remoteSlotAt(remoteRef, request2.actor);
           if (slot2 === void 0)
             throw new Error("remote slot readback failed");
           return {
             kind: "slot",
-            value: this.slotObservation(slot2, request.actor)
+            value: this.slotObservation(slot2, request2.actor)
           };
         }
         const action = await this.run([
           "--actor",
-          request.actor,
+          request2.actor,
           "merge-slot",
-          request.action,
+          request2.action,
           "--json"
         ]);
-        if (action === void 0 || action.exceeded || action.code !== 0 && request.action === "release")
+        if (action === void 0 || action.exceeded || action.code !== 0 && request2.action === "release")
           throw new Error("pinned bd slot operation failed");
         const show = await this.run([
           "show",
@@ -27327,76 +27985,76 @@ var PinnedBdEmbeddedProcess = class {
           throw new Error("pinned bd slot readback failed");
         return {
           kind: "slot",
-          value: this.slotObservation(slot, request.actor)
+          value: this.slotObservation(slot, request2.actor)
         };
       }
       case "slot_transition":
         return {
           kind: "slot_transition",
-          value: await this.proveSlotTransition(request.intent)
+          value: await this.proveSlotTransition(request2.intent)
         };
       case "remote_slot_transition":
         return {
           kind: "remote_slot_transition",
-          value: await this.proveRemoteSlotTransition(request.intent)
+          value: await this.proveRemoteSlotTransition(request2.intent)
         };
       case "mutation":
-        if (!validateMutationBatch(request.batch).ok)
+        if (!validateMutationBatch(request2.batch).ok)
           return { kind: "mutation", value: "quarantined" };
-        return this.projections.mutate(request.batch);
+        return this.projections.mutate(request2.batch);
       case "initialize":
-        if (!validateMergeSlotObservation(request.slot, this.prefix, this.scope).ok || request.slot.status !== "available" || request.slot.holder !== void 0)
+        if (!validateMergeSlotObservation(request2.slot, this.prefix, this.scope).ok || request2.slot.status !== "available" || request2.slot.holder !== void 0)
           return { kind: "mutation", value: "quarantined" };
         return this.projections.initialize === void 0 ? { kind: "mutation", value: "unavailable" } : this.projections.initialize(
           "sce.embedded.projection.initialize.v1",
-          request.input,
-          request.slot
+          request2.input,
+          request2.slot
         );
       case "preownership_mutation":
-        if (!validateMutationBatch(request.batch).ok)
+        if (!validateMutationBatch(request2.batch).ok)
           return { kind: "mutation", value: "quarantined" };
-        if (!validateMergeSlotObservation(request.slot, this.prefix, this.scope).ok || request.slot.status !== "available" || request.slot.holder !== void 0)
+        if (!validateMergeSlotObservation(request2.slot, this.prefix, this.scope).ok || request2.slot.status !== "available" || request2.slot.holder !== void 0)
           return { kind: "mutation", value: "quarantined" };
-        return this.projections.mutatePreOwnership === void 0 ? { kind: "mutation", value: "unavailable" } : this.projections.mutatePreOwnership(request.batch, request.slot);
+        return this.projections.mutatePreOwnership === void 0 ? { kind: "mutation", value: "unavailable" } : this.projections.mutatePreOwnership(request2.batch, request2.slot);
       case "initial_commit":
         return {
           kind: "commit",
-          value: await this.commitInitialProjection(request.input)
+          value: await this.commitInitialProjection(request2.input)
         };
       case "initial_push":
         return {
           kind: "push",
-          value: await this.pushInitialProjection(request.input)
+          value: await this.pushInitialProjection(request2.input)
         };
       case "readback": {
-        if (!validateMutationBatch(request.batch).ok)
+        if (!validateMutationBatch(request2.batch).ok)
           throw new Error("invalid readback batch");
-        const value = await this.projections.readback(request.batch);
+        const value = await this.projections.readback(request2.batch);
         if (value === void 0) throw new Error("projection readback failed");
         return { kind: "readback", value };
       }
       case "discover": {
-        if (!validateMutationBatch(request.batch).ok)
+        if (!validateMutationBatch(request2.batch).ok)
           throw new Error("invalid recovery batch");
-        const value = await this.projections.discover(request);
+        const value = await this.projections.discover(request2);
         if (value === void 0) throw new Error("checkpoint discovery failed");
-        if (request.point !== "after_push" || this.remote === void 0)
+        if (request2.point !== "after_push" || this.remote === void 0)
           return {
             kind: "discover",
-            value: await this.proveCheckpointDelta(request, value)
+            value: await this.proveCheckpointDelta(request2, value)
           };
         return {
           kind: "discover",
-          value: await this.proveRemoteCheckpointDelta(request, value)
+          value: await this.proveRemoteCheckpointDelta(request2, value)
         };
       }
       case "commit": {
-        const capture = await this.run(["dolt", request.kind, "--json"]);
-        if (capture === void 0 || capture.exceeded)
+        const capture2 = await this.run(["dolt", request2.kind, "--json"]);
+        if (capture2 === void 0 || capture2.exceeded)
           return { kind: "commit", value: "unavailable" };
         return {
           kind: "commit",
-          value: capture.code === 0 ? "applied" : "ambiguous"
+          value: capture2.code === 0 ? "applied" : "ambiguous"
         };
       }
       case "pull": {
@@ -27416,8 +28074,8 @@ var PinnedBdEmbeddedProcess = class {
         const cloneLineage = fastForward ? false : await this.provePinnedCloneLineage(before, remote2);
         if (!fastForward && !cloneLineage)
           return { kind: "pull", value: "conflict" };
-        const capture = await this.run(["dolt", request.kind, "--json"]);
-        if (capture === void 0 || capture.exceeded)
+        const capture2 = await this.run(["dolt", request2.kind, "--json"]);
+        if (capture2 === void 0 || capture2.exceeded)
           return { kind: "pull", value: "unavailable" };
         const after = await this.doltHead(this.databaseDirectory);
         const afterRemote = await this.remoteHead(
@@ -27426,7 +28084,7 @@ var PinnedBdEmbeddedProcess = class {
         );
         return {
           kind: "pull",
-          value: capture.code === 0 && afterRemote === remote2 && (fastForward ? after === remote2 : after !== void 0 && await this.provePinnedClonePull(
+          value: capture2.code === 0 && afterRemote === remote2 && (fastForward ? after === remote2 : after !== void 0 && await this.provePinnedClonePull(
             before,
             remote2,
             after,
@@ -27435,12 +28093,12 @@ var PinnedBdEmbeddedProcess = class {
         };
       }
       case "push": {
-        const capture = await this.run(["dolt", request.kind, "--json"]);
-        if (capture === void 0 || capture.exceeded)
+        const capture2 = await this.run(["dolt", request2.kind, "--json"]);
+        if (capture2 === void 0 || capture2.exceeded)
           return { kind: "push", value: "unavailable" };
         return {
           kind: "push",
-          value: capture.code === 0 ? "applied" : "conflict"
+          value: capture2.code === 0 ? "applied" : "conflict"
         };
       }
     }
@@ -27537,7 +28195,7 @@ var PinnedBdEmbeddedProcess = class {
   exactSlotDelta(source, intent2) {
     return isPinnedSlotTransitionDelta(source, this.prefix, intent2);
   }
-  async proveCarryCheckpoint(request, discovery) {
+  async proveCarryCheckpoint(request2, discovery) {
     if (discovery.status !== "observed" || this.projections.discoverCarry === void 0 || this.projections.matchesCarryDelta === void 0)
       return discovery.status === "observed" ? { status: "ambiguous" } : discovery;
     const currentHead = await this.doltHead(this.databaseDirectory);
@@ -27545,7 +28203,7 @@ var PinnedBdEmbeddedProcess = class {
     if (currentHead === void 0 || workingSet === void 0)
       return { status: "ambiguous" };
     if (workingSet === "pending") {
-      const before = await this.projections.discoverCarry(request, currentHead);
+      const before = await this.projections.discoverCarry(request2, currentHead);
       const diff = await this.runDolt(this.databaseDirectory, [
         "diff",
         "--data",
@@ -27553,24 +28211,24 @@ var PinnedBdEmbeddedProcess = class {
         "json",
         currentHead
       ]);
-      const proven = before?.status === "absent" && diff !== void 0 && diff.code === 0 && !diff.exceeded && this.projections.matchesCarryDelta(request.intent, diff.stdout) ? { ...discovery, baseHead: currentHead, head: currentHead } : { status: "ambiguous" };
+      const proven = before?.status === "absent" && diff !== void 0 && diff.code === 0 && !diff.exceeded && this.projections.matchesCarryDelta(request2.intent, diff.stdout) ? { ...discovery, baseHead: currentHead, head: currentHead } : { status: "ambiguous" };
       return this.bindRemoteCheckpointBaseline(proven);
     }
     if (workingSet !== "clean") return { status: "ambiguous" };
     const committed = await this.proveCommittedCarryCheckpoint(
-      request,
+      request2,
       discovery,
       currentHead
     );
     return this.bindRemoteCheckpointBaseline(committed);
   }
-  async proveCommittedCarryCheckpoint(request, discovery, currentHead) {
+  async proveCommittedCarryCheckpoint(request2, discovery, currentHead) {
     if (discovery.status !== "observed" || discovery.head !== currentHead || this.projections.discoverCarry === void 0 || this.projections.matchesCarryDelta === void 0)
       return { status: "ambiguous" };
     const parents = await this.directParents(currentHead);
     const parent = parents?.length === 1 ? parents[0] : void 0;
     if (parent === void 0) return { status: "ambiguous" };
-    const before = await this.projections.discoverCarry(request, parent);
+    const before = await this.projections.discoverCarry(request2, parent);
     const diff = await this.runDolt(this.databaseDirectory, [
       "diff",
       "--data",
@@ -27579,20 +28237,20 @@ var PinnedBdEmbeddedProcess = class {
       parent,
       currentHead
     ]);
-    return before?.status === "absent" && diff !== void 0 && diff.code === 0 && !diff.exceeded && this.projections.matchesCarryDelta(request.intent, diff.stdout) ? { ...discovery, baseHead: parent, head: currentHead } : { status: "ambiguous" };
+    return before?.status === "absent" && diff !== void 0 && diff.code === 0 && !diff.exceeded && this.projections.matchesCarryDelta(request2.intent, diff.stdout) ? { ...discovery, baseHead: parent, head: currentHead } : { status: "ambiguous" };
   }
-  async proveRemoteCarryCheckpoint(request, local) {
+  async proveRemoteCarryCheckpoint(request2, local) {
     if (local.status !== "observed" || this.remote === void 0 || this.projections.discoverCarry === void 0)
       return { status: "ambiguous" };
     const localHead = await this.doltHead(this.databaseDirectory);
     const workingSet = await this.doltWorkingSet(this.databaseDirectory);
     const remoteRef = await this.fetchRemoteMain(this.remote);
     const remoteHead = remoteRef === void 0 ? void 0 : await this.doltRefHead(remoteRef);
-    const remote2 = remoteRef === void 0 ? void 0 : await this.projections.discoverCarry(request, remoteRef);
+    const remote2 = remoteRef === void 0 ? void 0 : await this.projections.discoverCarry(request2, remoteRef);
     if (localHead === void 0 || workingSet !== "clean" || remoteHead === void 0 || remote2 === void 0 || localHead !== remoteHead)
       return { status: "ambiguous" };
     const proven = await this.proveCommittedCarryCheckpoint(
-      request,
+      request2,
       remote2,
       remoteHead
     );
@@ -27603,14 +28261,14 @@ var PinnedBdEmbeddedProcess = class {
    * pending or committed row could be carried with it. Bind recovery to the
    * complete current working-set or one-parent commit delta.
    */
-  async proveCheckpointDelta(request, discovery) {
+  async proveCheckpointDelta(request2, discovery) {
     if (discovery.status !== "observed") return discovery;
     const head3 = await this.doltHead(this.databaseDirectory);
     const workingSet = await this.doltWorkingSet(this.databaseDirectory);
     if (head3 === void 0 || workingSet === void 0)
       return { status: "ambiguous" };
     if (workingSet === "pending") {
-      const before = await this.projections.discoverAt(request, head3);
+      const before = await this.projections.discoverAt(request2, head3);
       const diff = await this.runDolt(this.databaseDirectory, [
         "diff",
         "--data",
@@ -27618,16 +28276,16 @@ var PinnedBdEmbeddedProcess = class {
         "json",
         head3
       ]);
-      const proven = before?.status === "absent" && diff !== void 0 && diff.code === 0 && !diff.exceeded && this.projections.matchesBatchDelta(request.batch, diff.stdout) ? { ...discovery, baseHead: head3, head: head3 } : { status: "ambiguous" };
+      const proven = before?.status === "absent" && diff !== void 0 && diff.code === 0 && !diff.exceeded && this.projections.matchesBatchDelta(request2.batch, diff.stdout) ? { ...discovery, baseHead: head3, head: head3 } : { status: "ambiguous" };
       return this.bindRemoteCheckpointBaseline(proven);
     }
     if (workingSet !== "clean") return { status: "ambiguous" };
     return this.bindRemoteCheckpointBaseline(
-      await this.proveCommittedCheckpoint(request, discovery, head3)
+      await this.proveCommittedCheckpoint(request2, discovery, head3)
     );
   }
   /** Exact one-parent checkpoint proof at a stable local or fetched ref. */
-  async proveCommittedCheckpoint(request, discovery, head3) {
+  async proveCommittedCheckpoint(request2, discovery, head3) {
     if (discovery.status !== "observed" || discovery.head !== head3)
       return { status: "ambiguous" };
     const parents = await this.directParents(head3);
@@ -27635,7 +28293,7 @@ var PinnedBdEmbeddedProcess = class {
       return { status: "ambiguous" };
     const parent = parents[0];
     if (parent === void 0) return { status: "ambiguous" };
-    const before = await this.projections.discoverAt(request, parent);
+    const before = await this.projections.discoverAt(request2, parent);
     const diff = await this.runDolt(this.databaseDirectory, [
       "diff",
       "--data",
@@ -27644,7 +28302,7 @@ var PinnedBdEmbeddedProcess = class {
       parent,
       head3
     ]);
-    return before?.status === "absent" && diff !== void 0 && diff.code === 0 && !diff.exceeded && this.projections.matchesBatchDelta(request.batch, diff.stdout) ? { ...discovery, baseHead: parent, head: head3 } : { status: "ambiguous" };
+    return before?.status === "absent" && diff !== void 0 && diff.code === 0 && !diff.exceeded && this.projections.matchesBatchDelta(request2.batch, diff.stdout) ? { ...discovery, baseHead: parent, head: head3 } : { status: "ambiguous" };
   }
   /**
    * Remote durable authority is an exact effect commit, not merely a selected
@@ -27652,18 +28310,18 @@ var PinnedBdEmbeddedProcess = class {
    * preserves the clone-local head while proving the remote effect and its
    * expected parent without accepting arbitrary later ancestry.
    */
-  async proveRemoteCheckpointDelta(request, local) {
+  async proveRemoteCheckpointDelta(request2, local) {
     if (this.remote === void 0 || local.status !== "observed")
       return { status: "ambiguous" };
     const localHead = await this.doltHead(this.databaseDirectory);
     const workingSet = await this.doltWorkingSet(this.databaseDirectory);
     const remoteRef = await this.fetchRemoteMain(this.remote);
     const remoteHead = remoteRef === void 0 ? void 0 : await this.doltRefHead(remoteRef);
-    const remote2 = remoteRef === void 0 ? void 0 : await this.projections.discoverAt(request, remoteRef);
+    const remote2 = remoteRef === void 0 ? void 0 : await this.projections.discoverAt(request2, remoteRef);
     if (localHead === void 0 || workingSet !== "clean" || remoteHead === void 0 || remote2 === void 0)
       return { status: "ambiguous" };
     const effect2 = await this.proveCommittedCheckpoint(
-      request,
+      request2,
       remote2,
       remoteHead
     );
@@ -27815,26 +28473,26 @@ var PinnedBdEmbeddedProcess = class {
     return slot === void 0 ? void 0 : this.slotObservation(slot, actor);
   }
   async doltRefHead(ref) {
-    const capture = await this.runDolt(this.databaseDirectory, [
+    const capture2 = await this.runDolt(this.databaseDirectory, [
       "sql",
       "-r",
       "json",
       "-q",
       `SELECT DOLT_HASHOF('${ref}') AS head`
     ]);
-    return capture === void 0 || capture.code !== 0 || capture.exceeded ? void 0 : sqlHead(capture.stdout);
+    return capture2 === void 0 || capture2.code !== 0 || capture2.exceeded ? void 0 : sqlHead(capture2.stdout);
   }
   /** Strict immediate-parent list from the pinned Dolt system table. */
   async directParents(commit2) {
     if (safeHead(commit2) === void 0) return void 0;
-    const capture = await this.runDolt(this.databaseDirectory, [
+    const capture2 = await this.runDolt(this.databaseDirectory, [
       "sql",
       "-r",
       "json",
       "-q",
       `SELECT parent_hash, parent_index FROM dolt_commit_ancestors WHERE commit_hash = '${commit2}' ORDER BY parent_index`
     ]);
-    const rows = capture === void 0 || capture.code !== 0 || capture.exceeded ? void 0 : sqlRows(capture.stdout);
+    const rows = capture2 === void 0 || capture2.code !== 0 || capture2.exceeded ? void 0 : sqlRows(capture2.stdout);
     if (rows === void 0 || rows.length === 0 || rows.length > 2)
       return void 0;
     const values = rows.map(
@@ -27851,16 +28509,16 @@ var PinnedBdEmbeddedProcess = class {
   async isAncestor(ancestor, descendant) {
     if (safeHead(ancestor) === void 0 || safeHead(descendant) === void 0)
       return false;
-    const capture = await this.runDolt(this.databaseDirectory, [
+    const capture2 = await this.runDolt(this.databaseDirectory, [
       "sql",
       "-r",
       "json",
       "-q",
       `WITH RECURSIVE ancestry(parent_hash) AS (SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash = '${descendant}' UNION SELECT edge.parent_hash FROM dolt_commit_ancestors AS edge JOIN ancestry ON edge.commit_hash = ancestry.parent_hash) SELECT COUNT(*) AS matches FROM ancestry WHERE parent_hash = '${ancestor}'`
     ]);
-    if (capture === void 0 || capture.code !== 0 || capture.exceeded)
+    if (capture2 === void 0 || capture2.code !== 0 || capture2.exceeded)
       return false;
-    const raw = json2(capture.stdout);
+    const raw = json2(capture2.stdout);
     const rows = raw?.rows;
     const row = Array.isArray(rows) && rows.length === 1 ? object2(rows[0]) : void 0;
     return raw !== void 0 && hasExactKeys(raw, ["rows"]) && row !== void 0 && hasExactKeys(row, ["matches"]) && row.matches === 1;
@@ -27927,15 +28585,15 @@ var PinnedBdEmbeddedProcess = class {
     };
   }
   async run(argv) {
-    const executable = this.executable(this.bdExecutable);
-    if (executable === void 0 || sameExecutable(this.bdRejectedExecutable, executable))
+    const executable2 = this.executable(this.bdExecutable);
+    if (executable2 === void 0 || sameExecutable(this.bdRejectedExecutable, executable2))
       return void 0;
     this.bdRejectedExecutable = void 0;
-    if (!sameExecutable(this.bdVersionExecutable, executable)) {
+    if (!sameExecutable(this.bdVersionExecutable, executable2)) {
       this.bdVersionCheck = void 0;
-      this.bdVersionExecutable = executable;
+      this.bdVersionExecutable = executable2;
     }
-    this.bdVersionCheck ??= this.runOnce(executable.path, ["--version"]);
+    this.bdVersionCheck ??= this.runOnce(executable2.path, ["--version"]);
     const version = await this.bdVersionCheck;
     if (version === void 0 || version.code !== 0 || !new RegExp(
       `^bd version ${PINNED_BD_VERSION}(?: \\(Homebrew\\))?\\n?$`,
@@ -27943,24 +28601,24 @@ var PinnedBdEmbeddedProcess = class {
     ).test(version.stdout))
       return void 0;
     const operational = this.executable(this.bdExecutable);
-    if (operational === void 0 || !sameExecutable(executable, operational)) {
-      this.bdRejectedExecutable = operational ?? executable;
+    if (operational === void 0 || !sameExecutable(executable2, operational)) {
+      this.bdRejectedExecutable = operational ?? executable2;
       return void 0;
     }
     return this.runOnce(operational.path, argv);
   }
-  async runOnce(executable, argv) {
-    return new Promise((resolve9) => {
+  async runOnce(executable2, argv) {
+    return new Promise((resolve11) => {
       let stdout = "";
       let bytes2 = 0;
       let exceeded = false;
       let settled = false;
-      const child = spawn4(executable, argv, {
+      const child = spawn5(executable2, argv, {
         cwd: this.cwd,
         env: {
           LANG: "C",
           LC_ALL: "C",
-          PATH: `${dirname3(this.bdExecutable)}:${dirname3(this.doltExecutable)}:/usr/bin:/bin`,
+          PATH: `${dirname4(this.bdExecutable)}:${dirname4(this.doltExecutable)}:/usr/bin:/bin`,
           TMPDIR: process.env.TMPDIR ?? "/private/tmp",
           DARWIN_USER_TEMP_DIR: process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
           TZ: "UTC"
@@ -27980,14 +28638,14 @@ var PinnedBdEmbeddedProcess = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve9(void 0);
+          resolve11(void 0);
         }
       });
       child.once("close", (code) => {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve9({ code, exceeded, stdout });
+          resolve11({ code, exceeded, stdout });
         }
       });
     });
@@ -28010,37 +28668,37 @@ var PinnedBdEmbeddedProcess = class {
     return { code, schema: "sce.beads-embedded.result", version: 1 };
   }
   async doltHead(cwd) {
-    const capture = await this.runDolt(cwd, [
+    const capture2 = await this.runDolt(cwd, [
       "sql",
       "-r",
       "json",
       "-q",
       'SELECT DOLT_HASHOF("HEAD") AS head'
     ]);
-    return capture === void 0 || capture.code !== 0 || capture.exceeded ? void 0 : sqlHead(capture.stdout);
+    return capture2 === void 0 || capture2.code !== 0 || capture2.exceeded ? void 0 : sqlHead(capture2.stdout);
   }
   async doltWorkingSet(cwd) {
-    const capture = await this.runDolt(cwd, [
+    const capture2 = await this.runDolt(cwd, [
       "sql",
       "-r",
       "json",
       "-q",
       "SELECT * FROM dolt_status"
     ]);
-    return capture === void 0 || capture.code !== 0 || capture.exceeded ? void 0 : sqlWorkingSet(capture.stdout);
+    return capture2 === void 0 || capture2.code !== 0 || capture2.exceeded ? void 0 : sqlWorkingSet(capture2.stdout);
   }
   async remoteHead(cwd, remote2) {
     if (cwd !== this.databaseDirectory) return void 0;
     const remoteRef = await this.fetchRemoteMain(remote2);
     if (remoteRef === void 0) return void 0;
-    const capture = await this.runDolt(cwd, [
+    const capture2 = await this.runDolt(cwd, [
       "sql",
       "-r",
       "json",
       "-q",
       `SELECT DOLT_HASHOF('${remoteRef}') AS head`
     ]);
-    return capture === void 0 || capture.code !== 0 || capture.exceeded ? void 0 : sqlHead(capture.stdout);
+    return capture2 === void 0 || capture2.code !== 0 || capture2.exceeded ? void 0 : sqlHead(capture2.stdout);
   }
   async fetchRemoteMain(remote2) {
     if (!/^[A-Za-z0-9._-]{1,80}$/u.test(remote2.name)) return void 0;
@@ -28056,49 +28714,49 @@ var PinnedBdEmbeddedProcess = class {
     if (!/^[A-Za-z0-9._-]{1,80}$/u.test(remote2.name) || cwd !== this.databaseDirectory)
       return false;
     const configured = await this.runDolt(cwd, ["remote", "-v"]);
-    return configured !== void 0 && configured.code === 0 && !configured.exceeded && configured.stdout.split("\n").some((line) => {
-      const parts = line.trim().split(/\s+/u);
-      return parts.length === 2 && parts[0] === remote2.name && parts[1] === remote2.url;
+    return configured !== void 0 && configured.code === 0 && !configured.exceeded && configured.stdout.split("\n").some((line2) => {
+      const parts = line2.trim().split(/\s+/u);
+      return parts.length === 2 && parts[0] === remote2.name && parts[1] !== void 0 && sameRemoteIdentity(parts[1], remote2.url);
     });
   }
   async runDolt(cwd, argv) {
-    const executable = this.executable(this.doltExecutable);
-    if (executable === void 0 || sameExecutable(this.doltRejectedExecutable, executable))
+    const executable2 = this.executable(this.doltExecutable);
+    if (executable2 === void 0 || sameExecutable(this.doltRejectedExecutable, executable2))
       return void 0;
     this.doltRejectedExecutable = void 0;
-    if (!sameExecutable(this.doltVersionExecutable, executable)) {
+    if (!sameExecutable(this.doltVersionExecutable, executable2)) {
       this.doltVersionCheck = void 0;
-      this.doltVersionExecutable = executable;
+      this.doltVersionExecutable = executable2;
     }
-    this.doltVersionCheck ??= this.runDoltOnce(executable.path, cwd, [
+    this.doltVersionCheck ??= this.runDoltOnce(executable2.path, cwd, [
       "version"
     ]);
     const version = await this.doltVersionCheck;
     if (version === void 0 || version.code !== 0 || version.stdout.split("\n", 1)[0] !== `dolt version ${PINNED_DOLT_VERSION}`)
       return void 0;
     const operational = this.executable(this.doltExecutable);
-    if (operational === void 0 || !sameExecutable(executable, operational)) {
-      this.doltRejectedExecutable = operational ?? executable;
+    if (operational === void 0 || !sameExecutable(executable2, operational)) {
+      this.doltRejectedExecutable = operational ?? executable2;
       return void 0;
     }
     return this.runDoltOnce(operational.path, cwd, argv);
   }
   executable(value) {
-    if (!isAbsolute5(value) || value.length > 4096 || value.includes("\0"))
+    if (!isAbsolute6(value) || value.length > 4096 || value.includes("\0"))
       return void 0;
     try {
-      const path2 = realpathSync3.native(value);
-      const stat3 = statSync2(path2, { throwIfNoEntry: false });
-      const digest2 = stat3 === void 0 ? void 0 : executableDigest(path2, stat3.size);
-      return stat3 === void 0 || !stat3.isFile() || digest2 === void 0 ? void 0 : {
-        ctimeMs: stat3.ctimeMs,
-        dev: stat3.dev,
+      const path2 = realpathSync4.native(value);
+      const stat4 = statSync3(path2, { throwIfNoEntry: false });
+      const digest2 = stat4 === void 0 ? void 0 : executableDigest(path2, stat4.size);
+      return stat4 === void 0 || !stat4.isFile() || digest2 === void 0 ? void 0 : {
+        ctimeMs: stat4.ctimeMs,
+        dev: stat4.dev,
         digest: digest2,
-        ino: stat3.ino,
-        mtimeMs: stat3.mtimeMs,
-        mode: stat3.mode,
+        ino: stat4.ino,
+        mtimeMs: stat4.mtimeMs,
+        mode: stat4.mode,
         path: path2,
-        size: stat3.size
+        size: stat4.size
       };
     } catch {
       return void 0;
@@ -28106,23 +28764,23 @@ var PinnedBdEmbeddedProcess = class {
   }
   canonicalDirectory(value) {
     try {
-      return realpathSync3.native(value);
+      return realpathSync4.native(value);
     } catch {
       return "";
     }
   }
-  async runDoltOnce(executable, cwd, argv) {
-    return new Promise((resolve9) => {
+  async runDoltOnce(executable2, cwd, argv) {
+    return new Promise((resolve11) => {
       let stdout = "";
       let bytes2 = 0;
       let exceeded = false;
       let settled = false;
-      const child = spawn4(executable, argv, {
+      const child = spawn5(executable2, argv, {
         cwd,
         env: {
           LANG: "C",
           LC_ALL: "C",
-          PATH: `${dirname3(this.bdExecutable)}:${dirname3(this.doltExecutable)}:/usr/bin:/bin`,
+          PATH: `${dirname4(this.bdExecutable)}:${dirname4(this.doltExecutable)}:/usr/bin:/bin`,
           TMPDIR: process.env.TMPDIR ?? "/private/tmp",
           DARWIN_USER_TEMP_DIR: process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
           TZ: "UTC"
@@ -28142,14 +28800,14 @@ var PinnedBdEmbeddedProcess = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve9(void 0);
+          resolve11(void 0);
         }
       });
       child.once("close", (code) => {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve9({ code, exceeded, stdout });
+          resolve11({ code, exceeded, stdout });
         }
       });
     });
@@ -28157,10 +28815,10 @@ var PinnedBdEmbeddedProcess = class {
 };
 
 // src/adapters/beads-embedded/dolt-projections.ts
-import { spawn as spawn5 } from "node:child_process";
+import { spawn as spawn6 } from "node:child_process";
 import { createHash as createHash4 } from "node:crypto";
-import { closeSync as closeSync3, openSync as openSync3, readSync as readSync2, realpathSync as realpathSync4, statSync as statSync3 } from "node:fs";
-import { dirname as dirname4, isAbsolute as isAbsolute6 } from "node:path";
+import { closeSync as closeSync3, openSync as openSync3, readSync as readSync2, realpathSync as realpathSync5, statSync as statSync4 } from "node:fs";
+import { dirname as dirname5, isAbsolute as isAbsolute7 } from "node:path";
 var MAX_OUTPUT_BYTES2 = 262144;
 var TIMEOUT_MS = 15e3;
 var PINNED_DOLT_VERSION2 = "2.2.1";
@@ -28239,7 +28897,7 @@ var DoltProjectionPersistence = class {
   rejectedExecutable;
   constructor(options) {
     try {
-      this.directory = realpathSync4.native(options.databaseDirectory);
+      this.directory = realpathSync5.native(options.databaseDirectory);
     } catch {
       this.directory = "";
     }
@@ -28327,7 +28985,8 @@ var DoltProjectionPersistence = class {
     if (records.length !== 1 || records[0]?.id !== this.rootIssueId)
       return { status: "ambiguous" };
     const rootValue = records[0]?.sce;
-    if (rootValue === null) return { status: "absent" };
+    if (rootValue === null || rootValue === void 0)
+      return { status: "absent" };
     const rootEnvelope = object3(rootValue);
     if (rootEnvelope === void 0 || Object.keys(rootEnvelope).length !== 2 || typeof rootEnvelope.commitment !== "string" || !Object.prototype.hasOwnProperty.call(rootEnvelope, "projection"))
       return { status: "ambiguous" };
@@ -28355,16 +29014,16 @@ var DoltProjectionPersistence = class {
     );
     const seen = /* @__PURE__ */ new Set();
     const children = [];
-    for (const record3 of childrenRows) {
-      if (Object.keys(record3).length !== 2 || typeof record3.id !== "string" || seen.has(record3.id) || !Object.prototype.hasOwnProperty.call(record3, "sce"))
+    for (const record4 of childrenRows) {
+      if (Object.keys(record4).length !== 2 || typeof record4.id !== "string" || seen.has(record4.id) || !Object.prototype.hasOwnProperty.call(record4, "sce"))
         return { status: "ambiguous" };
-      seen.add(record3.id);
-      const envelope = object3(record3.sce);
+      seen.add(record4.id);
+      const envelope = object3(record4.sce);
       if (envelope === void 0 || Object.keys(envelope).length !== 2 || typeof envelope.commitment !== "string" || !Object.prototype.hasOwnProperty.call(envelope, "projection"))
         return { status: "ambiguous" };
       const child = validateChildProjection(envelope.projection);
       const reference = child.ok ? expected.get(child.value.unitId) : void 0;
-      if (!child.ok || reference === void 0 || child.value.commitment !== envelope.commitment || this.childIssueId(child.value.unitId) !== record3.id || child.value.revision !== reference.revision || child.value.commitment !== reference.commitment || !same4(child.value.scope, parsedRoot.value.scope) || child.value.holder !== parsedRoot.value.holder || !same4(child.value.unit, parsedRoot.value.run.units[child.value.unitId]))
+      if (!child.ok || reference === void 0 || child.value.commitment !== envelope.commitment || this.childIssueId(child.value.unitId) !== record4.id || child.value.revision !== reference.revision || child.value.commitment !== reference.commitment || !same4(child.value.scope, parsedRoot.value.scope) || child.value.holder !== parsedRoot.value.holder || !same4(child.value.unit, parsedRoot.value.run.units[child.value.unitId]))
         return { status: "ambiguous" };
       children.push(child.value);
     }
@@ -28408,8 +29067,8 @@ var DoltProjectionPersistence = class {
   carrySelectStatement(predecessorRootIssueId) {
     return `SELECT id, JSON_EXTRACT(metadata,'$.sce') AS sce, JSON_EXTRACT(metadata,'$.sce_carry_claims') AS claims, JSON_CONTAINS_PATH(metadata,'one','$.sce_carry_claims') AS claims_present, JSON_TYPE(JSON_EXTRACT(metadata,'$.sce_carry_claims')) AS claims_type FROM issues WHERE id=${stringLiteral(predecessorRootIssueId)}`;
   }
-  async discoverCarry(request, ref) {
-    const intent2 = request.intent;
+  async discoverCarry(request2, ref) {
+    const intent2 = request2.intent;
     if (!this.validCarryCheckpointIntent(intent2) || ref !== void 0 && !(/^[A-Za-z0-9._-]{1,80}\/main$/u.test(ref) || /^[0-9a-z]{20,64}$/u.test(ref)))
       return void 0;
     const statement = this.carrySelectStatement(intent2.predecessorRootIssueId);
@@ -28481,33 +29140,33 @@ var DoltProjectionPersistence = class {
     return sce?.commitment === intent2.expectedAggregateCommitment && same4(beforeMetadata.sce, afterMetadata.sce);
   }
   validCarryCheckpointIntent(intent2) {
-    const record3 = validate(
+    const record4 = validate(
       ProvenanceCarryClaimRecordSchema,
       intent2.record
     );
     return /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u.test(
       intent2.predecessorRootIssueId
-    ) && /^[0-9a-f]{64}$/u.test(intent2.exportDigest) && /^[0-9a-f]{64}$/u.test(intent2.expectedAggregateCommitment) && record3.ok && record3.value !== void 0 && record3.value.predecessorRootBeadId === intent2.predecessorRootIssueId && record3.value.exportId === `sce:carry:${intent2.exportDigest}`;
+    ) && /^[0-9a-f]{64}$/u.test(intent2.exportDigest) && /^[0-9a-f]{64}$/u.test(intent2.expectedAggregateCommitment) && record4.ok && record4.value !== void 0 && record4.value.predecessorRootBeadId === intent2.predecessorRootIssueId && record4.value.exportId === `sce:carry:${intent2.exportDigest}`;
   }
-  async claimCarry(request) {
+  async claimCarry(request2) {
     const parsedRecord = validate(
       ProvenanceCarryClaimRecordSchema,
-      request.record
+      request2.record
     );
-    const slotPrefix = request.slot.slotId.endsWith("-merge-slot") ? request.slot.slotId.slice(0, -"-merge-slot".length) : "";
-    if (!parsedRecord.ok || parsedRecord.value === void 0 || !/^[0-9a-f]{64}$/u.test(request.exportDigest) || request.record.exportId !== `sce:carry:${request.exportDigest}` || request.record.predecessorRootBeadId !== request.predecessorRootIssueId || !/^[0-9a-f]{64}$/u.test(request.expectedAggregateCommitment) || !validateMergeSlotObservation(
-      request.slot,
+    const slotPrefix = request2.slot.slotId.endsWith("-merge-slot") ? request2.slot.slotId.slice(0, -"-merge-slot".length) : "";
+    if (!parsedRecord.ok || parsedRecord.value === void 0 || !/^[0-9a-f]{64}$/u.test(request2.exportDigest) || request2.record.exportId !== `sce:carry:${request2.exportDigest}` || request2.record.predecessorRootBeadId !== request2.predecessorRootIssueId || !/^[0-9a-f]{64}$/u.test(request2.expectedAggregateCommitment) || !validateMergeSlotObservation(
+      request2.slot,
       slotPrefix,
-      request.slot.scope
-    ).ok || request.slot.status !== "acquired" || request.slot.holder === void 0)
+      request2.slot.scope
+    ).ok || request2.slot.status !== "acquired" || request2.slot.holder === void 0)
       return { kind: "carry_claim", value: { status: "unavailable" } };
-    const singleton = { [request.exportDigest]: request.record };
-    const slot = request.slot;
+    const singleton = { [request2.exportDigest]: request2.record };
+    const slot = request2.slot;
     const slotHolder = slot.holder;
     const acquiredSlotPredicate = ` AND (SELECT COUNT(*) FROM issues WHERE id=${stringLiteral(slot.slotId)} AND title=${stringLiteral(slot.title)} AND status='in_progress' AND external_ref=${stringLiteral(`sce-scope:v1:${slot.scopeCommitment}`)} AND design=${stringLiteral(canonicalJson(slot.scope))} AND JSON_TYPE(metadata)='OBJECT' AND JSON_LENGTH(metadata)=1 AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.holder'))=${stringLiteral(slotHolder)})=1 AND (SELECT COUNT(*) FROM labels WHERE issue_id=${stringLiteral(slot.slotId)})=1 AND (SELECT COUNT(*) FROM labels WHERE issue_id=${stringLiteral(slot.slotId)} AND label=${stringLiteral(slot.label)})=1`;
-    const readback = `SELECT @sce_affected AS affected, r.id AS root_id, JSON_EXTRACT(r.metadata,'$.sce') AS root_sce, JSON_EXTRACT(r.metadata,'$.sce_carry_claims') AS claims, s.id AS slot_id, s.title AS slot_title, s.status AS slot_status, s.external_ref AS slot_external_ref, s.design AS slot_design, s.metadata AS slot_metadata, (SELECT COUNT(*) FROM labels WHERE issue_id=s.id) AS label_count, (SELECT COUNT(*) FROM labels WHERE issue_id=s.id AND label=${stringLiteral(slot.label)}) AS matching_label_count FROM issues r JOIN issues s ON s.id=${stringLiteral(slot.slotId)} WHERE r.id=${stringLiteral(request.predecessorRootIssueId)}`;
+    const readback = `SELECT @sce_affected AS affected, r.id AS root_id, JSON_EXTRACT(r.metadata,'$.sce') AS root_sce, JSON_EXTRACT(r.metadata,'$.sce_carry_claims') AS claims, s.id AS slot_id, s.title AS slot_title, s.status AS slot_status, s.external_ref AS slot_external_ref, s.design AS slot_design, s.metadata AS slot_metadata, (SELECT COUNT(*) FROM labels WHERE issue_id=s.id) AS label_count, (SELECT COUNT(*) FROM labels WHERE issue_id=s.id AND label=${stringLiteral(slot.label)}) AS matching_label_count FROM issues r JOIN issues s ON s.id=${stringLiteral(slot.slotId)} WHERE r.id=${stringLiteral(request2.predecessorRootIssueId)}`;
     const output = await this.sql(
-      `START TRANSACTION; UPDATE issues SET metadata=JSON_SET(metadata,'$.sce_carry_claims',${jsonLiteral(singleton)}) WHERE id=${stringLiteral(request.predecessorRootIssueId)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.sce.commitment'))=${stringLiteral(request.expectedAggregateCommitment)} AND (JSON_EXTRACT(metadata,'$.sce_carry_claims') IS NULL OR (JSON_TYPE(JSON_EXTRACT(metadata,'$.sce_carry_claims'))='OBJECT' AND JSON_LENGTH(JSON_EXTRACT(metadata,'$.sce_carry_claims'))=0))${acquiredSlotPredicate}; SET @sce_affected=ROW_COUNT(); ${readback} FOR UPDATE; COMMIT; ${readback}`
+      `START TRANSACTION; UPDATE issues SET metadata=JSON_SET(metadata,'$.sce_carry_claims',${jsonLiteral(singleton)}) WHERE id=${stringLiteral(request2.predecessorRootIssueId)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.sce.commitment'))=${stringLiteral(request2.expectedAggregateCommitment)} AND (JSON_EXTRACT(metadata,'$.sce_carry_claims') IS NULL OR (JSON_TYPE(JSON_EXTRACT(metadata,'$.sce_carry_claims'))='OBJECT' AND JSON_LENGTH(JSON_EXTRACT(metadata,'$.sce_carry_claims'))=0))${acquiredSlotPredicate}; SET @sce_affected=ROW_COUNT(); ${readback} FOR UPDATE; COMMIT; ${readback}`
     );
     if (output === void 0)
       return { kind: "carry_claim", value: { status: "unavailable" } };
@@ -28517,7 +29176,7 @@ var DoltProjectionPersistence = class {
       return { kind: "carry_claim", value: { status: "stale" } };
     const rootEnvelope = object3(row.root_sce);
     const root = validateRootProjection(rootEnvelope?.projection);
-    if (Object.keys(row).length !== 12 || row.root_id !== request.predecessorRootIssueId || !root.ok || root.value.aggregateCommitment !== request.expectedAggregateCommitment || rootEnvelope?.commitment !== request.expectedAggregateCommitment || !same4(row.claims, singleton) || row.slot_id !== slot.slotId || row.slot_title !== slot.title || row.slot_status !== "in_progress" || row.slot_external_ref !== `sce-scope:v1:${slot.scopeCommitment}` || row.slot_design !== canonicalJson(slot.scope) || !same4(row.slot_metadata, { holder: slotHolder }) || row.label_count !== 1 || row.matching_label_count !== 1)
+    if (Object.keys(row).length !== 12 || row.root_id !== request2.predecessorRootIssueId || !root.ok || root.value.aggregateCommitment !== request2.expectedAggregateCommitment || rootEnvelope?.commitment !== request2.expectedAggregateCommitment || !same4(row.claims, singleton) || row.slot_id !== slot.slotId || row.slot_title !== slot.title || row.slot_status !== "in_progress" || row.slot_external_ref !== `sce-scope:v1:${slot.scopeCommitment}` || row.slot_design !== canonicalJson(slot.scope) || !same4(row.slot_metadata, { holder: slotHolder }) || row.label_count !== 1 || row.matching_label_count !== 1)
       return { kind: "carry_claim", value: { status: "unavailable" } };
     return {
       kind: "carry_claim",
@@ -28535,21 +29194,21 @@ var DoltProjectionPersistence = class {
     const output = await this.sql(statement);
     return output === void 0 ? void 0 : this.parseReadback(output, batch);
   }
-  async discover(request) {
-    return this.discoverAt(request, void 0);
+  async discover(request2) {
+    return this.discoverAt(request2, void 0);
   }
-  async discoverAt(request, ref) {
-    if (!validateMutationBatch(request.batch).ok) return void 0;
-    const actual = await this.actual(request.batch, ref);
+  async discoverAt(request2, ref) {
+    if (!validateMutationBatch(request2.batch).ok) return void 0;
+    const actual = await this.actual(request2.batch, ref);
     const head3 = await this.head(ref);
     if (actual === void 0 || head3 === void 0) return void 0;
     const rootCommitment = actual.root.aggregateCommitment;
     const childCommitments = actual.children.map((child) => child.commitment);
-    if (same4(actual.root, request.batch.next.root) && same4(actual.children, request.batch.next.children))
+    if (same4(actual.root, request2.batch.next.root) && same4(actual.children, request2.batch.next.children))
       return { childCommitments, head: head3, rootCommitment, status: "observed" };
-    return rootCommitment === request.batch.expectedAggregateCommitment && same4(
+    return rootCommitment === request2.batch.expectedAggregateCommitment && same4(
       childCommitments,
-      request.batch.expectedChildren.map((child) => child.expectedCommitment)
+      request2.batch.expectedChildren.map((child) => child.expectedCommitment)
     ) ? { head: head3, status: "absent" } : { head: head3, status: "ambiguous" };
   }
   /**
@@ -28775,14 +29434,14 @@ var DoltProjectionPersistence = class {
     const seen = /* @__PURE__ */ new Set();
     let root;
     const children = [];
-    for (const record3 of records) {
-      if (Object.keys(record3).length !== 2 || !Object.prototype.hasOwnProperty.call(record3, "id") || !Object.prototype.hasOwnProperty.call(record3, "sce") || typeof record3.id !== "string" || !expectedIds.has(record3.id) || seen.has(record3.id))
+    for (const record4 of records) {
+      if (Object.keys(record4).length !== 2 || !Object.prototype.hasOwnProperty.call(record4, "id") || !Object.prototype.hasOwnProperty.call(record4, "sce") || typeof record4.id !== "string" || !expectedIds.has(record4.id) || seen.has(record4.id))
         return void 0;
-      seen.add(record3.id);
-      const envelope = object3(record3.sce);
+      seen.add(record4.id);
+      const envelope = object3(record4.sce);
       if (envelope === void 0 || Object.keys(envelope).length !== 2 || !Object.prototype.hasOwnProperty.call(envelope, "commitment") || !Object.prototype.hasOwnProperty.call(envelope, "projection") || typeof envelope.commitment !== "string")
         return void 0;
-      if (record3.id === this.rootIssueId) {
+      if (record4.id === this.rootIssueId) {
         const candidate2 = validateRootProjection(envelope.projection);
         if (!candidate2.ok || candidate2.value.aggregateCommitment !== envelope.commitment)
           return void 0;
@@ -28790,7 +29449,7 @@ var DoltProjectionPersistence = class {
         continue;
       }
       const candidate = validateChildProjection(envelope.projection);
-      if (!candidate.ok || candidate.value.commitment !== envelope.commitment || this.childIssueId(candidate.value.unitId) !== record3.id)
+      if (!candidate.ok || candidate.value.commitment !== envelope.commitment || this.childIssueId(candidate.value.unitId) !== record4.id)
         return void 0;
       children.push(candidate.value);
     }
@@ -28802,21 +29461,21 @@ var DoltProjectionPersistence = class {
     };
   }
   async sql(query) {
-    const executable = this.executable();
-    if (executable === void 0 || sameExecutable2(this.rejectedExecutable, executable))
+    const executable2 = this.executable();
+    if (executable2 === void 0 || sameExecutable2(this.rejectedExecutable, executable2))
       return void 0;
     this.rejectedExecutable = void 0;
-    if (!await this.pinnedVersion(executable)) return void 0;
+    if (!await this.pinnedVersion(executable2)) return void 0;
     const operational = this.executable();
-    if (operational === void 0 || !sameExecutable2(executable, operational)) {
-      this.rejectedExecutable = operational ?? executable;
+    if (operational === void 0 || !sameExecutable2(executable2, operational)) {
+      this.rejectedExecutable = operational ?? executable2;
       return void 0;
     }
-    return new Promise((resolve9) => {
+    return new Promise((resolve11) => {
       let output = "";
       let bytes2 = 0;
       let settled = false;
-      const child = spawn5(
+      const child = spawn6(
         operational.path,
         ["sql", "-r", "json", "-q", query],
         {
@@ -28824,7 +29483,7 @@ var DoltProjectionPersistence = class {
           env: {
             LANG: "C",
             LC_ALL: "C",
-            PATH: `${dirname4(this.doltExecutable)}:/usr/bin:/bin`,
+            PATH: `${dirname5(this.doltExecutable)}:/usr/bin:/bin`,
             TMPDIR: process.env.TMPDIR ?? "/private/tmp",
             DARWIN_USER_TEMP_DIR: process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
             TZ: "UTC"
@@ -28843,14 +29502,14 @@ var DoltProjectionPersistence = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve9(void 0);
+          resolve11(void 0);
         }
       });
       child.once("close", (code) => {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve9(code === 0 && bytes2 <= MAX_OUTPUT_BYTES2 ? output : void 0);
+          resolve11(code === 0 && bytes2 <= MAX_OUTPUT_BYTES2 ? output : void 0);
         }
       });
     });
@@ -28861,41 +29520,41 @@ var DoltProjectionPersistence = class {
     return typeof value === "number" && Number.isSafeInteger(value) ? value : void 0;
   }
   executable() {
-    if (!isAbsolute6(this.doltExecutable) || this.doltExecutable.includes("\0"))
+    if (!isAbsolute7(this.doltExecutable) || this.doltExecutable.includes("\0"))
       return void 0;
     try {
-      const path2 = realpathSync4.native(this.doltExecutable);
-      const stat3 = statSync3(path2, { throwIfNoEntry: false });
-      const digest2 = stat3 === void 0 ? void 0 : executableDigest2(path2, stat3.size);
-      return stat3 === void 0 || !stat3.isFile() || digest2 === void 0 ? void 0 : {
-        ctimeMs: stat3.ctimeMs,
-        dev: stat3.dev,
+      const path2 = realpathSync5.native(this.doltExecutable);
+      const stat4 = statSync4(path2, { throwIfNoEntry: false });
+      const digest2 = stat4 === void 0 ? void 0 : executableDigest2(path2, stat4.size);
+      return stat4 === void 0 || !stat4.isFile() || digest2 === void 0 ? void 0 : {
+        ctimeMs: stat4.ctimeMs,
+        dev: stat4.dev,
         digest: digest2,
-        ino: stat3.ino,
-        mtimeMs: stat3.mtimeMs,
-        mode: stat3.mode,
+        ino: stat4.ino,
+        mtimeMs: stat4.mtimeMs,
+        mode: stat4.mode,
         path: path2,
-        size: stat3.size
+        size: stat4.size
       };
     } catch {
       return void 0;
     }
   }
-  pinnedVersion(executable) {
-    if (!sameExecutable2(this.versionExecutable, executable)) {
+  pinnedVersion(executable2) {
+    if (!sameExecutable2(this.versionExecutable, executable2)) {
       this.versionCheck = void 0;
-      this.versionExecutable = executable;
+      this.versionExecutable = executable2;
     }
-    this.versionCheck ??= new Promise((resolve9) => {
+    this.versionCheck ??= new Promise((resolve11) => {
       let output = "";
       let settled = false;
-      const child = spawn5(executable.path, ["version"], {
+      const child = spawn6(executable2.path, ["version"], {
         cwd: this.directory,
         env: {
           DARWIN_USER_TEMP_DIR: process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
           LANG: "C",
           LC_ALL: "C",
-          PATH: `${dirname4(this.doltExecutable)}:/usr/bin:/bin`,
+          PATH: `${dirname5(this.doltExecutable)}:/usr/bin:/bin`,
           TMPDIR: process.env.TMPDIR ?? "/private/tmp",
           TZ: "UTC"
         },
@@ -28912,14 +29571,14 @@ var DoltProjectionPersistence = class {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve9(false);
+          resolve11(false);
         }
       });
       child.once("close", (code) => {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve9(
+          resolve11(
             code === 0 && output.split("\n", 1)[0] === `dolt version ${PINNED_DOLT_VERSION2}`
           );
         }
@@ -29398,14 +30057,14 @@ var EmbeddedBeadsAdapter = class {
     const slot = await this.slot("check");
     if (baseline === void 0 || slot?.status !== "acquired" || slot.holder !== this.holder)
       return { status: "ambiguous" };
-    const record3 = this.carryClaimRecord(effect2);
+    const record4 = this.carryClaimRecord(effect2);
     const checkpointIntent = this.carryCheckpointIntent(effect2);
     const response = await this.call({
       exportDigest: checkpointIntent.exportDigest,
       expectedAggregateCommitment: effect2.params.predecessorRootAggregateCommitment,
       kind: "carry_claim",
       predecessorRootIssueId: effect2.params.predecessorRootBeadId,
-      record: record3,
+      record: record4,
       slot
     });
     if (response?.kind !== "carry_claim")
@@ -29501,10 +30160,10 @@ var EmbeddedBeadsAdapter = class {
     return this.isExactIntentReadback(after.value, batch) ? this.durablePreOwnershipIntent(batch) : { status: "stale" };
   }
   /** Atomic absent-root bootstrap; active runs and ordinary CAS are refused. */
-  async createControllerAcquireIntent(request) {
+  async createControllerAcquireIntent(request2) {
     const parsed = validate(
       InitialControllerAcquireSchema,
-      request
+      request2
     );
     if (!this.usable || !parsed.ok || parsed.value === void 0 || !same5(parsed.value.expected.scope, this.scope) || parsed.value.expected.holder !== this.holder)
       return { status: "quarantined" };
@@ -30061,10 +30720,10 @@ var EmbeddedBeadsAdapter = class {
     if (claims === void 0 || Object.keys(claims).length > 1) return false;
     const entry = Object.entries(claims)[0];
     if (entry === void 0) return true;
-    const [digest2, record3] = entry;
+    const [digest2, record4] = entry;
     const parsed = validate(
       ProvenanceCarryClaimRecordSchema,
-      record3
+      record4
     );
     return /^[0-9a-f]{64}$/u.test(digest2) && parsed.ok && parsed.value !== void 0 && parsed.value.exportId === `sce:carry:${digest2}` && Buffer.byteLength(canonicalJson(parsed.value)) <= 4096;
   }
@@ -30160,10 +30819,10 @@ var EmbeddedBeadsAdapter = class {
     const discovery = response?.kind === "carry_discover" ? response.value : void 0;
     return discovery?.status === "observed" && head2(discovery.baseHead) && discovery.baseHead !== current.head && discovery.head === current.head && (this.mode === "local-only" || discovery.remoteHead === current.head);
   }
-  carryClaimRecordDigest(record3) {
+  carryClaimRecordDigest(record4) {
     return sha256(
       canonicalJson({
-        claimRecord: record3,
+        claimRecord: record4,
         domain: "sce.provenance-carry-claim-record.v1"
       })
     );
@@ -30273,9 +30932,9 @@ var EmbeddedBeadsAdapter = class {
     });
     return response?.kind === "discover" ? response.value : { status: "ambiguous" };
   }
-  async call(request) {
+  async call(request2) {
     try {
-      return await this.process.execute(request);
+      return await this.process.execute(request2);
     } catch {
       return void 0;
     }
@@ -30295,10 +30954,10 @@ var EmbeddedBeadsAdapter = class {
 };
 
 // src/adapters/beads-server/index.ts
-import { spawn as spawn6 } from "node:child_process";
+import { spawn as spawn7 } from "node:child_process";
 import { createHash as createHash5 } from "node:crypto";
 import { open as open2, realpath as realpath2, stat as stat2 } from "node:fs/promises";
-import { dirname as dirname5, isAbsolute as isAbsolute7, join as join5 } from "node:path";
+import { dirname as dirname6, isAbsolute as isAbsolute8, join as join6 } from "node:path";
 var MAX_ENDPOINT_BYTES = 320;
 var MAX_SCHEMA_BYTES = 160;
 var MAX_FINGERPRINT_BYTES = 160;
@@ -30328,9 +30987,9 @@ function executeDoltSqlTransaction(transport, statement, expectedRows, readback)
 function probeDoltSqlWorkerWrite(transport) {
   return doltSqlTransportOperations.get(transport)?.probeWorkerWrite() ?? Promise.resolve("refused");
 }
-async function executableSnapshot(executable) {
+async function executableSnapshot(executable2) {
   try {
-    const canonical2 = await realpath2(executable);
+    const canonical2 = await realpath2(executable2);
     const information = await stat2(canonical2);
     if (!information.isFile() || (information.mode & 73) === 0)
       return void 0;
@@ -30395,7 +31054,7 @@ var DoltSqlTransport = class {
   #executableSnapshot;
   #verifiedExecutable;
   constructor(input) {
-    if (!validIdentifier(input.user) || input.executable !== void 0 && !isAbsolute7(input.executable) || input.process === void 0 && input.executable === void 0 || input.identity.transportSecurity === "loopback_plaintext" && !loopbackEndpoint(input.identity.endpoint) || input.identity.topology === "external_server" && input.identity.transportSecurity !== "tls" && input.identity.transportSecurity !== "loopback_plaintext" || input.password !== void 0 && (!safeText(input.password, 4096) || containsSecretShape(input.password)))
+    if (!validIdentifier(input.user) || input.executable !== void 0 && !isAbsolute8(input.executable) || input.process === void 0 && input.executable === void 0 || input.identity.transportSecurity === "loopback_plaintext" && !loopbackEndpoint(input.identity.endpoint) || input.identity.topology === "external_server" && input.identity.transportSecurity !== "tls" && input.identity.transportSecurity !== "loopback_plaintext" || input.password !== void 0 && (!safeText(input.password, 4096) || containsSecretShape(input.password)))
       throw new Error("invalid Dolt SQL transport configuration");
     const role = input.role ?? (input.user === "worker" ? "worker" : "writer");
     const credentialReference = input.credentialReference ?? (role === "worker" ? input.identity.workerCredentialReference : input.identity.credentialReference);
@@ -30444,7 +31103,7 @@ var DoltSqlTransport = class {
     if (result2.status !== "ok") return result2;
     try {
       const output = result2.output.trim();
-      const results = output.length === 0 ? [] : output.split("\n").filter((line) => line.trim().length > 0).map(parseDoltRows);
+      const results = output.length === 0 ? [] : output.split("\n").filter((line2) => line2.trim().length > 0).map(parseDoltRows);
       return results.some((rows) => rows === void 0) ? { status: "refused" } : {
         status: "ok",
         results
@@ -30457,10 +31116,10 @@ var DoltSqlTransport = class {
     if (!safeText(statement, DOLT_SQL_MAX_STATEMENT_BYTES) || !Number.isSafeInteger(expectedRows) || expectedRows < 1 || readback !== void 0 && (!closedReadSql(readback.query) || !safeText(readback.query, DOLT_SQL_MAX_STATEMENT_BYTES) || canonicalJson(readback.expectedRows).length > DOLT_SQL_MAX_OUTPUT_BYTES) || this.#process !== runDoltSql)
       return { status: "refused" };
     const [host, port] = this.#endpointParts();
-    const executable = await this.#verifiedDoltExecutable();
-    if (host === void 0 || port === void 0 || executable === void 0)
+    const executable2 = await this.#verifiedDoltExecutable();
+    if (host === void 0 || port === void 0 || executable2 === void 0)
       return { status: "refused" };
-    if (await this.#pinnedDoltExecutable() !== executable)
+    if (await this.#pinnedDoltExecutable() !== executable2)
       return { status: "refused" };
     const argv = [
       ...this.#identity.transportSecurity === "loopback_plaintext" ? ["--no-tls"] : [],
@@ -30478,7 +31137,7 @@ var DoltSqlTransport = class {
     ];
     return runDoltSqlTransaction({
       argv,
-      executable,
+      executable: executable2,
       expectedRows,
       password: this.#password,
       ...readback === void 0 ? {} : { readback },
@@ -30492,9 +31151,9 @@ var DoltSqlTransport = class {
    */
   async #probeWorkerWrite() {
     const [host, port] = this.#endpointParts();
-    const executable = await this.#verifiedDoltExecutable();
+    const executable2 = await this.#verifiedDoltExecutable();
     const database = quotedIdentifier(this.#identity.database);
-    if (host === void 0 || port === void 0 || executable === void 0 || database === void 0 || await this.#pinnedDoltExecutable() !== executable)
+    if (host === void 0 || port === void 0 || executable2 === void 0 || database === void 0 || await this.#pinnedDoltExecutable() !== executable2)
       return "refused";
     const statement = `UPDATE ${database}.issues SET status = status WHERE 1 = 0`;
     try {
@@ -30515,10 +31174,10 @@ var DoltSqlTransport = class {
           "-r",
           "json"
         ],
-        executable,
+        executable: executable2,
         env: {
           DOLT_CLI_PASSWORD: this.#password ?? "",
-          PATH: `${dirname5(executable)}:/usr/bin:/bin`
+          PATH: `${dirname6(executable2)}:/usr/bin:/bin`
         },
         timeoutMs: DOLT_SQL_TIMEOUT_MS
       });
@@ -30542,9 +31201,9 @@ var DoltSqlTransport = class {
   async #execute(query) {
     const [host, port] = this.#endpointParts();
     if (host === void 0 || port === void 0) return { status: "refused" };
-    const executable = await this.#verifiedDoltExecutable();
-    if (executable === void 0) return { status: "refused" };
-    if (await this.#pinnedDoltExecutable() !== executable)
+    const executable2 = await this.#verifiedDoltExecutable();
+    if (executable2 === void 0) return { status: "refused" };
+    if (await this.#pinnedDoltExecutable() !== executable2)
       return { status: "refused" };
     const argv = [
       ...this.#identity.transportSecurity === "loopback_plaintext" ? ["--no-tls"] : [],
@@ -30565,12 +31224,12 @@ var DoltSqlTransport = class {
     try {
       const result2 = await this.#process({
         argv,
-        executable,
+        executable: executable2,
         // Dolt's CLI reads this variable during authentication. Keeping it in
         // the child environment avoids exposing a password through argv.
         env: {
           DOLT_CLI_PASSWORD: this.#password ?? "",
-          PATH: this.#executable === void 0 ? process.env.PATH : dirname5(this.#executable)
+          PATH: this.#executable === void 0 ? process.env.PATH : dirname6(this.#executable)
         },
         timeoutMs: DOLT_SQL_TIMEOUT_MS
       });
@@ -30592,20 +31251,20 @@ var DoltSqlTransport = class {
   async #verifiedDoltExecutable() {
     if (this.#process !== runDoltSql && this.#executable === void 0)
       return "";
-    const executable = await this.#pinnedDoltExecutable();
-    if (executable === void 0) return void 0;
-    if (this.#verifiedExecutable === executable) return executable;
+    const executable2 = await this.#pinnedDoltExecutable();
+    if (executable2 === void 0) return void 0;
+    if (this.#verifiedExecutable === executable2) return executable2;
     const version = await this.#process({
       argv: ["version"],
-      executable,
-      env: { PATH: `${dirname5(executable)}:/usr/bin:/bin` },
+      executable: executable2,
+      env: { PATH: `${dirname6(executable2)}:/usr/bin:/bin` },
       timeoutMs: DOLT_SQL_TIMEOUT_MS
     });
-    if (await this.#pinnedDoltExecutable() !== executable) return void 0;
+    if (await this.#pinnedDoltExecutable() !== executable2) return void 0;
     if (version.timedOut || version.exitCode !== 0 || Buffer.byteLength(version.output, "utf8") > DOLT_SQL_MAX_OUTPUT_BYTES || !/^dolt version 2\.2\.1(?:\s|$)/u.test(version.output))
       return void 0;
-    this.#verifiedExecutable = executable;
-    return executable;
+    this.#verifiedExecutable = executable2;
+    return executable2;
   }
   async #pinnedDoltExecutable() {
     if (this.#executablePoisoned) return void 0;
@@ -30622,10 +31281,10 @@ var DoltSqlTransport = class {
     return snapshot.canonical;
   }
 };
-async function runDoltSql(request) {
-  return new Promise((resolve9) => {
-    const child = spawn6(request.executable, request.argv, {
-      env: request.env,
+async function runDoltSql(request2) {
+  return new Promise((resolve11) => {
+    const child = spawn7(request2.executable, request2.argv, {
+      env: request2.env,
       stdio: ["ignore", "pipe", "pipe"]
     });
     let output = "";
@@ -30646,7 +31305,7 @@ async function runDoltSql(request) {
     const timer = setTimeout(() => {
       timedOut = true;
       terminate();
-    }, request.timeoutMs);
+    }, request2.timeoutMs);
     child.stdout.on("data", (chunk) => {
       if (capped) return;
       output += chunk.toString("utf8");
@@ -30670,7 +31329,7 @@ async function runDoltSql(request) {
     child.once("close", (code) => {
       clearTimeout(timer);
       if (killTimer !== void 0) clearTimeout(killTimer);
-      resolve9({
+      resolve11({
         exitCode: capped || timedOut || failed ? void 0 : code ?? void 0,
         output,
         stderr,
@@ -30680,11 +31339,11 @@ async function runDoltSql(request) {
   });
 }
 async function runDoltSqlTransaction(input) {
-  return new Promise((resolve9) => {
-    const child = spawn6(input.executable, input.argv, {
+  return new Promise((resolve11) => {
+    const child = spawn7(input.executable, input.argv, {
       env: {
         DOLT_CLI_PASSWORD: input.password ?? "",
-        PATH: `${dirname5(input.executable)}:/usr/bin:/bin`
+        PATH: `${dirname6(input.executable)}:/usr/bin:/bin`
       },
       stdio: ["pipe", "pipe", "ignore"]
     });
@@ -30772,8 +31431,8 @@ async function runDoltSqlTransaction(input) {
         return;
       closeStdin();
     };
-    const inspectLine = (line) => {
-      if (line.trim().length === 0 || result2 !== void 0) return;
+    const inspectLine = (line2) => {
+      if (line2.trim().length === 0 || result2 !== void 0) return;
       if (!rowCountPhaseObserved && rowCount === void 0 && !finalSent) {
         rowCountPhaseObserved = true;
         observeTestPhase("after_guarded_write_before_rowcount");
@@ -30781,7 +31440,7 @@ async function runDoltSqlTransaction(input) {
       }
       let rows;
       try {
-        rows = parseDoltRows(line);
+        rows = parseDoltRows(line2);
       } catch {
         terminate({ status: "refused" });
         return;
@@ -30847,18 +31506,18 @@ async function runDoltSqlTransaction(input) {
       output += chunk.toString("utf8");
       const lines2 = output.split("\n");
       output = lines2.pop() ?? "";
-      for (const line of lines2) inspectLine(line);
+      for (const line2 of lines2) inspectLine(line2);
     });
     child.once("error", () => terminate({ status: "unavailable" }));
     child.once("close", (code) => {
       clearTimeout(timer);
       if (killTimer !== void 0) clearTimeout(killTimer);
-      if (result2 !== void 0) return resolve9(result2);
+      if (result2 !== void 0) return resolve11(result2);
       if (code !== 0 || !finalSent || rowCount === void 0 || rowCount === input.expectedRows && !readbackMatched)
-        return resolve9({ status: "unavailable" });
+        return resolve11({ status: "unavailable" });
       if (rowCount !== input.expectedRows)
-        return resolve9({ status: "ok", rows: rowCount });
-      return resolve9(
+        return resolve11({ status: "ok", rows: rowCount });
+      return resolve11(
         postCommitClean && postCommitHead !== void 0 ? { status: "ok", rows: rowCount, committedHead: postCommitHead } : { status: "unavailable" }
       );
     });
@@ -30879,7 +31538,7 @@ var PinnedBdServerProcess = class {
   #executableSnapshot;
   #verifiedExecutable;
   constructor(input) {
-    if (!isAbsolute7(input.executable) || !isAbsolute7(input.workspace))
+    if (!isAbsolute8(input.executable) || !isAbsolute8(input.workspace))
       throw new Error("invalid pinned bd process configuration");
     this.#credentialEnvironment = input.credentialEnvironment;
     this.#executable = input.executable;
@@ -30948,10 +31607,10 @@ var PinnedBdServerProcess = class {
     if (verification.status !== "ok") return verification;
     const workspace = await this.#canonicalWorkspace();
     if (workspace === void 0) return { status: "refused" };
-    const executable = verification.executable;
-    if (await this.#canonicalExecutable() !== executable)
+    const executable2 = verification.executable;
+    if (await this.#canonicalExecutable() !== executable2)
       return { status: "refused" };
-    const result2 = await this.#exec(executable, [
+    const result2 = await this.#exec(executable2, [
       "-C",
       workspace,
       "--actor",
@@ -30974,19 +31633,19 @@ var PinnedBdServerProcess = class {
     }
   }
   async #verify() {
-    const executable = await this.#canonicalExecutable();
-    if (executable === void 0) return { status: "refused" };
-    if (this.#verifiedExecutable === executable)
-      return { status: "ok", executable };
-    const result2 = await this.#exec(executable, ["version"]);
-    if (await this.#canonicalExecutable() !== executable)
+    const executable2 = await this.#canonicalExecutable();
+    if (executable2 === void 0) return { status: "refused" };
+    if (this.#verifiedExecutable === executable2)
+      return { status: "ok", executable: executable2 };
+    const result2 = await this.#exec(executable2, ["version"]);
+    if (await this.#canonicalExecutable() !== executable2)
       return { status: "refused" };
     if (result2.timedOut || result2.exitCode === void 0 || Buffer.byteLength(result2.output, "utf8") > BD_PROCESS_MAX_OUTPUT_BYTES)
       return { status: "unavailable" };
     if (result2.exitCode !== 0 || !/^bd version 1\.1\.0(?:\s|$)/u.test(result2.output))
       return { status: "refused" };
-    this.#verifiedExecutable = executable;
-    return { status: "ok", executable };
+    this.#verifiedExecutable = executable2;
+    return { status: "ok", executable: executable2 };
   }
   async #canonicalExecutable() {
     if (this.#executablePoisoned) return void 0;
@@ -31015,10 +31674,10 @@ var PinnedBdServerProcess = class {
    * The command accepts only the validated declared prefix and does not alter
    * the server, so a mismatched workspace fails before slot mutation/CAS.
    */
-  async #workspacePrefixMatches(executable, workspace, prefix) {
+  async #workspacePrefixMatches(executable2, workspace, prefix) {
     if (this.#process !== runPinnedBd) return true;
     try {
-      const result2 = await this.#exec(executable, [
+      const result2 = await this.#exec(executable2, [
         "-C",
         workspace,
         "show",
@@ -31037,13 +31696,13 @@ var PinnedBdServerProcess = class {
   }
   #matchesContext(context, identity2, workspace) {
     const endpoint = `${String(context.server_host ?? "")}:${String(context.server_port ?? "")}`;
-    if (context.backend !== "dolt" || context.database !== identity2.database || context.dolt_mode !== "server" || endpoint !== identity2.endpoint || typeof context.beads_dir !== "string" || !isAbsolute7(context.beads_dir))
+    if (context.backend !== "dolt" || context.database !== identity2.database || context.dolt_mode !== "server" || endpoint !== identity2.endpoint || typeof context.beads_dir !== "string" || !isAbsolute8(context.beads_dir))
       return false;
     if (identity2.topology === "managed_local_shared_server" && this.#runtimeEnvironment === void 0 || identity2.topology === "external_server" && this.#credentialEnvironment === void 0)
       return false;
-    return context.beads_dir === join5(workspace, ".beads");
+    return context.beads_dir === join6(workspace, ".beads");
   }
-  async #exec(executable, argv, additionalPath = []) {
+  async #exec(executable2, argv, additionalPath = []) {
     const source = this.#credentialEnvironment?.();
     const runtime = this.#runtimeEnvironment?.();
     const password = source?.BEADS_DOLT_PASSWORD;
@@ -31051,17 +31710,17 @@ var PinnedBdServerProcess = class {
       return { exitCode: void 0, output: "", timedOut: false };
     if (runtime !== void 0 && (Object.keys(runtime).some(
       (key) => key !== "HOME" && key !== "XDG_CONFIG_HOME"
-    ) || runtime.HOME !== void 0 && (!isAbsolute7(runtime.HOME) || !safeText(runtime.HOME, 4096)) || runtime.XDG_CONFIG_HOME !== void 0 && (!isAbsolute7(runtime.XDG_CONFIG_HOME) || !safeText(runtime.XDG_CONFIG_HOME, 4096))))
+    ) || runtime.HOME !== void 0 && (!isAbsolute8(runtime.HOME) || !safeText(runtime.HOME, 4096)) || runtime.XDG_CONFIG_HOME !== void 0 && (!isAbsolute8(runtime.XDG_CONFIG_HOME) || !safeText(runtime.XDG_CONFIG_HOME, 4096))))
       return { exitCode: void 0, output: "", timedOut: false };
     return this.#process({
       argv,
-      executable,
+      executable: executable2,
       env: {
         BD_NON_INTERACTIVE: "1",
         ...password === void 0 ? {} : { BEADS_DOLT_PASSWORD: password },
         CI: "1",
         ...runtime?.HOME === void 0 ? {} : { HOME: runtime.HOME },
-        PATH: [dirname5(executable), ...additionalPath, "/usr/bin", "/bin"].join(
+        PATH: [dirname6(executable2), ...additionalPath, "/usr/bin", "/bin"].join(
           ":"
         ),
         ...runtime?.XDG_CONFIG_HOME === void 0 ? {} : { XDG_CONFIG_HOME: runtime.XDG_CONFIG_HOME }
@@ -31070,10 +31729,10 @@ var PinnedBdServerProcess = class {
     });
   }
 };
-async function runPinnedBd(request) {
-  return new Promise((resolve9) => {
-    const child = spawn6(request.executable, request.argv, {
-      env: request.env,
+async function runPinnedBd(request2) {
+  return new Promise((resolve11) => {
+    const child = spawn7(request2.executable, request2.argv, {
+      env: request2.env,
       stdio: ["ignore", "pipe", "ignore"]
     });
     let output = "";
@@ -31093,7 +31752,7 @@ async function runPinnedBd(request) {
     const timer = setTimeout(() => {
       timedOut = true;
       terminate();
-    }, request.timeoutMs);
+    }, request2.timeoutMs);
     child.stdout.on("data", (chunk) => {
       if (capped) return;
       output += chunk.toString("utf8");
@@ -31109,7 +31768,7 @@ async function runPinnedBd(request) {
     child.once("close", (code) => {
       clearTimeout(timer);
       if (killTimer !== void 0) clearTimeout(killTimer);
-      resolve9({
+      resolve11({
         exitCode: capped || timedOut || failed ? void 0 : code ?? void 0,
         output,
         timedOut: capped || timedOut
@@ -31192,7 +31851,7 @@ var PinnedBdManagedServerProcess = class {
   #verifiedDolt;
   #verifiedExecutable;
   constructor(input) {
-    if (!isAbsolute7(input.dataDirectory) || !isAbsolute7(input.doltExecutable) || !isAbsolute7(input.executable) || !isAbsolute7(input.workspace))
+    if (!isAbsolute8(input.dataDirectory) || !isAbsolute8(input.doltExecutable) || !isAbsolute8(input.executable) || !isAbsolute8(input.workspace))
       throw new Error("invalid pinned managed bd process configuration");
     this.#dataDirectory = input.dataDirectory;
     this.#doltExecutable = input.doltExecutable;
@@ -31202,43 +31861,43 @@ var PinnedBdManagedServerProcess = class {
     this.#workspace = input.workspace;
   }
   async start() {
-    const executable = await this.#verify();
-    if (executable === void 0) return { status: "refused" };
+    const executable2 = await this.#verify();
+    if (executable2 === void 0) return { status: "refused" };
     const dolt = await this.#verifyDolt();
     if (dolt === void 0) return { status: "refused" };
     const workspace = await this.#canonicalWorkspace();
     if (workspace === void 0) return { status: "refused" };
-    if (await this.#canonicalExecutable() !== executable || await this.#canonicalDolt() !== dolt)
+    if (await this.#canonicalExecutable() !== executable2 || await this.#canonicalDolt() !== dolt)
       return { status: "refused" };
-    const before = await this.#status(executable, dolt, workspace);
+    const before = await this.#status(executable2, dolt, workspace);
     if (before === void 0) return { status: "refused" };
     if (before === "running") return { status: "ok", value: void 0 };
-    if (await this.#canonicalExecutable() !== executable || await this.#canonicalDolt() !== dolt)
+    if (await this.#canonicalExecutable() !== executable2 || await this.#canonicalDolt() !== dolt)
       return { status: "refused" };
     const result2 = await this.#exec(
-      executable,
+      executable2,
       ["-C", workspace, "dolt", "start"],
-      [dirname5(dolt)]
+      [dirname6(dolt)]
     );
     if (result2.timedOut || result2.exitCode === void 0)
       return { status: "unavailable" };
     if (result2.exitCode !== 0) return { status: "refused" };
-    if (await this.#canonicalExecutable() !== executable || await this.#canonicalDolt() !== dolt)
+    if (await this.#canonicalExecutable() !== executable2 || await this.#canonicalDolt() !== dolt)
       return { status: "refused" };
-    if (await this.#status(executable, dolt, workspace) !== "running")
+    if (await this.#status(executable2, dolt, workspace) !== "running")
       return { status: "refused" };
     return { status: "ok", value: void 0 };
   }
   async #verify() {
-    const executable = await this.#canonicalExecutable();
-    if (executable === void 0) return void 0;
-    if (this.#verifiedExecutable === executable) return executable;
-    const result2 = await this.#exec(executable, ["version"]);
-    if (await this.#canonicalExecutable() !== executable) return void 0;
+    const executable2 = await this.#canonicalExecutable();
+    if (executable2 === void 0) return void 0;
+    if (this.#verifiedExecutable === executable2) return executable2;
+    const result2 = await this.#exec(executable2, ["version"]);
+    if (await this.#canonicalExecutable() !== executable2) return void 0;
     if (result2.timedOut || result2.exitCode !== 0 || Buffer.byteLength(result2.output, "utf8") > BD_PROCESS_MAX_OUTPUT_BYTES || !/^bd version 1\.1\.0(?:\s|$)/u.test(result2.output))
       return void 0;
-    this.#verifiedExecutable = executable;
-    return executable;
+    this.#verifiedExecutable = executable2;
+    return executable2;
   }
   async #canonicalExecutable() {
     if (this.#executablePoisoned) return void 0;
@@ -31275,13 +31934,13 @@ var PinnedBdManagedServerProcess = class {
     this.#doltSnapshot ??= snapshot;
     return snapshot.canonical;
   }
-  async #status(executable, dolt, workspace) {
-    if (await this.#canonicalExecutable() !== executable || await this.#canonicalDolt() !== dolt)
+  async #status(executable2, dolt, workspace) {
+    if (await this.#canonicalExecutable() !== executable2 || await this.#canonicalDolt() !== dolt)
       return void 0;
     const result2 = await this.#exec(
-      executable,
+      executable2,
       ["-C", workspace, "dolt", "status", "--json"],
-      [dirname5(dolt)]
+      [dirname6(dolt)]
     );
     if (result2.timedOut || result2.exitCode !== 0 || Buffer.byteLength(result2.output, "utf8") > BD_PROCESS_MAX_OUTPUT_BYTES)
       return void 0;
@@ -31294,7 +31953,7 @@ var PinnedBdManagedServerProcess = class {
         return void 0;
       if (!value.running)
         return value.data_dir === "" && value.pid === 0 && value.port === 0 ? "stopped" : void 0;
-      if (typeof value.data_dir !== "string" || !isAbsolute7(value.data_dir) || typeof value.pid !== "number" || !Number.isSafeInteger(value.pid) || value.pid <= 0 || typeof value.port !== "number" || !Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65535)
+      if (typeof value.data_dir !== "string" || !isAbsolute8(value.data_dir) || typeof value.pid !== "number" || !Number.isSafeInteger(value.pid) || value.pid <= 0 || typeof value.port !== "number" || !Number.isSafeInteger(value.port) || value.port < 1 || value.port > 65535)
         return void 0;
       const [actual, expected] = await Promise.all([
         realpath2(value.data_dir),
@@ -31313,20 +31972,20 @@ var PinnedBdManagedServerProcess = class {
       return void 0;
     }
   }
-  async #exec(executable, argv, additionalPath = []) {
+  async #exec(executable2, argv, additionalPath = []) {
     const runtime = this.#runtimeEnvironment?.();
     if (runtime !== void 0 && (Object.keys(runtime).some(
       (key) => key !== "HOME" && key !== "XDG_CONFIG_HOME"
-    ) || runtime.HOME !== void 0 && (!isAbsolute7(runtime.HOME) || !safeText(runtime.HOME, 4096)) || runtime.XDG_CONFIG_HOME !== void 0 && (!isAbsolute7(runtime.XDG_CONFIG_HOME) || !safeText(runtime.XDG_CONFIG_HOME, 4096))))
+    ) || runtime.HOME !== void 0 && (!isAbsolute8(runtime.HOME) || !safeText(runtime.HOME, 4096)) || runtime.XDG_CONFIG_HOME !== void 0 && (!isAbsolute8(runtime.XDG_CONFIG_HOME) || !safeText(runtime.XDG_CONFIG_HOME, 4096))))
       return { exitCode: void 0, output: "", timedOut: false };
     return this.#process({
       argv,
-      executable,
+      executable: executable2,
       env: {
         BD_NON_INTERACTIVE: "1",
         CI: "1",
         ...runtime?.HOME === void 0 ? {} : { HOME: runtime.HOME },
-        PATH: [dirname5(executable), ...additionalPath, "/usr/bin", "/bin"].join(
+        PATH: [dirname6(executable2), ...additionalPath, "/usr/bin", "/bin"].join(
           ":"
         ),
         ...runtime?.XDG_CONFIG_HOME === void 0 ? {} : { XDG_CONFIG_HOME: runtime.XDG_CONFIG_HOME }
@@ -31372,14 +32031,14 @@ function safeRecord(input, keys) {
     const expected = [...keys].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index]))
       return void 0;
-    const record3 = {};
+    const record4 = {};
     for (const key of keys) {
       const descriptor = descriptors[key];
       if (descriptor === void 0 || !("value" in descriptor))
         return void 0;
-      record3[key] = descriptor.value;
+      record4[key] = descriptor.value;
     }
-    return record3;
+    return record4;
   } catch {
     return void 0;
   }
@@ -31398,14 +32057,14 @@ function safeOptionalRecord(input, required2, optional) {
     const allowed = /* @__PURE__ */ new Set([...required2, ...optional]);
     if (actual.some((key) => !allowed.has(key)) || required2.some((key) => !actual.includes(key)))
       return void 0;
-    const record3 = {};
+    const record4 = {};
     for (const key of actual) {
       const descriptor = descriptors[key];
       if (descriptor === void 0 || !("value" in descriptor))
         return void 0;
-      record3[key] = descriptor.value;
+      record4[key] = descriptor.value;
     }
-    return record3;
+    return record4;
   } catch {
     return void 0;
   }
@@ -31497,7 +32156,7 @@ function parseCommit(input) {
   return isSchema(ServerCommitReadbackSchema, input) ? input : void 0;
 }
 function normalizedServerIdentity(input) {
-  const record3 = safeRecord(input, [
+  const record4 = safeRecord(input, [
     "autoCommitPolicy",
     "credentialProvenance",
     "credentialReference",
@@ -31510,19 +32169,19 @@ function normalizedServerIdentity(input) {
     "workerCredentialReference"
   ]);
   try {
-    return record3 !== void 0 && isSchema(ServerIdentitySchema, record3) ? record3 : void 0;
+    return record4 !== void 0 && isSchema(ServerIdentitySchema, record4) ? record4 : void 0;
   } catch {
     return void 0;
   }
 }
 function normalizedScope(input) {
-  const record3 = safeRecord(input, [
+  const record4 = safeRecord(input, [
     "beadsStoreIdentity",
     "gitRepositoryIdentity",
     "integrationBranch"
   ]);
   try {
-    return record3 !== void 0 && isSchema(FencingScopeSchema, record3) ? record3 : void 0;
+    return record4 !== void 0 && isSchema(FencingScopeSchema, record4) ? record4 : void 0;
   } catch {
     return void 0;
   }
@@ -32336,10 +32995,10 @@ var BeadsServerAdapter = class {
       version: 1
     };
   }
-  #carryClaimRecordDigest(record3) {
+  #carryClaimRecordDigest(record4) {
     return sha2562(
       canonicalJson({
-        claimRecord: record3,
+        claimRecord: record4,
         domain: "sce.provenance-carry-claim-record.v1"
       })
     );
@@ -33117,7 +33776,7 @@ var DoltBeadsServerDriver = class {
     const identity2 = normalizedServerIdentity(value.identity);
     const expectedRoot = validateRootProjection(value.expectedRoot);
     const scope = normalizedScope(value.scope);
-    const record3 = validate(
+    const record4 = validate(
       ProvenanceCarryClaimRecordSchema,
       value.record
     );
@@ -33135,10 +33794,10 @@ var DoltBeadsServerDriver = class {
       snapshotCommitment,
       storeIdentity: predecessorRun.storeIdentity
     });
-    return identity2 !== void 0 && expectedRoot.ok && scope !== void 0 && record3.ok && record3.value !== void 0 && typeof value.exportDigest === "string" && /^[0-9a-f]{64}$/u.test(value.exportDigest) && typeof value.holder === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(
+    return identity2 !== void 0 && expectedRoot.ok && scope !== void 0 && record4.ok && record4.value !== void 0 && typeof value.exportDigest === "string" && /^[0-9a-f]{64}$/u.test(value.exportDigest) && typeof value.holder === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(
       value.holder
-    ) && typeof value.predecessorRootBeadId === "string" && validIdentifier(value.predecessorRootBeadId) && value.predecessorRootBeadId !== this.#rows.rootBeadId && record3.value.exportId === `sce:carry:${value.exportDigest}` && record3.value.exportId === expectedExportId && record3.value.predecessorRootBeadId === value.predecessorRootBeadId && record3.value.predecessorRunId === predecessorRun?.controller.runId && record3.value.predecessorWaveId === predecessorRun?.gate?.waveId && record3.value.snapshotCommitment === snapshotCommitment && value.holder.split("/")[0] === record3.value.claimantRunId && exact(expectedRoot.value.scope, scope) && Buffer.byteLength(
-      canonicalJson(record3.value),
+    ) && typeof value.predecessorRootBeadId === "string" && validIdentifier(value.predecessorRootBeadId) && value.predecessorRootBeadId !== this.#rows.rootBeadId && record4.value.exportId === `sce:carry:${value.exportDigest}` && record4.value.exportId === expectedExportId && record4.value.predecessorRootBeadId === value.predecessorRootBeadId && record4.value.predecessorRunId === predecessorRun?.controller.runId && record4.value.predecessorWaveId === predecessorRun?.gate?.waveId && record4.value.snapshotCommitment === snapshotCommitment && value.holder.split("/")[0] === record4.value.claimantRunId && exact(expectedRoot.value.scope, scope) && Buffer.byteLength(
+      canonicalJson(record4.value),
       "utf8"
     ) <= 4096 ? {
       expectedRoot: expectedRoot.value,
@@ -33146,7 +33805,7 @@ var DoltBeadsServerDriver = class {
       holder: value.holder,
       identity: identity2,
       predecessorRootBeadId: value.predecessorRootBeadId,
-      record: record3.value,
+      record: record4.value,
       scope
     } : void 0;
   }
@@ -33493,8 +34152,8 @@ function text3(value, limit = 4096) {
 }
 function absolutePath4(value) {
   const path2 = text3(value);
-  if (path2 === void 0 || !isAbsolute8(path2)) return void 0;
-  const canonical2 = normalize5(resolve5(path2));
+  if (path2 === void 0 || !isAbsolute9(path2)) return void 0;
+  const canonical2 = normalize5(resolve6(path2));
   return canonical2 === "/" ? void 0 : canonical2;
 }
 function identifier5(value) {
@@ -33853,7 +34512,7 @@ function parseControllerConfig(input, environment) {
   const repository = git.repository;
   if (nonce === void 0 || git.remote !== void 0 && remote2 === void 0 || topology === void 0 || parsedHarness !== void 0 && !parsedHarness.ok || value.knowledgeContract !== void 0 && knowledgeContract === void 0 || commitment !== void 0 && !commitment.ok || run2.harness !== void 0 && parsedHarness === void 0 || parsedHarness !== void 0 && (run2.harness === void 0 || commitment === void 0 || !commitment.ok || run2.harness.family !== parsedHarness.value.capabilities.family || run2.harness.adapterVersion !== parsedHarness.value.capabilities.adapterVersion || run2.harness.harnessVersion !== parsedHarness.value.capabilities.harnessVersion || run2.harness.supportCommitment !== commitment.value) || canonicalGitCommonDir(repository.commonDir) !== repository.commonDir || absolutePath4(repository.cwd) !== repository.cwd || run2.controller.holder.length === 0 || run2.repositoryIdentity !== repository.identity || run2.repositoryIdentity !== scope.gitRepositoryIdentity || run2.storeIdentity !== scope.beadsStoreIdentity || run2.integrationBranch !== scope.integrationBranch)
     return void 0;
-  if (knowledgeContract === void 0 !== (run2.knowledgeContract === void 0) && !(knowledgeContract !== void 0 && canFreezeKnowledgeContractAtFirstWave(run2)) || knowledgeContract !== void 0 && run2.knowledgeContract !== void 0 && canonicalJson(knowledgeContract) !== canonicalJson(run2.knowledgeContract) || knowledgeContract !== void 0 && (run2.harness === void 0 || !knowledgeContractRuntimeValid(knowledgeContract, run2.harness) || maximumMaterialisationSidecarBytes(knowledgeContract, run2.harness) > 8192))
+  if (knowledgeContract === void 0 !== (run2.knowledgeContract === void 0) && !(knowledgeContract !== void 0 && (canFreezeKnowledgeContractAtFirstWave(run2) || isPristineUnacquiredRun(run2))) || knowledgeContract !== void 0 && run2.knowledgeContract !== void 0 && canonicalJson(knowledgeContract) !== canonicalJson(run2.knowledgeContract) || knowledgeContract !== void 0 && (run2.harness === void 0 || !knowledgeContractRuntimeValid(knowledgeContract, run2.harness) || maximumMaterialisationSidecarBytes(knowledgeContract, run2.harness) > 8192))
     return void 0;
   if (knowledgeContract !== void 0 && (() => {
     const roots = [
@@ -33880,9 +34539,9 @@ function parseControllerConfig(input, environment) {
   };
 }
 function pathsOverlap(left, right) {
-  const leftToRight = relative3(left, right);
-  const rightToLeft = relative3(right, left);
-  const contained = (value) => value === "" || !isAbsolute8(value) && value !== ".." && !value.startsWith("../");
+  const leftToRight = relative4(left, right);
+  const rightToLeft = relative4(right, left);
+  const contained = (value) => value === "" || !isAbsolute9(value) && value !== ".." && !value.startsWith("../");
   return contained(leftToRight) || contained(rightToLeft);
 }
 async function topologyProof(config) {
@@ -34015,8 +34674,11 @@ async function sharedServerRunner(config, topology, environment = (name) => proc
     return void 0;
   }
 }
+function validateControllerConfigDocument(input, environment = (name) => process.env[name]) {
+  return parseControllerConfig(input, environment) !== void 0;
+}
 async function createControllerConfigRunner(path2, dependencies = {}) {
-  if (!isAbsolute8(path2)) return void 0;
+  if (!isAbsolute9(path2)) return void 0;
   let source;
   try {
     source = await readFile2(path2, "utf8");
@@ -34432,7 +35094,7 @@ function authorizes(packet, authority) {
 // src/feedback/github.ts
 import { mkdtemp as mkdtemp2, rm as rm2, writeFile as writeFile3 } from "node:fs/promises";
 import { tmpdir as tmpdir2 } from "node:os";
-import { join as join6 } from "node:path";
+import { join as join7 } from "node:path";
 var MAX_PROVIDER_OUTPUT_BYTES = 128 * 1024;
 var PAGE_SIZE = 100;
 var MAX_ISSUES = 1e4;
@@ -34466,13 +35128,13 @@ var GhFeedbackTransport = class {
     };
     return discovery;
   }
-  async createIssue(request) {
-    if (request.target.repository !== FIXED_TARGET_NAME || request.target.repositoryId !== FIXED_TARGET_REPOSITORY_ID)
+  async createIssue(request2) {
+    if (request2.target.repository !== FIXED_TARGET_NAME || request2.target.repositoryId !== FIXED_TARGET_REPOSITORY_ID)
       throw rejected();
-    const directory = await mkdtemp2(join6(tmpdir2(), "sce-feedback-gh-"));
-    const bodyFile = join6(directory, "body.md");
+    const directory = await mkdtemp2(join7(tmpdir2(), "sce-feedback-gh-"));
+    const bodyFile = join7(directory, "body.md");
     try {
-      await writeFile3(bodyFile, request.body, {
+      await writeFile3(bodyFile, request2.body, {
         encoding: "utf8",
         mode: 384
       });
@@ -34483,7 +35145,7 @@ var GhFeedbackTransport = class {
         "--repo",
         FIXED_TARGET_NAME,
         "--title",
-        request.title,
+        request2.title,
         "--body-file",
         bodyFile
       ]);
@@ -34520,7 +35182,7 @@ var GhFeedbackTransport = class {
       ...cursor === null ? [] : ["--raw-field", `cursor=${cursor}`]
     ]);
     if (result2 === void 0) throw unavailable4();
-    return parseJson(result2);
+    return parseJson2(result2);
   }
   async hasFixedRepositoryIdentity() {
     const response = await this.graphql(repositoryIdentityQuery, null);
@@ -34559,7 +35221,7 @@ function parseIssuePage(value) {
   };
 }
 function parseReadback(value) {
-  return parseIssue(parseJson(value));
+  return parseIssue(parseJson2(value));
 }
 function parseIssue(value) {
   const candidate = record2(value);
@@ -34576,7 +35238,7 @@ function parseIssue(value) {
     open: candidate.state === "OPEN"
   };
 }
-function parseJson(value) {
+function parseJson2(value) {
   try {
     return JSON.parse(value);
   } catch {
@@ -34632,14 +35294,14 @@ import {
   openSync as openSync4,
   readFileSync as readFileSync2,
   readdirSync,
-  realpathSync as realpathSync5,
+  realpathSync as realpathSync6,
   renameSync,
-  statSync as statSync4,
+  statSync as statSync5,
   unlinkSync as unlinkSync2,
   writeFileSync as writeFileSync2
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { join as join7 } from "node:path";
+import { join as join8 } from "node:path";
 
 // src/feedback/submit.ts
 function canonicalIssueUrl(number) {
@@ -34682,14 +35344,14 @@ async function executeDurableIntent(packet, authority, transport) {
   if (discovery.status === "unavailable")
     return { status: "ambiguous", code: "GITHUB_UNAVAILABLE" };
   try {
-    const request = {
+    const request2 = {
       target: valid.target,
       title: valid.title,
       body: valid.body
     };
-    if (!isFeedbackSchema(GitHubCreateRequestSchema, request))
+    if (!isFeedbackSchema(GitHubCreateRequestSchema, request2))
       return { status: "ambiguous", code: "GITHUB_REJECTED" };
-    const issue = await transport.createIssue(request);
+    const issue = await transport.createIssue(request2);
     return validIssueReadback(valid, issue, "exact_generated") ? { status: "submitted", issue } : { status: "ambiguous", code: "GITHUB_REJECTED" };
   } catch (error) {
     return {
@@ -34718,7 +35380,7 @@ var FeedbackOutbox = class _FeedbackOutbox {
   constructor(directory, hooks) {
     this.hooks = hooks;
     this.directory = directory;
-    this.lockPath = join7(directory, ".lock");
+    this.lockPath = join8(directory, ".lock");
   }
   hooks;
   directory;
@@ -34767,7 +35429,7 @@ var FeedbackOutbox = class _FeedbackOutbox {
     for (const name of names.filter(
       (entry) => /^[0-9a-f]{64}\.json$/u.test(entry)
     )) {
-      const source = safeFile(join7(this.directory, name));
+      const source = safeFile(join8(this.directory, name));
       const envelope = source === void 0 ? void 0 : parseEnvelope(source);
       if (envelope === void 0 || envelope.packet.telemetry.fingerprint !== name.slice(0, -5))
         return { status: "invalid" };
@@ -34923,10 +35585,10 @@ var FeedbackOutbox = class _FeedbackOutbox {
         constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL | constants3.O_NOFOLLOW,
         384
       );
-      const stat3 = fstatSync2(descriptor);
-      if (!stat3.isFile() || (stat3.mode & 511) !== 384)
+      const stat4 = fstatSync2(descriptor);
+      if (!stat4.isFile() || (stat4.mode & 511) !== 384)
         return { status: "unavailable" };
-      opened = { dev: stat3.dev, ino: stat3.ino };
+      opened = { dev: stat4.dev, ino: stat4.ino };
       writeFileSync2(
         descriptor,
         `pid=${process.pid}
@@ -34945,8 +35607,8 @@ token=${randomUUID()}
       if (descriptor !== void 0) {
         closeSync4(descriptor);
         try {
-          const stat3 = lstatSync2(this.lockPath);
-          if (stat3.isFile() && !stat3.isSymbolicLink() && (stat3.mode & 511) === 384 && stat3.dev === opened?.dev && stat3.ino === opened?.ino)
+          const stat4 = lstatSync2(this.lockPath);
+          if (stat4.isFile() && !stat4.isSymbolicLink() && (stat4.mode & 511) === 384 && stat4.dev === opened?.dev && stat4.ino === opened?.ino)
             unlinkSync2(this.lockPath);
         } catch {
         }
@@ -34955,10 +35617,10 @@ token=${randomUUID()}
   }
   recoverKilledLock(path2) {
     try {
-      const stat3 = lstatSync2(path2);
-      if (!stat3.isFile() || stat3.isSymbolicLink() || (stat3.mode & 511) !== 384)
+      const stat4 = lstatSync2(path2);
+      if (!stat4.isFile() || stat4.isSymbolicLink() || (stat4.mode & 511) !== 384)
         return false;
-      const identity2 = { dev: stat3.dev, ino: stat3.ino };
+      const identity2 = { dev: stat4.dev, ino: stat4.ino };
       const source = readFileSync2(path2, "utf8");
       const pidSource = /^pid=(0|[1-9][0-9]*)\ntoken=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\n$/u.exec(
         source
@@ -34978,7 +35640,7 @@ token=${randomUUID()}
     }
   }
   acquireSubmissionLock(fingerprint) {
-    const path2 = join7(this.directory, `.submit-${fingerprint}.lock`);
+    const path2 = join8(this.directory, `.submit-${fingerprint}.lock`);
     let descriptor;
     let identity2;
     try {
@@ -34988,9 +35650,9 @@ token=${randomUUID()}
         constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL | constants3.O_NOFOLLOW,
         384
       );
-      const stat3 = fstatSync2(descriptor);
-      identity2 = { dev: stat3.dev, ino: stat3.ino };
-      if (!stat3.isFile() || (stat3.mode & 511) !== 384) {
+      const stat4 = fstatSync2(descriptor);
+      identity2 = { dev: stat4.dev, ino: stat4.ino };
+      if (!stat4.isFile() || (stat4.mode & 511) !== 384) {
         this.releaseLock(descriptor, identity2, path2);
         descriptor = void 0;
         return { status: "unavailable" };
@@ -35025,8 +35687,8 @@ token=${randomUUID()}
   releaseLock(descriptor, identity2, path2) {
     closeSync4(descriptor);
     try {
-      const stat3 = lstatSync2(path2);
-      if (stat3.isFile() && !stat3.isSymbolicLink() && stat3.dev === identity2.dev && stat3.ino === identity2.ino)
+      const stat4 = lstatSync2(path2);
+      if (stat4.isFile() && !stat4.isSymbolicLink() && stat4.dev === identity2.dev && stat4.ino === identity2.ino)
         unlinkSync2(path2);
     } catch {
     }
@@ -35038,9 +35700,9 @@ token=${randomUUID()}
     let bytes2 = 0;
     for (const name of names) {
       if (name === ".lock") continue;
-      const stat3 = safeStat(join7(this.directory, name));
-      if (stat3 === void 0) return "unavailable";
-      bytes2 += stat3.size;
+      const stat4 = safeStat(join8(this.directory, name));
+      if (stat4 === void 0) return "unavailable";
+      bytes2 += stat4.size;
       if (/^[0-9a-f]{64}\.json$/u.test(name)) packets += 1;
     }
     return packets >= OUTBOX_MAX_PACKETS || bytes2 + incomingBytes > OUTBOX_MAX_BYTES ? "quota" : "ok";
@@ -35049,7 +35711,7 @@ token=${randomUUID()}
     const source = sourceFor(envelope);
     if (new TextEncoder().encode(source).byteLength > OUTBOX_MAX_BYTES)
       return { status: "quota" };
-    const temporary = join7(
+    const temporary = join8(
       this.directory,
       `.${envelope.packet.telemetry.fingerprint}.${randomUUID()}.tmp`
     );
@@ -35077,19 +35739,19 @@ token=${randomUUID()}
     }
   }
   packetPath(fingerprint) {
-    return join7(this.directory, `${fingerprint}.json`);
+    return join8(this.directory, `${fingerprint}.json`);
   }
 };
 function outboxDirectory(commonDir) {
   try {
     if (lstatSync2(commonDir).isSymbolicLink()) return void 0;
-    const resolved = realpathSync5(commonDir);
+    const resolved = realpathSync6(commonDir);
     if (!strictDirectory2(resolved)) return void 0;
-    const sce = join7(resolved, "sce");
+    const sce = join8(resolved, "sce");
     createStrictDirectory(sce);
-    const outbox = join7(sce, "feedback-outbox");
+    const outbox = join8(sce, "feedback-outbox");
     createStrictDirectory(outbox);
-    return statSync4(resolved).dev === statSync4(outbox).dev ? outbox : void 0;
+    return statSync5(resolved).dev === statSync5(outbox).dev ? outbox : void 0;
   } catch {
     return void 0;
   }
@@ -35108,8 +35770,8 @@ function createStrictDirectory(path2) {
 }
 function strictDirectory2(path2, mode) {
   try {
-    const stat3 = lstatSync2(path2);
-    return stat3.isDirectory() && !stat3.isSymbolicLink() && (typeof process.getuid !== "function" || stat3.uid === process.getuid()) && (mode === void 0 || (stat3.mode & 511) === mode);
+    const stat4 = lstatSync2(path2);
+    return stat4.isDirectory() && !stat4.isSymbolicLink() && (typeof process.getuid !== "function" || stat4.uid === process.getuid()) && (mode === void 0 || (stat4.mode & 511) === mode);
   } catch {
     return false;
   }
@@ -35123,8 +35785,8 @@ function safeNames(directory) {
 }
 function safeStat(path2) {
   try {
-    const stat3 = lstatSync2(path2);
-    return stat3.isFile() && !stat3.isSymbolicLink() ? stat3 : void 0;
+    const stat4 = lstatSync2(path2);
+    return stat4.isFile() && !stat4.isSymbolicLink() ? stat4 : void 0;
   } catch {
     return void 0;
   }
@@ -35218,8 +35880,8 @@ function isStatus(value) {
 
 // src/feedback/runtime.ts
 import { execFile } from "node:child_process";
-import { constants as constants4, accessSync, lstatSync as lstatSync3, realpathSync as realpathSync6 } from "node:fs";
-import { isAbsolute as isAbsolute9, resolve as resolve6 } from "node:path";
+import { constants as constants4, accessSync, lstatSync as lstatSync3, realpathSync as realpathSync7 } from "node:fs";
+import { isAbsolute as isAbsolute10, resolve as resolve7 } from "node:path";
 import { promisify } from "node:util";
 var executeFile = promisify(execFile);
 var MAX_COMMAND_OUTPUT_BYTES2 = 128 * 1024;
@@ -35230,10 +35892,10 @@ var EXECUTABLE_CANDIDATES = {
 };
 var processFeedbackCommandExecutor = {
   async execute(file, args, options = {}) {
-    const executable = productionExecutable(file);
-    if (executable === void 0) return { code: 126, stderr: "", stdout: "" };
+    const executable2 = productionExecutable(file);
+    if (executable2 === void 0) return { code: 126, stderr: "", stdout: "" };
     try {
-      const result2 = await executeFile(executable, [...args], {
+      const result2 = await executeFile(executable2, [...args], {
         cwd: options.cwd,
         encoding: "utf8",
         env: feedbackEnvironment(file),
@@ -35261,10 +35923,10 @@ function productionExecutable(file) {
   if (file !== "git" && file !== "gh") return void 0;
   for (const candidate of EXECUTABLE_CANDIDATES[file]) {
     try {
-      const real = realpathSync6(candidate);
+      const real = realpathSync7(candidate);
       const entry = lstatSync3(real);
       accessSync(real, constants4.X_OK);
-      if (isAbsolute9(real) && entry.isFile() && !entry.isSymbolicLink())
+      if (isAbsolute10(real) && entry.isFile() && !entry.isSymbolicLink())
         return real;
     } catch {
     }
@@ -35313,7 +35975,7 @@ async function resolveGitCommonDirectory(executor, cwd = process.cwd()) {
   if (candidate.includes("\0") || candidate.includes("\r") || candidate.includes("\n"))
     return void 0;
   try {
-    const real = realpathSync6(resolve6(cwd, candidate));
+    const real = realpathSync7(resolve7(cwd, candidate));
     const entry = lstatSync3(real);
     return entry.isDirectory() && !entry.isSymbolicLink() ? real : void 0;
   } catch {
@@ -35326,14 +35988,14 @@ function boundedText(value, limit = MAX_COMMAND_OUTPUT_BYTES2) {
 }
 
 // src/feedback/cli.ts
-async function runFeedbackCliAction(action, request, dependencies = {}) {
-  if (action === "prepare") return prepare(request);
-  if (action === "preview") return preview(request);
-  if (action === "submit") return submit(request, dependencies);
-  return flush(request, dependencies);
+async function runFeedbackCliAction(action, request2, dependencies = {}) {
+  if (action === "prepare") return prepare(request2);
+  if (action === "preview") return preview(request2);
+  if (action === "submit") return submit(request2, dependencies);
+  return flush(request2, dependencies);
 }
-function prepare(request) {
-  const source = exactObject(request, ["telemetry", "narrative"]);
+function prepare(request2) {
+  const source = exactObject(request2, ["telemetry", "narrative"]);
   if (source === void 0)
     return invalid(
       "SCE_INVALID_FEEDBACK_REQUEST",
@@ -35345,8 +36007,8 @@ function prepare(request) {
   );
   return packet === void 0 ? invalid("SCE_INVALID_FEEDBACK_REQUEST", "Feedback request is invalid.") : { ok: true, result: { packet } };
 }
-function preview(request) {
-  const source = exactObject(request, ["packet"]);
+function preview(request2) {
+  const source = exactObject(request2, ["packet"]);
   if (source === void 0)
     return invalid(
       "SCE_INVALID_FEEDBACK_REQUEST",
@@ -35355,8 +36017,8 @@ function preview(request) {
   const preview2 = previewFeedback(source.packet);
   return preview2 === void 0 ? invalid("SCE_INVALID_FEEDBACK_PACKET", "Feedback packet is invalid.") : { ok: true, result: { preview: preview2 } };
 }
-async function submit(request, dependencies) {
-  const source = exactObject(request, ["packet", "authority"]);
+async function submit(request2, dependencies) {
+  const source = exactObject(request2, ["packet", "authority"]);
   if (source === void 0)
     return invalid(
       "SCE_INVALID_FEEDBACK_REQUEST",
@@ -35390,8 +36052,8 @@ async function submit(request, dependencies) {
     dependencies
   );
 }
-async function flush(request, dependencies) {
-  const source = exactObject(request, ["fingerprint", "authority"]);
+async function flush(request2, dependencies) {
+  const source = exactObject(request2, ["fingerprint", "authority"]);
   if (source === void 0 || typeof source.fingerprint !== "string" || !/^[0-9a-f]{64}$/u.test(source.fingerprint))
     return invalid(
       "SCE_INVALID_FEEDBACK_REQUEST",
@@ -35485,8 +36147,8 @@ function parseAuthority(value) {
 function exactObject(value, allowed) {
   if (value === null || typeof value !== "object" || Array.isArray(value))
     return void 0;
-  const record3 = value;
-  return Object.keys(record3).every((key) => allowed.includes(key)) ? record3 : void 0;
+  const record4 = value;
+  return Object.keys(record4).every((key) => allowed.includes(key)) ? record4 : void 0;
 }
 function publicIssue(issue) {
   return { number: issue.number, url: issue.url };
@@ -35520,7 +36182,7 @@ import {
   unlink,
   writeFile as writeFile4
 } from "node:fs/promises";
-import { basename as basename3, dirname as dirname6, join as join8, resolve as resolve7 } from "node:path";
+import { basename as basename4, dirname as dirname7, join as join9, resolve as resolve8 } from "node:path";
 var INSTALL_MANIFEST = ".sce-skill-install.json";
 var INSTALL_JOURNAL = ".sce-skill-install.transaction.json";
 var INSTALL_LOCK = ".sce-skill-install.lock";
@@ -35638,16 +36300,16 @@ async function fsyncTree(root) {
     fail2(`symbolic links are not installable: ${root}`);
   if (entry.isFile()) return await fsync(root);
   if (!entry.isDirectory()) fail2(`unsupported install entry: ${root}`);
-  for (const child of await readdir(root)) await fsyncTree(join8(root, child));
+  for (const child of await readdir(root)) await fsyncTree(join9(root, child));
   await fsync(root);
 }
 async function assertSafeExistingAncestors(path2) {
-  let current = resolve7(path2);
+  let current = resolve8(path2);
   while (true) {
     const entry = await lstat3(current).catch(() => void 0);
     if (entry?.isSymbolicLink() && current !== "/var" && current !== "/tmp")
       fail2(`refusing symlinked install parent: ${current}`);
-    const parent = dirname6(current);
+    const parent = dirname7(current);
     if (parent === current) return;
     current = parent;
   }
@@ -35666,7 +36328,7 @@ async function filesAt(root, prefix = "") {
     (left, right) => left.name.localeCompare(right.name)
   )) {
     const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
-    const fullPath = join8(root, entry.name);
+    const fullPath = join9(root, entry.name);
     if (entry.isSymbolicLink())
       fail2(`symbolic links are not installable: ${relativePath}`);
     if (entry.isDirectory())
@@ -35681,21 +36343,21 @@ async function filesAt(root, prefix = "") {
   return result2;
 }
 async function skillVersion(path2) {
-  const text5 = await readFile3(join8(path2, "SKILL.md"), "utf8").catch(
-    () => fail2(`missing SKILL.md in ${basename3(path2)}`)
+  const text5 = await readFile3(join9(path2, "SKILL.md"), "utf8").catch(
+    () => fail2(`missing SKILL.md in ${basename4(path2)}`)
   );
   const match = /^<!--\s*sce-skill-version:\s*([^\s#]+)\s*-->\s*$/mu.exec(text5);
   if (!match?.[1] || !SEMVER2.test(match[1]))
-    fail2(`invalid skill version in ${basename3(path2)}`);
+    fail2(`invalid skill version in ${basename4(path2)}`);
   return match[1];
 }
 async function createSkillInstallManifest(source) {
-  const resolved = resolve7(source);
+  const resolved = resolve8(source);
   await assertDirectory(resolved);
   const skills = {};
   const files = [];
   for (const name of SKILL_NAMES) {
-    const skillRoot = join8(resolved, name);
+    const skillRoot = join9(resolved, name);
     const entry = await lstat3(skillRoot).catch(() => void 0);
     if (!entry?.isDirectory() || entry.isSymbolicLink())
       fail2(`missing regular skill directory: ${name}`);
@@ -35719,10 +36381,10 @@ async function writeDurable(path2, value) {
   await writeFile4(temporary, stable(value), { mode: 384 });
   await fsync(temporary);
   await rename(temporary, path2);
-  await fsync(dirname6(path2));
+  await fsync(dirname7(path2));
 }
 async function readManifest(destination) {
-  const path2 = join8(destination, INSTALL_MANIFEST);
+  const path2 = join9(destination, INSTALL_MANIFEST);
   const entry = await lstat3(path2).catch(() => void 0);
   if (entry === void 0) return void 0;
   if (!entry.isFile() || entry.isSymbolicLink())
@@ -35735,7 +36397,7 @@ async function readManifest(destination) {
   }
 }
 async function readJournal(destination) {
-  const path2 = join8(destination, INSTALL_JOURNAL);
+  const path2 = join9(destination, INSTALL_JOURNAL);
   const entry = await lstat3(path2).catch(() => void 0);
   if (entry === void 0) return void 0;
   if (!entry.isFile() || entry.isSymbolicLink())
@@ -35748,13 +36410,13 @@ async function readJournal(destination) {
   }
 }
 function localTransactionPath(parent, name) {
-  if (basename3(name) !== name || !name.startsWith(JOURNAL_PREFIX))
+  if (basename4(name) !== name || !name.startsWith(JOURNAL_PREFIX))
     fail2("unsafe skill-install transaction path");
-  return join8(parent, name);
+  return join9(parent, name);
 }
 async function validateTree(root, manifest) {
   for (const name of SKILL_NAMES) {
-    const directory = join8(root, name);
+    const directory = join9(root, name);
     const entry = await lstat3(directory).catch(() => void 0);
     if (!entry?.isDirectory() || entry.isSymbolicLink())
       fail2(`installed skill missing: ${name}`);
@@ -35762,7 +36424,7 @@ async function validateTree(root, manifest) {
       fail2(`installed skill version differs: ${name}`);
   }
   const actual = (await Promise.all(
-    SKILL_NAMES.map((name) => filesAt(join8(root, name), name))
+    SKILL_NAMES.map((name) => filesAt(join9(root, name), name))
   )).flat().sort((left, right) => left.path.localeCompare(right.path));
   const expected = manifest.files;
   if (actual.length !== expected.length)
@@ -35785,13 +36447,13 @@ async function assertOwnedOrAbsent(destination, manifest) {
     SKILL_NAMES.map(
       async (name) => [
         name,
-        await lstat3(join8(destination, name)).catch(() => void 0)
+        await lstat3(join9(destination, name)).catch(() => void 0)
       ]
     )
   );
   const anySkill = entries.some(([, entry]) => entry !== void 0);
   if (manifest === void 0) {
-    if (anySkill || await lstat3(join8(destination, INSTALL_MANIFEST)).catch(() => void 0))
+    if (anySkill || await lstat3(join9(destination, INSTALL_MANIFEST)).catch(() => void 0))
       fail2("refusing unrelated skill collision");
     return;
   }
@@ -35800,8 +36462,8 @@ async function assertOwnedOrAbsent(destination, manifest) {
 async function move(from, to, phase, fault) {
   await fault?.(`before-${phase}`);
   await rename(from, to);
-  await fsync(dirname6(from));
-  if (dirname6(to) !== dirname6(from)) await fsync(dirname6(to));
+  await fsync(dirname7(from));
+  if (dirname7(to) !== dirname7(from)) await fsync(dirname7(to));
   await fault?.(`after-${phase}`);
 }
 async function movePresent(from, to, phase, fault) {
@@ -35810,7 +36472,7 @@ async function movePresent(from, to, phase, fault) {
   return true;
 }
 async function removeJournal(destination) {
-  await unlink(join8(destination, INSTALL_JOURNAL));
+  await unlink(join9(destination, INSTALL_JOURNAL));
   await fsync(destination);
 }
 async function cleanCommitted(destination, parent, journal) {
@@ -35822,7 +36484,7 @@ async function cleanCommitted(destination, parent, journal) {
     if (await readManifest(destination))
       fail2("uninstall transaction did not remove manifest");
     for (const name of SKILL_NAMES) {
-      if (await lstat3(join8(destination, name)).catch(() => void 0))
+      if (await lstat3(join9(destination, name)).catch(() => void 0))
         fail2("uninstall transaction did not remove skill set");
     }
   }
@@ -35834,9 +36496,9 @@ async function cleanCommitted(destination, parent, journal) {
 async function preserveForRecovery(parent, source) {
   const entry = await lstat3(source).catch(() => void 0);
   if (!entry) return;
-  const preserved = join8(
+  const preserved = join9(
     parent,
-    `.sce-recovery-${randomUUID2()}-${basename3(source)}`
+    `.sce-recovery-${randomUUID2()}-${basename4(source)}`
   );
   await rename(source, preserved);
   await fsync(parent);
@@ -35846,8 +36508,8 @@ async function restoreBackup(destination, parent, journal) {
   try {
     if (journal.previous !== null) {
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
-        const target = join8(destination, name);
-        const source = join8(backup, name);
+        const target = join9(destination, name);
+        const source = join9(backup, name);
         if (await lstat3(source).catch(() => void 0))
           await preserveForRecovery(parent, target);
         else if (await lstat3(target).catch(() => void 0))
@@ -35859,23 +36521,23 @@ async function restoreBackup(destination, parent, journal) {
       await validateInstalled(backup, journal.previous);
     } else {
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
-        await preserveForRecovery(parent, join8(destination, name));
+        await preserveForRecovery(parent, join9(destination, name));
     }
     for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
-      const source = join8(backup, name);
+      const source = join9(backup, name);
       if (await lstat3(source).catch(() => void 0))
-        await rename(source, join8(destination, name));
+        await rename(source, join9(destination, name));
     }
     await fsync(destination);
     if (journal.previous === null) {
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
-        if (await lstat3(join8(destination, name)).catch(() => void 0))
+        if (await lstat3(join9(destination, name)).catch(() => void 0))
           fail2(
             "recovery-needed: prior empty installation could not be restored"
           );
       }
     } else await validateInstalled(destination, journal.previous);
-    await writeDurable(join8(destination, INSTALL_JOURNAL), {
+    await writeDurable(join9(destination, INSTALL_JOURNAL), {
       ...journal,
       phase: "committed"
     });
@@ -35886,7 +36548,7 @@ async function restoreBackup(destination, parent, journal) {
 async function validatePrior(destination, journal) {
   if (journal.previous === null) {
     for (const name of [...SKILL_NAMES, INSTALL_MANIFEST]) {
-      if (await lstat3(join8(destination, name)).catch(() => void 0))
+      if (await lstat3(join9(destination, name)).catch(() => void 0))
         fail2("recovery-needed: prior empty installation could not be restored");
     }
   } else await validateInstalled(destination, journal.previous);
@@ -35910,7 +36572,7 @@ async function recover(destination, parent) {
   if (journal.operation === "install") {
     try {
       await validateInstalled(destination, journal.manifest);
-      await writeDurable(join8(destination, INSTALL_JOURNAL), {
+      await writeDurable(join9(destination, INSTALL_JOURNAL), {
         ...journal,
         phase: "committed"
       });
@@ -35937,8 +36599,8 @@ async function recover(destination, parent) {
   await cleanRollback(destination, parent, journal);
 }
 async function acquireLock(destination) {
-  const path2 = join8(destination, INSTALL_LOCK);
-  const reaper = join8(destination, INSTALL_LOCK_REAPER);
+  const path2 = join9(destination, INSTALL_LOCK);
+  const reaper = join9(destination, INSTALL_LOCK_REAPER);
   let handle;
   try {
     handle = await open3(path2, "wx", 384);
@@ -36001,8 +36663,8 @@ async function withLock(destination, operation) {
   }
 }
 async function installSkills(options) {
-  const source = resolve7(options.source);
-  const destination = resolve7(options.destination);
+  const source = resolve8(options.source);
+  const destination = resolve8(options.destination);
   const manifest = await createSkillInstallManifest(source);
   if (options.dryRun) {
     const entry = await lstat3(destination).catch(() => void 0);
@@ -36013,7 +36675,7 @@ async function installSkills(options) {
     return { manifest, status: "dry-run" };
   }
   await assertDirectory(destination, true);
-  if (options.stagingDirectory !== void 0 && resolve7(options.stagingDirectory) !== destination)
+  if (options.stagingDirectory !== void 0 && resolve8(options.stagingDirectory) !== destination)
     fail2("staging must be destination-local for deterministic recovery");
   const parent = destination;
   return await withLock(destination, async () => {
@@ -36027,11 +36689,11 @@ async function installSkills(options) {
     const backupPath = localTransactionPath(parent, backup);
     await mkdir2(stagePath, { mode: 448 });
     for (const name of SKILL_NAMES)
-      await cp(join8(source, name), join8(stagePath, name), {
+      await cp(join9(source, name), join9(stagePath, name), {
         recursive: true,
         verbatimSymlinks: true
       });
-    await writeDurable(join8(stagePath, INSTALL_MANIFEST), manifest);
+    await writeDurable(join9(stagePath, INSTALL_MANIFEST), manifest);
     await fsyncTree(stagePath);
     await mkdir2(backupPath, { mode: 448 });
     let journal = {
@@ -36044,30 +36706,30 @@ async function installSkills(options) {
       stage,
       version: 1
     };
-    await writeDurable(join8(destination, INSTALL_JOURNAL), journal);
+    await writeDurable(join9(destination, INSTALL_JOURNAL), journal);
     try {
       journal = { ...journal, phase: "backing-up" };
-      await writeDurable(join8(destination, INSTALL_JOURNAL), journal);
+      await writeDurable(join9(destination, INSTALL_JOURNAL), journal);
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
         await movePresent(
-          join8(destination, name),
-          join8(backupPath, name),
+          join9(destination, name),
+          join9(backupPath, name),
           "backup",
           options.fault
         );
       journal = { ...journal, phase: "swapping" };
-      await writeDurable(join8(destination, INSTALL_JOURNAL), journal);
+      await writeDurable(join9(destination, INSTALL_JOURNAL), journal);
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
         await move(
-          join8(stagePath, name),
-          join8(destination, name),
+          join9(stagePath, name),
+          join9(destination, name),
           "new",
           options.fault
         );
       await validateInstalled(destination, manifest);
       await options.fault?.("after-post-swap-validation");
       journal = { ...journal, phase: "committed" };
-      await writeDurable(join8(destination, INSTALL_JOURNAL), journal);
+      await writeDurable(join9(destination, INSTALL_JOURNAL), journal);
       await cleanCommitted(destination, parent, journal);
       return { manifest, status: "installed" };
     } catch (error) {
@@ -36087,7 +36749,7 @@ async function installSkills(options) {
   });
 }
 async function uninstallSkills(destinationInput, options = {}) {
-  const destination = resolve7(destinationInput);
+  const destination = resolve8(destinationInput);
   await assertDirectory(destination);
   await withLock(destination, async () => {
     await recover(destination, destination);
@@ -36108,12 +36770,12 @@ async function uninstallSkills(destinationInput, options = {}) {
       stage: `${transaction}.stage`,
       version: 1
     };
-    await writeDurable(join8(destination, INSTALL_JOURNAL), journal);
+    await writeDurable(join9(destination, INSTALL_JOURNAL), journal);
     try {
       for (const name of [...SKILL_NAMES, INSTALL_MANIFEST])
         await move(
-          join8(destination, name),
-          join8(backupPath, name),
+          join9(destination, name),
+          join9(backupPath, name),
           "backup",
           options.fault
         );
@@ -36122,7 +36784,7 @@ async function uninstallSkills(destinationInput, options = {}) {
         ...journal,
         phase: "committed"
       };
-      await writeDurable(join8(destination, INSTALL_JOURNAL), committed);
+      await writeDurable(join9(destination, INSTALL_JOURNAL), committed);
       await cleanCommitted(destination, destination, committed);
     } catch (error) {
       if (error instanceof SimulatedProcessLoss) throw error;
@@ -36134,6 +36796,670 @@ async function uninstallSkills(destinationInput, options = {}) {
       throw error;
     }
   });
+}
+
+// src/compose/index.ts
+import { randomUUID as randomUUID3 } from "node:crypto";
+import { access, constants as constants5, readFile as readFile4, stat as stat3, writeFile as writeFile5 } from "node:fs/promises";
+import { spawn as spawn8 } from "node:child_process";
+import { delimiter, isAbsolute as isAbsolute11, join as join10, resolve as resolve9 } from "node:path";
+var KNOWLEDGE_MANIFEST_FILE = "knowledge-manifest.json";
+var harnessFamilies = ["claude", "codex"];
+var ZERO_HASH = "0".repeat(64);
+var IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u;
+var HOLDER_PART = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
+var ENVIRONMENT_NAME2 = /^[A-Z_][A-Z0-9_]{0,159}$/u;
+var MAX_MANIFEST_BYTES = 256 * 1024;
+var defaultModelRoutes = {
+  claude: {
+    controller: "claude-fable-5-1",
+    frontier: "claude-fable-5-1",
+    workhorse: "claude-opus-5"
+  },
+  codex: {
+    controller: "gpt-5.6-sol",
+    frontier: "gpt-5.6-sol",
+    workhorse: "gpt-5.6-terra"
+  }
+};
+var familyOperations = {
+  claude: {
+    cancel: true,
+    collect: true,
+    controllerIdentity: false,
+    inspect: true,
+    launch: true,
+    lookupByClientKey: false,
+    poll: true,
+    returnedModelIdentity: true
+  },
+  codex: {
+    cancel: true,
+    collect: true,
+    controllerIdentity: true,
+    inspect: true,
+    launch: true,
+    lookupByClientKey: true,
+    poll: true,
+    returnedModelIdentity: true
+  }
+};
+var authorityShape = {
+  "local-change-only": {
+    completionBoundary: "local-integration",
+    integrationProfile: "local-ff",
+    needsRemote: false
+  },
+  "push-branch": {
+    completionBoundary: "branch-handoff",
+    integrationProfile: "none",
+    needsRemote: true
+  },
+  "open-pr": {
+    completionBoundary: "pr-handoff",
+    integrationProfile: "none",
+    needsRemote: true
+  },
+  integrate: {
+    completionBoundary: "remote-integration",
+    integrationProfile: "remote-ff",
+    needsRemote: true
+  }
+};
+function fail3(code, message) {
+  return { code, message, ok: false };
+}
+function record3(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : void 0;
+}
+function identifier6(value) {
+  return typeof value === "string" && IDENTIFIER.test(value) ? value : void 0;
+}
+function shortRandom() {
+  return randomUUID3().replaceAll("-", "").slice(0, 12);
+}
+function dateStamp() {
+  return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10).replaceAll("-", "");
+}
+function harnessSupportFor(family, models) {
+  return {
+    capabilities: {
+      adapterVersion: HARNESS_VERSION,
+      family,
+      harnessVersion: HARNESS_VERSION,
+      operations: familyOperations[family],
+      schema: "sce.harness-capabilities",
+      version: HARNESS_VERSION
+    },
+    controller: {
+      acceptedReturnedModels: [models.controller],
+      requestedModel: models.controller
+    },
+    frontier: {
+      acceptedReturnedModels: [models.frontier],
+      requestedModel: models.frontier
+    },
+    schema: "sce.harness-support",
+    version: HARNESS_VERSION,
+    workhorse: {
+      acceptedReturnedModels: [models.workhorse],
+      requestedModel: models.workhorse
+    }
+  };
+}
+function knowledgeContractFromManifest(manifest) {
+  const value = record3(manifest);
+  const provenance = record3(value?.provenance);
+  const verification = record3(value?.verification);
+  const artifactHomes = record3(value?.artifactHomes);
+  if (value === void 0 || value.schema !== "sce.knowledge-manifest" || value.version !== 1 || provenance === void 0 || verification === void 0 || artifactHomes === void 0 || typeof artifactHomes.generated !== "string" || !Array.isArray(value.driveAliases) || !Array.isArray(value.materialisationTargets))
+    return void 0;
+  const variables = [];
+  const aliases = [];
+  for (const candidate of value.driveAliases) {
+    const alias = record3(candidate);
+    if (alias === void 0 || typeof alias.mountPathVariable !== "string" || !ENVIRONMENT_NAME2.test(alias.mountPathVariable))
+      return void 0;
+    variables.push(alias.mountPathVariable);
+    aliases.push({
+      alias: alias.alias,
+      markerFile: alias.markerFile,
+      mountPathVariable: alias.mountPathVariable,
+      mountPolicy: alias.mountPolicy,
+      namespaceControl: alias.namespaceControl
+    });
+  }
+  if (typeof provenance.worktreeRootVariable !== "string" || !ENVIRONMENT_NAME2.test(provenance.worktreeRootVariable))
+    return void 0;
+  variables.push(provenance.worktreeRootVariable);
+  return {
+    contract: {
+      aliases,
+      audience: value.audience,
+      domainScope: value.accessDomainId,
+      gateTargets: value.materialisationTargets,
+      humanDriver: value.humanDriver,
+      projectId: value.projectId,
+      provenance: {
+        eventsDirectory: provenance.eventsDirectory,
+        generatedDirectory: artifactHomes.generated,
+        recordFormatVersion: provenance.recordFormatVersion,
+        reproducibilityCommand: provenance.reproducibilityCommand,
+        rollupGeneratorCommand: provenance.rollupGeneratorCommand,
+        worktreeRootVariable: provenance.worktreeRootVariable
+      },
+      verification: {
+        fast: verification.fast,
+        integration: verification.integration,
+        release: verification.release
+      }
+    },
+    variables
+  };
+}
+function pristineInitialRun(input) {
+  const shape = authorityShape[input.authorityProfile];
+  return {
+    revision: 0,
+    state: "initializing",
+    storeIdentity: input.storeIdentity,
+    repositoryIdentity: input.repositoryIdentity,
+    integrationBranch: input.integrationBranch,
+    authorityProfile: input.authorityProfile,
+    completionBoundary: shape.completionBoundary,
+    integrationProfile: shape.integrationProfile,
+    gitObjectFormat: input.gitObjectFormat,
+    controllerFencingToken: input.fencingToken,
+    controller: {
+      runId: input.runId,
+      incarnationId: input.incarnationId,
+      holder: `${input.runId}/${input.incarnationId}`,
+      requestedModel: input.requestedModel,
+      returnedModel: input.requestedModel,
+      promptHash: ZERO_HASH,
+      state: "unacquired"
+    },
+    harness: {
+      adapterVersion: HARNESS_VERSION,
+      family: input.harness.family,
+      harnessVersion: HARNESS_VERSION,
+      supportCommitment: input.harness.supportCommitment
+    },
+    units: {},
+    reservations: {},
+    activeModifyingUnitIds: [],
+    wave: { id: `${input.runId}-wave-0`, unitIds: [] },
+    qualificationQueue: [],
+    integrationQueue: [],
+    effectJournal: [],
+    processedEventIds: [],
+    processedIdempotencyKeys: [],
+    usedSessionCount: 0,
+    sessionLineage: "",
+    sessionLineageRoot: ZERO_HASH,
+    closedUnitEvidence: "",
+    closedUnitEvidenceCommitment: ZERO_HASH,
+    journalCheckpoint: {
+      revision: 0,
+      compactedEffects: 0,
+      compactedEvents: 0,
+      compactedIdempotencyKeys: 0,
+      commitment: ZERO_HASH
+    },
+    journalCommitment: ZERO_HASH
+  };
+}
+function composeControllerConfig(observation, options) {
+  const warnings = [];
+  const preflight = observation.preflight.payload;
+  if (preflight.status === "refused")
+    return fail3(
+      "SCE_COMPOSE_PREFLIGHT_REFUSED",
+      `Preflight refused the repository (${preflight.code}).`
+    );
+  if (preflight.status === "uninitialized")
+    return fail3(
+      "SCE_COMPOSE_PREFLIGHT_UNINITIALIZED",
+      "Beads is not initialized here; run bd init and bd merge-slot create first."
+    );
+  const beads = preflight.beads;
+  if (beads.mode !== "embedded")
+    return fail3(
+      "SCE_COMPOSE_TOPOLOGY_UNSUPPORTED",
+      `compose-config supports the embedded Beads topology only (observed ${beads.mode}); compose a shared-server configuration by hand.`
+    );
+  if (beads.projectId === void 0 || beads.storePath === void 0 || beads.database === void 0 || beads.prefix === void 0)
+    return fail3(
+      "SCE_COMPOSE_STORE_IDENTITY_MISSING",
+      "bd context did not report a project id, store path, database and prefix."
+    );
+  const rootBeadId = identifier6(options.rootBeadId);
+  if (rootBeadId === void 0 || !rootBeadId.startsWith(`${beads.prefix}-`))
+    return fail3(
+      "SCE_COMPOSE_OPTION_INVALID",
+      `--root-bead must be an issue id with the ${beads.prefix} prefix.`
+    );
+  const integrationBranch = options.integrationBranch ?? observation.currentBranch;
+  if (integrationBranch === void 0 || identifier6(integrationBranch) === void 0)
+    return fail3(
+      "SCE_COMPOSE_BRANCH_MISSING",
+      "The integration branch could not be observed; pass --branch."
+    );
+  const authorityProfile = options.authorityProfile ?? "local-change-only";
+  const syncConfigured = beads.syncRemote !== void 0;
+  const beadsMode = options.beadsMode ?? (syncConfigured ? "git-sync" : "local-only");
+  if (beadsMode === "git-sync" && !syncConfigured)
+    return fail3(
+      "SCE_COMPOSE_SYNC_MODE_MISMATCH",
+      "git-sync mode needs bd config sync.remote; none is configured, use --beads-mode local-only."
+    );
+  if (beadsMode === "local-only" && syncConfigured)
+    return fail3(
+      "SCE_COMPOSE_SYNC_MODE_MISMATCH",
+      "bd config sync.remote is set, so the embedded adapter requires git-sync mode; omit --beads-mode or pass git-sync."
+    );
+  const syncRemote = beads.syncRemote === void 0 ? void 0 : observation.remotes.find(
+    (remote2) => remote2.normalized === beads.syncRemote
+  );
+  if (beadsMode === "git-sync" && syncRemote === void 0)
+    return fail3(
+      "SCE_COMPOSE_REMOTE_MISSING",
+      "No Git remote matches bd's configured sync.remote."
+    );
+  const remoteName = syncRemote?.name ?? observation.remotes.find((remote2) => remote2.name === "origin")?.name ?? observation.remotes[0]?.name;
+  if (authorityShape[authorityProfile].needsRemote && remoteName === void 0)
+    return fail3(
+      "SCE_COMPOSE_REMOTE_MISSING",
+      `The ${authorityProfile} authority profile needs a Git remote; none is configured.`
+    );
+  const models = {
+    controller: options.models?.controller ?? defaultModelRoutes[options.harnessFamily].controller,
+    frontier: options.models?.frontier ?? defaultModelRoutes[options.harnessFamily].frontier,
+    workhorse: options.models?.workhorse ?? defaultModelRoutes[options.harnessFamily].workhorse
+  };
+  const harnessSupport = harnessSupportFor(options.harnessFamily, models);
+  const parsedHarness = parseHarnessSupport(harnessSupport);
+  const commitment = harnessSupportCommitment(harnessSupport);
+  if (!parsedHarness.ok || !commitment.ok)
+    return fail3(
+      "SCE_COMPOSE_HARNESS_INVALID",
+      parsedHarness.ok ? "harness support cannot be committed" : parsedHarness.reason
+    );
+  if (parsedHarness.classification.dispatchRecovery === "at-most-once-manual")
+    warnings.push(
+      "The harness family is classified at-most-once-manual: an ambiguous author launch blocks for a human observation."
+    );
+  if (parsedHarness.classification.tierEnforcement === "unavailable")
+    warnings.push(
+      "Tier enforcement is unavailable for this harness family: paths that need a proven controller tier fail explicitly."
+    );
+  let knowledgeContract;
+  const wantsKnowledge = options.knowledge ?? observation.manifest !== void 0;
+  if (wantsKnowledge) {
+    if (observation.manifest === void 0)
+      return fail3(
+        "SCE_COMPOSE_MANIFEST_MISSING",
+        `--knowledge was requested but ${KNOWLEDGE_MANIFEST_FILE} is absent.`
+      );
+    const projected = knowledgeContractFromManifest(observation.manifest);
+    if (projected === void 0)
+      return fail3(
+        "SCE_COMPOSE_MANIFEST_INVALID",
+        `${KNOWLEDGE_MANIFEST_FILE} is not a version 1 sce.knowledge-manifest the composer can project.`
+      );
+    const missing = projected.variables.filter((name) => {
+      const value = observation.environment(name);
+      return value === void 0 || !isAbsolute11(value) || resolve9(value) !== value || containsSecretShape(value);
+    });
+    if (missing.length > 0)
+      return fail3(
+        "SCE_COMPOSE_ENVIRONMENT_MISSING",
+        `Set these variables to canonical absolute paths before composing: ${missing.join(", ")}.`
+      );
+    knowledgeContract = projected.contract;
+  } else if (observation.manifest !== void 0)
+    warnings.push(
+      `${KNOWLEDGE_MANIFEST_FILE} is present but ignored (--no-knowledge); the run will be a software run.`
+    );
+  const runId2 = options.identities?.runId ?? `run-${dateStamp()}-${shortRandom()}`;
+  const incarnationId = options.identities?.incarnationId ?? `inc-${shortRandom()}`;
+  const fencingToken = options.identities?.fencingToken ?? `fence-${shortRandom()}`;
+  const nonce = options.identities?.nonce ?? `nonce-${shortRandom()}`;
+  for (const [name, value] of [
+    ["runId", runId2],
+    ["incarnationId", incarnationId]
+  ])
+    if (!HOLDER_PART.test(value))
+      return fail3(
+        "SCE_COMPOSE_OPTION_INVALID",
+        `${name} is not a valid holder part.`
+      );
+  if (identifier6(fencingToken) === void 0 || identifier6(nonce) === void 0)
+    return fail3(
+      "SCE_COMPOSE_OPTION_INVALID",
+      "identities must be identifiers."
+    );
+  const initialRun = pristineInitialRun({
+    authorityProfile,
+    fencingToken,
+    gitObjectFormat: preflight.git.objectFormat,
+    harness: {
+      family: options.harnessFamily,
+      supportCommitment: commitment.value
+    },
+    incarnationId,
+    integrationBranch,
+    repositoryIdentity: preflight.git.identity,
+    requestedModel: models.controller,
+    runId: runId2,
+    storeIdentity: beads.projectId
+  });
+  const runValidation = validate(
+    RepositoryRunSchema,
+    initialRun
+  );
+  const invariantErrors = runValidation.ok ? runInvariantErrors(initialRun) : ["schema"];
+  if (!runValidation.ok || invariantErrors.length > 0)
+    return fail3(
+      "SCE_COMPOSE_CONFIG_REJECTED",
+      `The pristine run failed its own invariants: ${invariantErrors.join("; ")}.`
+    );
+  const config = {
+    schema: "sce.controller-config",
+    version: 1,
+    nonce,
+    git: {
+      ...authorityShape[authorityProfile].needsRemote && remoteName !== void 0 ? { remote: remoteName } : {},
+      repository: {
+        commonDir: preflight.git.commonDir,
+        cwd: preflight.git.topLevel,
+        identity: preflight.git.identity,
+        objectFormat: preflight.git.objectFormat,
+        remoteUrls: observation.remotes.map((remote2) => remote2.url)
+      }
+    },
+    scope: {
+      beadsStoreIdentity: beads.projectId,
+      gitRepositoryIdentity: preflight.git.identity,
+      integrationBranch
+    },
+    harnessSupport,
+    initialRun,
+    ...knowledgeContract === void 0 ? {} : { knowledgeContract },
+    topology: {
+      kind: "embedded",
+      mode: beadsMode,
+      bdExecutable: observation.bdExecutable,
+      doltExecutable: observation.doltExecutable,
+      databaseDirectory: join10(beads.storePath, beads.database),
+      prefix: beads.prefix,
+      rootBeadId,
+      childBeadIds: {},
+      ...beadsMode === "git-sync" && syncRemote !== void 0 && beads.syncRemote !== void 0 ? {
+        remote: {
+          name: syncRemote.name,
+          ref: "refs/dolt/data",
+          url: beads.syncRemote
+        }
+      } : {},
+      preflight: observation.preflight
+    }
+  };
+  if (!validateControllerConfigDocument(
+    JSON.parse(canonicalJson(config)),
+    observation.environment
+  ))
+    return fail3(
+      "SCE_COMPOSE_CONFIG_REJECTED",
+      "The composed document was refused by the strict controller-config parser."
+    );
+  return {
+    config,
+    ok: true,
+    summary: {
+      authorityProfile,
+      beadsMode,
+      classification: parsedHarness.classification,
+      firstRequest: {
+        command: "acquire-controller",
+        request: {
+          event: {
+            eventId: `${runId2}-acquire-1`,
+            expectedRevision: 0,
+            idempotencyKey: deriveIdempotencyKey(
+              initialRun,
+              0,
+              null,
+              "controller_acquire"
+            ),
+            type: "controller_acquire_intent"
+          }
+        }
+      },
+      harnessFamily: options.harnessFamily,
+      integrationBranch,
+      knowledge: knowledgeContract !== void 0,
+      models,
+      repositoryIdentity: preflight.git.identity,
+      rootBeadId,
+      storeIdentity: beads.projectId,
+      warnings
+    }
+  };
+}
+function capture(cwd, executable2, argv) {
+  return new Promise((resolveCapture) => {
+    const child = spawn8(executable2, argv, {
+      cwd,
+      env: process.env,
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    const chunks = [];
+    child.stdout.on("data", (chunk) => chunks.push(chunk));
+    child.on("error", () => resolveCapture({ ok: false, stdout: "" }));
+    child.on(
+      "close",
+      (code) => resolveCapture({
+        ok: code === 0,
+        stdout: Buffer.concat(chunks).toString("utf8")
+      })
+    );
+  });
+}
+async function findExecutable(name, environmentPath = process.env.PATH) {
+  if (isAbsolute11(name)) return await executable(name) ? name : void 0;
+  for (const directory of (environmentPath ?? "").split(delimiter)) {
+    if (directory.length === 0 || !isAbsolute11(directory)) continue;
+    const candidate = join10(directory, name);
+    if (await executable(candidate)) return candidate;
+  }
+  return void 0;
+}
+async function executable(path2) {
+  try {
+    await access(path2, constants5.X_OK);
+    return (await stat3(path2)).isFile();
+  } catch {
+    return false;
+  }
+}
+function executableVersionProblem(bdVersionOutput, doltVersionOutput) {
+  const bdOk = new RegExp(
+    `^bd version ${PINNED_BD_VERSION.replaceAll(".", "\\.")}(?: \\(Homebrew\\))?\\n?$`,
+    "u"
+  ).test(bdVersionOutput);
+  const doltLine = doltVersionOutput.split("\n", 1)[0];
+  const doltOk = doltLine === `dolt version ${PINNED_DOLT_VERSION}`;
+  if (bdOk && doltOk) return void 0;
+  const problems = [
+    ...bdOk ? [] : [
+      `bd reports "${bdVersionOutput.trim().split("\n", 1)[0]}" but the engine pins ${PINNED_BD_VERSION}`
+    ],
+    ...doltOk ? [] : [
+      `dolt reports "${doltLine ?? ""}" but the engine pins ${PINNED_DOLT_VERSION} (install that release and pass --dolt-executable)`
+    ]
+  ];
+  return problems.join("; ");
+}
+async function observeRepository(cwd, options = {}) {
+  const bdExecutable = await findExecutable(options.bdExecutable ?? "bd");
+  const doltExecutable = await findExecutable(options.doltExecutable ?? "dolt");
+  if (bdExecutable === void 0 || doltExecutable === void 0)
+    return {
+      code: "SCE_COMPOSE_EXECUTABLE_MISSING",
+      message: `bd and dolt must be on PATH or passed explicitly (bd: ${bdExecutable ?? "missing"}, dolt: ${doltExecutable ?? "missing"}).`,
+      ok: false
+    };
+  const bdVersion = await capture(cwd, bdExecutable, ["--version"]);
+  const doltVersion = await capture(cwd, doltExecutable, ["version"]);
+  const versionProblem = executableVersionProblem(
+    bdVersion.ok ? bdVersion.stdout : "",
+    doltVersion.ok ? doltVersion.stdout : ""
+  );
+  if (versionProblem !== void 0)
+    return {
+      code: "SCE_COMPOSE_EXECUTABLE_VERSION",
+      message: `Pinned tool versions do not match: ${versionProblem}.`,
+      ok: false
+    };
+  const preflight = await inspectPreflight(cwd);
+  const remotes = [];
+  const remoteOutput = await capture(cwd, "git", [
+    "config",
+    "--null",
+    "--get-regexp",
+    "^remote\\..*\\.url$"
+  ]);
+  if (remoteOutput.ok) {
+    const urls = parseGitRemoteConfigOutput(remoteOutput.stdout) ?? [];
+    const names = remoteOutput.stdout.slice(0, -1).split("\0").map(
+      (entry) => entry.slice("remote.".length, entry.indexOf("\n")).replace(/\.url$/u, "")
+    );
+    urls.forEach((url, index) => {
+      const name = names[index];
+      if (name !== void 0 && name.length > 0)
+        remotes.push({
+          name,
+          normalized: normalizeGitRemote(url, canonicalLocalBareRepository),
+          url
+        });
+    });
+  }
+  const branchOutput = await capture(cwd, "git", ["branch", "--show-current"]);
+  const currentBranch = branchOutput.ok && branchOutput.stdout.trim().length > 0 ? branchOutput.stdout.trim() : void 0;
+  const topLevel = preflight.payload.status === "ready" ? preflight.payload.git.topLevel : cwd;
+  const manifestPath = join10(topLevel, KNOWLEDGE_MANIFEST_FILE);
+  let manifest;
+  let manifestPresent = false;
+  try {
+    const source = await readFile4(manifestPath, "utf8");
+    manifestPresent = true;
+    if (Buffer.byteLength(source, "utf8") > MAX_MANIFEST_BYTES)
+      throw new Error("too large");
+    manifest = JSON.parse(source);
+  } catch (error) {
+    if (manifestPresent)
+      return {
+        code: "SCE_COMPOSE_MANIFEST_INVALID",
+        message: `${KNOWLEDGE_MANIFEST_FILE} could not be read as JSON (${error instanceof Error ? error.message : "unknown"}).`,
+        ok: false
+      };
+  }
+  return {
+    observation: {
+      bdExecutable,
+      currentBranch,
+      doltExecutable,
+      environment: options.environment ?? ((name) => process.env[name]),
+      manifest,
+      manifestPath: manifestPresent ? manifestPath : void 0,
+      preflight,
+      remotes
+    },
+    ok: true
+  };
+}
+async function writeComposedConfig(path2, config, overwrite) {
+  try {
+    await writeFile5(path2, `${JSON.stringify(config, null, 2)}
+`, {
+      encoding: "utf8",
+      flag: overwrite ? "w" : "wx"
+    });
+    return { ok: true, path: path2 };
+  } catch (error) {
+    const code = error.code;
+    return code === "EEXIST" ? {
+      code: "SCE_COMPOSE_OUTPUT_EXISTS",
+      message: `${path2} exists; pass --overwrite to replace it.`,
+      ok: false
+    } : {
+      code: "SCE_COMPOSE_OUTPUT_FAILED",
+      message: `${path2} could not be written.`,
+      ok: false
+    };
+  }
+}
+function classifySlotDocument(source, prefix, scope) {
+  let parsed;
+  try {
+    parsed = JSON.parse(source);
+  } catch {
+    return "unreadable";
+  }
+  const issue = Array.isArray(parsed) && parsed.length === 1 ? record3(parsed[0]) : void 0;
+  if (issue === void 0 || issue.id !== `${prefix}-merge-slot` || issue.title !== MERGE_SLOT_TITLE || !Array.isArray(issue.labels) || issue.labels.length !== 1 || issue.labels[0] !== MERGE_SLOT_LABEL)
+    return "unreadable";
+  const empty = (value) => value === void 0 || value === null || value === "";
+  if (empty(issue.external_ref) && empty(issue.design)) return "unbound";
+  return issue.external_ref === `sce-scope:v1:${deriveScopeCommitment(scope)}` && issue.design === canonicalJson(scope) ? "bound" : "foreign";
+}
+async function inspectSlotScope(cwd, bdExecutable, prefix, scope) {
+  const shown = await capture(cwd, bdExecutable, [
+    "show",
+    `${prefix}-merge-slot`,
+    "--long",
+    "--json"
+  ]);
+  return shown.ok ? classifySlotDocument(shown.stdout, prefix, scope) : "unreadable";
+}
+async function bindSlotScope(cwd, topology, scope) {
+  const result2 = await pinnedProcess(cwd, topology, scope).initializeSlotScope(
+    SLOT_INITIALIZATION_AUTHORITY
+  );
+  return result2.code === "applied" || result2.code === "ambiguous" || result2.code === "quarantined" ? result2.code : "unavailable";
+}
+function pinnedProcess(cwd, topology, scope) {
+  const projections = new DoltProjectionPersistence({
+    childIssueId: () => void 0,
+    databaseDirectory: topology.databaseDirectory,
+    doltExecutable: topology.doltExecutable,
+    rootIssueId: topology.rootBeadId
+  });
+  return new PinnedBdEmbeddedProcess({
+    bdExecutable: topology.bdExecutable,
+    cwd,
+    databaseDirectory: topology.databaseDirectory,
+    doltExecutable: topology.doltExecutable,
+    prefix: topology.prefix,
+    projections,
+    scope,
+    ...topology.remote === void 0 ? {} : { remote: topology.remote }
+  });
+}
+async function inspectDoltSync(cwd, topology, scope) {
+  const state = await pinnedProcess(cwd, topology, scope).execute({
+    kind: "state"
+  });
+  if (state.kind !== "state" || !state.value.reachable) return "unreachable";
+  if (topology.remote === void 0) return "local-only";
+  if (state.value.remoteHead === void 0) return "remote-missing";
+  return state.value.remoteHead === state.value.head ? "in-sync" : "local-ahead";
+}
+async function pushDoltData(cwd, topology, scope) {
+  const pushed = await capture(cwd, topology.bdExecutable, ["dolt", "push"]);
+  if (!pushed.ok) return "local-ahead";
+  return inspectDoltSync(cwd, topology, scope);
 }
 
 // src/cli.ts
@@ -36159,7 +37485,40 @@ var installerOptions = /* @__PURE__ */ new Set([
   "--help"
 ]);
 var installerCommands = ["install-skill", "uninstall-skill"];
-var cliCommandNames = [...commandNames, ...installerCommands];
+var composeCommand = "compose-config";
+var composeValueOptions = /* @__PURE__ */ new Set([
+  "--authority",
+  "--bd-executable",
+  "--beads-mode",
+  "--branch",
+  "--controller-model",
+  "--cwd",
+  "--dolt-executable",
+  "--frontier-model",
+  "--harness",
+  "--output",
+  "--root-bead",
+  "--workhorse-model"
+]);
+var composeFlagOptions = /* @__PURE__ */ new Set([
+  "--bind-slot",
+  "--help",
+  "--json",
+  "--knowledge",
+  "--no-knowledge",
+  "--overwrite"
+]);
+var authorityProfiles = [
+  "local-change-only",
+  "push-branch",
+  "open-pr",
+  "integrate"
+];
+var cliCommandNames = [
+  ...commandNames,
+  ...installerCommands,
+  composeCommand
+];
 var CliError = class extends Error {
   code;
   exitCode;
@@ -36201,6 +37560,7 @@ function parseCliArguments(argv) {
   }
   if (isInstallerCommand(first))
     return parseInstallerCommand(first, argv.slice(1));
+  if (first === composeCommand) return parseComposeCommand(argv.slice(1));
   if (!isCommandName(first)) {
     throw new CliError("SCE_UNKNOWN_COMMAND", "Unknown command.");
   }
@@ -36271,6 +37631,138 @@ function parseInstallerCommand(command, argv) {
     kind: "installer"
   };
 }
+function parseComposeCommand(argv) {
+  const values = /* @__PURE__ */ new Map();
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token === void 0) continue;
+    if (!token.startsWith("-"))
+      throw new CliError("SCE_UNEXPECTED_ARGUMENT", "Unexpected argument.");
+    const [option, inlineValue] = splitOption(
+      token === "-h" ? "--help" : token
+    );
+    if (composeFlagOptions.has(option)) {
+      if (inlineValue !== void 0)
+        throw new CliError(
+          "SCE_INVALID_OPTION_VALUE",
+          `${option} does not accept a value.`
+        );
+      setOption(values, option, true);
+      continue;
+    }
+    if (!composeValueOptions.has(option))
+      throw new CliError("SCE_UNKNOWN_OPTION", "Unknown option.");
+    const value = inlineValue ?? argv[++index];
+    if (value === void 0 || value === "--" || value.startsWith("--"))
+      throw new CliError(
+        "SCE_MISSING_OPTION_VALUE",
+        `${option} requires a value.`
+      );
+    setOption(values, option, value);
+  }
+  if (values.has("--help")) {
+    if (values.size !== 1)
+      throw new CliError(
+        "SCE_UNEXPECTED_ARGUMENT",
+        "--help does not accept arguments."
+      );
+    return { command: composeCommand, kind: "help" };
+  }
+  const harness = optionValue(values, "--harness");
+  const rootBeadId = optionValue(values, "--root-bead");
+  const output = optionValue(values, "--output");
+  if (harness === void 0 || !isHarnessFamily(harness))
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      `--harness must be one of: ${harnessFamilies.join(", ")}.`
+    );
+  if (rootBeadId === void 0)
+    throw new CliError(
+      "SCE_MISSING_OPTION_VALUE",
+      "--root-bead requires the epic issue id the run is created beneath."
+    );
+  if (output === void 0)
+    throw new CliError(
+      "SCE_MISSING_OPTION_VALUE",
+      "--output requires an absolute file path for the composed configuration."
+    );
+  if (values.has("--knowledge") && values.has("--no-knowledge"))
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      "--knowledge and --no-knowledge are mutually exclusive."
+    );
+  const authority = optionValue(values, "--authority");
+  if (authority !== void 0 && !authorityProfiles.includes(authority))
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      `--authority must be one of: ${authorityProfiles.join(", ")}.`
+    );
+  const beadsMode = optionValue(values, "--beads-mode");
+  if (beadsMode !== void 0 && beadsMode !== "local-only" && beadsMode !== "git-sync")
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      "--beads-mode must be local-only or git-sync."
+    );
+  const cwd = optionValue(values, "--cwd");
+  const branch = optionValue(values, "--branch");
+  const controller = optionValue(values, "--controller-model");
+  const frontier = optionValue(values, "--frontier-model");
+  const workhorse = optionValue(values, "--workhorse-model");
+  const bdExecutable = optionValue(values, "--bd-executable");
+  const doltExecutable = optionValue(values, "--dolt-executable");
+  for (const [option, value] of [
+    ["--bd-executable", bdExecutable],
+    ["--dolt-executable", doltExecutable]
+  ])
+    if (value !== void 0 && !isAbsolute12(value))
+      throw new CliError(
+        "SCE_INVALID_OPTION_VALUE",
+        `${option} must be an absolute path.`
+      );
+  return {
+    ...bdExecutable === void 0 ? {} : { bdExecutable },
+    bindSlot: values.has("--bind-slot"),
+    compose: {
+      ...authority === void 0 ? {} : {
+        authorityProfile: authority
+      },
+      ...beadsMode === void 0 ? {} : { beadsMode },
+      harnessFamily: harness,
+      ...branch === void 0 ? {} : { integrationBranch: branch },
+      ...values.has("--knowledge") ? { knowledge: true } : values.has("--no-knowledge") ? { knowledge: false } : {},
+      ...controller === void 0 && frontier === void 0 && workhorse === void 0 ? {} : {
+        models: {
+          ...controller === void 0 ? {} : { controller },
+          ...frontier === void 0 ? {} : { frontier },
+          ...workhorse === void 0 ? {} : { workhorse }
+        }
+      },
+      rootBeadId
+    },
+    cwd: cwd === void 0 ? process.cwd() : parseAbsolutePath(cwd, "--cwd"),
+    ...doltExecutable === void 0 ? {} : { doltExecutable },
+    kind: "compose",
+    output: parseAbsolutePath(output, "--output"),
+    overwrite: values.has("--overwrite")
+  };
+}
+function isHarnessFamily(value) {
+  return harnessFamilies.includes(value);
+}
+function parseAbsolutePath(value, option) {
+  if (!isAbsolute12(value) || value.length > 4096 || value.includes("\0"))
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      `${option} must be an absolute non-root path.`
+    );
+  const path2 = normalize6(resolve10(value));
+  if (path2 === "/")
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      `${option} must be an absolute non-root path.`
+    );
+  return path2;
+}
 function parseCommand(command, argv) {
   const positionals = [];
   const values = /* @__PURE__ */ new Map();
@@ -36330,14 +37822,14 @@ function parseCommand(command, argv) {
       "This feedback action accepts only --request."
     );
   const feedbackAction = parsePositionals(command, positionals);
-  const request = {
+  const request2 = {
     command,
     ...feedbackAction === void 0 ? {} : { feedbackAction },
     options: parseOptions(values),
     schema: REQUEST_SCHEMA,
     version: SCHEMA_VERSION2
   };
-  if (!validateCommandRequest(request))
+  if (!validateCommandRequest(request2))
     throw new CliError(
       "SCE_INVALID_REQUEST",
       "The command request is invalid."
@@ -36346,7 +37838,7 @@ function parseCommand(command, argv) {
   return {
     ...controllerConfig === void 0 ? {} : { controllerConfig: parseControllerConfigPath(controllerConfig) },
     kind: "command",
-    request
+    request: request2
   };
 }
 function splitOption(token) {
@@ -36387,21 +37879,21 @@ function parsePositionals(command, positionals) {
 function parseOptions(values) {
   const expectedRevision = optionValue(values, "--expected-revision");
   const idempotencyKey2 = optionValue(values, "--idempotency-key");
-  const request = optionValue(values, "--request");
+  const request2 = optionValue(values, "--request");
   return {
     ...expectedRevision === void 0 ? {} : { expectedRevision: parseExpectedRevision(expectedRevision) },
     ...idempotencyKey2 === void 0 ? {} : { idempotencyKey: parseNonEmpty(idempotencyKey2, "--idempotency-key") },
     json: values.has("--json"),
-    ...request === void 0 ? {} : { request: parseRequest(request) }
+    ...request2 === void 0 ? {} : { request: parseRequest(request2) }
   };
 }
 function parseControllerConfigPath(value) {
-  if (!isAbsolute10(value) || value.length > 4096 || value.includes("\0"))
+  if (!isAbsolute12(value) || value.length > 4096 || value.includes("\0"))
     throw new CliError(
       "SCE_INVALID_OPTION_VALUE",
       "--controller-config must be an absolute path."
     );
-  const path2 = normalize6(resolve8(value));
+  const path2 = normalize6(resolve10(value));
   if (path2 === "/")
     throw new CliError(
       "SCE_INVALID_OPTION_VALUE",
@@ -36410,12 +37902,12 @@ function parseControllerConfigPath(value) {
   return path2;
 }
 function parseDestination(value) {
-  if (!isAbsolute10(value) || value.length > 4096 || value.includes("\0"))
+  if (!isAbsolute12(value) || value.length > 4096 || value.includes("\0"))
     throw new CliError(
       "SCE_INVALID_OPTION_VALUE",
       "--destination must be an absolute non-root path."
     );
-  const destination = normalize6(resolve8(value));
+  const destination = normalize6(resolve10(value));
   if (destination === "/")
     throw new CliError(
       "SCE_INVALID_OPTION_VALUE",
@@ -36485,6 +37977,7 @@ async function runCli(argv, dependencies = {}) {
     if (invocation.kind === "installer") {
       return await runInstaller(invocation, dependencies);
     }
+    if (invocation.kind === "compose") return await runCompose(invocation);
     if (invocation.request.command === "feedback") {
       const feedback = await runFeedbackCliAction(
         invocation.request.feedbackAction,
@@ -36561,6 +38054,99 @@ async function runCli(argv, dependencies = {}) {
     );
   }
 }
+async function runCompose(invocation) {
+  const observed2 = await observeRepository(invocation.cwd, {
+    ...invocation.bdExecutable === void 0 ? {} : { bdExecutable: invocation.bdExecutable },
+    ...invocation.doltExecutable === void 0 ? {} : { doltExecutable: invocation.doltExecutable }
+  });
+  if (!observed2.ok)
+    return failure(
+      observed2.code,
+      observed2.message,
+      EXIT_UNAVAILABLE,
+      composeCommand
+    );
+  const composed = composeControllerConfig(
+    observed2.observation,
+    invocation.compose
+  );
+  if (!composed.ok)
+    return failure(
+      composed.code,
+      composed.message,
+      EXIT_UNAVAILABLE,
+      composeCommand
+    );
+  const document = composed.config;
+  const cwd = observed2.observation.preflight.payload.status === "ready" ? observed2.observation.preflight.payload.git.topLevel : invocation.cwd;
+  let slotScope = await inspectSlotScope(
+    cwd,
+    observed2.observation.bdExecutable,
+    document.topology.prefix,
+    document.scope
+  );
+  if (slotScope === "foreign")
+    return failure(
+      "SCE_COMPOSE_SLOT_FOREIGN",
+      `${document.topology.prefix}-merge-slot is bound to a different scope; it is never rebound automatically.`,
+      EXIT_UNAVAILABLE,
+      composeCommand
+    );
+  const warnings = [...composed.summary.warnings];
+  let doltSync = await inspectDoltSync(cwd, document.topology, document.scope);
+  if (invocation.bindSlot && slotScope === "unbound") {
+    const bound = await bindSlotScope(cwd, document.topology, document.scope);
+    if (bound !== "applied")
+      return failure(
+        "SCE_COMPOSE_SLOT_BIND_FAILED",
+        `Binding ${document.topology.prefix}-merge-slot to the run scope returned ${bound}.`,
+        EXIT_UNAVAILABLE,
+        composeCommand
+      );
+    slotScope = "bound";
+    if (document.topology.remote !== void 0)
+      doltSync = await pushDoltData(cwd, document.topology, document.scope);
+  } else if (slotScope === "unbound")
+    warnings.push(
+      `${document.topology.prefix}-merge-slot is not bound to a scope yet; rerun with --bind-slot (or the first acquire-controller is quarantined).`
+    );
+  else if (slotScope === "unreadable")
+    warnings.push(
+      `${document.topology.prefix}-merge-slot could not be read; create it with bd merge-slot create before the first run.`
+    );
+  if (doltSync === "remote-missing" || doltSync === "local-ahead")
+    warnings.push(
+      `Dolt data is ${doltSync === "remote-missing" ? "not on the remote yet" : "ahead of the remote"}; run bd dolt push before the first acquire-controller, which refuses an unsynced git-sync store as ambiguous.`
+    );
+  else if (doltSync === "unreachable")
+    warnings.push(
+      "The pinned bd/dolt process could not read the embedded store; the first command will report it unavailable."
+    );
+  const written = await writeComposedConfig(
+    invocation.output,
+    composed.config,
+    invocation.overwrite
+  );
+  if (!written.ok)
+    return failure(
+      written.code,
+      written.message,
+      EXIT_UNAVAILABLE,
+      composeCommand
+    );
+  return success(
+    {
+      ...composed.summary,
+      doltSync,
+      output: written.path,
+      preflight: observed2.observation.preflight,
+      slotScope,
+      status: "composed",
+      warnings
+    },
+    composeCommand
+  );
+}
 async function runInstaller(invocation, dependencies) {
   try {
     const source = dependencies.skillSource ?? resolvePackagedSkillSource();
@@ -36596,9 +38182,9 @@ async function runInstaller(invocation, dependencies) {
 }
 function resolvePackagedSkillSource(moduleUrl = import.meta.url) {
   const modulePath = fileURLToPath(moduleUrl);
-  const moduleDirectory = dirname7(modulePath);
-  const packageRoot = basename4(moduleDirectory) === "src" ? resolve8(moduleDirectory, "..") : resolve8(moduleDirectory, "../../..");
-  return join9(packageRoot, "skills");
+  const moduleDirectory = dirname8(modulePath);
+  const packageRoot = basename5(moduleDirectory) === "src" ? resolve10(moduleDirectory, "..") : resolve10(moduleDirectory, "../../..");
+  return join11(packageRoot, "skills");
 }
 async function main(argv, dependencies = {}, write = (value) => process.stdout.write(value)) {
   const execution2 = await runCli(argv, dependencies);
@@ -36662,7 +38248,7 @@ function helpResult(command, version) {
   return {
     ...command === "feedback" ? { actions: [...feedbackActions] } : {},
     command,
-    usage: command === "feedback" ? "sce feedback <prepare|preview|submit|flush> --request <json>" : command === "install-skill" ? "sce install-skill [--host <codex|claude>] --destination <absolute path> [--dry-run]" : command === "uninstall-skill" ? "sce uninstall-skill [--host <codex|claude>] --destination <absolute path>" : `sce ${command} [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]`
+    usage: command === "feedback" ? "sce feedback <prepare|preview|submit|flush> --request <json>" : command === "install-skill" ? "sce install-skill [--host <codex|claude>] --destination <absolute path> [--dry-run]" : command === "uninstall-skill" ? "sce uninstall-skill [--host <codex|claude>] --destination <absolute path>" : command === composeCommand ? "sce compose-config --harness <claude|codex> --root-bead <id> --output <absolute path> [--cwd <absolute path>] [--branch <name>] [--authority <local-change-only|push-branch|open-pr|integrate>] [--beads-mode <local-only|git-sync>] [--controller-model <id>] [--frontier-model <id>] [--workhorse-model <id>] [--knowledge|--no-knowledge] [--bd-executable <absolute path>] [--dolt-executable <absolute path>] [--bind-slot] [--overwrite] [--json]" : `sce ${command} [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]`
   };
 }
 function canonicalJson2(value) {
@@ -36690,7 +38276,7 @@ function isEntrypoint() {
     return false;
   }
   try {
-    return import.meta.url === pathToFileURL(realpathSync7(entrypoint)).href;
+    return import.meta.url === pathToFileURL(realpathSync8(entrypoint)).href;
   } catch {
     return false;
   }

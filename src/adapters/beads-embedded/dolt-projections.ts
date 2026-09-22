@@ -307,8 +307,11 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
     if (records === undefined) return { status: "unavailable" };
     if (records.length !== 1 || records[0]?.id !== this.rootIssueId)
       return { status: "ambiguous" };
+    // Dolt 2.2.1 `-r json` omits a NULL column rather than emitting null, so
+    // an absent envelope key on the exact root row is positive absence.
     const rootValue = records[0]?.sce;
-    if (rootValue === null) return { status: "absent" };
+    if (rootValue === null || rootValue === undefined)
+      return { status: "absent" };
     const rootEnvelope = object(rootValue);
     if (
       rootEnvelope === undefined ||

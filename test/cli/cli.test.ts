@@ -73,7 +73,12 @@ test("global help and version are JSON envelopes", async () => {
   assert.deepEqual(JSON.parse(help.stdout), {
     ok: true,
     result: {
-      commands: [...commandNames, "install-skill", "uninstall-skill"],
+      commands: [
+        ...commandNames,
+        "install-skill",
+        "uninstall-skill",
+        "compose-config",
+      ],
       name: "sce",
       usage:
         "sce <command> [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]",

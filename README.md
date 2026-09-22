@@ -68,8 +68,10 @@ promised core paths; bounded `P2`/`P3` work is recorded as follow-up.
 The TypeScript build produces one self-contained executable,
 `skills/single-controller-engineer/scripts/sce.mjs`, vendored inside the
 primary skill and exposed as the `sce` bin. The CLI is a stepwise, idempotent
-protocol engine, not a daemon: `sce next --json` computes the legal actions
-from authoritative Git and Beads facts, and commands such as `preflight`,
+protocol engine, not a daemon: `sce compose-config` observes a repository and
+writes its self-validated controller configuration (software or knowledge,
+including the one authorized merge-slot bootstrap), `sce next --json` computes
+the legal actions from authoritative Git and Beads facts, and commands such as
 `plan-wave`, `qualify`, `review-prepare`, `integrate`, and `resume` persist
 intent before effects and reject stale or illegal transitions.
 

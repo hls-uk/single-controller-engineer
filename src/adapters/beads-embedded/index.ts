@@ -70,6 +70,8 @@ export {
   validateSlotTransitionIntent,
 } from "./slot-transition.js";
 export {
+  PINNED_BD_VERSION,
+  PINNED_DOLT_VERSION,
   PinnedBdEmbeddedProcess,
   isPinnedCloneMergeDelta,
   isPinnedSlotTransitionDelta,

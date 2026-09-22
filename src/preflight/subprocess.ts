@@ -162,7 +162,7 @@ export function canonicalizeContextDirectories(
 }
 
 /** Filesystem proof for local aliases: realpath plus the minimum bare layout. */
-function canonicalLocalBareRepository(path: string): string | undefined {
+export function canonicalLocalBareRepository(path: string): string | undefined {
   const lexical = canonicalAbsolutePath(path);
   if (lexical === undefined) return undefined;
   try {

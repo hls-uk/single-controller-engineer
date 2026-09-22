@@ -29,6 +29,7 @@ export {
   parseGitInspection,
 } from "./schemas.js";
 export {
+  canonicalLocalBareRepository,
   classifySubprocess,
   executeSanitizedInspection,
   inspectPreflight,

@@ -34,8 +34,9 @@ first; everything there applies unchanged.
 
 The engine learns about a knowledge repository through one validated input:
 an optional **knowledge contract** in the controller configuration, composed
-from the manifest and parsed by the same strict parser as the rest of the
-configuration. It records:
+from the manifest (by `sce compose-config`, which projects the manifest field
+by field and refuses when a named environment variable is unset) and parsed
+by the same strict parser as the rest of the configuration. It records:
 
 - `projectId`, `domainScope` (the access-domain identifier), and `audience`,
   copied into every provenance record;

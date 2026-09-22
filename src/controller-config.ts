@@ -59,6 +59,7 @@ import {
 import { canonicalJson, type JsonValue } from "./protocol/canonical.js";
 import {
   canFreezeKnowledgeContractAtFirstWave,
+  isPristineUnacquiredRun,
   knowledgeContractRuntimeValid,
   maximumMaterialisationSidecarBytes,
 } from "./protocol/reducer.js";
@@ -703,7 +704,8 @@ function parseControllerConfig(
       (run.knowledgeContract === undefined) &&
       !(
         knowledgeContract !== undefined &&
-        canFreezeKnowledgeContractAtFirstWave(run)
+        (canFreezeKnowledgeContractAtFirstWave(run) ||
+          isPristineUnacquiredRun(run))
       )) ||
     (knowledgeContract !== undefined &&
       run.knowledgeContract !== undefined &&
@@ -940,6 +942,18 @@ async function sharedServerRunner(
 }
 
 /** Reads and composes an explicit local controller config without exposing it. */
+/**
+ * Strict acceptance check for a composed document: exactly the parse the
+ * runner performs, with no topology proof and no side effect.
+ */
+export function validateControllerConfigDocument(
+  input: unknown,
+  environment: (name: string) => string | undefined = (name) =>
+    process.env[name],
+): boolean {
+  return parseControllerConfig(input, environment) !== undefined;
+}
+
 export async function createControllerConfigRunner(
   path: string,
   dependencies: ControllerConfigDependencies = {},

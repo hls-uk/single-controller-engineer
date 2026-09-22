@@ -23,6 +23,12 @@ send feedback.
    lock, never user work.
 3. Run pure preflight and select exactly one topology reference below. Do not
    infer topology, repository identity, a controller holder, or remote state.
+   For a repository's first run, compose the controller configuration with
+   `sce compose-config --harness <family> --root-bead <epic> --output <abs>
+--bind-slot --json` (it observes Git, Beads and the pinned executables,
+   self-validates, binds the fresh merge slot, and prints the exact first
+   `acquire-controller` request); reuse that document for the rest of the
+   run rather than recomposing, which would change the holder.
 4. State the promised core use cases and explicit non-goals. Classify known
    findings P0–P3 using the accelerated-beta reference.
 5. Establish one controller. Only it writes Beads, holds the controller slot,

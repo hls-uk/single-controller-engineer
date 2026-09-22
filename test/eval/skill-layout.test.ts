@@ -10,6 +10,23 @@ const skills = [
 ] as const;
 const hostAgents = ["claude.yaml", "openai.yaml"] as const;
 
+/** GitHub-style heading slugs, enough for the anchors these skills use. */
+function headingSlugs(markdown: string): Set<string> {
+  const slugs = new Set<string>();
+  for (const line of markdown.split("\n")) {
+    const heading = /^#{1,6}\s+(.+?)\s*$/u.exec(line);
+    if (heading === null) continue;
+    slugs.add(
+      heading[1]!
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s-]/gu, "")
+        .trim()
+        .replace(/\s+/gu, "-"),
+    );
+  }
+  return slugs;
+}
+
 test("packaged skills have strict identity, valid local links, and no unfinished placeholders", async () => {
   for (const path of skills) {
     const source = await readFile(path, "utf8");
@@ -26,7 +43,13 @@ test("packaged skills have strict identity, valid local links, and no unfinished
     for (const match of source.matchAll(/\[[^\]]+\]\(([^)]+)\)/gu)) {
       const target = match[1]!;
       assert.doesNotMatch(target, /^(?:https?:|\/)/u);
-      await readFile(resolve(dirname(path), target), "utf8");
+      const [file, fragment] = target.split("#", 2);
+      const linked = await readFile(resolve(dirname(path), file!), "utf8");
+      if (fragment !== undefined)
+        assert.ok(
+          headingSlugs(linked).has(fragment),
+          `${path} links to a missing heading ${target}`,
+        );
     }
   }
 });

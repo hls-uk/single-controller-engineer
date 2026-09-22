@@ -29,6 +29,19 @@ import {
   type FeedbackCliDependencies,
 } from "./feedback/cli.js";
 import { installSkills, uninstallSkills } from "./install/index.js";
+import {
+  bindSlotScope,
+  composeControllerConfig,
+  harnessFamilies,
+  inspectDoltSync,
+  inspectSlotScope,
+  observeRepository,
+  pushDoltData,
+  writeComposedConfig,
+  type ComposeOptions,
+  type ComposedTopology,
+  type HarnessFamily,
+} from "./compose/index.js";
 import type {
   CommandName,
   CommandOptions,
@@ -62,8 +75,42 @@ const installerOptions = new Set([
 ]);
 const installerCommands = ["install-skill", "uninstall-skill"] as const;
 type InstallerCommand = (typeof installerCommands)[number];
-type CliCommandName = CommandName | InstallerCommand;
-const cliCommandNames = [...commandNames, ...installerCommands] as const;
+const composeCommand = "compose-config" as const;
+type ComposeCommand = typeof composeCommand;
+const composeValueOptions = new Set([
+  "--authority",
+  "--bd-executable",
+  "--beads-mode",
+  "--branch",
+  "--controller-model",
+  "--cwd",
+  "--dolt-executable",
+  "--frontier-model",
+  "--harness",
+  "--output",
+  "--root-bead",
+  "--workhorse-model",
+]);
+const composeFlagOptions = new Set([
+  "--bind-slot",
+  "--help",
+  "--json",
+  "--knowledge",
+  "--no-knowledge",
+  "--overwrite",
+]);
+const authorityProfiles = [
+  "local-change-only",
+  "push-branch",
+  "open-pr",
+  "integrate",
+] as const;
+type CliCommandName = CommandName | InstallerCommand | ComposeCommand;
+const cliCommandNames = [
+  ...commandNames,
+  ...installerCommands,
+  composeCommand,
+] as const;
 
 export class CliError extends Error {
   public readonly code: string;
@@ -132,6 +179,16 @@ type ParsedInvocation =
       readonly host?: "claude" | "codex";
       readonly kind: "installer";
       readonly command: InstallerCommand;
+    }
+  | {
+      readonly bdExecutable?: string;
+      readonly bindSlot: boolean;
+      readonly compose: ComposeOptions;
+      readonly cwd: string;
+      readonly doltExecutable?: string;
+      readonly kind: "compose";
+      readonly output: string;
+      readonly overwrite: boolean;
     };
 
 export function parseCliArguments(argv: readonly string[]): ParsedInvocation {
@@ -166,6 +223,7 @@ export function parseCliArguments(argv: readonly string[]): ParsedInvocation {
   }
   if (isInstallerCommand(first))
     return parseInstallerCommand(first, argv.slice(1));
+  if (first === composeCommand) return parseComposeCommand(argv.slice(1));
   if (!isCommandName(first)) {
     throw new CliError("SCE_UNKNOWN_COMMAND", "Unknown command.");
   }
@@ -241,6 +299,160 @@ function parseInstallerCommand(
     ...(host === undefined ? {} : { host }),
     kind: "installer",
   };
+}
+
+function parseComposeCommand(argv: readonly string[]): ParsedInvocation {
+  const values = new Map<string, string | true>();
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token === undefined) continue;
+    if (!token.startsWith("-"))
+      throw new CliError("SCE_UNEXPECTED_ARGUMENT", "Unexpected argument.");
+    const [option, inlineValue] = splitOption(
+      token === "-h" ? "--help" : token,
+    );
+    if (composeFlagOptions.has(option)) {
+      if (inlineValue !== undefined)
+        throw new CliError(
+          "SCE_INVALID_OPTION_VALUE",
+          `${option} does not accept a value.`,
+        );
+      setOption(values, option, true);
+      continue;
+    }
+    if (!composeValueOptions.has(option))
+      throw new CliError("SCE_UNKNOWN_OPTION", "Unknown option.");
+    const value = inlineValue ?? argv[++index];
+    if (value === undefined || value === "--" || value.startsWith("--"))
+      throw new CliError(
+        "SCE_MISSING_OPTION_VALUE",
+        `${option} requires a value.`,
+      );
+    setOption(values, option, value);
+  }
+  if (values.has("--help")) {
+    if (values.size !== 1)
+      throw new CliError(
+        "SCE_UNEXPECTED_ARGUMENT",
+        "--help does not accept arguments.",
+      );
+    return { command: composeCommand, kind: "help" };
+  }
+  const harness = optionValue(values, "--harness");
+  const rootBeadId = optionValue(values, "--root-bead");
+  const output = optionValue(values, "--output");
+  if (harness === undefined || !isHarnessFamily(harness))
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      `--harness must be one of: ${harnessFamilies.join(", ")}.`,
+    );
+  if (rootBeadId === undefined)
+    throw new CliError(
+      "SCE_MISSING_OPTION_VALUE",
+      "--root-bead requires the epic issue id the run is created beneath.",
+    );
+  if (output === undefined)
+    throw new CliError(
+      "SCE_MISSING_OPTION_VALUE",
+      "--output requires an absolute file path for the composed configuration.",
+    );
+  if (values.has("--knowledge") && values.has("--no-knowledge"))
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      "--knowledge and --no-knowledge are mutually exclusive.",
+    );
+  const authority = optionValue(values, "--authority");
+  if (
+    authority !== undefined &&
+    !(authorityProfiles as readonly string[]).includes(authority)
+  )
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      `--authority must be one of: ${authorityProfiles.join(", ")}.`,
+    );
+  const beadsMode = optionValue(values, "--beads-mode");
+  if (
+    beadsMode !== undefined &&
+    beadsMode !== "local-only" &&
+    beadsMode !== "git-sync"
+  )
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      "--beads-mode must be local-only or git-sync.",
+    );
+  const cwd = optionValue(values, "--cwd");
+  const branch = optionValue(values, "--branch");
+  const controller = optionValue(values, "--controller-model");
+  const frontier = optionValue(values, "--frontier-model");
+  const workhorse = optionValue(values, "--workhorse-model");
+  const bdExecutable = optionValue(values, "--bd-executable");
+  const doltExecutable = optionValue(values, "--dolt-executable");
+  for (const [option, value] of [
+    ["--bd-executable", bdExecutable],
+    ["--dolt-executable", doltExecutable],
+  ] as const)
+    if (value !== undefined && !isAbsolute(value))
+      throw new CliError(
+        "SCE_INVALID_OPTION_VALUE",
+        `${option} must be an absolute path.`,
+      );
+  return {
+    ...(bdExecutable === undefined ? {} : { bdExecutable }),
+    bindSlot: values.has("--bind-slot"),
+    compose: {
+      ...(authority === undefined
+        ? {}
+        : {
+            authorityProfile: authority as NonNullable<
+              ComposeOptions["authorityProfile"]
+            >,
+          }),
+      ...(beadsMode === undefined ? {} : { beadsMode }),
+      harnessFamily: harness,
+      ...(branch === undefined ? {} : { integrationBranch: branch }),
+      ...(values.has("--knowledge")
+        ? { knowledge: true }
+        : values.has("--no-knowledge")
+          ? { knowledge: false }
+          : {}),
+      ...(controller === undefined &&
+      frontier === undefined &&
+      workhorse === undefined
+        ? {}
+        : {
+            models: {
+              ...(controller === undefined ? {} : { controller }),
+              ...(frontier === undefined ? {} : { frontier }),
+              ...(workhorse === undefined ? {} : { workhorse }),
+            },
+          }),
+      rootBeadId,
+    },
+    cwd: cwd === undefined ? process.cwd() : parseAbsolutePath(cwd, "--cwd"),
+    ...(doltExecutable === undefined ? {} : { doltExecutable }),
+    kind: "compose",
+    output: parseAbsolutePath(output, "--output"),
+    overwrite: values.has("--overwrite"),
+  };
+}
+
+function isHarnessFamily(value: string): value is HarnessFamily {
+  return (harnessFamilies as readonly string[]).includes(value);
+}
+
+function parseAbsolutePath(value: string, option: string): string {
+  if (!isAbsolute(value) || value.length > 4_096 || value.includes("\u0000"))
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      `${option} must be an absolute non-root path.`,
+    );
+  const path = normalize(resolve(value));
+  if (path === "/")
+    throw new CliError(
+      "SCE_INVALID_OPTION_VALUE",
+      `${option} must be an absolute non-root path.`,
+    );
+  return path;
 }
 
 function parseCommand(
@@ -505,6 +717,7 @@ export async function runCli(
     if (invocation.kind === "installer") {
       return await runInstaller(invocation, dependencies);
     }
+    if (invocation.kind === "compose") return await runCompose(invocation);
     if (invocation.request.command === "feedback") {
       const feedback = await runFeedbackCliAction(
         invocation.request.feedbackAction,
@@ -588,6 +801,112 @@ export async function runCli(
       EXIT_SOFTWARE,
     );
   }
+}
+
+async function runCompose(
+  invocation: Extract<ParsedInvocation, { readonly kind: "compose" }>,
+): Promise<CliExecution> {
+  const observed = await observeRepository(invocation.cwd, {
+    ...(invocation.bdExecutable === undefined
+      ? {}
+      : { bdExecutable: invocation.bdExecutable }),
+    ...(invocation.doltExecutable === undefined
+      ? {}
+      : { doltExecutable: invocation.doltExecutable }),
+  });
+  if (!observed.ok)
+    return failure(
+      observed.code,
+      observed.message,
+      EXIT_UNAVAILABLE,
+      composeCommand,
+    );
+  const composed = composeControllerConfig(
+    observed.observation,
+    invocation.compose,
+  );
+  if (!composed.ok)
+    return failure(
+      composed.code,
+      composed.message,
+      EXIT_UNAVAILABLE,
+      composeCommand,
+    );
+  const document = composed.config as unknown as {
+    scope: Parameters<typeof inspectSlotScope>[3];
+    topology: ComposedTopology;
+  };
+  const cwd =
+    observed.observation.preflight.payload.status === "ready"
+      ? observed.observation.preflight.payload.git.topLevel
+      : invocation.cwd;
+  let slotScope = await inspectSlotScope(
+    cwd,
+    observed.observation.bdExecutable,
+    document.topology.prefix,
+    document.scope,
+  );
+  if (slotScope === "foreign")
+    return failure(
+      "SCE_COMPOSE_SLOT_FOREIGN",
+      `${document.topology.prefix}-merge-slot is bound to a different scope; it is never rebound automatically.`,
+      EXIT_UNAVAILABLE,
+      composeCommand,
+    );
+  const warnings = [...composed.summary.warnings];
+  let doltSync = await inspectDoltSync(cwd, document.topology, document.scope);
+  if (invocation.bindSlot && slotScope === "unbound") {
+    const bound = await bindSlotScope(cwd, document.topology, document.scope);
+    if (bound !== "applied")
+      return failure(
+        "SCE_COMPOSE_SLOT_BIND_FAILED",
+        `Binding ${document.topology.prefix}-merge-slot to the run scope returned ${bound}.`,
+        EXIT_UNAVAILABLE,
+        composeCommand,
+      );
+    slotScope = "bound";
+    if (document.topology.remote !== undefined)
+      doltSync = await pushDoltData(cwd, document.topology, document.scope);
+  } else if (slotScope === "unbound")
+    warnings.push(
+      `${document.topology.prefix}-merge-slot is not bound to a scope yet; rerun with --bind-slot (or the first acquire-controller is quarantined).`,
+    );
+  else if (slotScope === "unreadable")
+    warnings.push(
+      `${document.topology.prefix}-merge-slot could not be read; create it with bd merge-slot create before the first run.`,
+    );
+  if (doltSync === "remote-missing" || doltSync === "local-ahead")
+    warnings.push(
+      `Dolt data is ${doltSync === "remote-missing" ? "not on the remote yet" : "ahead of the remote"}; run bd dolt push before the first acquire-controller, which refuses an unsynced git-sync store as ambiguous.`,
+    );
+  else if (doltSync === "unreachable")
+    warnings.push(
+      "The pinned bd/dolt process could not read the embedded store; the first command will report it unavailable.",
+    );
+  const written = await writeComposedConfig(
+    invocation.output,
+    composed.config,
+    invocation.overwrite,
+  );
+  if (!written.ok)
+    return failure(
+      written.code,
+      written.message,
+      EXIT_UNAVAILABLE,
+      composeCommand,
+    );
+  return success(
+    {
+      ...(composed.summary as unknown as JsonObject),
+      doltSync,
+      output: written.path,
+      preflight: observed.observation.preflight as unknown as JsonObject,
+      slotScope,
+      status: "composed",
+      warnings,
+    },
+    composeCommand,
+  );
 }
 
 async function runInstaller(
@@ -727,7 +1046,9 @@ function helpResult(
           ? "sce install-skill [--host <codex|claude>] --destination <absolute path> [--dry-run]"
           : command === "uninstall-skill"
             ? "sce uninstall-skill [--host <codex|claude>] --destination <absolute path>"
-            : `sce ${command} [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]`,
+            : command === composeCommand
+              ? "sce compose-config --harness <claude|codex> --root-bead <id> --output <absolute path> [--cwd <absolute path>] [--branch <name>] [--authority <local-change-only|push-branch|open-pr|integrate>] [--beads-mode <local-only|git-sync>] [--controller-model <id>] [--frontier-model <id>] [--workhorse-model <id>] [--knowledge|--no-knowledge] [--bd-executable <absolute path>] [--dolt-executable <absolute path>] [--bind-slot] [--overwrite] [--json]"
+              : `sce ${command} [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]`,
   };
 }
 
