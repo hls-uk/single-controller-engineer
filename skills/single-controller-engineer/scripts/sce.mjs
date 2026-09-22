@@ -10392,7 +10392,7 @@ var WaveGateSchema = strictObject({
   originalUnitIds: Type.Array(identifier(), { maxItems: 3, uniqueItems: true }),
   waveId: identifier()
 });
-var WaveTaskMetadataSchema = strictObject({
+var waveTaskFields = {
   acceptanceIds: Type.Array(identifier(), {
     minItems: 1,
     maxItems: 64,
@@ -10432,9 +10432,13 @@ var WaveTaskMetadataSchema = strictObject({
   ),
   tombstones: Type.Optional(
     Type.Array(identifier(), { maxItems: 64, uniqueItems: true })
-  ),
+  )
+};
+var WaveTaskMetadataSchema = strictObject({
+  ...waveTaskFields,
   unitId: identifier()
 });
+var ChildTaskRecordSchema = strictObject(waveTaskFields);
 var UnitSchema = strictObject({
   id: identifier(),
   // Stable at planning time and never reassigned, even after a unit leaves
@@ -29073,22 +29077,22 @@ var DoltProjectionPersistence = class {
     const parsedRoot = validateRootProjection(rootEnvelope.projection);
     if (!parsedRoot.ok || parsedRoot.value.aggregateCommitment !== rootEnvelope.commitment)
       return { status: "ambiguous" };
-    const childIds = parsedRoot.value.childRows.map(
+    const childIds2 = parsedRoot.value.childRows.map(
       (child) => this.childIssueId(child.unitId)
     );
-    if (childIds.some((id) => id === void 0) || new Set(childIds).size !== childIds.length)
+    if (childIds2.some((id) => id === void 0) || new Set(childIds2).size !== childIds2.length)
       return { status: "ambiguous" };
-    if (childIds.length === 0)
+    if (childIds2.length === 0)
       return {
         status: "observed",
         value: { children: [], root: parsedRoot.value }
       };
     const childSource = await this.sql(
-      this.selectStatement(childIds)
+      this.selectStatement(childIds2)
     );
     const childrenRows = childSource === void 0 ? void 0 : parseRows(childSource);
     if (childrenRows === void 0) return { status: "unavailable" };
-    if (childrenRows.length !== childIds.length) return { status: "ambiguous" };
+    if (childrenRows.length !== childIds2.length) return { status: "ambiguous" };
     const expected = new Map(
       parsedRoot.value.childRows.map((child) => [child.unitId, child])
     );
@@ -29107,7 +29111,7 @@ var DoltProjectionPersistence = class {
         return { status: "ambiguous" };
       children.push(child.value);
     }
-    return children.length !== expected.size || seen.size !== childIds.length ? { status: "ambiguous" } : {
+    return children.length !== expected.size || seen.size !== childIds2.length ? { status: "ambiguous" } : {
       status: "observed",
       value: {
         children: children.sort(
@@ -37098,7 +37102,9 @@ function pristineInitialRun(input) {
       harnessVersion: HARNESS_VERSION,
       supportCommitment: input.harness.supportCommitment
     },
-    units: {},
+    units: Object.fromEntries(
+      (input.units ?? []).map((unit) => [unit.id, unit])
+    ),
     reservations: {},
     activeModifyingUnitIds: [],
     wave: { id: `${input.runId}-wave-0`, unitIds: [] },
@@ -37120,6 +37126,60 @@ function pristineInitialRun(input) {
       commitment: ZERO_HASH
     },
     journalCommitment: ZERO_HASH
+  };
+}
+function planInitialUnits(children, baseOid, warnings) {
+  const candidates = [...children].filter((child) => child.status === "open" && child.issueType !== "epic").sort(
+    (left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0
+  );
+  const records = /* @__PURE__ */ new Map();
+  for (const child of candidates) {
+    if (child.task === void 0) {
+      warnings.push(
+        `${child.id} carries no $.sce_task record and is not planned as a unit.`
+      );
+      continue;
+    }
+    if (identifier6(child.id) === void 0)
+      return { ok: false, message: `${child.id} is not a valid unit id.` };
+    const parsed = validate(ChildTaskRecordSchema, child.task);
+    if (!parsed.ok || parsed.value === void 0)
+      return {
+        ok: false,
+        message: `${child.id} carries an invalid $.sce_task record.`
+      };
+    records.set(child.id, parsed.value);
+  }
+  if (records.size === 0) return { ok: true, units: [] };
+  if (records.size > LIMITS.units)
+    return {
+      ok: false,
+      message: `${records.size} planned children exceed the ${LIMITS.units}-unit envelope.`
+    };
+  if (baseOid === void 0)
+    return {
+      ok: false,
+      message: "the integration branch head could not be observed, so planned units have no base."
+    };
+  for (const [id, record4] of records)
+    for (const dependency of record4.dependencies)
+      if (dependency === id || !records.has(dependency))
+        return {
+          ok: false,
+          message: `${id} depends on ${dependency}, which is not a planned open sibling.`
+        };
+  return {
+    ok: true,
+    units: [...records.entries()].map(([id, record4], ordinal) => ({
+      id,
+      ordinal,
+      revision: 0,
+      state: "planned",
+      baseOid,
+      taskMetadata: { ...record4, unitId: id },
+      reservationIds: [],
+      repairCount: 0
+    }))
   };
 }
 function composeControllerConfig(observation, options) {
@@ -37252,6 +37312,12 @@ function composeControllerConfig(observation, options) {
       "SCE_COMPOSE_OPTION_INVALID",
       "identities must be identifiers."
     );
+  const planned = planInitialUnits(
+    observation.children,
+    observation.branchHeads[integrationBranch],
+    warnings
+  );
+  if (!planned.ok) return fail3("SCE_COMPOSE_UNIT_INVALID", planned.message);
   const initialRun = pristineInitialRun({
     authorityProfile,
     fencingToken,
@@ -37265,7 +37331,8 @@ function composeControllerConfig(observation, options) {
     repositoryIdentity: preflight.git.identity,
     requestedModel: models.controller,
     runId: runId2,
-    storeIdentity: beads.projectId
+    storeIdentity: beads.projectId,
+    units: planned.units
   });
   const runValidation = validate(
     RepositoryRunSchema,
@@ -37307,7 +37374,11 @@ function composeControllerConfig(observation, options) {
       databaseDirectory: join10(beads.storePath, beads.database),
       prefix: beads.prefix,
       rootBeadId,
-      childBeadIds: {},
+      // A planned unit is its own child bead: the engine writes the unit's
+      // projection to that bead's `$.sce` beside the `$.sce_task` record.
+      childBeadIds: Object.fromEntries(
+        planned.units.map((unit) => [unit.id, unit.id])
+      ),
       ...beadsMode === "git-sync" && syncRemote !== void 0 && beads.syncRemote !== void 0 ? {
         remote: {
           name: syncRemote.name,
@@ -37353,12 +37424,44 @@ function composeControllerConfig(observation, options) {
       integrationBranch,
       knowledge: knowledgeContract !== void 0,
       models,
+      plannedUnits: planned.units.map((unit) => unit.id),
       repositoryIdentity: preflight.git.identity,
       rootBeadId,
       storeIdentity: beads.projectId,
       warnings
     }
   };
+}
+function childIds(source) {
+  try {
+    const parsed = JSON.parse(source);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((item) => {
+      const row = item !== null && typeof item === "object" ? item : void 0;
+      const id = row?.id;
+      return typeof id === "string" && identifier6(id) !== void 0 ? [id] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+function childObservation(id, source) {
+  try {
+    const parsed = JSON.parse(source);
+    const row = Array.isArray(parsed) ? parsed[0] : parsed;
+    if (row === null || typeof row !== "object") return void 0;
+    const record4 = row;
+    if (record4.id !== id) return void 0;
+    const metadata = record4.metadata !== null && typeof record4.metadata === "object" ? record4.metadata : void 0;
+    return {
+      id,
+      issueType: typeof record4.issue_type === "string" ? record4.issue_type : "",
+      status: typeof record4.status === "string" ? record4.status : "",
+      task: metadata?.sce_task
+    };
+  } catch {
+    return void 0;
+  }
 }
 function capture(cwd, executable2, argv) {
   return new Promise((resolveCapture) => {
@@ -37460,6 +37563,36 @@ async function observeRepository(cwd, options = {}) {
   }
   const branchOutput = await capture(cwd, "git", ["branch", "--show-current"]);
   const currentBranch = branchOutput.ok && branchOutput.stdout.trim().length > 0 ? branchOutput.stdout.trim() : void 0;
+  const branchHeads = {};
+  for (const branch of new Set(
+    [currentBranch, options.integrationBranch].filter(
+      (value) => value !== void 0 && value.length > 0
+    )
+  )) {
+    const head3 = await capture(cwd, "git", [
+      "rev-parse",
+      "--verify",
+      "--end-of-options",
+      `refs/heads/${branch}^{commit}`
+    ]);
+    const oid3 = head3.ok ? head3.stdout.trim() : "";
+    if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(oid3)) branchHeads[branch] = oid3;
+  }
+  const children = [];
+  if (options.rootBeadId !== void 0) {
+    const listed = await capture(cwd, bdExecutable, [
+      "list",
+      "--parent",
+      options.rootBeadId,
+      "--json"
+    ]);
+    const ids = listed.ok ? childIds(listed.stdout) : [];
+    for (const id of ids) {
+      const shown = await capture(cwd, bdExecutable, ["show", id, "--json"]);
+      const child = shown.ok ? childObservation(id, shown.stdout) : void 0;
+      if (child !== void 0) children.push(child);
+    }
+  }
   const topLevel = preflight.payload.status === "ready" ? preflight.payload.git.topLevel : cwd;
   const manifestPath = join10(topLevel, KNOWLEDGE_MANIFEST_FILE);
   let manifest;
@@ -37481,6 +37614,8 @@ async function observeRepository(cwd, options = {}) {
   return {
     observation: {
       bdExecutable,
+      branchHeads,
+      children,
       currentBranch,
       doltExecutable,
       environment: options.environment ?? ((name) => process.env[name]),
@@ -38169,6 +38304,8 @@ async function runCli(argv, dependencies = {}) {
 }
 async function runCompose(invocation) {
   const observed2 = await observeRepository(invocation.cwd, {
+    rootBeadId: invocation.compose.rootBeadId,
+    ...invocation.compose.integrationBranch === void 0 ? {} : { integrationBranch: invocation.compose.integrationBranch },
     ...invocation.bdExecutable === void 0 ? {} : { bdExecutable: invocation.bdExecutable },
     ...invocation.doltExecutable === void 0 ? {} : { doltExecutable: invocation.doltExecutable }
   });

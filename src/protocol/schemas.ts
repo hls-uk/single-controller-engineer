@@ -945,7 +945,12 @@ export const WaveGateSchema = strictObject({
 export type WaveGate = Static<typeof WaveGateSchema>;
 
 /** Validated Beads task metadata supplied to the deterministic wave planner. */
-export const WaveTaskMetadataSchema = strictObject({
+/**
+ * Controller plan fields shared by a wave task and the machine-readable
+ * `$.sce_task` record a child bead carries so compose-config can project it
+ * into a planned initial unit. The unit id is the bead id itself.
+ */
+const waveTaskFields = {
   acceptanceIds: Type.Array(identifier(), {
     minItems: 1,
     maxItems: 64,
@@ -986,8 +991,13 @@ export const WaveTaskMetadataSchema = strictObject({
   tombstones: Type.Optional(
     Type.Array(identifier(), { maxItems: 64, uniqueItems: true }),
   ),
+};
+export const WaveTaskMetadataSchema = strictObject({
+  ...waveTaskFields,
   unitId: identifier(),
 });
+export const ChildTaskRecordSchema = strictObject(waveTaskFields);
+export type ChildTaskRecord = Static<typeof ChildTaskRecordSchema>;
 export type WaveTaskMetadata = Static<typeof WaveTaskMetadataSchema>;
 
 export const UnitSchema = strictObject({

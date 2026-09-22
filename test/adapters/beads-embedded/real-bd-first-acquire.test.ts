@@ -77,6 +77,35 @@ async function freshRepository(
   ]);
   await json(repository, ["merge-slot", "create", "--json"]);
   await json(repository, ["create", "--id", "sce-root", "root", "--json"]);
+  // One open child with a strict task record becomes the first planned unit.
+  await json(repository, [
+    "create",
+    "--id",
+    "sce-unit-1",
+    "unit 1",
+    "--metadata",
+    JSON.stringify({
+      sce_task: {
+        acceptanceIds: ["sce-unit-1:A1"],
+        conflictDomains: ["docs"],
+        dependencies: [],
+        independence: "proven",
+        mandatoryVerification: ["npm run test:fast"],
+        ownedPaths: ["docs"],
+        priority: 2,
+        reservations: [],
+        risk: "low",
+      },
+    }),
+    "--json",
+  ]);
+  await json(repository, [
+    "update",
+    "sce-unit-1",
+    "--parent",
+    "sce-root",
+    "--json",
+  ]);
   return repository;
 }
 
@@ -118,6 +147,7 @@ async function firstAcquireCompletes(remote: string | undefined, root: string) {
   );
   const first = summary.firstRequest as Record<string, unknown>;
   assert.equal(first.command, "acquire-controller");
+  assert.deepEqual(summary.plannedUnits, ["sce-unit-1"]);
   const document = JSON.parse(await readFile(config, "utf8")) as {
     initialRun: { controller: { holder: string } };
     topology: { mode: string };
@@ -143,6 +173,17 @@ async function firstAcquireCompletes(remote: string | undefined, root: string) {
     acquired.response.result,
     { revision: 2, status: "reconciled" },
     acquired.stdout,
+  );
+
+  // With a planned unit the acquired run's next legal action is the wave.
+  const next = await runCli(["next", "--controller-config", config, "--json"]);
+  assert.equal(next.response.ok, true, next.stdout);
+  if (!next.response.ok) throw new Error("unreachable");
+  assert.deepEqual(
+    (next.response.result.legalActions as readonly { type: string }[]).map(
+      (action) => action.type,
+    ),
+    ["wave_planned"],
   );
 
   const status = await runCli([

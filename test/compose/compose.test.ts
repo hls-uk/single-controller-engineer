@@ -13,7 +13,10 @@ import {
   type RepositoryObservation,
 } from "../../src/compose/index.js";
 import { createControllerConfigRunner } from "../../src/controller-config.js";
+import { legalActions } from "../../src/protocol/actions.js";
 import { canonicalJson } from "../../src/protocol/canonical.js";
+import { reduce } from "../../src/protocol/reducer.js";
+import type { RepositoryRun } from "../../src/protocol/schemas.js";
 import { deriveScopeCommitment } from "../../src/fencing/index.js";
 import type { PreflightEnvelope } from "../../src/preflight/index.js";
 import { parseCliArguments, runCli } from "../../src/cli.js";
@@ -112,6 +115,8 @@ function observation(
 ): RepositoryObservation {
   return {
     bdExecutable: "/opt/bin/bd",
+    branchHeads: { main: "a".repeat(40) },
+    children: [],
     currentBranch: "main",
     doltExecutable: "/opt/bin/dolt",
     environment: (name) =>
@@ -561,4 +566,135 @@ test("the compose-config CLI surface parses strictly and is listed in help", asy
   );
   const commandHelp = await runCli(["compose-config", "--help"]);
   assert.match(JSON.parse(commandHelp.stdout).result.usage, /--bind-slot/u);
+});
+
+const taskRecord = {
+  acceptanceIds: ["ex-1:A1"],
+  conflictDomains: ["preflight-tests"],
+  dependencies: [],
+  independence: "proven" as const,
+  mandatoryVerification: ["npm run test:fast"],
+  ownedPaths: ["test/preflight"],
+  priority: 2,
+  reservations: [],
+  risk: "low" as const,
+};
+
+test("open children with strict $.sce_task records become planned initial units the reducer can wave", async () => {
+  const result = composeControllerConfig(
+    observation({
+      children: [
+        { id: "ex-2", issueType: "bug", status: "open", task: taskRecord },
+        {
+          id: "ex-1",
+          issueType: "task",
+          status: "open",
+          task: { ...taskRecord, dependencies: ["ex-2"] },
+        },
+        { id: "ex-3", issueType: "task", status: "closed", task: taskRecord },
+        { id: "ex-4", issueType: "task", status: "open", task: undefined },
+        { id: "ex-5", issueType: "epic", status: "open", task: taskRecord },
+      ],
+    }),
+    { harnessFamily: "claude", identities, rootBeadId: "ex-root" },
+  );
+  assert.equal(result.ok, true, result.ok ? "" : result.message);
+  if (!result.ok) return;
+  assert.deepEqual(result.summary.plannedUnits, ["ex-1", "ex-2"]);
+  assert.deepEqual(
+    result.summary.warnings.filter((warning) => warning.includes("ex-4")),
+    ["ex-4 carries no $.sce_task record and is not planned as a unit."],
+  );
+  const run = (result.config as Record<string, any>)
+    .initialRun as RepositoryRun;
+  assert.deepEqual(Object.keys(run.units), ["ex-1", "ex-2"]);
+  assert.equal(run.units["ex-1"]?.ordinal, 0);
+  assert.equal(run.units["ex-2"]?.ordinal, 1);
+  assert.equal(run.units["ex-1"]?.baseOid, "a".repeat(40));
+  assert.equal(run.units["ex-1"]?.state, "planned");
+  assert.deepEqual(run.units["ex-2"]?.taskMetadata, {
+    ...taskRecord,
+    unitId: "ex-2",
+  });
+
+  // The composed units survive the controller acquisition and form the first
+  // wave: this is the path a fresh repository takes before any worktree.
+  const first = result.summary.firstRequest.request.event;
+  const acquired = reduce(run, first as never);
+  assert.equal(acquired.ok, true);
+  if (!acquired.ok) return;
+  const effect = acquired.effects[0];
+  assert.ok(effect !== undefined);
+  const settled = reduce(acquired.nextState, {
+    eventId: "acquired",
+    expectedRevision: acquired.nextState.revision,
+    effectId: effect.effectId,
+    effectKind: "controller_acquire",
+    holder: acquired.nextState.controller.holder,
+    controllerFencingToken: acquired.nextState.controllerFencingToken,
+    observationHash: "e".repeat(64),
+    type: "controller_acquired",
+  });
+  assert.equal(settled.ok, true);
+  if (!settled.ok) return;
+  assert.deepEqual(
+    legalActions(settled.nextState).map((action) => action.type),
+    ["wave_planned"],
+  );
+  const waved = reduce(settled.nextState, {
+    eventId: "wave",
+    expectedRevision: settled.nextState.revision,
+    type: "wave_planned",
+    waveId: "wave-1",
+    tasks: Object.values(settled.nextState.units).map(
+      (unit) => unit.taskMetadata!,
+    ),
+  });
+  assert.equal(waved.ok, true, waved.ok ? "" : JSON.stringify(waved));
+  if (!waved.ok) return;
+  assert.deepEqual(waved.nextState.wave.unitIds, ["ex-2"]);
+});
+
+test("an invalid or dangling $.sce_task record refuses the composition", async () => {
+  const invalid = composeControllerConfig(
+    observation({
+      children: [
+        {
+          id: "ex-1",
+          issueType: "task",
+          status: "open",
+          task: { ...taskRecord, risk: "unknown" },
+        },
+      ],
+    }),
+    { harnessFamily: "claude", identities, rootBeadId: "ex-root" },
+  );
+  assert.equal(invalid.ok, false);
+  if (!invalid.ok) assert.equal(invalid.code, "SCE_COMPOSE_UNIT_INVALID");
+  const dangling = composeControllerConfig(
+    observation({
+      children: [
+        {
+          id: "ex-1",
+          issueType: "task",
+          status: "open",
+          task: { ...taskRecord, dependencies: ["ex-9"] },
+        },
+      ],
+    }),
+    { harnessFamily: "claude", identities, rootBeadId: "ex-root" },
+  );
+  assert.equal(dangling.ok, false);
+  if (!dangling.ok) assert.match(dangling.message, /ex-9/u);
+  const unbased = composeControllerConfig(
+    observation({
+      branchHeads: {},
+      children: [
+        { id: "ex-1", issueType: "task", status: "open", task: taskRecord },
+      ],
+    }),
+    { harnessFamily: "claude", identities, rootBeadId: "ex-root" },
+  );
+  assert.equal(unbased.ok, false);
+  if (!unbased.ok) assert.equal(unbased.code, "SCE_COMPOSE_UNIT_INVALID");
 });

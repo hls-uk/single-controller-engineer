@@ -25,7 +25,11 @@ import {
   runInvariantErrors,
 } from "../protocol/reducer.js";
 import {
+  ChildTaskRecordSchema,
+  type ChildTaskRecord,
+  LIMITS,
   RepositoryRunSchema,
+  type Unit,
   validate,
   type AuthorityProfile,
   type CompletionBoundary,
@@ -161,8 +165,21 @@ export type GitRemoteObservation = Readonly<{
 }>;
 
 /** Everything the composer needs, observed once and passed in explicitly. */
+/** One child bead of the root epic as `bd show --json` reports it. */
+export type ChildBeadObservation = Readonly<{
+  id: string;
+  issueType: string;
+  status: string;
+  /** Raw `$.sce_task` metadata record, or undefined when the bead has none. */
+  task: unknown;
+}>;
+
 export type RepositoryObservation = Readonly<{
   bdExecutable: string;
+  /** Exact commit OIDs of the observed branches (current and requested). */
+  branchHeads: Readonly<Record<string, string>>;
+  /** Children of the requested root bead; empty when no root was requested. */
+  children: readonly ChildBeadObservation[];
   currentBranch: string | undefined;
   doltExecutable: string;
   environment: (name: string) => string | undefined;
@@ -208,7 +225,8 @@ export type ComposeFailureCode =
   | "SCE_COMPOSE_REMOTE_MISSING"
   | "SCE_COMPOSE_STORE_IDENTITY_MISSING"
   | "SCE_COMPOSE_SYNC_MODE_MISMATCH"
-  | "SCE_COMPOSE_TOPOLOGY_UNSUPPORTED";
+  | "SCE_COMPOSE_TOPOLOGY_UNSUPPORTED"
+  | "SCE_COMPOSE_UNIT_INVALID";
 
 /** The exact first command a fresh run accepts; the engine adds the slot plan. */
 export type FirstAcquireRequest = Readonly<{
@@ -232,6 +250,8 @@ export type ComposeSummary = Readonly<{
   integrationBranch: string;
   knowledge: boolean;
   models: Readonly<{ controller: string; frontier: string; workhorse: string }>;
+  /** Unit ids (child bead ids) planned into the initial run, in ordinal order. */
+  plannedUnits: readonly string[];
   repositoryIdentity: string;
   rootBeadId: string;
   storeIdentity: string;
@@ -394,6 +414,8 @@ export function pristineInitialRun(
     requestedModel: string;
     runId: string;
     storeIdentity: string;
+    /** Planned units in ordinal order; absent means a unit-free run. */
+    units?: readonly Unit[];
   }>,
 ): RepositoryRun {
   const shape = authorityShape[input.authorityProfile];
@@ -423,7 +445,9 @@ export function pristineInitialRun(
       harnessVersion: HARNESS_VERSION,
       supportCommitment: input.harness.supportCommitment,
     },
-    units: {},
+    units: Object.fromEntries(
+      (input.units ?? []).map((unit) => [unit.id, unit]),
+    ),
     reservations: {},
     activeModifyingUnitIds: [],
     wave: { id: `${input.runId}-wave-0`, unitIds: [] },
@@ -445,6 +469,77 @@ export function pristineInitialRun(
       commitment: ZERO_HASH,
     },
     journalCommitment: ZERO_HASH,
+  };
+}
+
+/**
+ * Projects the root epic's open children into planned initial units. A child
+ * is planned only from a strictly valid `$.sce_task` record: no prose is
+ * parsed and nothing is inferred. Children without a record are reported and
+ * left out; an invalid record or an unplanned dependency refuses the whole
+ * composition, because a wave must later cover every unit exactly once.
+ */
+export function planInitialUnits(
+  children: readonly ChildBeadObservation[],
+  baseOid: string | undefined,
+  warnings: string[],
+):
+  | Readonly<{ ok: true; units: readonly Unit[] }>
+  | Readonly<{ ok: false; message: string }> {
+  const candidates = [...children]
+    .filter((child) => child.status === "open" && child.issueType !== "epic")
+    .sort((left, right) =>
+      left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
+    );
+  const records = new Map<string, ChildTaskRecord>();
+  for (const child of candidates) {
+    if (child.task === undefined) {
+      warnings.push(
+        `${child.id} carries no $.sce_task record and is not planned as a unit.`,
+      );
+      continue;
+    }
+    if (identifier(child.id) === undefined)
+      return { ok: false, message: `${child.id} is not a valid unit id.` };
+    const parsed = validate<ChildTaskRecord>(ChildTaskRecordSchema, child.task);
+    if (!parsed.ok || parsed.value === undefined)
+      return {
+        ok: false,
+        message: `${child.id} carries an invalid $.sce_task record.`,
+      };
+    records.set(child.id, parsed.value);
+  }
+  if (records.size === 0) return { ok: true, units: [] };
+  if (records.size > LIMITS.units)
+    return {
+      ok: false,
+      message: `${records.size} planned children exceed the ${LIMITS.units}-unit envelope.`,
+    };
+  if (baseOid === undefined)
+    return {
+      ok: false,
+      message:
+        "the integration branch head could not be observed, so planned units have no base.",
+    };
+  for (const [id, record] of records)
+    for (const dependency of record.dependencies)
+      if (dependency === id || !records.has(dependency))
+        return {
+          ok: false,
+          message: `${id} depends on ${dependency}, which is not a planned open sibling.`,
+        };
+  return {
+    ok: true,
+    units: [...records.entries()].map(([id, record], ordinal) => ({
+      id,
+      ordinal,
+      revision: 0,
+      state: "planned" as const,
+      baseOid,
+      taskMetadata: { ...record, unitId: id },
+      reservationIds: [],
+      repairCount: 0,
+    })),
   };
 }
 
@@ -619,6 +714,12 @@ export function composeControllerConfig(
       "identities must be identifiers.",
     );
 
+  const planned = planInitialUnits(
+    observation.children,
+    observation.branchHeads[integrationBranch],
+    warnings,
+  );
+  if (!planned.ok) return fail("SCE_COMPOSE_UNIT_INVALID", planned.message);
   const initialRun = pristineInitialRun({
     authorityProfile,
     fencingToken,
@@ -633,6 +734,7 @@ export function composeControllerConfig(
     requestedModel: models.controller,
     runId,
     storeIdentity: beads.projectId,
+    units: planned.units,
   });
   const runValidation = validate<RepositoryRun>(
     RepositoryRunSchema,
@@ -680,7 +782,11 @@ export function composeControllerConfig(
       databaseDirectory: join(beads.storePath, beads.database),
       prefix: beads.prefix,
       rootBeadId,
-      childBeadIds: {},
+      // A planned unit is its own child bead: the engine writes the unit's
+      // projection to that bead's `$.sce` beside the `$.sce_task` record.
+      childBeadIds: Object.fromEntries(
+        planned.units.map((unit) => [unit.id, unit.id]),
+      ),
       ...(beadsMode === "git-sync" &&
       syncRemote !== undefined &&
       beads.syncRemote !== undefined
@@ -732,6 +838,7 @@ export function composeControllerConfig(
       integrationBranch,
       knowledge: knowledgeContract !== undefined,
       models,
+      plannedUnits: planned.units.map((unit) => unit.id),
       repositoryIdentity: preflight.git.identity,
       rootBeadId,
       storeIdentity: beads.projectId,
@@ -741,6 +848,50 @@ export function composeControllerConfig(
 }
 
 type Captured = Readonly<{ ok: boolean; stdout: string }>;
+
+/** Child ids from `bd list --parent <root> --json`; malformed output is empty. */
+function childIds(source: string): readonly string[] {
+  try {
+    const parsed = JSON.parse(source) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.flatMap((item) => {
+      const row =
+        item !== null && typeof item === "object"
+          ? (item as Record<string, unknown>)
+          : undefined;
+      const id = row?.id;
+      return typeof id === "string" && identifier(id) !== undefined ? [id] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+/** One child from `bd show <id> --json`; the `$.sce_task` record stays raw. */
+function childObservation(
+  id: string,
+  source: string,
+): ChildBeadObservation | undefined {
+  try {
+    const parsed = JSON.parse(source) as unknown;
+    const row = (Array.isArray(parsed) ? parsed[0] : parsed) as unknown;
+    if (row === null || typeof row !== "object") return undefined;
+    const record = row as Record<string, unknown>;
+    if (record.id !== id) return undefined;
+    const metadata =
+      record.metadata !== null && typeof record.metadata === "object"
+        ? (record.metadata as Record<string, unknown>)
+        : undefined;
+    return {
+      id,
+      issueType: typeof record.issue_type === "string" ? record.issue_type : "",
+      status: typeof record.status === "string" ? record.status : "",
+      task: metadata?.sce_task,
+    };
+  } catch {
+    return undefined;
+  }
+}
 
 function capture(
   cwd: string,
@@ -792,6 +943,10 @@ export type ObserveOptions = Readonly<{
   bdExecutable?: string;
   doltExecutable?: string;
   environment?: (name: string) => string | undefined;
+  /** Requested integration branch; its head is observed beside the current one. */
+  integrationBranch?: string;
+  /** Root epic whose open children are observed as planning input. */
+  rootBeadId?: string;
 }>;
 
 export type ObserveResult =
@@ -893,6 +1048,36 @@ export async function observeRepository(
     branchOutput.ok && branchOutput.stdout.trim().length > 0
       ? branchOutput.stdout.trim()
       : undefined;
+  const branchHeads: Record<string, string> = {};
+  for (const branch of new Set(
+    [currentBranch, options.integrationBranch].filter(
+      (value): value is string => value !== undefined && value.length > 0,
+    ),
+  )) {
+    const head = await capture(cwd, "git", [
+      "rev-parse",
+      "--verify",
+      "--end-of-options",
+      `refs/heads/${branch}^{commit}`,
+    ]);
+    const oid = head.ok ? head.stdout.trim() : "";
+    if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(oid)) branchHeads[branch] = oid;
+  }
+  const children: ChildBeadObservation[] = [];
+  if (options.rootBeadId !== undefined) {
+    const listed = await capture(cwd, bdExecutable, [
+      "list",
+      "--parent",
+      options.rootBeadId,
+      "--json",
+    ]);
+    const ids = listed.ok ? childIds(listed.stdout) : [];
+    for (const id of ids) {
+      const shown = await capture(cwd, bdExecutable, ["show", id, "--json"]);
+      const child = shown.ok ? childObservation(id, shown.stdout) : undefined;
+      if (child !== undefined) children.push(child);
+    }
+  }
   const topLevel =
     preflight.payload.status === "ready" ? preflight.payload.git.topLevel : cwd;
   const manifestPath = join(topLevel, KNOWLEDGE_MANIFEST_FILE);
@@ -915,6 +1100,8 @@ export async function observeRepository(
   return {
     observation: {
       bdExecutable,
+      branchHeads,
+      children,
       currentBranch,
       doltExecutable,
       environment: options.environment ?? ((name) => process.env[name]),

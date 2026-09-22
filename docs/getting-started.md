@@ -120,6 +120,20 @@ sce compose-config --harness claude --root-bead <epic-id> \
 - The engine pins `bd` 1.1.0 and `dolt` 2.2.1 exactly. A mismatch is refused
   with `SCE_COMPOSE_EXECUTABLE_VERSION`; install the pinned release and pass
   `--bd-executable` or `--dolt-executable`.
+- The root bead's open children become the run's planned units when each
+  carries a strict machine-readable `sce_task` record in its metadata (the
+  wave task fields: `acceptanceIds`, `conflictDomains`, `dependencies`,
+  `independence`, `mandatoryVerification`, `ownedPaths`, `priority`,
+  `reservations`, `risk`). The unit id is the bead id and its base is the
+  integration branch head at compose time. A child without a record is
+  reported and left unplanned; an invalid record or a dependency on an
+  unplanned sibling refuses the composition with `SCE_COMPOSE_UNIT_INVALID`.
+  The result's `plannedUnits` lists what was planned, for example:
+
+```sh
+bd update <child-id> --metadata '{"sce_task":{"acceptanceIds":["<child-id>:A1"],"conflictDomains":["docs"],"dependencies":[],"independence":"proven","mandatoryVerification":["npm run test:fast"],"ownedPaths":["docs"],"priority":2,"reservations":[],"risk":"low"}}'
+```
+
 - The result's `firstRequest` is the exact `acquire-controller` request the
   fresh run accepts (its idempotency key is derived from the run identities),
   so the first command is:

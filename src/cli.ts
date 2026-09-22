@@ -807,6 +807,10 @@ async function runCompose(
   invocation: Extract<ParsedInvocation, { readonly kind: "compose" }>,
 ): Promise<CliExecution> {
   const observed = await observeRepository(invocation.cwd, {
+    rootBeadId: invocation.compose.rootBeadId,
+    ...(invocation.compose.integrationBranch === undefined
+      ? {}
+      : { integrationBranch: invocation.compose.integrationBranch }),
     ...(invocation.bdExecutable === undefined
       ? {}
       : { bdExecutable: invocation.bdExecutable }),
