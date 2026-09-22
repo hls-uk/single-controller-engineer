@@ -300,6 +300,18 @@ function sameRemoteIdentity(configuredUrl: string, expected: string): boolean {
   return normalized !== undefined && normalized === expected;
 }
 
+/** Non-interactive SSH/Git for remote Dolt transport: agent passthrough, no prompts. */
+function sshEnvironment(): Readonly<Record<string, string>> {
+  const socket = process.env.SSH_AUTH_SOCK;
+  return {
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? "ssh -o BatchMode=yes",
+    ...(socket === undefined || socket.length === 0 || socket.includes("\u0000")
+      ? {}
+      : { SSH_AUTH_SOCK: socket }),
+  };
+}
+
 function doltShow(
   source: string,
 ): { readonly dataDir: string; readonly database: string } | undefined {
@@ -2243,6 +2255,9 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
           DARWIN_USER_TEMP_DIR:
             process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
           TZ: "UTC",
+          // A git+ssh Dolt remote needs the agent socket, and every prompt
+          // must fail rather than wait on a terminal nobody is watching.
+          ...sshEnvironment(),
         },
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],
@@ -2498,6 +2513,9 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
           DARWIN_USER_TEMP_DIR:
             process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
           TZ: "UTC",
+          // A git+ssh Dolt remote needs the agent socket, and every prompt
+          // must fail rather than wait on a terminal nobody is watching.
+          ...sshEnvironment(),
         },
         shell: false,
         stdio: ["ignore", "pipe", "pipe"],

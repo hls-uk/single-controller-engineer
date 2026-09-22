@@ -28151,6 +28151,14 @@ function sameRemoteIdentity(configuredUrl, expected) {
   const normalized = normalizeGitRemote(plain, canonicalLocalBareRepository);
   return normalized !== void 0 && normalized === expected;
 }
+function sshEnvironment() {
+  const socket = process.env.SSH_AUTH_SOCK;
+  return {
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND ?? "ssh -o BatchMode=yes",
+    ...socket === void 0 || socket.length === 0 || socket.includes("\0") ? {} : { SSH_AUTH_SOCK: socket }
+  };
+}
 function doltShow(source) {
   const raw = json2(source);
   if (raw === void 0 || raw.backend !== "dolt" || raw.embedded !== true || raw.schema_version !== 1)
@@ -29369,7 +29377,10 @@ var PinnedBdEmbeddedProcess = class {
           PATH: `${dirname4(this.bdExecutable)}:${dirname4(this.doltExecutable)}:/usr/bin:/bin`,
           TMPDIR: process.env.TMPDIR ?? "/private/tmp",
           DARWIN_USER_TEMP_DIR: process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
-          TZ: "UTC"
+          TZ: "UTC",
+          // A git+ssh Dolt remote needs the agent socket, and every prompt
+          // must fail rather than wait on a terminal nobody is watching.
+          ...sshEnvironment()
         },
         shell: false,
         stdio: ["ignore", "pipe", "pipe"]
@@ -29540,7 +29551,10 @@ var PinnedBdEmbeddedProcess = class {
           PATH: `${dirname4(this.bdExecutable)}:${dirname4(this.doltExecutable)}:/usr/bin:/bin`,
           TMPDIR: process.env.TMPDIR ?? "/private/tmp",
           DARWIN_USER_TEMP_DIR: process.env.DARWIN_USER_TEMP_DIR ?? "/private/tmp",
-          TZ: "UTC"
+          TZ: "UTC",
+          // A git+ssh Dolt remote needs the agent socket, and every prompt
+          // must fail rather than wait on a terminal nobody is watching.
+          ...sshEnvironment()
         },
         shell: false,
         stdio: ["ignore", "pipe", "pipe"]
