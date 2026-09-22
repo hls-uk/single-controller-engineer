@@ -31616,7 +31616,6 @@ var EmbeddedBeadsAdapter = class {
 import { spawn as spawn7 } from "node:child_process";
 import { createHash as createHash5 } from "node:crypto";
 import { open as open2, realpath as realpath2, stat as stat2 } from "node:fs/promises";
-import { homedir as homedir2 } from "node:os";
 import { dirname as dirname6, isAbsolute as isAbsolute8, join as join6 } from "node:path";
 var MAX_ENDPOINT_BYTES = 320;
 var MAX_SCHEMA_BYTES = 160;
@@ -32379,11 +32378,7 @@ var PinnedBdServerProcess = class {
         BD_NON_INTERACTIVE: "1",
         ...password === void 0 ? {} : { BEADS_DOLT_PASSWORD: password },
         CI: "1",
-        // bd resolves `~` for its config directory; without HOME it writes
-        // that config into a literal `~/` under the working directory and
-        // dirties the repository, so every bd child is given one. Managed
-        // server mode's isolated runtime HOME still wins when configured.
-        HOME: runtime?.HOME ?? homedir2(),
+        ...runtime?.HOME === void 0 ? {} : { HOME: runtime.HOME },
         PATH: [dirname6(executable2), ...additionalPath, "/usr/bin", "/bin"].join(
           ":"
         ),
@@ -32648,11 +32643,7 @@ var PinnedBdManagedServerProcess = class {
       env: {
         BD_NON_INTERACTIVE: "1",
         CI: "1",
-        // bd resolves `~` for its config directory; without HOME it writes
-        // that config into a literal `~/` under the working directory and
-        // dirties the repository, so every bd child is given one. Managed
-        // server mode's isolated runtime HOME still wins when configured.
-        HOME: runtime?.HOME ?? homedir2(),
+        ...runtime?.HOME === void 0 ? {} : { HOME: runtime.HOME },
         PATH: [dirname6(executable2), ...additionalPath, "/usr/bin", "/bin"].join(
           ":"
         ),
