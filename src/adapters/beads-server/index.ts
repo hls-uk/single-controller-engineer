@@ -11,6 +11,7 @@ import { Type } from "@sinclair/typebox";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { open, realpath, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 
 import {
@@ -1381,7 +1382,11 @@ export class PinnedBdServerProcess {
         BD_NON_INTERACTIVE: "1",
         ...(password === undefined ? {} : { BEADS_DOLT_PASSWORD: password }),
         CI: "1",
-        ...(runtime?.HOME === undefined ? {} : { HOME: runtime.HOME }),
+        // bd resolves `~` for its config directory; without HOME it writes
+        // that config into a literal `~/` under the working directory and
+        // dirties the repository, so every bd child is given one. Managed
+        // server mode's isolated runtime HOME still wins when configured.
+        HOME: runtime?.HOME ?? homedir(),
         PATH: [dirname(executable), ...additionalPath, "/usr/bin", "/bin"].join(
           ":",
         ),
@@ -2014,7 +2019,11 @@ export class PinnedBdManagedServerProcess implements ManagedServerProcess {
       env: {
         BD_NON_INTERACTIVE: "1",
         CI: "1",
-        ...(runtime?.HOME === undefined ? {} : { HOME: runtime.HOME }),
+        // bd resolves `~` for its config directory; without HOME it writes
+        // that config into a literal `~/` under the working directory and
+        // dirties the repository, so every bd child is given one. Managed
+        // server mode's isolated runtime HOME still wins when configured.
+        HOME: runtime?.HOME ?? homedir(),
         PATH: [dirname(executable), ...additionalPath, "/usr/bin", "/bin"].join(
           ":",
         ),

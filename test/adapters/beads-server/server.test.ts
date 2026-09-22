@@ -6391,3 +6391,50 @@ test("preflight refuses wrong database, missing server-enforced worker readonly,
     code: "BS_READ_ONLY_NOT_ENFORCED",
   });
 });
+
+/**
+ * The engine reads the worktree through a sanitized git, so a repository the
+ * operator's own `git status` calls clean can still be refused. Read that
+ * same view here rather than the ambient one.
+ */
+async function sanitizedGitStatusRecords(
+  cwd: string,
+): Promise<readonly string[]> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      "/usr/bin/git",
+      ["-c", "core.attributesFile=/dev/null", "status", "--porcelain=v1", "-z"],
+      {
+        cwd,
+        env: { HOME: "/nonexistent", PATH: "/usr/bin:/bin" },
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+    let output = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString("utf8");
+    });
+    child.once("error", reject);
+    child.once("close", (code) =>
+      code === 0
+        ? resolve(output.split("\0").filter((record) => record.length > 0))
+        : reject(new Error("sanitized git status failed")),
+    );
+  });
+}
+
+/** True for a status record naming a literal `~` entry, path side only. */
+function namesLiteralTilde(record: string): boolean {
+  const path = /^[ MADRCU?!]{2} /u.test(record) ? record.slice(3) : record;
+  return path === "~" || path.startsWith("~/");
+}
+
+// bd resolves `~` for its config directory, and the adapter's children inherit
+// this process's working directory. A bd child spawned without HOME therefore
+// writes a literal `~/` into the repository. Keep this test last in the file:
+// it is the whole suite's readback, not a single adapter's.
+test("the suite leaves no bd-written `~` entry in the repository", async () => {
+  await assert.rejects(stat(join(process.cwd(), "~")));
+  const records = await sanitizedGitStatusRecords(process.cwd());
+  assert.deepEqual(records.filter(namesLiteralTilde), []);
+});
