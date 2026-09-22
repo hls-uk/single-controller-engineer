@@ -16,7 +16,13 @@ import {
   validateMutationBatch,
 } from "../../fencing/index.js";
 import { canonicalJson, type JsonValue } from "../../protocol/canonical.js";
-import { isPinnedBdIssueRow, type EmbeddedResult } from "./schemas.js";
+import {
+  isPinnedBdIssueRow,
+  redactedStderrTail,
+  REMOTE_FAILURE_WINDOW_CHARS,
+  type EmbeddedResult,
+  type RemoteFailureTail,
+} from "./schemas.js";
 
 import type {
   CarryCheckpointIntent,
@@ -131,6 +137,8 @@ export interface PinnedBdProcessOptions {
 type Capture = Readonly<{
   code: number | null;
   exceeded: boolean;
+  /** Present only when the child wrote stderr; see `redactedStderrTail`. */
+  stderrTail?: RemoteFailureTail;
   stdout: string;
   /** The child was killed at its time budget; its exit code proves nothing. */
   timedOut: boolean;
@@ -162,6 +170,41 @@ function sameExecutable(
     left.path === right.path &&
     left.size === right.size
   );
+}
+
+/**
+ * A bounded rolling window over one child's stderr. Only the window is held:
+ * a child that floods stderr costs the same as one that writes a line.
+ */
+function stderrWindow() {
+  let text = "";
+  let dropped = false;
+  return {
+    push(chunk: Buffer): void {
+      text += chunk.toString("utf8");
+      if (text.length > REMOTE_FAILURE_WINDOW_CHARS) {
+        text = text.slice(text.length - REMOTE_FAILURE_WINDOW_CHARS);
+        dropped = true;
+      }
+    },
+    /** The `Capture` field, or no field at all when nothing survives. */
+    captured(): Readonly<{ stderrTail?: RemoteFailureTail }> {
+      const stderrTail = redactedStderrTail(text, dropped);
+      return stderrTail === undefined ? {} : { stderrTail };
+    },
+  };
+}
+
+/**
+ * Attaches a failed child's tail to the observation it caused. The tail never
+ * changes a classification; it only lets a refusal name its cause.
+ */
+function failureTail(
+  capture: Capture,
+): Readonly<{ stderrTail?: RemoteFailureTail }> {
+  return capture.code === 0 || capture.stderrTail === undefined
+    ? {}
+    : { stderrTail: capture.stderrTail };
 }
 
 /** Bounded content proof catches same-inode replacements between probes. */
@@ -1235,6 +1278,7 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         );
         return {
           kind: "pull",
+          ...failureTail(capture),
           value:
             capture.code === 0 &&
             afterRemote === remote &&
@@ -1257,6 +1301,7 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
           return { kind: "push", value: "unavailable" };
         return {
           kind: "push",
+          ...failureTail(capture),
           value: capture.code === 0 ? "applied" : "conflict",
         };
       }
@@ -2200,7 +2245,7 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
           TZ: "UTC",
         },
         shell: false,
-        stdio: ["ignore", "pipe", "ignore"],
+        stdio: ["ignore", "pipe", "pipe"],
       });
       const timer = setTimeout(() => {
         timedOut = true;
@@ -2213,6 +2258,8 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
           child.kill("SIGKILL");
         } else stdout += chunk.toString("utf8");
       });
+      const stderr = stderrWindow();
+      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
       child.once("error", () => {
         clearTimeout(timer);
         if (!settled) {
@@ -2224,7 +2271,7 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve({ code, exceeded, stdout, timedOut });
+          resolve({ code, exceeded, stdout, timedOut, ...stderr.captured() });
         }
       });
     });
@@ -2453,7 +2500,7 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
           TZ: "UTC",
         },
         shell: false,
-        stdio: ["ignore", "pipe", "ignore"],
+        stdio: ["ignore", "pipe", "pipe"],
       });
       const timer = setTimeout(() => {
         timedOut = true;
@@ -2467,6 +2514,8 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
           child.kill("SIGKILL");
         } else stdout += chunk.toString("utf8");
       });
+      const stderr = stderrWindow();
+      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
       child.once("error", () => {
         clearTimeout(timer);
         if (!settled) {
@@ -2478,7 +2527,7 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         clearTimeout(timer);
         if (!settled) {
           settled = true;
-          resolve({ code, exceeded, stdout, timedOut });
+          resolve({ code, exceeded, stdout, timedOut, ...stderr.captured() });
         }
       });
     });

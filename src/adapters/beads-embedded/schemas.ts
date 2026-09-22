@@ -1,4 +1,5 @@
 import { Type, type Static } from "@sinclair/typebox";
+import { Ajv, type ValidateFunction } from "ajv";
 
 import {
   type ChildProjection,
@@ -9,6 +10,23 @@ import {
 } from "../../fencing/index.js";
 import type { DoltObservation } from "../../preflight/index.js";
 import type { ProvenanceCarryClaimRecord } from "../../protocol/schemas.js";
+
+const utf8 = new TextEncoder();
+const ajv = new Ajv({
+  allErrors: true,
+  coerceTypes: false,
+  removeAdditional: false,
+  strict: true,
+  useDefaults: false,
+});
+ajv.addKeyword({
+  keyword: "maxUtf8Bytes",
+  type: "string",
+  schemaType: "number",
+  validate: (limit: number, value: string) =>
+    utf8.encode(value).byteLength <= limit,
+  errors: false,
+});
 
 /** Exact pinned bd 1.1.0 `issues` data-diff row envelope. */
 const PINNED_BD_ISSUE_BASE_KEYS = [
@@ -365,6 +383,122 @@ export type CrashDiscovery = Readonly<{
   status: "absent" | "observed" | "ambiguous";
 }>;
 
+/**
+ * A failed remote Dolt child is the only witness to why it failed: a refused
+ * ssh key, an unreachable host, and a genuinely diverged remote all leave the
+ * same non-zero exit. The process therefore keeps a bounded, redacted tail of
+ * that child's stderr so a refusal can name its cause. It is diagnostic text
+ * only; no classification ever reads it.
+ */
+export const REMOTE_FAILURE_TAIL_BYTES = 2_048;
+/**
+ * Redaction runs over a larger rolling window than it publishes, so a secret
+ * shape which the published cut would have split is still matched whole. Both
+ * numbers are memory bounds: neither the child's whole stderr nor an unbounded
+ * window is ever held.
+ */
+export const REMOTE_FAILURE_WINDOW_CHARS = 8_192;
+
+export const RemoteFailureTailSchema = Type.Object(
+  {
+    schema: Type.Literal("sce.beads-embedded.remote-failure-tail"),
+    /**
+     * Printable ASCII and newline only. Every other byte is replaced before
+     * validation, so one character is exactly one byte and the character
+     * bound is the byte bound.
+     */
+    text: Type.String({
+      maxLength: REMOTE_FAILURE_TAIL_BYTES,
+      maxUtf8Bytes: REMOTE_FAILURE_TAIL_BYTES,
+      minLength: 1,
+      pattern: "^[\\n\\x20-\\x7E]+$",
+    }),
+    /** Earlier stderr was dropped to hold the bound; this is a tail. */
+    truncated: Type.Boolean(),
+    version: Type.Literal(1),
+  },
+  { additionalProperties: false },
+);
+export type RemoteFailureTail = Static<typeof RemoteFailureTailSchema>;
+
+const validateRemoteFailureTail = ajv.compile(
+  RemoteFailureTailSchema,
+) as ValidateFunction<RemoteFailureTail>;
+
+const ANSI_ESCAPE = /\u001B\[[0-9;?]{0,16}[A-Za-z]/gu;
+const UNPRINTABLE = /[^\n\x20-\x7E]/gu;
+
+/**
+ * Obvious secret shapes, each bounded and each replaced in place so the
+ * surrounding words survive: a reader still learns which credential the
+ * child rejected, never the credential itself.
+ */
+const SECRET_SHAPES: readonly (readonly [RegExp, string])[] = [
+  // A complete private key block, then one whose end the window dropped.
+  [
+    /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----[\s\S]{0,8192}?-----END [A-Z0-9 ]{0,40}PRIVATE KEY-----/gu,
+    "[redacted key]",
+  ],
+  [
+    /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY-----[\s\S]{0,8192}/gu,
+    "[redacted key]",
+  ],
+  // An ssh key blob, and any line that is nothing but base64 (the body of a
+  // key block whose header the window dropped).
+  [
+    /(ssh-(?:rsa|dss|ed25519)|ecdsa-sha2-[a-z0-9-]{1,32})[ \t]+[A-Za-z0-9+/=]{16,}/gu,
+    "$1 [redacted]",
+  ],
+  [/^[A-Za-z0-9+/]{40,}={0,2}$/gmu, "[redacted]"],
+  // Published token shapes.
+  [/\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{8,}/gu, "[redacted]"],
+  [/\bxox[abprs]-[A-Za-z0-9-]{8,}/gu, "[redacted]"],
+  [/\b(?:AKIA|ASIA)[0-9A-Z]{8,}/gu, "[redacted]"],
+  [/\bsk-[A-Za-z0-9_-]{16,}/gu, "[redacted]"],
+  [
+    /\bey[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/gu,
+    "[redacted]",
+  ],
+  // Userinfo in a URL, so a remote keeps only its scheme, host, and path.
+  [/([a-z][a-z0-9+.-]{0,15}:\/\/)[^\s/@]{1,256}@/giu, "$1[redacted]@"],
+  // `Authorization: ...`, `token=...`, and every other named secret, redacted
+  // to the end of its line because the value may itself contain separators.
+  [
+    /\b(api[_-]?key|authorization|bearer|cookie|credentials?|passphrase|passwd|password|private[_-]?key|secret|session[_-]?token|token)([ \t]*[:=][ \t]*)[^\n]+/giu,
+    "$1$2[redacted]",
+  ],
+];
+
+function redactStderr(value: string): string {
+  let text = value.replace(/\r\n?/gu, "\n").replace(ANSI_ESCAPE, "");
+  for (const [shape, replacement] of SECRET_SHAPES)
+    text = text.replace(shape, replacement);
+  return text.replace(UNPRINTABLE, " ");
+}
+
+/**
+ * Publishes a bounded stderr window: redact, restrict to printable ASCII, cut
+ * to the byte bound, and validate. Anything that fails validation is dropped
+ * rather than published unbounded.
+ */
+export function redactedStderrTail(
+  window: string,
+  dropped: boolean,
+): RemoteFailureTail | undefined {
+  const redacted = redactStderr(window).trim();
+  const text = redacted.slice(
+    Math.max(0, redacted.length - REMOTE_FAILURE_TAIL_BYTES),
+  );
+  if (text === "") return undefined;
+  const value = {
+    schema: "sce.beads-embedded.remote-failure-tail",
+    text,
+    truncated: dropped || text.length < redacted.length,
+    version: 1,
+  } as const;
+  return validateRemoteFailureTail(value) ? value : undefined;
+}
+
 export type EmbeddedResponse =
   | Readonly<{ kind: "state"; value: EmbeddedState }>
   | Readonly<{ kind: "load"; value: EmbeddedLoad }>
@@ -407,10 +541,14 @@ export type EmbeddedResponse =
   | Readonly<{ kind: "commit"; value: "applied" | "ambiguous" | "unavailable" }>
   | Readonly<{
       kind: "pull";
+      /** A failed child's redacted tail; diagnostic, never classified on. */
+      stderrTail?: RemoteFailureTail;
       value: "applied" | "conflict" | "ambiguous" | "unavailable";
     }>
   | Readonly<{
       kind: "push";
+      /** A failed child's redacted tail; diagnostic, never classified on. */
+      stderrTail?: RemoteFailureTail;
       value: "applied" | "conflict" | "ambiguous" | "unavailable";
     }>
   | Readonly<{ kind: "readback"; value: EmbeddedReadback }>
