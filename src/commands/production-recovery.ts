@@ -48,6 +48,7 @@ import {
 import {
   deriveCandidateDiffHash,
   canFreezeKnowledgeContractAtFirstWave,
+  knowledgeContractAwaitsFirstWave,
   deriveProvenanceCarryClaimKey,
   deriveProvenanceCarryExportId,
   projectionInputIsValid,
@@ -1472,7 +1473,8 @@ export function createProductionRecoveryRunner(
   const contractMayBeFrozenByFirstWave = (run: RepositoryRun) => {
     return (
       knowledgeContract !== undefined &&
-      canFreezeKnowledgeContractAtFirstWave(run)
+      (canFreezeKnowledgeContractAtFirstWave(run) ||
+        knowledgeContractAwaitsFirstWave(run))
     );
   };
   return createRecoveryRunner({
@@ -1569,7 +1571,10 @@ export function createProductionRecoveryRunner(
             proof.scope.beadsStoreIdentity ||
           recovery.initialRun.integrationBranch !==
             proof.scope.integrationBranch ||
-          !contractMatches(recovery.initialRun.knowledgeContract))
+          !(
+            contractMatches(recovery.initialRun.knowledgeContract) ||
+            contractMayBeFrozenByFirstWave(recovery.initialRun)
+          ))
       )
         return undefined;
       const verified = await verifyRepository(git.runner, git.repository);

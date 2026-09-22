@@ -481,15 +481,16 @@ export function knowledgeContractRuntimeValid(
  * first wave, but it cannot coexist with any unit or gate work.
  */
 /**
- * A composed initial run before its first controller acquisition: nothing has
- * happened yet, so a configuration knowledge contract may accompany it and be
- * frozen at the first wave exactly as for an acquired, unit-free run.
+ * A run that has not planned its first wave: no units, no wave, no gate and
+ * no carry. A configuration knowledge contract may accompany such a run at any
+ * controller state (composed and unacquired, acquire intended, or acquired)
+ * because the contract is frozen only by `wave_planned`.
  */
-export function isPristineUnacquiredRun(state: RepositoryRun): boolean {
+export function knowledgeContractAwaitsFirstWave(
+  state: RepositoryRun,
+): boolean {
   return (
-    state.revision === 0 &&
-    state.state === "initializing" &&
-    state.controller.state === "unacquired" &&
+    (state.state === "initializing" || state.state === "active") &&
     state.knowledgeContract === undefined &&
     state.gate === undefined &&
     state.pendingProvenanceCarry === undefined &&
@@ -501,8 +502,11 @@ export function isPristineUnacquiredRun(state: RepositoryRun): boolean {
     state.activeModifyingUnitIds.length === 0 &&
     state.qualificationQueue.length === 0 &&
     state.integrationQueue.length === 0 &&
-    state.effectJournal.length === 0 &&
-    state.processedEventIds.length === 0 &&
+    state.effectJournal.every(
+      (entry) =>
+        entry.kind === "controller_acquire" ||
+        entry.kind === "controller_release",
+    ) &&
     state.usedSessionCount === 0 &&
     state.closedUnitEvidence === "" &&
     runInvariantErrors(state).length === 0

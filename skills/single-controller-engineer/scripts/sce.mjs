@@ -12100,8 +12100,10 @@ function knowledgeContractRuntimeValid(contract, harness) {
     )
   ) && commands.length >= 1 && commands.length <= 32 && commands.every(canonicalCommandVector) && canonicalCommandVector(contract.provenance.rollupGeneratorCommand) && canonicalCommandVector(contract.provenance.reproducibilityCommand) && utf82.encode(canonicalJson(commands)).byteLength <= 32768 && maximumMaterialisationSidecarBytes(contract, harness) <= LIMITS.materialisationSidecarBytes;
 }
-function isPristineUnacquiredRun(state) {
-  return state.revision === 0 && state.state === "initializing" && state.controller.state === "unacquired" && state.knowledgeContract === void 0 && state.gate === void 0 && state.pendingProvenanceCarry === void 0 && state.provenanceCarryClaim === void 0 && state.lastProvenanceCarryRefusal === void 0 && state.wave.unitIds.length === 0 && Object.keys(state.units).length === 0 && Object.keys(state.reservations).length === 0 && state.activeModifyingUnitIds.length === 0 && state.qualificationQueue.length === 0 && state.integrationQueue.length === 0 && state.effectJournal.length === 0 && state.processedEventIds.length === 0 && state.usedSessionCount === 0 && state.closedUnitEvidence === "" && runInvariantErrors(state).length === 0;
+function knowledgeContractAwaitsFirstWave(state) {
+  return (state.state === "initializing" || state.state === "active") && state.knowledgeContract === void 0 && state.gate === void 0 && state.pendingProvenanceCarry === void 0 && state.provenanceCarryClaim === void 0 && state.lastProvenanceCarryRefusal === void 0 && state.wave.unitIds.length === 0 && Object.keys(state.units).length === 0 && Object.keys(state.reservations).length === 0 && state.activeModifyingUnitIds.length === 0 && state.qualificationQueue.length === 0 && state.integrationQueue.length === 0 && state.effectJournal.every(
+    (entry) => entry.kind === "controller_acquire" || entry.kind === "controller_release"
+  ) && state.usedSessionCount === 0 && state.closedUnitEvidence === "" && runInvariantErrors(state).length === 0;
 }
 function canFreezeKnowledgeContractAtFirstWave(state) {
   const carryLifecycle = [
@@ -27098,7 +27100,7 @@ function createProductionRecoveryRunner(options) {
   };
   const contractMatches = (value) => knowledgeContract === void 0 === (value === void 0) && (knowledgeContract === void 0 || value === void 0 || canonicalJson(knowledgeContract) === canonicalJson(value));
   const contractMayBeFrozenByFirstWave = (run2) => {
-    return knowledgeContract !== void 0 && canFreezeKnowledgeContractAtFirstWave(run2);
+    return knowledgeContract !== void 0 && (canFreezeKnowledgeContractAtFirstWave(run2) || knowledgeContractAwaitsFirstWave(run2));
   };
   return createRecoveryRunner({
     ...recovery,
@@ -27162,7 +27164,7 @@ function createProductionRecoveryRunner(options) {
       }
       if (proof === void 0 || proof.commonDir !== git.repository.commonDir || proof.scope.gitRepositoryIdentity !== git.repository.identity)
         return void 0;
-      if (recovery.initialRun !== void 0 && (recovery.initialRun.controller.holder !== proof.holder || recovery.initialRun.repositoryIdentity !== proof.scope.gitRepositoryIdentity || recovery.initialRun.gitObjectFormat !== git.repository.objectFormat || recovery.initialRun.storeIdentity !== proof.scope.beadsStoreIdentity || recovery.initialRun.integrationBranch !== proof.scope.integrationBranch || !contractMatches(recovery.initialRun.knowledgeContract)))
+      if (recovery.initialRun !== void 0 && (recovery.initialRun.controller.holder !== proof.holder || recovery.initialRun.repositoryIdentity !== proof.scope.gitRepositoryIdentity || recovery.initialRun.gitObjectFormat !== git.repository.objectFormat || recovery.initialRun.storeIdentity !== proof.scope.beadsStoreIdentity || recovery.initialRun.integrationBranch !== proof.scope.integrationBranch || !(contractMatches(recovery.initialRun.knowledgeContract) || contractMayBeFrozenByFirstWave(recovery.initialRun))))
         return void 0;
       const verified = await verifyRepository(git.runner, git.repository);
       return verified.state === "observed" ? proof : void 0;
@@ -35194,7 +35196,7 @@ function parseControllerConfig(input, environment) {
   const repository = git.repository;
   if (nonce === void 0 || git.remote !== void 0 && remote2 === void 0 || topology === void 0 || parsedHarness !== void 0 && !parsedHarness.ok || value.knowledgeContract !== void 0 && knowledgeContract === void 0 || commitment !== void 0 && !commitment.ok || run2.harness !== void 0 && parsedHarness === void 0 || parsedHarness !== void 0 && (run2.harness === void 0 || commitment === void 0 || !commitment.ok || run2.harness.family !== parsedHarness.value.capabilities.family || run2.harness.adapterVersion !== parsedHarness.value.capabilities.adapterVersion || run2.harness.harnessVersion !== parsedHarness.value.capabilities.harnessVersion || run2.harness.supportCommitment !== commitment.value) || canonicalGitCommonDir(repository.commonDir) !== repository.commonDir || absolutePath4(repository.cwd) !== repository.cwd || run2.controller.holder.length === 0 || run2.repositoryIdentity !== repository.identity || run2.repositoryIdentity !== scope.gitRepositoryIdentity || run2.storeIdentity !== scope.beadsStoreIdentity || run2.integrationBranch !== scope.integrationBranch)
     return void 0;
-  if (knowledgeContract === void 0 !== (run2.knowledgeContract === void 0) && !(knowledgeContract !== void 0 && (canFreezeKnowledgeContractAtFirstWave(run2) || isPristineUnacquiredRun(run2))) || knowledgeContract !== void 0 && run2.knowledgeContract !== void 0 && canonicalJson(knowledgeContract) !== canonicalJson(run2.knowledgeContract) || knowledgeContract !== void 0 && (run2.harness === void 0 || !knowledgeContractRuntimeValid(knowledgeContract, run2.harness) || maximumMaterialisationSidecarBytes(knowledgeContract, run2.harness) > 8192))
+  if (knowledgeContract === void 0 !== (run2.knowledgeContract === void 0) && !(knowledgeContract !== void 0 && (canFreezeKnowledgeContractAtFirstWave(run2) || knowledgeContractAwaitsFirstWave(run2))) || knowledgeContract !== void 0 && run2.knowledgeContract !== void 0 && canonicalJson(knowledgeContract) !== canonicalJson(run2.knowledgeContract) || knowledgeContract !== void 0 && (run2.harness === void 0 || !knowledgeContractRuntimeValid(knowledgeContract, run2.harness) || maximumMaterialisationSidecarBytes(knowledgeContract, run2.harness) > 8192))
     return void 0;
   if (knowledgeContract !== void 0 && (() => {
     const roots = [
