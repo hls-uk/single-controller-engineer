@@ -5679,6 +5679,30 @@ test("a base refresh returns a collected, qualified, or approved unit to collect
   );
   assert.equal(failed.units[unitId]?.state, "repair_required");
   assert.equal(failed.units[unitId]?.baseOid, OID_A);
+
+  // An approved unit carries a reviewer packet bound to the old base; the
+  // refresh discards the review outright, packet and session included.
+  const approvedRun = approvedCandidate("integrate", "local-ff");
+  assert.ok(approvedRun.units[unitId]?.reviewerPacket !== undefined);
+  const approvedIntent = stepUnit(approvedRun, unitId, "refresh_intent", {
+    baseOid: OID_B,
+  });
+  const approvedRefreshed = observeUnit(
+    approvedIntent,
+    unitId,
+    "refresh_observed",
+    "candidate_refresh",
+    { baseOid: OID_B, headOid: OID_C, treeOid: OID_C },
+  );
+  const rebased = approvedRefreshed.units[unitId]!;
+  assert.equal(rebased.state, "collected");
+  assert.equal(rebased.reviewerPacket, undefined);
+  assert.equal(rebased.reviewPromptHash, undefined);
+  assert.equal(rebased.reviewerSessionId, undefined);
+  assert.equal(rebased.approvalResponseHash, undefined);
+  assert.ok(rebased.workerPacket !== undefined);
+  assert.equal(rebased.launchBaseOid, OID_A);
+  assert.deepEqual(runInvariantErrors(approvedRefreshed), []);
 });
 
 test("marking a unit effect ambiguous advances that unit's revision so the checkpoint stays exact", () => {
