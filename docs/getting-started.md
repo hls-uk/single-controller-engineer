@@ -165,7 +165,8 @@ the loop this repository uses on itself:
    candidate observation, and again after a sibling lands, the controller
    refreshes it onto the current integration head (`refresh-candidate`), which
    rebases the unit branch in its own worktree and discards every binding to
-   the old base.
+   the old base. Once a unit has landed (or is cancelled, parked, failed, or
+   timed out), `close-unit` releases its path reservation and closes it.
 
 Authority is profiled, never assumed: a run records `local-change-only`,
 `push-branch`, `open-pr`, or `integrate` and stops at its completion

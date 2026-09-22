@@ -75,6 +75,7 @@ export {
   PinnedBdEmbeddedProcess,
   isPinnedCloneMergeDelta,
   isPinnedSlotTransitionDelta,
+  outputBytesFor,
   parsePinnedBdState,
   SLOT_INITIALIZATION_AUTHORITY,
 } from "./pinned-bd-process.js";

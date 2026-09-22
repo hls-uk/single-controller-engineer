@@ -58,6 +58,17 @@ function processTimeoutMs(argv: readonly string[]): number {
     first === "pull";
   return network ? NETWORK_TIMEOUT_MS : PROCESS_TIMEOUT_MS;
 }
+/**
+ * A checkpoint proof reads a complete `dolt diff` of the changed projection
+ * rows. The projection reader admits 256 KiB per capture, and a data diff
+ * carries each changed row twice (from/to) as base64-wrapped cells, so an
+ * exact delta can approach 700 KiB; 1 MiB bounds it. Every other capture
+ * keeps the 64 KiB budget, and an exceeded capture is never a proof.
+ */
+const DELTA_OUTPUT_BYTES = 1_048_576;
+export function outputBytesFor(argv: readonly string[]): number {
+  return argv[0] === "diff" ? DELTA_OUTPUT_BYTES : MAX_OUTPUT_BYTES;
+}
 const EXECUTABLE_SAMPLE_BYTES = 65_536;
 const MAX_CLONE_LINEAGE_EDGES = 64;
 
@@ -67,7 +78,8 @@ export interface ProjectionPersistencePort {
     input: EmbeddedInitialProjection,
     slot: MergeSlotObservation,
   ): Promise<EmbeddedResponse>;
-  load?(): Promise<EmbeddedLoad>;
+  /** Reads the projection at `ref` (a Dolt commit hash) or the working set. */
+  load?(ref?: string): Promise<EmbeddedLoad>;
   readCarry?(predecessorRootIssueId: string): Promise<EmbeddedResponse>;
   claimCarry?(
     request: Extract<EmbeddedRequest, { readonly kind: "carry_claim" }>,
@@ -999,14 +1011,29 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
               },
             };
       }
-      case "load":
+      case "load": {
+        if (this.projections.load === undefined)
+          return { kind: "load", value: { status: "unavailable" } };
+        const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+        if (workingSet === undefined)
+          return { kind: "load", value: { status: "unavailable" } };
+        if (workingSet === "clean")
+          return { kind: "load", value: await this.projections.load() };
+        // A pending working set is an unproven write: a batch whose process
+        // died between mutation and commit, or unrelated work. The durable
+        // checkpoint is HEAD. Only the exact batch that wrote the delta can
+        // prove and commit it (compareAndSet's pending branch); serving the
+        // working set here would let the engine build on state it can never
+        // resubmit, and so block forever.
+        const head = await this.doltHead(this.databaseDirectory);
         return {
           kind: "load",
           value:
-            this.projections.load === undefined
-              ? { status: "unavailable" }
-              : await this.projections.load(),
+            head === undefined
+              ? { status: "ambiguous" }
+              : await this.projections.load(head),
         };
+      }
       case "carry_read":
         return this.projections.readCarry === undefined
           ? { kind: "carry_read", value: { status: "unavailable" } }
@@ -2432,9 +2459,10 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
         timedOut = true;
         child.kill("SIGKILL");
       }, processTimeoutMs(argv));
+      const budget = outputBytesFor(argv);
       child.stdout.on("data", (chunk: Buffer) => {
         bytes += chunk.byteLength;
-        if (bytes > MAX_OUTPUT_BYTES) {
+        if (bytes > budget) {
           exceeded = true;
           child.kill("SIGKILL");
         } else stdout += chunk.toString("utf8");

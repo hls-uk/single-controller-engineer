@@ -27201,6 +27201,7 @@ var commandNames = [
   "review-record",
   "publish",
   "integrate",
+  "close-unit",
   "gate-wave",
   "claim-provenance-carry",
   "resume",
@@ -27379,6 +27380,7 @@ var UnavailableCommandSchema = strictObject5({
     Type.Literal("review-record"),
     Type.Literal("publish"),
     Type.Literal("integrate"),
+    Type.Literal("close-unit"),
     Type.Literal("gate-wave"),
     Type.Literal("resume"),
     Type.Literal("release-controller")
@@ -27551,6 +27553,7 @@ var commandEvent = {
   "review-record": ["review_collected"],
   publish: ["publish_intent"],
   integrate: ["integrate_intent"],
+  "close-unit": ["reservation_release_intent"],
   "gate-wave": [
     "materialisation_resolve_intent",
     "destination_probe_intent",
@@ -27941,6 +27944,10 @@ function processTimeoutMs(argv) {
   const [first, second] = argv;
   const network = first === "dolt" && (second === "push" || second === "pull") || first === "fetch" || first === "push" || first === "pull";
   return network ? NETWORK_TIMEOUT_MS : PROCESS_TIMEOUT_MS;
+}
+var DELTA_OUTPUT_BYTES = 1048576;
+function outputBytesFor(argv) {
+  return argv[0] === "diff" ? DELTA_OUTPUT_BYTES : MAX_OUTPUT_BYTES;
 }
 var EXECUTABLE_SAMPLE_BYTES = 65536;
 var MAX_CLONE_LINEAGE_EDGES = 64;
@@ -28429,11 +28436,20 @@ var PinnedBdEmbeddedProcess = class {
           }
         };
       }
-      case "load":
+      case "load": {
+        if (this.projections.load === void 0)
+          return { kind: "load", value: { status: "unavailable" } };
+        const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+        if (workingSet === void 0)
+          return { kind: "load", value: { status: "unavailable" } };
+        if (workingSet === "clean")
+          return { kind: "load", value: await this.projections.load() };
+        const head3 = await this.doltHead(this.databaseDirectory);
         return {
           kind: "load",
-          value: this.projections.load === void 0 ? { status: "unavailable" } : await this.projections.load()
+          value: head3 === void 0 ? { status: "ambiguous" } : await this.projections.load(head3)
         };
+      }
       case "carry_read":
         return this.projections.readCarry === void 0 ? { kind: "carry_read", value: { status: "unavailable" } } : await this.projections.readCarry(request2.predecessorRootIssueId);
       case "carry_claim":
@@ -29382,9 +29398,10 @@ var PinnedBdEmbeddedProcess = class {
         timedOut = true;
         child.kill("SIGKILL");
       }, processTimeoutMs(argv));
+      const budget = outputBytesFor(argv);
       child.stdout.on("data", (chunk) => {
         bytes2 += chunk.byteLength;
-        if (bytes2 > MAX_OUTPUT_BYTES) {
+        if (bytes2 > budget) {
           exceeded = true;
           child.kill("SIGKILL");
         } else stdout += chunk.toString("utf8");
@@ -29571,8 +29588,12 @@ var DoltProjectionPersistence = class {
    * Load exactly the root and every child that root references. A malformed
    * root/child, missing child, or duplicate mapping is never absence.
    */
-  async load() {
-    const source = await this.sql(this.selectStatement([this.rootIssueId]));
+  async load(ref) {
+    if (ref !== void 0 && !/^[0-9a-z]{20,64}$/u.test(ref))
+      return { status: "ambiguous" };
+    const source = await this.sql(
+      this.selectStatement([this.rootIssueId], ref)
+    );
     const records = source === void 0 ? void 0 : parseRows(source);
     if (records === void 0) return { status: "unavailable" };
     if (records.length !== 1 || records[0]?.id !== this.rootIssueId)
@@ -29597,7 +29618,7 @@ var DoltProjectionPersistence = class {
         value: { children: [], root: parsedRoot.value }
       };
     const childSource = await this.sql(
-      this.selectStatement(childIds2)
+      this.selectStatement(childIds2, ref)
     );
     const childrenRows = childSource === void 0 ? void 0 : parseRows(childSource);
     if (childrenRows === void 0) return { status: "unavailable" };
@@ -29919,8 +29940,9 @@ var DoltProjectionPersistence = class {
     const rows = this.rows(batch);
     return rows === void 0 ? void 0 : this.selectStatement(rows.map((row) => row.issueId));
   }
-  selectStatement(ids) {
-    return `SELECT id, JSON_EXTRACT(metadata,'$.sce') AS sce FROM issues WHERE id IN (${ids.map(stringLiteral).join(",")}) ORDER BY id`;
+  selectStatement(ids, ref) {
+    const table = ref === void 0 ? "issues" : `issues AS OF '${ref}'`;
+    return `SELECT id, JSON_EXTRACT(metadata,'$.sce') AS sce FROM ${table} WHERE id IN (${ids.map(stringLiteral).join(",")}) ORDER BY id`;
   }
   async actual(batch, ref) {
     const rows = this.rows(batch);

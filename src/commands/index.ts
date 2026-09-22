@@ -43,6 +43,7 @@ export const commandNames = [
   "review-record",
   "publish",
   "integrate",
+  "close-unit",
   "gate-wave",
   "claim-provenance-carry",
   "resume",
@@ -248,6 +249,7 @@ const UnavailableCommandSchema = strictObject({
     Type.Literal("review-record"),
     Type.Literal("publish"),
     Type.Literal("integrate"),
+    Type.Literal("close-unit"),
     Type.Literal("gate-wave"),
     Type.Literal("resume"),
     Type.Literal("release-controller"),
@@ -473,6 +475,7 @@ const commandEvent: Readonly<
   "review-record": ["review_collected"],
   publish: ["publish_intent"],
   integrate: ["integrate_intent"],
+  "close-unit": ["reservation_release_intent"],
   "gate-wave": [
     "materialisation_resolve_intent",
     "destination_probe_intent",

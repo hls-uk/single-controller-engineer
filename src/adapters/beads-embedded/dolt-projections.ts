@@ -302,8 +302,12 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
    * Load exactly the root and every child that root references. A malformed
    * root/child, missing child, or duplicate mapping is never absence.
    */
-  public async load(): Promise<EmbeddedLoad> {
-    const source = await this.sql(this.selectStatement([this.rootIssueId]));
+  public async load(ref?: string): Promise<EmbeddedLoad> {
+    if (ref !== undefined && !/^[0-9a-z]{20,64}$/u.test(ref))
+      return { status: "ambiguous" };
+    const source = await this.sql(
+      this.selectStatement([this.rootIssueId], ref),
+    );
     const records = source === undefined ? undefined : parseRows(source);
     if (records === undefined) return { status: "unavailable" };
     if (records.length !== 1 || records[0]?.id !== this.rootIssueId)
@@ -341,7 +345,7 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
         value: { children: [], root: parsedRoot.value },
       };
     const childSource = await this.sql(
-      this.selectStatement(childIds as string[]),
+      this.selectStatement(childIds as string[], ref),
     );
     const childrenRows =
       childSource === undefined ? undefined : parseRows(childSource);
@@ -925,8 +929,9 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
       : this.selectStatement(rows.map((row) => row.issueId));
   }
 
-  private selectStatement(ids: readonly string[]): string {
-    return `SELECT id, JSON_EXTRACT(metadata,'$.sce') AS sce FROM issues WHERE id IN (${ids.map(stringLiteral).join(",")}) ORDER BY id`;
+  private selectStatement(ids: readonly string[], ref?: string): string {
+    const table = ref === undefined ? "issues" : `issues AS OF '${ref}'`;
+    return `SELECT id, JSON_EXTRACT(metadata,'$.sce') AS sce FROM ${table} WHERE id IN (${ids.map(stringLiteral).join(",")}) ORDER BY id`;
   }
 
   private async actual(

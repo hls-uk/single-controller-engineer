@@ -218,6 +218,44 @@ async function firstAcquireCompletes(remote: string | undefined, root: string) {
   ]);
   assert.deepEqual(JSON.parse(pending.stdout), {});
 
+  // sce-296.14: a pending working set is an unproven write (a process that
+  // died between mutation and commit, or unrelated work). The engine must
+  // keep reading the committed head, or it builds on state that only the
+  // exact crashed batch can commit and blocks forever. Corrupt the working
+  // set copy of the root row: served as-is it fails the commitment check.
+  await run(database, DOLT, [
+    "sql",
+    "-q",
+    "UPDATE issues SET metadata = JSON_SET(metadata, '$.sce.projection.aggregateRevision', 99) WHERE id = 'sce-root'",
+  ]);
+  const dirty = await run(database, DOLT, [
+    "sql",
+    "-r",
+    "json",
+    "-q",
+    "SELECT * FROM dolt_status",
+  ]);
+  assert.notDeepEqual(JSON.parse(dirty.stdout), {});
+  const overPending = await runCli([
+    "status",
+    "--controller-config",
+    config,
+    "--json",
+  ]);
+  assert.equal(overPending.response.ok, true, overPending.stdout);
+  if (!overPending.response.ok) throw new Error("unreachable");
+  assert.equal(overPending.response.result.revision, 2);
+  assert.equal(overPending.response.result.effectCount, 1);
+  await run(database, DOLT, ["checkout", "issues"]);
+  const restored = await run(database, DOLT, [
+    "sql",
+    "-r",
+    "json",
+    "-q",
+    "SELECT * FROM dolt_status",
+  ]);
+  assert.deepEqual(JSON.parse(restored.stdout), {});
+
   // sce-296.1: journal commits land above the slot commit under auto-commit
   // (an ambiguity record, a checkpoint, an unrelated bd write). The persisted
   // transition must still be provable afterwards, or an ambiguous act can
