@@ -21304,9 +21304,9 @@ function deriveGitIdentity(input, localBareCanonicalizer) {
   if (inspection.value.providerId !== void 0) {
     if (containsSecretShape(inspection.value.providerId)) return { ok: false };
     identity2 = `provider:${inspection.value.providerId}`;
+  } else if (aliases.length === 0) {
+    identity2 = `local:${commonDir}`;
   } else {
-    if (aliases.length === 0 || aliases.some((alias) => alias === void 0))
-      return { ok: false };
     const distinct = new Set(aliases);
     if (distinct.size !== 1) return { ok: false };
     identity2 = [...distinct][0];
@@ -21466,11 +21466,13 @@ async function executeCaptured(request2) {
       outputExceeded: false,
       signal: null,
       spawnFailed: true,
+      stderrBytes: 0,
       stdout: "",
       timedOut: false
     };
   return new Promise((resolveCapture) => {
     let stdout = "";
+    let stderrBytes = 0;
     let outputBytes = 0;
     let outputExceeded = false;
     let timedOut = false;
@@ -21490,6 +21492,7 @@ async function executeCaptured(request2) {
         return;
       }
       if (stream === "stdout") stdout += chunk.toString("utf8");
+      else stderrBytes += chunk.byteLength;
     };
     child.stdout.on("data", (chunk) => append("stdout", chunk));
     child.stderr.on("data", (chunk) => append("stderr", chunk));
@@ -21507,6 +21510,7 @@ async function executeCaptured(request2) {
         outputExceeded,
         signal,
         spawnFailed,
+        stderrBytes,
         stdout,
         timedOut
       });
@@ -21566,6 +21570,19 @@ function parseGitRemoteConfigOutput(source) {
     urls.push(url);
   }
   return urls;
+}
+var remoteUrlQuery = {
+  executable: "git",
+  argv: ["config", "--null", "--get-regexp", "^remote\\..*\\.url$"]
+};
+async function observeGitRemoteUrls(cwd) {
+  const captured = await executeCaptured(request(cwd, remoteUrlQuery));
+  if (captured.exitCode === 1 && captured.signal === null && !captured.outputExceeded && !captured.spawnFailed && !captured.timedOut && captured.stderrBytes === 0 && captured.stdout.length === 0)
+    return { ok: true, urls: [] };
+  const code = subprocessRefusalCode(
+    classifySubprocess(remoteUrlQuery, captured)
+  );
+  return code === void 0 ? { ok: true, urls: parseGitRemoteConfigOutput(captured.stdout) } : { ok: false, code };
 }
 function embeddedStoreProof(observation) {
   if (observation.backend !== "dolt" || observation.embedded !== true || observation.schema_version !== 1)
@@ -21728,10 +21745,7 @@ async function inspectPreflight(cwd, options = {}) {
     executable: "git",
     argv: ["rev-parse", "--show-object-format"]
   });
-  const remoteOutput = options.providerId === void 0 ? await inspectionOutput(safeCwd, {
-    executable: "git",
-    argv: ["config", "--null", "--get-regexp", "^remote\\..*\\.url$"]
-  }) : void 0;
+  const remoteOutput = options.providerId === void 0 ? await observeGitRemoteUrls(safeCwd) : void 0;
   if (!topLevelOutput.ok)
     return preflightEnvelope(
       { status: "refused", code: topLevelOutput.code },
@@ -21776,7 +21790,7 @@ async function inspectPreflight(cwd, options = {}) {
       { status: "refused", code: "PF_BD_CONTEXT_INVALID" },
       void 0
     );
-  const remoteUrls = remoteOutput === void 0 ? [] : remoteOutput.ok ? parseGitRemoteConfigOutput(remoteOutput.stdout) : void 0;
+  const remoteUrls = remoteOutput === void 0 ? [] : remoteOutput.ok ? remoteOutput.urls : void 0;
   if (remoteUrls === void 0)
     return preflightEnvelope(
       { status: "refused", code: "PF_GIT_INSPECTION_INVALID" },
