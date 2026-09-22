@@ -40,6 +40,7 @@ import {
 } from "../../../src/adapters/beads-server/index.js";
 import type { InitialControllerAcquire } from "../../../src/commands/recovery.js";
 import {
+  FENCING_LIMITS,
   deriveChangedRowsCommitment,
   deriveScopeCommitment,
   deriveSlotReadbackHash,
@@ -58,11 +59,13 @@ import {
   deriveSessionFingerprint,
   deriveSessionLineageRoot,
   reduce,
+  runInvariantErrors,
 } from "../../../src/protocol/reducer.js";
 import {
   canonicalJson,
   type JsonValue,
 } from "../../../src/protocol/canonical.js";
+import { LIMITS, type Unit } from "../../../src/protocol/schemas.js";
 import { event, run, unit } from "../../protocol/fixtures.js";
 
 const scope: FencingScope = {
@@ -322,26 +325,119 @@ function denseRun(sessionCount = 2_176) {
 }
 
 /**
- * A protocol-valid root close to its envelope high-water mark. One child
- * retains a 57 KiB projection and the other 63 retain bounded independent
- * facts, so the one-child reducer transition exercises JSON hex expansion
- * without inventing an invalid aggregate.
+ * Verification text is the near-bound fixture's only padding, so every
+ * command stays a unique, schema-bounded string of an exact byte length.
  */
-function nearBoundRun() {
+const BOUNDARY_BIG_COMMAND_COUNT = 8;
+const BOUNDARY_COMMAND_FLOOR = 8;
+
+function boundedCommand(seed: string, length: number): string {
+  assert.ok(length >= BOUNDARY_COMMAND_FLOOR);
+  return seed.padEnd(length, "v").slice(0, length);
+}
+
+/**
+ * One bounded unit of the near-bound root. Index zero carries the
+ * near-maximum child projection and the other 63 carry independent bounded
+ * facts. The reducer's run invariants require committed verification
+ * commands to mirror the committed wave task metadata exactly, so both
+ * fields hold the same array.
+ */
+function boundedUnit(
+  index: number,
+  bigLength: number,
+  smallLength: number,
+): Unit {
+  const id =
+    index === 0 ? "unit-1" : `z-unit-${String(index + 1).padStart(2, "0")}`;
+  const base = unit(id);
+  const taskMetadata = base.taskMetadata;
+  assert.ok(taskMetadata);
+  const commands =
+    index === 0
+      ? Array.from({ length: BOUNDARY_BIG_COMMAND_COUNT }, (_, item) =>
+          boundedCommand(`x${item}`, bigLength),
+        )
+      : [boundedCommand(`y${index}`, smallLength)];
+  return {
+    ...base,
+    taskMetadata: { ...taskMetadata, mandatoryVerification: commands },
+    verificationCommands: commands,
+  };
+}
+
+/**
+ * Calibration, not a pinned byte total. Both boundary envelopes carry whole
+ * protocol projections, so their exact sizes are a function of the
+ * `RepositoryRun` schema rather than of anything this test asserts: the
+ * totals the original fixture pinned rotted silently the moment a later
+ * protocol field landed, leaving this release-tier vector red without a
+ * signal. Searching for the largest padding the shape still admits keeps the
+ * boundary pair pinning the only limits under test, the exact
+ * `FENCING_LIMITS` guards, and lets the fixture follow the schema instead of
+ * contradicting it.
+ */
+function largestAdmissibleLength(admits: (length: number) => boolean): number {
+  assert.ok(
+    admits(BOUNDARY_COMMAND_FLOOR),
+    "boundary fixture no longer fits its own floor",
+  );
+  let low = BOUNDARY_COMMAND_FLOOR;
+  let high = LIMITS.text;
+  while (low < high) {
+    const middle = low + Math.ceil((high - low) / 2);
+    if (admits(middle)) low = middle;
+    else high = middle - 1;
+  }
+  return low;
+}
+
+function bigChildProjectionBytes(length: number): number {
+  const child = makeChildProjection(
+    makeRootProjection(run([boundedUnit(0, length, length)])),
+    "unit-1",
+  );
+  assert.ok(child);
+  return Buffer.byteLength(canonicalJson(child as JsonValue), "utf8");
+}
+
+/** The largest near-maximum child projection the fencing schema admits. */
+const BOUNDARY_BIG_COMMAND_LENGTH = largestAdmissibleLength(
+  (length) =>
+    bigChildProjectionBytes(length) <= FENCING_LIMITS.childProjectionBytes,
+);
+
+/** Whether a 39-child batch of this shape stays valid and under the guard. */
+function boundaryBatchFits(length: number): boolean {
+  const batch = schemaValidBoundaryBatch(
+    39,
+    BOUNDARY_BIG_COMMAND_LENGTH,
+    length,
+  );
+  return (
+    validateMutationBatch(batch).ok &&
+    Buffer.byteLength(canonicalJson(batch as JsonValue), "utf8") <=
+      FENCING_LIMITS.batchBytes
+  );
+}
+
+const BOUNDARY_SMALL_COMMAND_LENGTH =
+  largestAdmissibleLength(boundaryBatchFits);
+
+/**
+ * A protocol-valid root close to its envelope high-water mark. One child
+ * retains a near-maximum child projection and the other 63 retain bounded
+ * independent facts, so the one-child reducer transition exercises JSON hex
+ * expansion without inventing an invalid aggregate.
+ */
+function nearBoundRun(
+  bigLength = BOUNDARY_BIG_COMMAND_LENGTH,
+  smallLength = BOUNDARY_SMALL_COMMAND_LENGTH,
+) {
   return run(
-    Array.from({ length: 64 }, (_, index) => {
-      const id =
-        index === 0 ? "unit-1" : `z-unit-${String(index + 1).padStart(2, "0")}`;
-      return {
-        ...unit(id),
-        verificationCommands: [
-          ...(index === 0
-            ? Array.from({ length: 7 }, () => "x".repeat(8_192))
-            : []),
-          ...(index === 0 ? [] : ["y".repeat(900)]),
-        ],
-      };
-    }),
+    Array.from({ length: 64 }, (_, index) =>
+      boundedUnit(index, bigLength, smallLength),
+    ),
   );
 }
 
@@ -351,8 +447,12 @@ function nearBoundRun() {
  * 256 KiB boundary vectors used below. It is intentionally not sent to a
  * server: the production adapter must reject the 40-child case first.
  */
-function schemaValidBoundaryBatch(changedChildCount: number): MutationBatch {
-  const before = makeRootProjection(nearBoundRun());
+function schemaValidBoundaryBatch(
+  changedChildCount: number,
+  bigLength = BOUNDARY_BIG_COMMAND_LENGTH,
+  smallLength = BOUNDARY_SMALL_COMMAND_LENGTH,
+): MutationBatch {
+  const before = makeRootProjection(nearBoundRun(bigLength, smallLength));
   const nextRun = {
     ...before.run,
     revision: before.run.revision + 1,
@@ -4338,10 +4438,30 @@ test("adapter admits the schema-valid near-limit batch and refuses max-plus-one 
   );
   assert.equal(validateMutationBatch(nearLimit).ok, true);
   assert.equal(validateMutationBatch(overLimit).ok, true);
-  assert.equal(nearBytes, 260_525);
-  assert.equal(overBytes, 262_266);
-  assert.ok(nearBytes <= 256 * 1024);
-  assert.ok(overBytes > 256 * 1024);
+  assert.ok(nearBytes <= FENCING_LIMITS.batchBytes);
+  assert.ok(overBytes > FENCING_LIMITS.batchBytes);
+  // The pair sits on the guard rather than merely under it: one more byte of
+  // committed verification text per unit no longer fits, while the run
+  // envelope still admits that byte, so the 256 KiB batch guard is what binds.
+  assert.equal(boundaryBatchFits(BOUNDARY_SMALL_COMMAND_LENGTH + 1), false);
+  assert.deepEqual(
+    runInvariantErrors(
+      nearBoundRun(
+        BOUNDARY_BIG_COMMAND_LENGTH,
+        BOUNDARY_SMALL_COMMAND_LENGTH + 1,
+      ),
+    ),
+    [],
+  );
+  // One near-maximum child projection rides inside both boundary vectors.
+  assert.ok(
+    bigChildProjectionBytes(BOUNDARY_BIG_COMMAND_LENGTH) <=
+      FENCING_LIMITS.childProjectionBytes,
+  );
+  assert.ok(
+    bigChildProjectionBytes(BOUNDARY_BIG_COMMAND_LENGTH + 1) >
+      FENCING_LIMITS.childProjectionBytes,
+  );
 
   const server = new FakeServer(identity());
   server.root = makeRootProjection(nearBoundRun());
