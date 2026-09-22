@@ -1063,6 +1063,21 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
           kind: "slot_transition",
           value: await this.proveSlotTransition(request.intent),
         };
+      case "slot_lineage":
+        return {
+          kind: "slot_lineage",
+          value: validateSlotTransitionIntent(
+            request.intent,
+            this.prefix,
+            this.scope,
+            this.remote === undefined ? "local-only" : "git-sync",
+          )
+            ? await this.proveSlotLineage(
+                request.intent.before.head,
+                request.head,
+              )
+            : "ambiguous",
+        };
       case "remote_slot_transition":
         return {
           kind: "remote_slot_transition",
@@ -1755,14 +1770,21 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       slot === undefined ||
       canonicalJson(this.slotObservation(slot, intent.holder) as JsonValue) !==
         canonicalJson(intent.after as JsonValue) ||
-      (workingSet === "pending" && head !== intent.before.head) ||
       (workingSet === "clean" && head === intent.before.head)
     )
       return "absent";
+    // The effect base is the head a pending slot change sits on, or the sole
+    // parent of the committed slot change. It must descend from the planned
+    // head with the slot untouched: the controller's own journal commits sit
+    // between the two under auto-commit, and nothing else may.
+    const base = workingSet === "pending" ? head : await this.soleParent(head);
+    if (base === undefined) return "ambiguous";
+    const lineage = await this.proveSlotLineage(intent.before.head, base);
+    if (lineage !== "observed") return lineage;
     const args =
       workingSet === "pending"
-        ? ["diff", "--data", "-r", "json", intent.before.head]
-        : ["diff", "--data", "-r", "json", intent.before.head, head];
+        ? ["diff", "--data", "-r", "json", base]
+        : ["diff", "--data", "-r", "json", base, head];
     const diff = await this.runDolt(this.databaseDirectory, args);
     return diff !== undefined &&
       diff.code === 0 &&
@@ -1886,6 +1908,54 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
     );
   }
 
+  private async soleParent(commit: string): Promise<string | undefined> {
+    const parents = await this.directParents(commit);
+    return parents !== undefined && parents.length === 1
+      ? parents[0]
+      : undefined;
+  }
+
+  /**
+   * Slot-untouched lineage: `head` is `from` itself, or a descendant whose
+   * intervening commits never wrote the built-in slot's issue, label, or
+   * event rows. One exact count row decides; any other shape is ambiguous.
+   */
+  private async proveSlotLineage(
+    from: string,
+    head: string,
+  ): Promise<"observed" | "absent" | "ambiguous"> {
+    if (safeHead(from) === undefined || safeHead(head) === undefined)
+      return "ambiguous";
+    if (from === head) return "observed";
+    if (!(await this.isAncestor(from, head))) return "absent";
+    const slot = `${this.prefix}-merge-slot`;
+    const rowsTouching = (table: string, column: string) =>
+      `(SELECT COUNT(*) FROM dolt_diff('${from}', '${head}', '${table}') WHERE from_${column} = '${slot}' OR to_${column} = '${slot}')`;
+    const capture = await this.runDolt(this.databaseDirectory, [
+      "sql",
+      "-r",
+      "json",
+      "-q",
+      `SELECT ${rowsTouching("issues", "id")} + ${rowsTouching("labels", "issue_id")} + ${rowsTouching("events", "issue_id")} AS touched`,
+    ]);
+    if (capture === undefined || capture.code !== 0 || capture.exceeded)
+      return "ambiguous";
+    const raw = json(capture.stdout);
+    const rows = raw?.rows;
+    const row =
+      Array.isArray(rows) && rows.length === 1 ? object(rows[0]) : undefined;
+    if (
+      raw === undefined ||
+      !hasExactKeys(raw, ["rows"]) ||
+      row === undefined ||
+      !hasExactKeys(row, ["touched"]) ||
+      typeof row.touched !== "number" ||
+      !Number.isInteger(row.touched)
+    )
+      return "ambiguous";
+    return row.touched === 0 ? "observed" : "absent";
+  }
+
   private remoteProof(
     status: "absent" | "ambiguous",
   ): RemoteSlotTransitionProof {
@@ -1929,11 +1999,11 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       remoteHead === intent.before.remoteHead
     )
       return this.remoteProof("absent");
-    const effectParents = await this.directParents(remoteHead);
+    const effectBase = await this.soleParent(remoteHead);
     if (
-      effectParents === undefined ||
-      effectParents.length !== 1 ||
-      effectParents[0] !== intent.before.remoteHead
+      effectBase === undefined ||
+      (await this.proveSlotLineage(intent.before.remoteHead, effectBase)) !==
+        "observed"
     )
       return this.remoteProof("ambiguous");
     const effectDiff = await this.runDolt(this.databaseDirectory, [
@@ -1941,7 +2011,7 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       "--data",
       "-r",
       "json",
-      intent.before.remoteHead,
+      effectBase,
       remoteHead,
     ]);
     const remoteSlot = await this.remoteSlotAt(remoteRef, intent.holder);

@@ -254,6 +254,17 @@ export type EmbeddedRequest =
     }>
   | Readonly<{
       /**
+       * Proves that `head` is the journalled before-head itself, or descends
+       * from it through commits that never touched the built-in merge slot.
+       * The controller journals its intent after planning, and under Dolt
+       * auto-commit each such write is its own commit ahead of the plan.
+       */
+      head: string;
+      intent: SlotTransitionIntent;
+      kind: "slot_lineage";
+    }>
+  | Readonly<{
+      /**
        * Proves a transition authored by another clone from the configured
        * remote's exact parent→effect commit, then admits only bd's pinned
        * clone-local merge metadata in this clone.
@@ -364,6 +375,10 @@ export type EmbeddedResponse =
   | Readonly<{ kind: "slot"; value: MergeSlotObservation }>
   | Readonly<{
       kind: "slot_transition";
+      value: "observed" | "absent" | "ambiguous";
+    }>
+  | Readonly<{
+      kind: "slot_lineage";
       value: "observed" | "absent" | "ambiguous";
     }>
   | Readonly<{

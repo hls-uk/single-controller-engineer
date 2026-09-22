@@ -1089,10 +1089,15 @@ export function createProductionRecoveryEffectAdapter(
         case "controller_acquire":
         case "controller_release": {
           const transition = controllerTransition(effect);
-          const executor = options.topology?.executeControllerTransition;
-          if (transition === undefined || executor === undefined)
+          const topology = options.topology;
+          // Call the method on its topology: a class-based adapter relies on
+          // `this`, and an unbound call throws before any slot command runs.
+          if (
+            transition === undefined ||
+            topology?.executeControllerTransition === undefined
+          )
             return ambiguous();
-          const result = await executor(transition);
+          const result = await topology.executeControllerTransition(transition);
           return result.status === "observed"
             ? done
             : result.status === "unavailable"

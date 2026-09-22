@@ -1544,6 +1544,9 @@ test("lost-result slot replays prove the exact persisted transition without muta
       },
     },
     { kind: "slot", value: slot("acquired", holder) },
+    // The remote head carries the effect itself, so it is not slot-untouched
+    // lineage from the planned head; only the typed cross-clone proof remains.
+    { kind: "slot_lineage", value: "absent" },
     {
       kind: "remote_slot_transition",
       value: {
@@ -1579,7 +1582,15 @@ test("lost-result slot replays prove the exact persisted transition without muta
   assert.equal(forbidden(crossClone), false);
   assert.deepEqual(
     crossClone.requests.map((request) => request.kind),
-    ["state", "state", "slot", "remote_slot_transition", "slot", "state"],
+    [
+      "state",
+      "state",
+      "slot",
+      "slot_lineage",
+      "remote_slot_transition",
+      "slot",
+      "state",
+    ],
   );
 
   const acquirePlanner = new ScriptedPort([
@@ -1711,4 +1722,93 @@ test("engine-only bd status cannot fabricate full state or carry extra output", 
     ),
     undefined,
   );
+});
+
+test("acquire executes on a head advanced only by the journalled intent commit", async () => {
+  const planned = "b".repeat(40);
+  const journalled = "c".repeat(40);
+  const planner = new ScriptedPort([
+    {
+      kind: "state",
+      value: {
+        autoCommit: "on",
+        head: planned,
+        reachable: true,
+        workingSet: "clean",
+      },
+    },
+    { kind: "slot", value: slot("available") },
+  ]);
+  const intent = await adapter(
+    planner,
+    "local-only",
+  ).prepareAcquireTransition();
+  assert.ok("idempotencyKey" in intent);
+  assert.equal(intent.before.head, planned);
+
+  const mutating = (port: ScriptedPort) =>
+    port.requests.some(
+      (request) =>
+        request.kind === "commit" ||
+        request.kind === "push" ||
+        (request.kind === "slot" && request.action !== "check"),
+    );
+  const afterIntent = {
+    autoCommit: "on" as const,
+    head: journalled,
+    reachable: true,
+    workingSet: "clean" as const,
+  };
+  // The intent commit moved the head; the process proves the slot row was
+  // untouched between the planned head and the current one, so the exact
+  // journalled transition executes instead of being quarantined.
+  const advanced = new ScriptedPort([
+    { kind: "state", value: afterIntent },
+    { kind: "state", value: afterIntent },
+    { kind: "slot", value: slot("available") },
+    { kind: "slot_lineage", value: "observed" },
+    { kind: "slot", value: slot("acquired", holder) },
+    { kind: "state", value: { ...afterIntent, head: "d".repeat(40) } },
+    { kind: "slot", value: slot("acquired", holder) },
+  ]);
+  assert.equal(
+    (await adapter(advanced, "local-only").acquire({ transition: intent }))
+      .code,
+    "applied",
+    JSON.stringify(advanced.requests),
+  );
+  assert.deepEqual(
+    advanced.requests.map((request) => request.kind),
+    [
+      "state",
+      "state",
+      "slot",
+      "slot_lineage",
+      "slot",
+      "slot_transition",
+      "state",
+      "slot",
+    ],
+  );
+  const lineage = advanced.requests[3];
+  assert.equal(lineage?.kind, "slot_lineage");
+  if (lineage?.kind !== "slot_lineage") throw new Error("unreachable");
+  assert.equal(lineage.head, journalled);
+
+  // A head that touched the slot in between is not the planned base; the
+  // transition is quarantined before any slot mutation.
+  for (const verdict of ["absent", "ambiguous"] as const) {
+    const foreign = new ScriptedPort([
+      { kind: "state", value: afterIntent },
+      { kind: "state", value: afterIntent },
+      { kind: "slot", value: slot("available") },
+      { kind: "slot_lineage", value: verdict },
+    ]);
+    assert.equal(
+      (await adapter(foreign, "local-only").acquire({ transition: intent }))
+        .code,
+      "quarantined",
+    );
+    assert.equal(mutating(foreign), false);
+  }
 });

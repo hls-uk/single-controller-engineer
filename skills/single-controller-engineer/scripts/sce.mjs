@@ -26463,10 +26463,10 @@ function createProductionRecoveryEffectAdapter(options) {
         case "controller_acquire":
         case "controller_release": {
           const transition = controllerTransition(effect2);
-          const executor = options.topology?.executeControllerTransition;
-          if (transition === void 0 || executor === void 0)
+          const topology = options.topology;
+          if (transition === void 0 || topology?.executeControllerTransition === void 0)
             return ambiguous3();
-          const result2 = await executor(transition);
+          const result2 = await topology.executeControllerTransition(transition);
           return result2.status === "observed" ? done : result2.status === "unavailable" ? unavailable2() : ambiguous3();
         }
         case "branch_create":
@@ -27993,6 +27993,19 @@ var PinnedBdEmbeddedProcess = class {
           kind: "slot_transition",
           value: await this.proveSlotTransition(request2.intent)
         };
+      case "slot_lineage":
+        return {
+          kind: "slot_lineage",
+          value: validateSlotTransitionIntent(
+            request2.intent,
+            this.prefix,
+            this.scope,
+            this.remote === void 0 ? "local-only" : "git-sync"
+          ) ? await this.proveSlotLineage(
+            request2.intent.before.head,
+            request2.head
+          ) : "ambiguous"
+        };
       case "remote_slot_transition":
         return {
           kind: "remote_slot_transition",
@@ -28442,9 +28455,13 @@ var PinnedBdEmbeddedProcess = class {
       `${this.prefix}-merge-slot`,
       this.scope
     );
-    if (head3 === void 0 || workingSet === void 0 || slot === void 0 || canonicalJson(this.slotObservation(slot, intent2.holder)) !== canonicalJson(intent2.after) || workingSet === "pending" && head3 !== intent2.before.head || workingSet === "clean" && head3 === intent2.before.head)
+    if (head3 === void 0 || workingSet === void 0 || slot === void 0 || canonicalJson(this.slotObservation(slot, intent2.holder)) !== canonicalJson(intent2.after) || workingSet === "clean" && head3 === intent2.before.head)
       return "absent";
-    const args = workingSet === "pending" ? ["diff", "--data", "-r", "json", intent2.before.head] : ["diff", "--data", "-r", "json", intent2.before.head, head3];
+    const base = workingSet === "pending" ? head3 : await this.soleParent(head3);
+    if (base === void 0) return "ambiguous";
+    const lineage = await this.proveSlotLineage(intent2.before.head, base);
+    if (lineage !== "observed") return lineage;
+    const args = workingSet === "pending" ? ["diff", "--data", "-r", "json", base] : ["diff", "--data", "-r", "json", base, head3];
     const diff = await this.runDolt(this.databaseDirectory, args);
     return diff !== void 0 && diff.code === 0 && !diff.exceeded && this.exactSlotDelta(diff.stdout, intent2) ? "observed" : "ambiguous";
   }
@@ -28523,6 +28540,38 @@ var PinnedBdEmbeddedProcess = class {
     const row = Array.isArray(rows) && rows.length === 1 ? object2(rows[0]) : void 0;
     return raw !== void 0 && hasExactKeys(raw, ["rows"]) && row !== void 0 && hasExactKeys(row, ["matches"]) && row.matches === 1;
   }
+  async soleParent(commit2) {
+    const parents = await this.directParents(commit2);
+    return parents !== void 0 && parents.length === 1 ? parents[0] : void 0;
+  }
+  /**
+   * Slot-untouched lineage: `head` is `from` itself, or a descendant whose
+   * intervening commits never wrote the built-in slot's issue, label, or
+   * event rows. One exact count row decides; any other shape is ambiguous.
+   */
+  async proveSlotLineage(from, head3) {
+    if (safeHead(from) === void 0 || safeHead(head3) === void 0)
+      return "ambiguous";
+    if (from === head3) return "observed";
+    if (!await this.isAncestor(from, head3)) return "absent";
+    const slot = `${this.prefix}-merge-slot`;
+    const rowsTouching = (table, column) => `(SELECT COUNT(*) FROM dolt_diff('${from}', '${head3}', '${table}') WHERE from_${column} = '${slot}' OR to_${column} = '${slot}')`;
+    const capture2 = await this.runDolt(this.databaseDirectory, [
+      "sql",
+      "-r",
+      "json",
+      "-q",
+      `SELECT ${rowsTouching("issues", "id")} + ${rowsTouching("labels", "issue_id")} + ${rowsTouching("events", "issue_id")} AS touched`
+    ]);
+    if (capture2 === void 0 || capture2.code !== 0 || capture2.exceeded)
+      return "ambiguous";
+    const raw = json2(capture2.stdout);
+    const rows = raw?.rows;
+    const row = Array.isArray(rows) && rows.length === 1 ? object2(rows[0]) : void 0;
+    if (raw === void 0 || !hasExactKeys(raw, ["rows"]) || row === void 0 || !hasExactKeys(row, ["touched"]) || typeof row.touched !== "number" || !Number.isInteger(row.touched))
+      return "ambiguous";
+    return row.touched === 0 ? "observed" : "absent";
+  }
   remoteProof(status) {
     return {
       schema: "sce.beads-embedded.remote-slot-transition-proof",
@@ -28550,15 +28599,15 @@ var PinnedBdEmbeddedProcess = class {
     const remoteHead = remoteRef === void 0 ? void 0 : await this.doltRefHead(remoteRef);
     if (localHead === void 0 || workingSet !== "clean" || remoteRef === void 0 || remoteHead === void 0 || remoteHead === intent2.before.remoteHead)
       return this.remoteProof("absent");
-    const effectParents = await this.directParents(remoteHead);
-    if (effectParents === void 0 || effectParents.length !== 1 || effectParents[0] !== intent2.before.remoteHead)
+    const effectBase = await this.soleParent(remoteHead);
+    if (effectBase === void 0 || await this.proveSlotLineage(intent2.before.remoteHead, effectBase) !== "observed")
       return this.remoteProof("ambiguous");
     const effectDiff = await this.runDolt(this.databaseDirectory, [
       "diff",
       "--data",
       "-r",
       "json",
-      intent2.before.remoteHead,
+      effectBase,
       remoteHead
     ]);
     const remoteSlot = await this.remoteSlotAt(remoteRef, intent2.holder);
@@ -29704,7 +29753,12 @@ var EmbeddedBeadsAdapter = class {
       return this.confirmDurableSlot(check);
     const transition = authority.transition;
     if (transition === void 0) return result("quarantined");
-    if (!this.matchesTransitionBefore(transition, "acquire", before, check))
+    if (!await this.matchesTransitionBefore(
+      transition,
+      "acquire",
+      before,
+      check
+    ))
       return result("quarantined");
     const acquired = await this.slot("acquire");
     if (acquired === void 0) return result("quarantined");
@@ -29779,7 +29833,12 @@ var EmbeddedBeadsAdapter = class {
     if (state === void 0 || !state.reachable || state.workingSet !== "clean" || state.head === void 0 || this.mode === "git-sync" && (state.remoteHead === void 0 || state.remoteHead !== state.head))
       return result("ambiguous");
     const transition = authority.transition;
-    if (!this.matchesTransitionBefore(transition, "release", state, before))
+    if (!await this.matchesTransitionBefore(
+      transition,
+      "release",
+      state,
+      before
+    ))
       return result("quarantined");
     const released = await this.slot("release");
     if (released === void 0) return result("quarantined");
@@ -29860,7 +29919,7 @@ var EmbeddedBeadsAdapter = class {
     }
     if (current.status === "acquired" && current.holder !== this.holder)
       return { status: "blocked" };
-    if (same5(current, transition.before.slot) && state.head === transition.before.head && (this.mode === "local-only" || state.remoteHead === transition.before.remoteHead))
+    if (same5(current, transition.before.slot) && await this.slotLineage(transition, state.head) === "observed" && (this.mode === "local-only" || state.remoteHead !== void 0 && await this.slotLineage(transition, state.remoteHead) === "observed"))
       return { status: "absent" };
     return { status: "ambiguous" };
   }
@@ -30358,14 +30417,21 @@ var EmbeddedBeadsAdapter = class {
       readbackHash: deriveSlotReadbackHash(withoutHash)
     };
   }
-  matchesTransitionBefore(transition, kind, state, slot) {
+  /**
+   * The journalled before-head is the plan-time head. Every controller
+   * journal write after planning (the intent itself, checkpoints) is its own
+   * Dolt commit, so the effect base is proved as slot-untouched lineage from
+   * that head rather than head equality. In git-sync the store must already
+   * be in sync again, exactly as the planner required.
+   */
+  async matchesTransitionBefore(transition, kind, state, slot) {
     return validateSlotTransitionIntent(
       transition,
       this.prefix,
       this.scope,
       this.mode,
       this.holder
-    ) && transition.kind === kind && state.head !== void 0 && transition.before.head === state.head && transition.before.remoteHead === state.remoteHead && same5(transition.before.slot, slot) && same5(transition.after, this.expectedSlot(kind, slot));
+    ) && transition.kind === kind && state.head !== void 0 && (this.mode === "git-sync" ? state.remoteHead === state.head : state.remoteHead === transition.before.remoteHead) && same5(transition.before.slot, slot) && same5(transition.after, this.expectedSlot(kind, slot)) && await this.slotLineage(transition, state.head) === "observed";
   }
   /**
    * Resumes only a controller-journalled built-in transition. The process
@@ -30382,16 +30448,18 @@ var EmbeddedBeadsAdapter = class {
       return result("ambiguous");
     const state = await this.state();
     const local = await this.slot("check");
-    if (state === void 0 || !state.reachable || state.workingSet === "unknown" || local === void 0 || !same5(local, transition.after) || state.head === void 0 || // A pending change retains the before head; an auto-committed change
-    // must have created a new head. Either other shape is unrelated state.
-    state.workingSet === "pending" && state.head !== transition.before.head || state.workingSet === "clean" && state.head === transition.before.head)
+    if (state === void 0 || !state.reachable || state.workingSet === "unknown" || local === void 0 || !same5(local, transition.after) || state.head === void 0 || // A pending change retains its slot-untouched base head; an
+    // auto-committed change must have created a new head. Either other
+    // shape is unrelated state.
+    state.workingSet === "pending" && await this.slotLineage(transition, state.head) !== "observed" || state.workingSet === "clean" && state.head === transition.before.head)
       return result("ambiguous");
     if (this.mode === "git-sync") {
-      if (state.remoteHead === transition.before.remoteHead) {
+      const remoteLineage = state.remoteHead === void 0 ? "ambiguous" : await this.slotLineage(transition, state.remoteHead);
+      if (remoteLineage === "observed") {
         const remote2 = await this.slot("check", "remote");
         if (remote2 === void 0 || !same5(remote2, transition.before.slot))
           return result("ambiguous");
-      } else if (state.workingSet === "clean") {
+      } else if (remoteLineage === "absent" && state.workingSet === "clean") {
         return this.reconcileRemoteSlotTransition(
           kind,
           transition,
@@ -30493,7 +30561,7 @@ var EmbeddedBeadsAdapter = class {
     if (local === void 0 || !same5(local, transition.after))
       return result("ambiguous");
     if (this.mode === "local-only") return result("applied");
-    if (state.remoteHead !== transition.before.remoteHead || state.head === transition.before.remoteHead)
+    if (state.remoteHead === void 0 || state.head === state.remoteHead || await this.slotLineage(transition, state.remoteHead) !== "observed")
       return result("ambiguous");
     const remoteBefore = await this.slot("check", "remote");
     if (remoteBefore === void 0 || !same5(remoteBefore, transition.before.slot))
@@ -30919,6 +30987,20 @@ var EmbeddedBeadsAdapter = class {
       this.scope
     );
     return validated.ok ? validated.value : void 0;
+  }
+  /**
+   * Proves `head` is the journalled before-head, or descends from it with the
+   * built-in slot row untouched. Equality needs no process call, so a store
+   * that never commits between plan and act keeps its exact request trace.
+   */
+  async slotLineage(transition, head3) {
+    if (head3 === transition.before.head) return "observed";
+    const response = await this.call({
+      kind: "slot_lineage",
+      head: head3,
+      intent: transition
+    });
+    return response?.kind === "slot_lineage" ? response.value : "ambiguous";
   }
   async readback(batch) {
     const response = await this.call({ kind: "readback", batch });

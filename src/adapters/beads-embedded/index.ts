@@ -339,7 +339,14 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       return this.confirmDurableSlot(check);
     const transition = authority.transition;
     if (transition === undefined) return result("quarantined");
-    if (!this.matchesTransitionBefore(transition, "acquire", before, check))
+    if (
+      !(await this.matchesTransitionBefore(
+        transition,
+        "acquire",
+        before,
+        check,
+      ))
+    )
       return result("quarantined");
     const acquired = await this.slot("acquire");
     if (acquired === undefined) return result("quarantined");
@@ -450,7 +457,14 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     )
       return result("ambiguous");
     const transition = authority.transition;
-    if (!this.matchesTransitionBefore(transition, "release", state, before))
+    if (
+      !(await this.matchesTransitionBefore(
+        transition,
+        "release",
+        state,
+        before,
+      ))
+    )
       return result("quarantined");
     const released = await this.slot("release");
     if (released === undefined) return result("quarantined");
@@ -571,9 +585,11 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       return { status: "blocked" };
     if (
       same(current, transition.before.slot) &&
-      state.head === transition.before.head &&
+      (await this.slotLineage(transition, state.head)) === "observed" &&
       (this.mode === "local-only" ||
-        state.remoteHead === transition.before.remoteHead)
+        (state.remoteHead !== undefined &&
+          (await this.slotLineage(transition, state.remoteHead)) ===
+            "observed"))
     )
       return { status: "absent" };
     return { status: "ambiguous" };
@@ -1390,12 +1406,19 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     };
   }
 
-  private matchesTransitionBefore(
+  /**
+   * The journalled before-head is the plan-time head. Every controller
+   * journal write after planning (the intent itself, checkpoints) is its own
+   * Dolt commit, so the effect base is proved as slot-untouched lineage from
+   * that head rather than head equality. In git-sync the store must already
+   * be in sync again, exactly as the planner required.
+   */
+  private async matchesTransitionBefore(
     transition: SlotTransitionIntent,
     kind: "acquire" | "release",
     state: EmbeddedState,
     slot: MergeSlotObservation,
-  ): boolean {
+  ): Promise<boolean> {
     return (
       validateSlotTransitionIntent(
         transition,
@@ -1406,10 +1429,12 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       ) &&
       transition.kind === kind &&
       state.head !== undefined &&
-      transition.before.head === state.head &&
-      transition.before.remoteHead === state.remoteHead &&
+      (this.mode === "git-sync"
+        ? state.remoteHead === state.head
+        : state.remoteHead === transition.before.remoteHead) &&
       same(transition.before.slot, slot) &&
-      same(transition.after, this.expectedSlot(kind, slot))
+      same(transition.after, this.expectedSlot(kind, slot)) &&
+      (await this.slotLineage(transition, state.head)) === "observed"
     );
   }
 
@@ -1442,19 +1467,27 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       local === undefined ||
       !same(local, transition.after) ||
       state.head === undefined ||
-      // A pending change retains the before head; an auto-committed change
-      // must have created a new head. Either other shape is unrelated state.
+      // A pending change retains its slot-untouched base head; an
+      // auto-committed change must have created a new head. Either other
+      // shape is unrelated state.
       (state.workingSet === "pending" &&
-        state.head !== transition.before.head) ||
+        (await this.slotLineage(transition, state.head)) !== "observed") ||
       (state.workingSet === "clean" && state.head === transition.before.head)
     )
       return result("ambiguous");
     if (this.mode === "git-sync") {
-      if (state.remoteHead === transition.before.remoteHead) {
+      // The remote is either still at a slot-untouched base (this clone owns
+      // the unpushed effect) or has provably moved past it (another clone of
+      // this holder pushed the effect). Anything less exact is ambiguous.
+      const remoteLineage =
+        state.remoteHead === undefined
+          ? "ambiguous"
+          : await this.slotLineage(transition, state.remoteHead);
+      if (remoteLineage === "observed") {
         const remote = await this.slot("check", "remote");
         if (remote === undefined || !same(remote, transition.before.slot))
           return result("ambiguous");
-      } else if (state.workingSet === "clean") {
+      } else if (remoteLineage === "absent" && state.workingSet === "clean") {
         return this.reconcileRemoteSlotTransition(
           kind,
           transition,
@@ -1652,8 +1685,9 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       return result("ambiguous");
     if (this.mode === "local-only") return result("applied");
     if (
-      state.remoteHead !== transition.before.remoteHead ||
-      state.head === transition.before.remoteHead
+      state.remoteHead === undefined ||
+      state.head === state.remoteHead ||
+      (await this.slotLineage(transition, state.remoteHead)) !== "observed"
     )
       return result("ambiguous");
     const remoteBefore = await this.slot("check", "remote");
@@ -2452,6 +2486,24 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       this.scope,
     );
     return validated.ok ? validated.value : undefined;
+  }
+
+  /**
+   * Proves `head` is the journalled before-head, or descends from it with the
+   * built-in slot row untouched. Equality needs no process call, so a store
+   * that never commits between plan and act keeps its exact request trace.
+   */
+  private async slotLineage(
+    transition: SlotTransitionIntent,
+    head: string,
+  ): Promise<"observed" | "absent" | "ambiguous"> {
+    if (head === transition.before.head) return "observed";
+    const response = await this.call({
+      kind: "slot_lineage",
+      head,
+      intent: transition,
+    });
+    return response?.kind === "slot_lineage" ? response.value : "ambiguous";
   }
 
   private async readback(

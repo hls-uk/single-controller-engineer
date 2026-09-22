@@ -2231,6 +2231,66 @@ test("controller topology is exactly bound and reconcile never executes its muta
   assert.equal(executions, 1);
 });
 
+test("controller topology methods are called on their instance, not as detached functions", async () => {
+  // The production embedded adapter is a class whose methods read `this`.
+  // A detached call throws before any slot command and used to surface as
+  // an ambiguous act that blocked every fresh acquire (sce-59r).
+  class InstanceTopology implements ControllerTransitionRecoveryPort {
+    public executions = 0;
+    private readonly usable = true;
+
+    public async executeControllerTransition(): Promise<
+      Readonly<{ status: "observed" | "ambiguous" }>
+    > {
+      if (!this.usable) return { status: "ambiguous" };
+      this.executions += 1;
+      return { status: "observed" };
+    }
+
+    public async reconcileControllerTransition(): Promise<
+      Readonly<{ status: "absent" | "ambiguous" }>
+    > {
+      return this.usable ? { status: "absent" } : { status: "ambiguous" };
+    }
+  }
+  const topology = new InstanceTopology();
+  const effect = {
+    effectId: "effect-controller",
+    idempotencyKey: "key-controller",
+    kind: "controller_acquire",
+    params: {
+      controllerFencingToken: "fence-1",
+      holder: "run-1/incarnation-1",
+      promptHash: HASH,
+      requestedModel: "frontier",
+      returnedModel: "frontier-1",
+      slotTransition: {
+        holder: "run-1/incarnation-1",
+        scope: {
+          beadsStoreIdentity: "store-1",
+          gitRepositoryIdentity: repository.identity,
+          integrationBranch: "main",
+        },
+      },
+    },
+    paramsHash: HASH,
+    schemaVersion: 1,
+    unitId: null,
+  } as unknown as ProtocolEffect;
+  const adapter = createProductionRecoveryEffectAdapter({
+    git: {
+      repository,
+      runner: async () => ({ exitCode: 1, signal: null, stdout: "" }),
+    },
+    topology,
+  });
+  assert.deepEqual(await adapter.reconcile(effect, localRun()), {
+    status: "absent",
+  });
+  assert.equal((await adapter.execute(effect, localRun())).status, "observed");
+  assert.equal(topology.executions, 1);
+});
+
 test("controller acquire and release execute and reconcile emit strict unitless observations", async () => {
   const state = localRun();
   for (const kind of ["acquire", "release"] as const) {

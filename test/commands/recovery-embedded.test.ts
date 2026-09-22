@@ -435,3 +435,73 @@ test("controller transition reconciliation is read-only before/after act and blo
     ["state", "slot"],
   );
 });
+
+class AdvancedHeadPort implements EmbeddedProcessPort {
+  public readonly identity = identity();
+  public readonly requests: EmbeddedRequest[] = [];
+
+  public constructor(
+    private readonly observed: MergeSlotObservation,
+    private readonly lineage: "observed" | "absent" | "ambiguous",
+  ) {}
+
+  public async execute(request: EmbeddedRequest): Promise<EmbeddedResponse> {
+    this.requests.push(request);
+    switch (request.kind) {
+      case "state":
+        return {
+          kind: "state",
+          value: {
+            autoCommit: "on",
+            head: "b".repeat(40),
+            reachable: true,
+            workingSet: "clean",
+          },
+        };
+      case "slot":
+        return { kind: "slot", value: this.observed };
+      case "slot_lineage":
+        return { kind: "slot_lineage", value: this.lineage };
+      default:
+        throw new Error(`unexpected mutation ${request.kind}`);
+    }
+  }
+}
+
+test("reconciliation is absent only when the advanced head is slot-untouched lineage of the planned head", async () => {
+  // Under Dolt auto-commit the journalled acquire intent is itself a commit,
+  // so the store head has always moved past the planned before-head by the
+  // time the transition is reconciled. That advance is not an ambiguity when
+  // the process proves the merge slot was never touched in between.
+  const intent = transition();
+  const advanced = new AdvancedHeadPort(slot(), "observed");
+  assert.deepEqual(
+    await adapter(advanced).reconcileControllerTransition(intent),
+    { status: "absent" },
+  );
+  assert.deepEqual(
+    advanced.requests.map((request) => request.kind),
+    ["state", "slot", "slot_lineage"],
+  );
+  const lineage = advanced.requests[2];
+  assert.equal(lineage?.kind, "slot_lineage");
+  if (lineage?.kind !== "slot_lineage") throw new Error("unreachable");
+  assert.equal(lineage.head, "b".repeat(40));
+  assert.deepEqual(lineage.intent, intent);
+
+  const touched = new AdvancedHeadPort(slot(), "absent");
+  assert.deepEqual(
+    await adapter(touched).reconcileControllerTransition(intent),
+    { status: "ambiguous" },
+  );
+  const unproved = new AdvancedHeadPort(slot(), "ambiguous");
+  assert.deepEqual(
+    await adapter(unproved).reconcileControllerTransition(intent),
+    { status: "ambiguous" },
+  );
+  for (const port of [touched, unproved])
+    assert.deepEqual(
+      port.requests.map((request) => request.kind),
+      ["state", "slot", "slot_lineage"],
+    );
+});
