@@ -54,6 +54,15 @@ export const commandNames = [
 
 export type CommandName = (typeof commandNames)[number];
 
+/** The commands whose request carries a repository run envelope. */
+export const stateCommandNames = ["inspect", "next", "status"] as const;
+
+export type StateCommandName = (typeof stateCommandNames)[number];
+
+export function isStateCommandName(value: string): value is StateCommandName {
+  return (stateCommandNames as readonly string[]).includes(value);
+}
+
 export const feedbackActions = [
   "prepare",
   "preview",
@@ -623,7 +632,7 @@ function recoveryBlocked(): CommandRunnerResult {
 }
 
 async function stateResult(
-  command: "inspect" | "next" | "status",
+  command: StateCommandName,
   run: RepositoryRun,
 ): Promise<CommandRunnerResult> {
   const request = {
@@ -637,15 +646,8 @@ async function stateResult(
 
 function isStateCommandRequest(
   request: CommandRequest,
-): request is Extract<
-  CommandRequest,
-  { readonly command: "inspect" | "next" | "status" }
-> {
-  return (
-    request.command === "inspect" ||
-    request.command === "next" ||
-    request.command === "status"
-  );
+): request is Extract<CommandRequest, { readonly command: StateCommandName }> {
+  return isStateCommandName(request.command);
 }
 
 function isHarnessPacketCommandRequest(

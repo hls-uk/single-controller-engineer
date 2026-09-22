@@ -16,6 +16,7 @@ import {
   feedbackActions,
   isCommandName,
   isFeedbackAction,
+  isStateCommandName,
   MAX_CLI_REQUEST_BYTES,
   MAX_CLI_RESPONSE_BYTES,
   stateOnlyCommandRunner,
@@ -536,10 +537,7 @@ function parseCommand(
     version: SCHEMA_VERSION,
   };
   if (!validateCommandRequest(request))
-    throw new CliError(
-      "SCE_INVALID_REQUEST",
-      "The command request is invalid.",
-    );
+    throw new CliError("SCE_INVALID_REQUEST", malformedRequestMessage(command));
   const controllerConfig = optionValue(values, "--controller-config");
   return {
     ...(controllerConfig === undefined
@@ -700,6 +698,33 @@ function parseRequest(value: string): JsonObject {
   return parsed;
 }
 
+/**
+ * A rejected request carries only its code, so both refusal seams name the
+ * exact payload the invoked command reads: the harness packet request, the
+ * run envelope an explicit invocation supplies, or the authoritative store a
+ * --controller-config invocation reads its run from.
+ */
+function malformedRequestMessage(command: CommandName): string {
+  if (command === "harness-packet")
+    return "The harness-packet request is invalid: --request must be a complete sce.harness-packet payload (unitId, role, baseOid, acceptance, mandatoryVerification, ownedPaths, plus the reviewer fields when role is reviewer).";
+  if (isStateCommandName(command))
+    return `The ${command} request is invalid: --request must be '{"run":{...}}' with a valid repository run envelope, or be omitted when --controller-config supplies the run.`;
+  return "The command request is invalid.";
+}
+
+function refusedRequestMessage(
+  command: CommandName,
+  controllerConfig: boolean,
+): string {
+  if (command === "harness-packet")
+    return "The harness-packet request is not a usable launch packet: --request must carry a valid sce.harness-packet payload within the bounded launch size.";
+  if (!isStateCommandName(command))
+    return "The request does not contain a valid repository run.";
+  return controllerConfig
+    ? `The ${command} command reads its repository run from the --controller-config authoritative store, which did not supply a valid run; an explicit --request '{"run":{...}}' envelope is read only without --controller-config.`
+    : `The ${command} command needs a repository run: pass --request '{"run":{...}}' with the run envelope, or --controller-config <absolute path> to read the run from its authoritative store.`;
+}
+
 export async function runCli(
   argv: readonly string[],
   dependencies: CliDependencies = {},
@@ -777,7 +802,10 @@ export async function runCli(
     if (outcome.status === "invalid") {
       return failure(
         outcome.code,
-        "The request does not contain a valid repository run.",
+        refusedRequestMessage(
+          invocation.request.command,
+          invocation.controllerConfig !== undefined,
+        ),
         EXIT_USAGE,
         invocation.request.command,
       );

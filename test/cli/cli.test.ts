@@ -1409,3 +1409,87 @@ test("vendored CLI bundle is reproducible and executable", async () => {
   );
   assert.ok((await stat(output)).mode & 0o111);
 });
+
+test("refused state requests name the run payload and where the run comes from", async () => {
+  for (const command of ["inspect", "next", "status"] as const) {
+    const bare = await runCli([command, "--json"]);
+    assert.equal(bare.exitCode, 64);
+    assert.deepEqual(JSON.parse(bare.stdout).error, {
+      code: "SCE_INVALID_STATE_REQUEST",
+      message: `The ${command} command needs a repository run: pass --request '{"run":{...}}' with the run envelope, or --controller-config <absolute path> to read the run from its authoritative store.`,
+    });
+
+    const malformed = await runCli([
+      command,
+      "--json",
+      "--request",
+      JSON.stringify({ run: { revision: 0 } }),
+    ]);
+    assert.equal(malformed.exitCode, 64);
+    assert.deepEqual(JSON.parse(malformed.stdout).error, {
+      code: "SCE_INVALID_REQUEST",
+      message: `The ${command} request is invalid: --request must be '{"run":{...}}' with a valid repository run envelope, or be omitted when --controller-config supplies the run.`,
+    });
+
+    const stored = await runCli(
+      [command, "--controller-config", "/tmp/sce.json"],
+      {
+        async controllerConfigRunner() {
+          return createRecoveryCommandRunner(async () => ({
+            revision: 0,
+            run: { ...run(), activeModifyingUnitIds: ["unit-2"] },
+            status: "idle",
+          }));
+        },
+      },
+    );
+    assert.equal(stored.exitCode, 64);
+    assert.deepEqual(JSON.parse(stored.stdout).error, {
+      code: "SCE_INVALID_STATE_REQUEST",
+      message: `The ${command} command reads its repository run from the --controller-config authoritative store, which did not supply a valid run; an explicit --request '{"run":{...}}' envelope is read only without --controller-config.`,
+    });
+  }
+});
+
+test("refused harness packets name the packet request, not a repository run", async () => {
+  const packetInput = {
+    acceptance: ["acceptance-a"],
+    baseOid: "a".repeat(40),
+    mandatoryVerification: ["npm test"],
+    ownedPaths: ["src/a"],
+    role: "worker" as const,
+    unitId: "unit-1",
+  };
+
+  const malformed = await runCli([
+    "harness-packet",
+    "--json",
+    "--request",
+    JSON.stringify({ ...packetInput, unexpected: true }),
+  ]);
+  assert.equal(malformed.exitCode, 64);
+  assert.deepEqual(JSON.parse(malformed.stdout).error, {
+    code: "SCE_INVALID_REQUEST",
+    message:
+      "The harness-packet request is invalid: --request must be a complete sce.harness-packet payload (unitId, role, baseOid, acceptance, mandatoryVerification, ownedPaths, plus the reviewer fields when role is reviewer).",
+  });
+
+  const oversized = await runCli([
+    "harness-packet",
+    "--json",
+    "--request",
+    JSON.stringify({
+      ...packetInput,
+      acceptance: Array.from(
+        { length: 64 },
+        (_value, index) => `acceptance-${index}-${"a".repeat(200)}`,
+      ),
+    }),
+  ]);
+  assert.equal(oversized.exitCode, 64);
+  assert.deepEqual(JSON.parse(oversized.stdout).error, {
+    code: "SCE_INVALID_STATE_REQUEST",
+    message:
+      "The harness-packet request is not a usable launch packet: --request must carry a valid sce.harness-packet payload within the bounded launch size.",
+  });
+});
