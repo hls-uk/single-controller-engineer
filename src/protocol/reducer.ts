@@ -1413,10 +1413,19 @@ function reduceWavePlan(
   const planned: RepositoryRun = {
     ...stateWithoutPendingCarry,
     units: Object.fromEntries(
-      Object.entries(state.units).map(([unitId, unit]) => [
-        unitId,
-        { ...unit, taskMetadata: byUnitId.get(unitId)! },
-      ]),
+      Object.entries(state.units).map(([unitId, unit]) => {
+        const task = byUnitId.get(unitId)!;
+        // A rewritten plan binding is a unit change. Its child projection
+        // carries it, so the unit revision advances exactly as for any other
+        // change; an unchanged binding leaves the unit untouched.
+        return [
+          unitId,
+          canonicalJson(unit.taskMetadata as unknown as JsonValue) ===
+          canonicalJson(task as unknown as JsonValue)
+            ? unit
+            : { ...unit, revision: unit.revision + 1, taskMetadata: task },
+        ];
+      }),
     ),
     wave: { id: event.waveId, unitIds: [...selected.value] },
   };
@@ -1434,7 +1443,10 @@ function reduceWavePlan(
   );
 }
 
-function canonicalTaskMetadata(task: WaveTaskMetadata): WaveTaskMetadata {
+/** The exact at-rest form of a task; a planned unit stores nothing else. */
+export function canonicalTaskMetadata(
+  task: WaveTaskMetadata,
+): WaveTaskMetadata {
   return {
     ...task,
     acceptanceIds: sortedStrings(task.acceptanceIds),

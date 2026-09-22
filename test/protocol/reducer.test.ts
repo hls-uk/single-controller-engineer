@@ -5577,3 +5577,34 @@ test("terminal intents start only from stable observed lifecycle states", () => 
   if (!stackedTimeout.ok)
     assert.equal(stackedTimeout.code, "illegal_transition");
 });
+
+test("a wave plan that rewrites a unit's binding advances that unit's revision only", () => {
+  const first = unit("unit-1");
+  const second = unit("unit-2");
+  const state = {
+    ...run([first, second]),
+    wave: { id: "wave-0", unitIds: [] },
+  };
+  const canonicalFirst = state.units["unit-1"]!.taskMetadata!;
+  const reordered = {
+    ...state.units["unit-2"]!.taskMetadata!,
+    mandatoryVerification: ["npm test", "npm run lint"],
+    ownedPaths: ["test", "src"],
+  };
+  const result = reduce(state, {
+    eventId: "wave",
+    expectedRevision: state.revision,
+    type: "wave_planned",
+    waveId: "wave-1",
+    tasks: [canonicalFirst, reordered],
+  });
+  assert.equal(result.ok, true, result.ok ? "" : JSON.stringify(result));
+  if (!result.ok) return;
+  assert.deepEqual(result.nextState.units["unit-1"], state.units["unit-1"]);
+  assert.equal(result.nextState.units["unit-2"]?.revision, second.revision + 1);
+  assert.deepEqual(result.nextState.units["unit-2"]?.taskMetadata, {
+    ...reordered,
+    mandatoryVerification: ["npm run lint", "npm test"],
+    ownedPaths: ["src", "test"],
+  });
+});

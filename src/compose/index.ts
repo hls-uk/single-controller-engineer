@@ -21,6 +21,7 @@ import {
 } from "../harness/index.js";
 import { canonicalJson, type JsonValue } from "../protocol/canonical.js";
 import {
+  canonicalTaskMetadata,
   deriveIdempotencyKey,
   runInvariantErrors,
 } from "../protocol/reducer.js";
@@ -536,7 +537,10 @@ export function planInitialUnits(
       revision: 0,
       state: "planned" as const,
       baseOid,
-      taskMetadata: { ...record, unitId: id },
+      // Stored in the reducer's canonical form: a later wave plan must find
+      // every unit already exact, because planning never bumps a unit's
+      // revision and a rewritten child would fail the batch validator.
+      taskMetadata: canonicalTaskMetadata({ ...record, unitId: id }),
       reservationIds: [],
       repairCount: 0,
     })),

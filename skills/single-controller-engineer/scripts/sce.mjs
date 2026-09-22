@@ -12633,10 +12633,13 @@ function reduceWavePlan(state, event) {
   const planned = {
     ...stateWithoutPendingCarry,
     units: Object.fromEntries(
-      Object.entries(state.units).map(([unitId, unit]) => [
-        unitId,
-        { ...unit, taskMetadata: byUnitId.get(unitId) }
-      ])
+      Object.entries(state.units).map(([unitId, unit]) => {
+        const task = byUnitId.get(unitId);
+        return [
+          unitId,
+          canonicalJson(unit.taskMetadata) === canonicalJson(task) ? unit : { ...unit, revision: unit.revision + 1, taskMetadata: task }
+        ];
+      })
     ),
     wave: { id: event.waveId, unitIds: [...selected.value] }
   };
@@ -37221,7 +37224,10 @@ function planInitialUnits(children, baseOid, warnings) {
       revision: 0,
       state: "planned",
       baseOid,
-      taskMetadata: { ...record4, unitId: id },
+      // Stored in the reducer's canonical form: a later wave plan must find
+      // every unit already exact, because planning never bumps a unit's
+      // revision and a rewritten child would fail the batch validator.
+      taskMetadata: canonicalTaskMetadata({ ...record4, unitId: id }),
       reservationIds: [],
       repairCount: 0
     }))

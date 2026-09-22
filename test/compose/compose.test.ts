@@ -584,7 +584,17 @@ test("open children with strict $.sce_task records become planned initial units 
   const result = composeControllerConfig(
     observation({
       children: [
-        { id: "ex-2", issueType: "bug", status: "open", task: taskRecord },
+        {
+          id: "ex-2",
+          issueType: "bug",
+          status: "open",
+          // Unsorted on purpose: the stored unit must be the canonical form.
+          task: {
+            ...taskRecord,
+            mandatoryVerification: ["npm run typecheck", "npm run test:fast"],
+            ownedPaths: ["test/preflight", "src/preflight"],
+          },
+        },
         {
           id: "ex-1",
           issueType: "task",
@@ -614,6 +624,8 @@ test("open children with strict $.sce_task records become planned initial units 
   assert.equal(run.units["ex-1"]?.state, "planned");
   assert.deepEqual(run.units["ex-2"]?.taskMetadata, {
     ...taskRecord,
+    mandatoryVerification: ["npm run test:fast", "npm run typecheck"],
+    ownedPaths: ["src/preflight", "test/preflight"],
     unitId: "ex-2",
   });
 
@@ -653,6 +665,9 @@ test("open children with strict $.sce_task records become planned initial units 
   assert.equal(waved.ok, true, waved.ok ? "" : JSON.stringify(waved));
   if (!waved.ok) return;
   assert.deepEqual(waved.nextState.wave.unitIds, ["ex-2"]);
+  // Planning rewrites nothing: every composed unit is already canonical, so
+  // the wave checkpoint carries no child row whose revision did not advance.
+  assert.deepEqual(waved.nextState.units, settled.nextState.units);
 });
 
 test("an invalid or dangling $.sce_task record refuses the composition", async () => {
