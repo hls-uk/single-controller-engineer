@@ -6682,6 +6682,7 @@ function intentStateForEffect(kind: EffectKind): UnitState | undefined {
     dispatch: "dispatch_intent",
     worker_collect: "collect_intent",
     candidate_collect: "candidate_intent",
+    candidate_refresh: "refresh_intent",
     verify: "verification_intent",
     review_dispatch: "reviewer_dispatch_intent",
     review_collect: "review_collect_intent",

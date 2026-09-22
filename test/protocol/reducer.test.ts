@@ -5866,3 +5866,40 @@ test("a refresh after a repair binds the launch base to the repair packet, not t
   assert.equal(second.units[unitId]?.launchBaseOid, OID_B);
   assert.deepEqual(runInvariantErrors(second), []);
 });
+
+// sce-296.16: an ambiguous refresh must be recordable like every other unit
+// effect. Without candidate_refresh in the intent-state map the ambiguity was
+// rejected, persistence reported corrupt, and even `status` was blocked.
+test("an ambiguous candidate refresh marks its entry ambiguous and blocks the run", () => {
+  const committed = completeCandidate(run([unit("unit-1")]));
+  const unitId = "unit-1";
+  const intended = stepUnit(committed, unitId, "refresh_intent", {
+    baseOid: OID_B,
+  });
+  const entry = intended.effectJournal.find(
+    (item) => item.kind === "candidate_refresh" && item.status === "intended",
+  );
+  assert.ok(entry !== undefined);
+  const result = reduce(intended, {
+    effectId: entry.effectId,
+    effectKind: "candidate_refresh",
+    eventId: "recover-ambiguous-refresh",
+    expectedRevision: intended.revision,
+    type: "effect_ambiguous",
+    unitId,
+  });
+  assert.equal(result.ok, true, result.ok ? "" : JSON.stringify(result));
+  if (!result.ok) return;
+  assert.equal(result.nextState.state, "blocked");
+  assert.equal(
+    result.nextState.effectJournal.find(
+      (item) => item.effectId === entry.effectId,
+    )?.status,
+    "ambiguous",
+  );
+  assert.equal(result.nextState.units[unitId]?.state, "blocked");
+  assert.equal(
+    result.nextState.units[unitId]?.revision,
+    intended.units[unitId]!.revision + 1,
+  );
+});
