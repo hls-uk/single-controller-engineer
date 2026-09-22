@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  mkdir,
   mkdtemp,
   readFile,
   realpath,
@@ -29,6 +30,7 @@ import {
   ensureWorktree,
   integrateLocalFastForward,
   integrateRemoteFastForward,
+  integrationTreeClean,
   isGitSchema,
   nodeGitRunner,
   observeCandidate,
@@ -1318,4 +1320,54 @@ test("refreshCandidate rebases a clean unit worktree onto a moved integration he
   });
   assert.equal(dirty.state, "refused");
   assert.equal(dirty.code, "GIT_DIRTY");
+});
+
+test("a modified bd passive export never blocks local fast-forward integration; anything else still does", async () => {
+  assert.equal(integrationTreeClean(""), true);
+  assert.equal(integrationTreeClean(" M .beads/interactions.jsonl\0"), true);
+  assert.equal(
+    integrationTreeClean(
+      " M .beads/issues.jsonl\0 M .beads/interactions.jsonl\0",
+    ),
+    true,
+  );
+  assert.equal(integrationTreeClean("M  .beads/interactions.jsonl\0"), false);
+  assert.equal(integrationTreeClean("?? .beads/other.jsonl\0"), false);
+  assert.equal(integrationTreeClean(" M .beads/nested/x.jsonl\0"), false);
+  assert.equal(integrationTreeClean(" M src/index.ts\0"), false);
+  assert.equal(
+    integrationTreeClean(" M .beads/interactions.jsonl\0 M src/a.ts\0"),
+    false,
+  );
+
+  const { base, cwd } = await setupRepository();
+  const repo = await actualRepository(cwd);
+  await mkdir(join(cwd, ".beads"), { recursive: true });
+  await writeFile(join(cwd, ".beads", "interactions.jsonl"), "{}\n");
+  await git(cwd, "add", ".beads/interactions.jsonl");
+  await git(cwd, "commit", "-m", "audit export");
+  const exportBase = (await git(cwd, "rev-parse", "HEAD")).trim();
+  await git(cwd, "branch", "unit/ff", exportBase);
+  const worktreePath = await realpath(
+    await mkdtemp(join(tmpdir(), "sce-git-ff-")),
+  );
+  await rm(worktreePath, { force: true, recursive: true });
+  await git(cwd, "worktree", "add", worktreePath, "unit/ff");
+  await writeFile(join(worktreePath, "unit.txt"), "candidate\n");
+  await git(worktreePath, "add", "unit.txt");
+  await git(worktreePath, "commit", "-m", "candidate");
+  const candidate = (await git(worktreePath, "rev-parse", "HEAD")).trim();
+  // The audit export churns underneath; the fast-forward still lands.
+  await writeFile(join(cwd, ".beads", "interactions.jsonl"), "{}\n{}\n");
+  const landed = await integrateLocalFastForward(nodeGitRunner, repo, {
+    base: exportBase,
+    candidate,
+    integrationRef: "refs/heads/main",
+  });
+  assert.equal(landed.state, "observed", JSON.stringify(landed));
+  assert.equal(
+    (await git(cwd, "rev-parse", "refs/heads/main")).trim(),
+    candidate,
+  );
+  assert.notEqual(base, candidate);
 });

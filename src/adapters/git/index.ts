@@ -1417,6 +1417,24 @@ export async function discoverRefresh(
       };
 }
 
+/**
+ * bd rewrites its passive exports under `.beads/` (issues, interaction audit)
+ * on its own schedule, including from session hooks, so a tracked export that
+ * is merely modified never blocks a fast-forward: it is not candidate content
+ * and the merge does not touch it. Any other entry keeps the tree dirty.
+ */
+const PASSIVE_EXPORT = /^\.beads\/[A-Za-z0-9._-]+\.jsonl$/u;
+export function integrationTreeClean(porcelain: string): boolean {
+  if (porcelain.length === 0) return true;
+  const entries = porcelain.split("\0").filter((entry) => entry.length > 0);
+  return entries.every(
+    (entry) =>
+      entry.length > 3 &&
+      entry.slice(0, 2) === " M" &&
+      PASSIVE_EXPORT.test(entry.slice(3)),
+  );
+}
+
 /** Read-only branch recovery probe; it never calls `git branch`. */
 export async function discoverBranch(
   runner: GitRunner,
@@ -1639,7 +1657,7 @@ export async function integrateLocalFastForward(
     "--porcelain=v1",
     "-z",
   ]);
-  if (!commandOk(clean) || clean.stdout.length !== 0)
+  if (!commandOk(clean) || !integrationTreeClean(clean.stdout))
     return effect("refused", "GIT_DIRTY");
   const merged = await run(runner, repository, [
     "merge",

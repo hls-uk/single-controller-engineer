@@ -5680,3 +5680,31 @@ test("a base refresh returns a collected, qualified, or approved unit to collect
   assert.equal(failed.units[unitId]?.state, "repair_required");
   assert.equal(failed.units[unitId]?.baseOid, OID_A);
 });
+
+test("marking a unit effect ambiguous advances that unit's revision so the checkpoint stays exact", () => {
+  const committed = completeCandidate();
+  const unitId = "unit-1";
+  const intended = stepUnit(committed, unitId, "verification_intent", {
+    commands: committed.units[unitId]!.taskMetadata!.mandatoryVerification,
+  });
+  const entry = intended.effectJournal.find(
+    (item) => item.kind === "verify" && item.status === "intended",
+  );
+  assert.ok(entry !== undefined);
+  const before = intended.units[unitId]!;
+  const blocked = reduce(intended, {
+    eventId: "ambiguous",
+    expectedRevision: intended.revision,
+    type: "effect_ambiguous",
+    effectId: entry.effectId,
+    effectKind: "verify",
+    unitId,
+    observationHash: HASH,
+  });
+  assert.equal(blocked.ok, true, blocked.ok ? "" : JSON.stringify(blocked));
+  if (!blocked.ok) return;
+  const after = blocked.nextState.units[unitId]!;
+  assert.equal(after.state, "blocked");
+  assert.equal(after.revision, before.revision + 1);
+  assert.equal(blocked.nextState.state, "blocked");
+});

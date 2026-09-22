@@ -6849,8 +6849,11 @@ function markEffectAmbiguous(
     ...(entry.unitId === null
       ? {}
       : {
+          // Blocking a unit changes its projection; the child row carries
+          // the change, so its revision advances like any other transition.
           units: replaceUnit(state, {
             ...state.units[entry.unitId]!,
+            revision: state.units[entry.unitId]!.revision + 1,
             state: "blocked",
           }),
         }),

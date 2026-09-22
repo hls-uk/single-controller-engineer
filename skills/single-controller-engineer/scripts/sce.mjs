@@ -16558,8 +16558,11 @@ function markEffectAmbiguous(state, event) {
       } : candidate
     ),
     ...entry.unitId === null ? {} : {
+      // Blocking a unit changes its projection; the child row carries
+      // the change, so its revision advances like any other transition.
       units: replaceUnit(state, {
         ...state.units[entry.unitId],
+        revision: state.units[entry.unitId].revision + 1,
         state: "blocked"
       })
     }
@@ -22583,6 +22586,14 @@ async function discoverRefresh(runner, repository, input) {
     tree: ready.tree
   };
 }
+var PASSIVE_EXPORT = /^\.beads\/[A-Za-z0-9._-]+\.jsonl$/u;
+function integrationTreeClean(porcelain) {
+  if (porcelain.length === 0) return true;
+  const entries = porcelain.split("\0").filter((entry) => entry.length > 0);
+  return entries.every(
+    (entry) => entry.length > 3 && entry.slice(0, 2) === " M" && PASSIVE_EXPORT.test(entry.slice(3))
+  );
+}
 async function discoverBranch(runner, repository, input) {
   if (!safeRef(input.branch) || !exactOid(repository.objectFormat, input.base))
     return effect("refused", "GIT_BAD_INPUT");
@@ -22727,7 +22738,7 @@ async function integrateLocalFastForward(runner, repository, input) {
     "--porcelain=v1",
     "-z"
   ]);
-  if (!commandOk(clean) || clean.stdout.length !== 0)
+  if (!commandOk(clean) || !integrationTreeClean(clean.stdout))
     return effect("refused", "GIT_DIRTY");
   const merged = await run(runner, repository, [
     "merge",
