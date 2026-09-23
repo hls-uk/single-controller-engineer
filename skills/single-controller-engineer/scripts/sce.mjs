@@ -9615,6 +9615,7 @@ var LIMITS = {
   projectionSnapshotBytes: 65536
 };
 var HARNESS_PACKET_BYTES = 8192;
+var CANDIDATE_DIFF_MAX_BYTES = 65536;
 var utf8 = new TextEncoder();
 var identifier = () => Type.String({
   minLength: 1,
@@ -9873,7 +9874,10 @@ var HarnessPacketInputSchema = Type.Union([
   strictObject({ ...HarnessPacketInputCommon, role: Type.Literal("worker") }),
   strictObject({
     ...HarnessPacketInputCommon,
-    candidateDiffByteCount: Type.Integer({ minimum: 1, maximum: 65536 }),
+    candidateDiffByteCount: Type.Integer({
+      minimum: 1,
+      maximum: CANDIDATE_DIFF_MAX_BYTES
+    }),
     candidateDiffHash: hash(),
     candidateDiffStat: candidateDiffStat(),
     headOid: oid(),
@@ -9893,7 +9897,10 @@ var HarnessPacketSchema = Type.Union([
   }),
   strictObject({
     ...HarnessPacketCommon,
-    candidateDiffByteCount: Type.Integer({ minimum: 1, maximum: 65536 }),
+    candidateDiffByteCount: Type.Integer({
+      minimum: 1,
+      maximum: CANDIDATE_DIFF_MAX_BYTES
+    }),
     candidateDiffCommand: Type.Array(text(), {
       minItems: 2,
       maxItems: 32
@@ -11325,6 +11332,25 @@ var ProtocolEventSchema = Type.Union([
     headOid: oid(),
     treeOid: oid(),
     candidateDiffHash: hash()
+  }),
+  // An exact refusal, not an absence: the collect read reached a clean
+  // branch/object pair and measured its diff past the packet bound, so no
+  // snapshot can exist. The measured size travels into the repair context so
+  // the repair packet names how many bytes the lane has to shed. The runner
+  // keeps the one chunk that crosses its cap and then stops reading, so the
+  // count is a floor on the true diff and never exceeds twice the bound.
+  strictObject({
+    ...eventBase,
+    type: Type.Literal("candidate_refused"),
+    ...observedEffect,
+    reason: Type.Literal("diff_oversize"),
+    measuredByteCount: Type.Integer({
+      minimum: CANDIDATE_DIFF_MAX_BYTES + 1,
+      maximum: CANDIDATE_DIFF_MAX_BYTES * 2
+    }),
+    maximumByteCount: Type.Literal(CANDIDATE_DIFF_MAX_BYTES),
+    headOid: oid(),
+    treeOid: oid()
   }),
   // A stale base is refreshed on the same unit identity: the candidate is
   // rebased onto the current integration head, and every candidate,
@@ -15763,6 +15789,53 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
         );
       }
       break;
+    case "candidate_refused":
+      if (unit.state !== "candidate_intent") return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "candidate_collect"))
+        return badObservation();
+      {
+        const {
+          approvalResponseHash: _approval,
+          candidateDiffHash: _diff,
+          reviewBaseOid: _reviewBase,
+          reviewHeadOid: _reviewHead,
+          reviewPromptHash: _reviewPrompt,
+          reviewTree: _reviewTree,
+          reviewerPacket: _reviewerPacket,
+          reviewerRequestedModel: _reviewerRequested,
+          reviewerReturnedModel: _reviewerReturned,
+          reviewerSessionId: _reviewerSession,
+          ...retained
+        } = unit;
+        result2 = observe(
+          state,
+          unit,
+          "repair_required",
+          event,
+          {},
+          clearUnitOwners(state, unit.id),
+          {
+            ...retained,
+            candidateHead: event.headOid,
+            candidateTree: event.treeOid,
+            repairContext: {
+              baseOid: unit.baseOid,
+              headOid: event.headOid,
+              treeOid: event.treeOid,
+              responseHash: event.observationHash,
+              rationale: `candidate diff measured at least ${event.measuredByteCount} bytes against the ${event.maximumByteCount}-byte candidate bound`,
+              findings: [
+                {
+                  id: "candidate-diff-oversize",
+                  severity: "blocking",
+                  detail: `the diff against the unit base must fit ${event.maximumByteCount} bytes and measured at least ${event.measuredByteCount}; shed at least the difference on the same branch and worktree, then collect the candidate again`
+                }
+              ]
+            }
+          }
+        );
+      }
+      break;
     case "refresh_intent":
       if (!["collected", "candidate_committed", "qualified", "approved"].includes(
         unit.state
@@ -16788,7 +16861,7 @@ function effectMatchesObservation(type, kind) {
     worktree_create: ["worktree_observed"],
     dispatch: ["dispatch_observed"],
     worker_collect: ["worker_collected"],
-    candidate_collect: ["candidate_observed"],
+    candidate_collect: ["candidate_observed", "candidate_refused"],
     verify: ["verification_observed", "verification_failed"],
     review_dispatch: ["reviewer_observed"],
     review_collect: ["review_collected"],
@@ -23350,6 +23423,29 @@ async function runAt(runner, cwd, argv, env) {
     return { exitCode: null, signal: null, stdout: "", unavailable: true };
   }
 }
+function oversizeStdoutBytes(raw) {
+  if (typeof raw !== "object" || raw === null) return void 0;
+  const { invalidUtf8, stdout, stdoutBytes, timedOut, unavailable: unavailable6 } = raw;
+  if (timedOut === true || unavailable6 === true) return void 0;
+  const measured = typeof stdoutBytes === "number" ? stdoutBytes : invalidUtf8 === true || typeof stdout !== "string" ? void 0 : Buffer.byteLength(stdout, "utf8");
+  return measured !== void 0 && Number.isSafeInteger(measured) && measured > MAX_OUTPUT && measured <= MAX_OUTPUT * 2 ? measured : void 0;
+}
+async function readCandidateDiff(runner, cwd, argv) {
+  const unreadable = {
+    state: "result",
+    result: { exitCode: null, signal: null, stdout: "", unavailable: true }
+  };
+  let raw;
+  try {
+    raw = await runner({ argv, cwd });
+  } catch {
+    return unreadable;
+  }
+  const parsed = parseGitResult(raw);
+  if (parsed !== void 0) return { state: "result", result: parsed };
+  const byteCount = oversizeStdoutBytes(raw);
+  return byteCount === void 0 ? unreadable : { state: "oversize", byteCount };
+}
 async function refOid(runner, repository, ref) {
   const result2 = await run(runner, repository, [
     "for-each-ref",
@@ -23524,6 +23620,24 @@ async function verifyRepository(runner, repository) {
     return effect("refused", "GIT_IDENTITY_MISMATCH");
   return effect("observed", "GIT_OK");
 }
+async function confirmCandidatePair(runner, worktreePath, branch, head3, tree) {
+  const finalHead = await runAt(runner, worktreePath, [
+    "rev-parse",
+    "--verify",
+    "HEAD^{commit}"
+  ]);
+  if (!commandOk(finalHead) || oneLine(finalHead.stdout) !== head3)
+    return effect("refused", "GIT_REFUSED");
+  const [finalTree, finalStatus, finalRef] = await Promise.all([
+    runAt(runner, worktreePath, ["rev-parse", "--verify", `${head3}^{tree}`]),
+    runAt(runner, worktreePath, ["status", "--porcelain=v1", "-z"]),
+    runAt(runner, worktreePath, ["symbolic-ref", "-q", "HEAD"])
+  ]);
+  if (!commandOk(finalTree) || !commandOk(finalStatus) || !commandOk(finalRef) || oneLine(finalTree.stdout) !== tree || finalStatus.stdout.length !== 0 || oneLine(finalRef.stdout) !== `refs/heads/${branch}`)
+    return effect("refused", "GIT_REFUSED");
+  const finalIndex = await verifyOrdinaryTrackedIndex(runner, worktreePath);
+  return finalIndex.state === "observed" ? void 0 : finalIndex;
+}
 async function observeCandidate(runner, repository, input) {
   if (!exactOid(repository.objectFormat, input.base) || !safeRef(input.branch) || !safeAbsolutePath(input.worktreePath) || input.allowedPaths.length === 0 || input.allowedPaths.some((path2) => !validScope(path2)) || !disjointScopes(input.allowedPaths))
     return effect("refused", "GIT_BAD_INPUT");
@@ -23582,7 +23696,7 @@ async function observeCandidate(runner, repository, input) {
     return effect("refused", "GIT_REFUSED");
   const clean = statusResult.stdout.length === 0;
   if (!clean) return effect("refused", "GIT_DIRTY");
-  const [ancestorResult, pathsResult, diffResult] = await Promise.all([
+  const [ancestorResult, pathsResult, diffRead] = await Promise.all([
     runAt(runner, wantedPath, [
       "merge-base",
       "--is-ancestor",
@@ -23600,7 +23714,7 @@ async function observeCandidate(runner, repository, input) {
       "--no-renames",
       `${input.base}..${head3}`
     ]),
-    runAt(runner, wantedPath, [
+    readCandidateDiff(runner, wantedPath, [
       "-c",
       "core.quotePath=false",
       "-c",
@@ -23623,32 +23737,35 @@ async function observeCandidate(runner, repository, input) {
       `${input.base}..${head3}`
     ])
   ]);
-  if (!commandOk(ancestorResult) || !commandOk(pathsResult) || !commandOk(diffResult) || Buffer.byteLength(diffResult.stdout, "utf8") > MAX_OUTPUT)
+  if (!commandOk(ancestorResult) || !commandOk(pathsResult))
     return effect("refused", "GIT_REFUSED");
+  if (diffRead.state === "oversize") {
+    const drift = await confirmCandidatePair(
+      runner,
+      wantedPath,
+      input.branch,
+      head3,
+      tree
+    );
+    return drift ?? {
+      code: "GIT_DIFF_OVERSIZE",
+      oversize: { byteCount: diffRead.byteCount, head: head3, tree },
+      state: "refused"
+    };
+  }
+  const diffResult = diffRead.result;
+  if (!commandOk(diffResult)) return effect("refused", "GIT_REFUSED");
   const changedPaths = nulPaths(pathsResult.stdout);
   if (changedPaths === void 0 || diffResult.stdout.includes("\0"))
     return effect("refused", "GIT_REFUSED");
-  const finalHead = await runAt(runner, wantedPath, [
-    "rev-parse",
-    "--verify",
-    "HEAD^{commit}"
-  ]);
-  const finalHeadOid = oneLine(finalHead.stdout);
-  if (!commandOk(finalHead) || finalHeadOid === void 0 || finalHeadOid !== head3)
-    return effect("refused", "GIT_REFUSED");
-  const [finalTree, finalStatus, finalRef] = await Promise.all([
-    runAt(runner, wantedPath, [
-      "rev-parse",
-      "--verify",
-      `${finalHeadOid}^{tree}`
-    ]),
-    runAt(runner, wantedPath, ["status", "--porcelain=v1", "-z"]),
-    runAt(runner, wantedPath, ["symbolic-ref", "-q", "HEAD"])
-  ]);
-  if (!commandOk(finalTree) || !commandOk(finalStatus) || !commandOk(finalRef) || oneLine(finalTree.stdout) !== tree || finalStatus.stdout.length !== 0 || oneLine(finalRef.stdout) !== `refs/heads/${input.branch}`)
-    return effect("refused", "GIT_REFUSED");
-  const finalIndex = await verifyOrdinaryTrackedIndex(runner, wantedPath);
-  if (finalIndex.state !== "observed") return finalIndex;
+  const raced = await confirmCandidatePair(
+    runner,
+    wantedPath,
+    input.branch,
+    head3,
+    tree
+  );
+  if (raced !== void 0) return raced;
   const canonicalChangedPaths = [...new Set(changedPaths)].sort();
   if (canonicalChangedPaths.some(
     (path2) => !input.allowedPaths.some((scope) => containedBy(scope, path2))
@@ -24379,16 +24496,23 @@ var nodeGitRunner = async ({ argv, cwd, env }) => {
     });
     child.once("close", (exitCode, signal) => {
       clearTimeout(timer);
+      const collected = Buffer.concat(stdoutChunks);
       let stdout = "";
       let invalidUtf8 = false;
       try {
-        stdout = new TextDecoder("utf-8", { fatal: true }).decode(
-          Buffer.concat(stdoutChunks)
-        );
+        stdout = new TextDecoder("utf-8", { fatal: true }).decode(collected);
       } catch {
         invalidUtf8 = true;
       }
-      done({ exitCode, invalidUtf8, signal, stdout, timedOut, unavailable: unavailable6 });
+      done({
+        exitCode,
+        invalidUtf8,
+        signal,
+        stdout,
+        ...collected.byteLength > MAX_OUTPUT ? { stdoutBytes: collected.byteLength } : {},
+        timedOut,
+        unavailable: unavailable6
+      });
     });
   });
 };
@@ -27039,6 +27163,19 @@ async function candidateObserved(effect2, run2, git) {
   const input = candidateInput(effect2, run2);
   if (input === void 0) return ambiguous3();
   const result2 = await observeCandidate(git.runner, git.repository, input);
+  if (result2.state === "refused" && result2.code === "GIT_DIFF_OVERSIZE" && result2.oversize !== void 0 && result2.oversize.byteCount > CANDIDATE_DIFF_MAX_BYTES && result2.oversize.byteCount <= CANDIDATE_DIFF_MAX_BYTES * 2)
+    return {
+      observation: {
+        ...eventBase2(effect2, run2),
+        headOid: result2.oversize.head,
+        maximumByteCount: CANDIDATE_DIFF_MAX_BYTES,
+        measuredByteCount: result2.oversize.byteCount,
+        reason: "diff_oversize",
+        treeOid: result2.oversize.tree,
+        type: "candidate_refused"
+      },
+      status: "observed"
+    };
   if (result2.state !== "observed" || result2.snapshot === void 0)
     return ambiguous3();
   return {
@@ -39833,7 +39970,7 @@ async function runCli(argv, dependencies = {}) {
   }
 }
 async function runCandidateDigest(invocation, dependencies) {
-  const read = await readCandidateDiff(invocation, dependencies);
+  const read = await readCandidateDiff2(invocation, dependencies);
   if (!read.ok)
     return failure(
       read.code,
@@ -39888,7 +40025,7 @@ async function runCandidateDigest(invocation, dependencies) {
     candidateDigestCommand
   );
 }
-async function readCandidateDiff(invocation, dependencies) {
+async function readCandidateDiff2(invocation, dependencies) {
   let bytes2;
   try {
     bytes2 = invocation.file !== void 0 ? await readFile5(invocation.file) : dependencies.standardInput !== void 0 ? await dependencies.standardInput() : await readProcessStandardInput();
