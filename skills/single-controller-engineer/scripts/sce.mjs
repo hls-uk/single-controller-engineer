@@ -10239,9 +10239,30 @@ var CompactGateTargetStateSchema = strictObject({
   status: gateStatus(),
   version: Type.Literal(2)
 });
+var CompactGateResolutionV3Schema = strictObject({
+  currentEffectId: Type.Optional(effectIdentifier()),
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  gateEntryId: identifier(),
+  lastRefusal: Type.Optional(MaterialisationResolveRefusalSchema),
+  sourceOid: oid(),
+  status: gateStatus()
+});
+var CompactGateTargetStateV3Schema = strictObject({
+  definition: GateTargetDefinitionSchema,
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  materialisations: Type.Array(CompactGateMaterialisationSchema, {
+    maxItems: LIMITS.materialisationMatches
+  }),
+  resolution: CompactGateResolutionV3Schema,
+  status: gateStatus(),
+  version: Type.Literal(3)
+});
 var ProvenanceTargetEvidenceSchema = Type.Union([
   GateTargetStateSchema,
-  CompactGateTargetStateSchema
+  CompactGateTargetStateSchema,
+  CompactGateTargetStateV3Schema
 ]);
 var GateTargetPromiseSchema = strictObject({
   definition: GateTargetDefinitionSchema,
@@ -11907,15 +11928,38 @@ function same(left, right) {
 }
 function compactTargetEvidenceShape(target) {
   const { materialisations, resolution, ...rest } = target;
+  const entries = materialisations.map(compactMaterialisationShape);
+  if (resolution !== void 0 && resolution.capacities === void 0)
+    return {
+      ...rest,
+      materialisations: entries,
+      resolution: retiredResolutionShape(resolution),
+      version: 3
+    };
   return {
     ...rest,
-    materialisations: materialisations.map(compactMaterialisationShape),
+    materialisations: entries,
     ...resolution === void 0 ? {} : { resolution: compactResolutionShape(resolution) },
     version: 2
   };
 }
+function frozenTargetEvidence(target) {
+  const resolution = target.resolution;
+  if (resolution?.capacities === void 0) return target;
+  const { capacities: _capacities, ...retired } = resolution;
+  return { ...target, resolution: retired };
+}
 function compactResolutionShape(resolution) {
   const { sources: _sources, targetId: _targetId, ...rest } = resolution;
+  return rest;
+}
+function retiredResolutionShape(resolution) {
+  const {
+    capacities: _capacities,
+    sources: _sources,
+    targetId: _targetId,
+    ...rest
+  } = resolution;
   return rest;
 }
 function compactMaterialisationShape(item) {
@@ -12483,7 +12527,7 @@ function provenanceInput(state, gate) {
   const targets = /* @__PURE__ */ new Map();
   for (const target of [
     ...carried?.targetEvidence ?? [],
-    ...gate.targets.filter((target2) => target2.definition.scope === "unit")
+    ...gate.targets.filter((target2) => target2.definition.scope === "unit").map(frozenTargetEvidence)
   ]) {
     const previous = targets.get(target.definition.targetId);
     if (previous !== void 0 && canonicalJson(previous) !== canonicalJson(target))
@@ -12585,7 +12629,7 @@ function hydratedProjectionIsValid(input) {
     ) || targetIds.has(target.definition.targetId) || index > 0 && (compareProtocolText(
       input.targetEvidence[index - 1].definition.originUnitId ?? "",
       origin
-    ) > 0 || input.targetEvidence[index - 1].definition.originUnitId === origin && input.targetEvidence[index - 1].definition.targetOrdinal >= target.definition.targetOrdinal) || !targetIsSettled(target) || !targetRecordIsCoherent(target) || target.resolution === void 0 || target.resolution.targetId !== target.definition.targetId || entryIds.has(target.resolution.gateEntryId) || !resolutionRecordIsCoherent(target.resolution) || target.resolution.status === "observed" && (target.resolution.sources === void 0 || target.resolution.sources.length !== target.materialisations.length) || target.status === "observed" && (target.resolution.status !== "observed" || target.materialisations.some((item) => item.status !== "observed")))
+    ) > 0 || input.targetEvidence[index - 1].definition.originUnitId === origin && input.targetEvidence[index - 1].definition.targetOrdinal >= target.definition.targetOrdinal) || !targetIsSettled(target) || !targetRecordIsCoherent(target) || target.resolution === void 0 || target.resolution.targetId !== target.definition.targetId || entryIds.has(target.resolution.gateEntryId) || !frozenResolutionRecordIsCoherent(target.resolution) || target.resolution.status === "observed" && (target.resolution.sources === void 0 || target.resolution.sources.length !== target.materialisations.length) || target.status === "observed" && (target.resolution.status !== "observed" || target.materialisations.some((item) => item.status !== "observed")))
       return false;
     targetIds.add(target.definition.targetId);
     entryIds.add(target.resolution.gateEntryId);
@@ -13582,7 +13626,7 @@ function reachableTargetVariants(sources, binding) {
 }
 function compactReachableShape(value) {
   return compactTargetEvidenceShape(
-    value
+    frozenTargetEvidence(value)
   );
 }
 function largestReachableDelta(baseline, variants) {
@@ -18337,6 +18381,18 @@ function targetPromiseIsCoherent(value) {
 function gatePlaceholderIsCoherent(value) {
   return settlementMetadataIsCoherent(value) && (value.status === "pending" || value.disposition === "handoff_boundary" || value.disposition === "no_landed_units" || value.disposition === "deferral_cascade");
 }
+var RETIRED_RESOLUTION_BUDGET = {
+  remainingAggregateEnvelopeByteCapacity: 0,
+  remainingItemCapacity: 0,
+  remainingProjectionSnapshotByteCapacity: 0,
+  remainingSourceByteCapacity: 0
+};
+function frozenResolutionRecordIsCoherent(value) {
+  return resolutionRecordIsCoherent(value) || value.capacities === void 0 && resolutionRecordIsCoherent({
+    ...value,
+    capacities: RETIRED_RESOLUTION_BUDGET
+  });
+}
 function resolutionRecordIsCoherent(value) {
   if (!settlementMetadataIsCoherent(value)) return false;
   if (value.status === "observed")
@@ -19234,8 +19290,14 @@ function gateInvariantErrors(state) {
     );
     const currentSlice = snapshot === void 0 ? void 0 : projectionInputSlice(snapshot, currentIds);
     const expectedCurrent = currentProjectionInput(state, gate, currentIds);
+    const expectedRetired = expectedCurrent === void 0 ? void 0 : {
+      ...expectedCurrent,
+      targetEvidence: expectedCurrent.targetEvidence.map(frozenTargetEvidence)
+    };
     const carriedSlice = snapshot === void 0 ? void 0 : projectionInputSlice(snapshot, carriedIds);
-    if (!sameStringArray(currentIds, expectedCurrentIds) || currentSlice === void 0 || expectedCurrent === void 0 || canonicalJson(currentSlice) !== canonicalJson(expectedCurrent))
+    if (!sameStringArray(currentIds, expectedCurrentIds) || currentSlice === void 0 || expectedCurrent === void 0 || ![expectedRetired, expectedCurrent].some(
+      (expected) => canonicalJson(currentSlice) === canonicalJson(expected)
+    ))
       errors.push("provenance snapshot does not bind current landed evidence");
     if (gate.carriedSnapshotCommitment === void 0 ? carriedIds.length !== 0 : carriedSlice === void 0 || provenanceCarrySnapshotCommitment(carriedSlice) !== gate.carriedSnapshotCommitment)
       errors.push("provenance snapshot does not bind carried evidence");
