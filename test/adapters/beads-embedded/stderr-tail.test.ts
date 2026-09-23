@@ -9,6 +9,7 @@ import {
   EMBEDDED_ADAPTER_VERSION,
   EmbeddedResultSchema,
   REMOTE_FAILURE_TAIL_BYTES,
+  REMOTE_FAILURE_WINDOW_CHARS,
   redactedStderrTail,
 } from "../../../src/adapters/beads-embedded/schemas.js";
 import { isSchema } from "../../../src/adapters/git/schemas.js";
@@ -261,4 +262,88 @@ test("the strict result schema admits exactly one bounded, redacted tail", () =>
     { ...refused, stderr: tail.text },
   ])
     assert.equal(isSchema(EmbeddedResultSchema, invalid), false);
+});
+
+// A named secret is a whole word standing immediately before its separator.
+// Both halves of that rule are load bearing, so both are pinned here: the
+// benign causes an operator needs to read, and the credentials that must not
+// survive next to them. Values are assembled rather than written literally.
+const FAKE_PASSWORD = ["hunter", "2"].join("");
+const FAKE_OPAQUE = ["not", "a", "real", "value"].join("-");
+
+test("a benign cause whose words merely contain a secret name survives intact", () => {
+  for (const line of [
+    // The name continues into a different word on its right.
+    "secretary: out of the office until Monday",
+    "keyword tokenizer: failed",
+    // The name opens an identifier it does not end.
+    "TOKEN_TTL_SECONDS: 300",
+    "private_key_path: /tmp/sce/does-not-exist",
+    // The name is a file stem, and the cause is the errno after it.
+    "cannot read token.json: EACCES",
+    "secret.txt: No such file or directory",
+    // The causes the tail exists to carry are never named secrets at all.
+    "sce@dolt.example.invalid: Permission denied (publickey).",
+    "remote: error: cannot lock ref 'refs/dolt/data'",
+    "fatal: Could not read from remote repository.",
+  ]) {
+    const tail = redactedStderrTail(line, false);
+    assert.ok(tail !== undefined, line);
+    assert.equal(tail.text, line);
+  }
+});
+
+test("a named secret is redacted however its name is decorated", () => {
+  for (const [name, separator] of [
+    ["DOLT_REMOTE_PASSWORD", "="],
+    ["AWS_SECRET_ACCESS_KEY", "="],
+    ["secret_key", "="],
+    ["--password", "="],
+    ["Authorization", ": "],
+    ["sync.token", " = "],
+    ["Cookie", ": "],
+  ] as const)
+    for (const value of [FAKE_PASSWORD, FAKE_OPAQUE]) {
+      const tail = redactedStderrTail(`${name}${separator}${value}`, false);
+      assert.ok(tail !== undefined, name);
+      assert.equal(tail.text, `${name}${separator}[redacted]`);
+    }
+  // A query parameter decorates the name with punctuation the identifier run
+  // cannot cross, so the host and path survive and only the value does not.
+  const query = redactedStderrTail(
+    `GET https://dolt.example.invalid/sce/beads?access_token=${FAKE_OPAQUE}`,
+    false,
+  );
+  assert.ok(query !== undefined);
+  assert.equal(
+    query.text,
+    "GET https://dolt.example.invalid/sce/beads?access_token=[redacted]",
+  );
+});
+
+test("an adversarial window is redacted in bounded time, never by backtracking", () => {
+  // Each window is the full capture width and is built from near-misses: a
+  // name that never ends its identifier, a name that never meets a separator,
+  // and one 8 KiB identifier ending in a name with nothing after it. Every
+  // start position therefore makes the rule exhaust its bounded prefix run
+  // and fail, which is where an unbounded rule would go quadratic.
+  const windows = [
+    "secretary.tokenizer_".repeat(REMOTE_FAILURE_WINDOW_CHARS),
+    "AWS_SECRET_ACCESS_KEY_".repeat(REMOTE_FAILURE_WINDOW_CHARS),
+    `${"a-".repeat(REMOTE_FAILURE_WINDOW_CHARS)}password`,
+  ].map((window) => window.slice(0, REMOTE_FAILURE_WINDOW_CHARS));
+  for (const window of windows) {
+    assert.equal(window.length, REMOTE_FAILURE_WINDOW_CHARS);
+    const started = performance.now();
+    const tail = redactedStderrTail(window, true);
+    const elapsed = performance.now() - started;
+    assert.ok(tail !== undefined);
+    assert.equal(
+      Buffer.byteLength(tail.text, "utf8"),
+      REMOTE_FAILURE_TAIL_BYTES,
+    );
+    // Generous by three orders of magnitude against the measured cost, so
+    // this fails only on a genuine backtracking blowup, never on load.
+    assert.ok(elapsed < 1_000, `${elapsed.toFixed(1)}ms`);
+  }
 });

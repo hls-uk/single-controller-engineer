@@ -2,6 +2,8 @@
   "schema": "sce.fast-tests",
   "version": 1,
   "roots": [
+    "test/adapters/beads-embedded/refusal-tail.test.ts",
+    "test/adapters/beads-embedded/stderr-tail.test.ts",
     "test/cli/cli.test.ts",
     "test/commands/recovery.test.ts",
     "test/compose",
@@ -19,6 +21,8 @@
     "test/protocol/schemas.test.ts"
   ],
   "expectedFiles": [
+    "test/adapters/beads-embedded/refusal-tail.test.ts",
+    "test/adapters/beads-embedded/stderr-tail.test.ts",
     "test/cli/cli.test.ts",
     "test/commands/recovery.test.ts",
     "test/compose/compose.test.ts",

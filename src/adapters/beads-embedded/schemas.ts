@@ -464,11 +464,15 @@ const SECRET_SHAPES: readonly (readonly [RegExp, string])[] = [
   // `Authorization: ...`, `token=...`, and every other named secret, redacted
   // to the end of its line because the value may itself contain separators.
   // The name is rarely bare: `DOLT_REMOTE_PASSWORD=`, `AWS_SECRET_ACCESS_KEY=`,
-  // `secret_key=`, and `?access_token=` all decorate it, and a word boundary
-  // before the name would miss every one of them. Bound the decoration instead
-  // and refuse only a name continued from an alphanumeric run.
+  // `secret_key=`, `?access_token=`, and `--password=` all decorate it, so the
+  // decoration is bounded rather than refused. The name is still a whole word:
+  // it may not continue a letter run on its left, and it must be the last
+  // segment of the identifier, standing immediately before the separator.
+  // That is what keeps a benign cause readable. `secretary:`, `keyword
+  // tokenizer:`, `TOKEN_TTL_SECONDS:`, `token.json:`, and `secret.txt:` each
+  // name something that is not a credential, and each survives intact.
   [
-    /(?<![A-Za-z0-9])([A-Za-z0-9_.-]{0,64}(?:api[_-]?key|authorization|bearer|cookie|credentials?|passphrase|passwd|password|private[_-]?key|secret|session[_-]?token|token)[A-Za-z0-9_.-]{0,64})([ \t]*[:=][ \t]*)[^\n]+/giu,
+    /(?<![A-Za-z0-9])([A-Za-z0-9_.-]{0,64}(?<![A-Za-z])(?:access[_-]?key|api[_-]?key|authorization|bearer|cookie|credentials?|passphrase|passwd|password|private[_-]?key|secret[_-]?key|secret|session[_-]?token|token))([ \t]*[:=][ \t]*)[^\n]+/giu,
     "$1$2[redacted]",
   ],
 ];
