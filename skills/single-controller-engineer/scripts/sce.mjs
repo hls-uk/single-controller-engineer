@@ -28584,7 +28584,8 @@ function stderrWindow() {
   };
 }
 function failureTail(capture2) {
-  return capture2.code === 0 || capture2.stderrTail === void 0 ? {} : { stderrTail: capture2.stderrTail };
+  const clean = capture2.code === 0 && !capture2.exceeded && !capture2.timedOut;
+  return clean || capture2.stderrTail === void 0 ? {} : { stderrTail: capture2.stderrTail };
 }
 function executableDigest(path2, size) {
   if (!Number.isSafeInteger(size) || size < 0) return void 0;
