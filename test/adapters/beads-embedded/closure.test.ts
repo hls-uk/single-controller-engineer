@@ -129,21 +129,49 @@ function rootOnlyClosureBatch(
 /**
  * The embedded CAS is one conditional statement: its count subquery must match
  * every predicated row, root and retired alike, or the update affects no rows.
+ * Each `(id=… AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.sce.<path>'))=…)` term
+ * is evaluated against the stored envelope the way Dolt evaluates it: a path
+ * that the envelope does not hold (a child row keeps its revision under
+ * `projection`) extracts NULL and never matches.
  */
 function casSucceeds(
   query: string,
   rows: ReadonlyMap<string, ReturnType<typeof envelope>>,
 ): boolean {
-  const root = rows.get(rootIssueId);
-  const child = rows.get(childIssueId);
-  if (root === undefined || !query.includes(hex(root.commitment))) return false;
-  if (!query.includes(hex(childIssueId))) return true;
-  return (
-    child !== undefined &&
-    "revision" in child.projection &&
-    query.includes(hex(child.commitment)) &&
-    query.includes(hex(String(child.projection.revision)))
+  const read = query.slice(
+    query.indexOf("(SELECT COUNT(*) FROM issues WHERE "),
   );
+  const expected = Number(/\)=(\d+)/.exec(read)?.[1]);
+  const terms = read.matchAll(
+    /\(id=CONVERT\(0x([0-9a-f]+) USING utf8mb4\)((?: AND JSON_UNQUOTE\(JSON_EXTRACT\(metadata,'\$\.sce\.[A-Za-z.]+'\)\)=CONVERT\(0x[0-9a-f]+ USING utf8mb4\))+)\)/g,
+  );
+  let matched = 0;
+  for (const [, issueHex, checks] of terms) {
+    const row = rows.get(Buffer.from(issueHex!, "hex").toString("utf8"));
+    if (row === undefined) continue;
+    const holds = [
+      ...checks!.matchAll(
+        /JSON_EXTRACT\(metadata,'\$\.sce\.([A-Za-z.]+)'\)\)=CONVERT\(0x([0-9a-f]+) USING utf8mb4\)/g,
+      ),
+    ].every(([, path, valueHex]) => {
+      const value = path!
+        .split(".")
+        .reduce<unknown>(
+          (node, key) =>
+            typeof node === "object" && node !== null
+              ? (node as Record<string, unknown>)[key]
+              : undefined,
+          row,
+        );
+      return (
+        value !== undefined &&
+        value !== null &&
+        String(value) === Buffer.from(valueHex!, "hex").toString("utf8")
+      );
+    });
+    if (holds) matched += 1;
+  }
+  return Number.isInteger(expected) && matched === expected;
 }
 
 function installProjectionSql(
@@ -389,6 +417,10 @@ test("root-only closure retires the sole child while preserving inert child hist
   assert.ok(parts.read.includes(hex(childIssueId)));
   assert.ok(parts.read.includes(hex(retiredChild.commitment)));
   assert.ok(parts.read.includes(hex(String(retiredChild.revision))));
+  // The revision is read where the embedded writer stores it: under the
+  // `{commitment, projection}` envelope, never at the top of `$.sce`.
+  assert.ok(parts.read.includes("'$.sce.projection.revision'"));
+  assert.equal(parts.read.includes("'$.sce.revision'"), false);
   // The count term covers the root and the one predicated retired row.
   assert.equal(parts.read.split(";", 1)[0]?.endsWith("=2"), true);
 

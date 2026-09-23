@@ -875,7 +875,10 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
    * A retired unit leaves the root's authority set but its bead stays as inert
    * history, so it is never a changed row and is never written here. The one
    * CAS statement still reads it: its count term zeroes the affected rows when
-   * that row's commitment or revision moved between load and root CAS.
+   * that row's commitment or revision moved between load and root CAS. Child
+   * rows are stored as `{commitment, projection}` (see `rows`), so the revision
+   * is read under `$.sce.projection`; a path that does not exist extracts NULL
+   * and would fail every retiring closure closed.
    */
   private retiredPredicates(
     batch: MutationBatch,
@@ -893,7 +896,7 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
       return undefined;
     return retired.map(
       (row, index) =>
-        `(id=${stringLiteral(ids[index]!)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.sce.commitment'))=${stringLiteral(row.expectedCommitment)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.sce.revision'))=${stringLiteral(String(row.expectedRevision))})`,
+        `(id=${stringLiteral(ids[index]!)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.sce.commitment'))=${stringLiteral(row.expectedCommitment)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.sce.projection.revision'))=${stringLiteral(String(row.expectedRevision))})`,
     );
   }
 
