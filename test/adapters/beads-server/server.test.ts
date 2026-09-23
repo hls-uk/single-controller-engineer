@@ -16,8 +16,12 @@ import {
 import { createServer } from "node:net";
 import { dirname, isAbsolute, join } from "node:path";
 import { spawn, type ChildProcess } from "node:child_process";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 
+import {
+  PINNED_BD_VERSION,
+  PINNED_DOLT_VERSION,
+} from "../../../src/adapters/beads-embedded/index.js";
 import {
   __setDoltBeadsServerDriverPostTransactionTestHookForTests,
   __setDoltSqlTransactionTestHookForTests,
@@ -67,6 +71,133 @@ import {
 } from "../../../src/protocol/canonical.js";
 import { LIMITS, type Unit } from "../../../src/protocol/schemas.js";
 import { event, run, unit } from "../../protocol/fixtures.js";
+
+/**
+ * Pinned-binary resolution for the whole suite. Every real `bd` and `dolt`
+ * child below names its executable here, so `BD_TEST_EXECUTABLE` and
+ * `DOLT_TEST_EXECUTABLE` reach every site at once and a machine without the
+ * pinned Homebrew releases reports an explicit skip instead of the
+ * `BS_SERVER_REFUSED` a reader would take for an adapter defect.
+ */
+type PinnedTool = "bd" | "dolt";
+
+type PinnedToolPin = Readonly<{
+  defaultExecutable: string;
+  variable: string;
+  version: string;
+}>;
+
+const PINNED_TOOLS: Readonly<Record<PinnedTool, PinnedToolPin>> = {
+  bd: {
+    defaultExecutable: "/opt/homebrew/bin/bd",
+    variable: "BD_TEST_EXECUTABLE",
+    version: PINNED_BD_VERSION,
+  },
+  dolt: {
+    defaultExecutable: "/opt/homebrew/bin/dolt",
+    variable: "DOLT_TEST_EXECUTABLE",
+    version: PINNED_DOLT_VERSION,
+  },
+};
+
+/** The single place this suite may name a real `bd` or `dolt` executable. */
+function pinnedExecutable(tool: PinnedTool): string {
+  const pin = PINNED_TOOLS[tool];
+  const executable = process.env[pin.variable] ?? pin.defaultExecutable;
+  if (!isAbsolute(executable))
+    throw new Error(`${pin.variable} must name an absolute path`);
+  return executable;
+}
+
+type PinnedToolStatus =
+  | Readonly<{ status: "pinned" }>
+  | Readonly<{ status: "unusable"; reason: string }>;
+
+const pinnedToolStatuses = new Map<PinnedTool, Promise<PinnedToolStatus>>();
+
+/**
+ * Absence and version skew are environment facts, not adapter observations.
+ * Read them once per tool, from the same `version` line the engine pins, and
+ * keep the reason naming the exact binary the run could not use.
+ */
+async function probePinnedTool(tool: PinnedTool): Promise<PinnedToolStatus> {
+  const pin = PINNED_TOOLS[tool];
+  const executable = pinnedExecutable(tool);
+  const expected = `${tool} version ${pin.version}`;
+  // A bd child without HOME resolves `~` into its working directory and Dolt
+  // refuses a HOME that does not exist, so the probe owns a real throwaway
+  // one and stays as hermetic as every fixture below it. bd's late event
+  // writer recreates that HOME after an otherwise successful removal, so the
+  // probe reaps it through the same quiet window every fixture root uses.
+  const probeHome = await mkdtemp("/private/tmp/sce-pin-probe-");
+  const reported = await new Promise<string | undefined>((resolve) => {
+    const child = spawn(executable, ["version"], {
+      cwd: probeHome,
+      env: {
+        HOME: probeHome,
+        PATH: `${dirname(executable)}:/usr/bin:/bin`,
+        XDG_CONFIG_HOME: probeHome,
+      },
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    let output = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      if (output.length <= 4_096) output += chunk.toString("utf8");
+    });
+    child.once("error", () => resolve(undefined));
+    child.once("close", (code) =>
+      resolve(code === 0 ? (output.split("\n", 1)[0] ?? "") : undefined),
+    );
+  }).finally(() => removeFixtureDirectory(probeHome));
+  if (reported === undefined)
+    return {
+      status: "unusable",
+      reason: `${tool} is absent or unrunnable at ${executable}; point ${pin.variable} at a ${expected} binary`,
+    };
+  // Homebrew tags the packaging onto bd's version line. The engine pins the
+  // release, not the packaging.
+  if (reported !== expected && reported !== `${expected} (Homebrew)`)
+    return {
+      status: "unusable",
+      reason: `${executable} reports "${reported}" but the engine pins ${expected}`,
+    };
+  return { status: "pinned" };
+}
+
+function pinnedToolStatus(tool: PinnedTool): Promise<PinnedToolStatus> {
+  const probed = pinnedToolStatuses.get(tool) ?? probePinnedTool(tool);
+  pinnedToolStatuses.set(tool, probed);
+  return probed;
+}
+
+/**
+ * The one gate every real-binary test takes. It returns true having already
+ * marked the test skipped -- never failed -- when a pinned binary is missing
+ * or off-pin, or when this machine cannot hand a fixture a loopback port.
+ * Fixtures always bind an ephemeral port rather than a configured one, so a
+ * foreign server on 3306 or 3307 can never be mistaken for ours; when even
+ * an ephemeral port is taken, the skip names the port.
+ */
+async function skipWithoutRealServer(
+  t: TestContext,
+  ...tools: readonly PinnedTool[]
+): Promise<boolean> {
+  for (const tool of tools) {
+    const status = await pinnedToolStatus(tool);
+    if (status.status === "unusable") {
+      t.skip(status.reason);
+      return true;
+    }
+  }
+  const probe = await probeLoopbackPort();
+  if (probe.status === "occupied") {
+    t.skip(
+      `127.0.0.1:${String(probe.port)} is held by another server; no fixture can bind it`,
+    );
+    return true;
+  }
+  return false;
+}
 
 const scope: FencingScope = {
   beadsStoreIdentity: "store-1",
@@ -297,7 +428,7 @@ function initialServerAcquire(): InitialControllerAcquire {
 }
 
 /** Exact bounded protocol session-lineage maximum for the real SQL fixture. */
-function denseRun(sessionCount = 2_176) {
+function denseRun(sessionCount = LIMITS.sessionHistory) {
   const state = run();
   const sessionIds = Array.from(
     { length: sessionCount },
@@ -586,6 +717,24 @@ async function unusedLoopbackPort(): Promise<number> {
   return address.port;
 }
 
+type LoopbackPortProbe = Readonly<{
+  port: number;
+  status: "free" | "occupied";
+}>;
+
+/** Confirms this machine still hands the fixtures a bindable loopback port. */
+async function probeLoopbackPort(): Promise<LoopbackPortProbe> {
+  const port = await unusedLoopbackPort();
+  const server = createServer();
+  const bound = await new Promise<boolean>((resolve) => {
+    server.once("error", () => resolve(false));
+    server.listen(port, "127.0.0.1", () => resolve(true));
+  });
+  if (bound)
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  return { port, status: bound ? "free" : "occupied" };
+}
+
 async function runDolt(
   args: readonly string[],
   input: Readonly<{
@@ -595,10 +744,7 @@ async function runDolt(
     stdin?: string;
   }>,
 ): Promise<void> {
-  const executable =
-    input.executable ??
-    process.env.DOLT_TEST_EXECUTABLE ??
-    "/opt/homebrew/bin/dolt";
+  const executable = input.executable ?? pinnedExecutable("dolt");
   if (!isAbsolute(executable))
     throw new Error("test Dolt executable must be absolute");
   await new Promise<void>((resolve, reject) => {
@@ -912,8 +1058,7 @@ async function startRealDoltServer(
     identityForEndpoint?: (endpoint: string) => ServerIdentity;
   }> = {},
 ): Promise<RealDoltServer> {
-  const executable =
-    process.env.DOLT_TEST_EXECUTABLE ?? "/opt/homebrew/bin/dolt";
+  const executable = pinnedExecutable("dolt");
   let directory: string | undefined;
   let server: ChildProcess | undefined;
   try {
@@ -1052,9 +1197,8 @@ async function createManagedBdServer(
     ) => void | Promise<void>;
   }> = {},
 ): Promise<ManagedBdServer> {
-  const executable =
-    process.env.DOLT_TEST_EXECUTABLE ?? "/opt/homebrew/bin/dolt";
-  const bdExecutable = process.env.BD_TEST_EXECUTABLE ?? "/opt/homebrew/bin/bd";
+  const executable = pinnedExecutable("dolt");
+  const bdExecutable = pinnedExecutable("bd");
   // Keep this repository outside the checked-out worktree so bd's project
   // discovery cannot reach or rewrite the controller's real `.beads` config.
   const directory = await mkdtemp("/private/tmp/sce-managed-bd-");
@@ -1062,6 +1206,10 @@ async function createManagedBdServer(
   const runtime = { config: join(directory, "config"), home };
   const workspace = join(directory, "workspace");
   const dataDirectory = join(home, ".beads", "shared-server", "dolt");
+  // An ephemeral port, never bd's configured default: a foreign MySQL or
+  // Dolt already listening there would otherwise be adopted as this
+  // fixture's own server and surface as an adapter refusal.
+  const sharedServerPort = await unusedLoopbackPort();
   const writerPassword = randomBytes(18).toString("hex");
   const workerPassword = randomBytes(18).toString("hex");
   let teardown: PrivateBdServerTeardownAuthority | undefined;
@@ -1077,6 +1225,10 @@ async function createManagedBdServer(
         "--prefix",
         "sce",
         "--shared-server",
+        "--server-host",
+        "127.0.0.1",
+        "--server-port",
+        String(sharedServerPort),
         "--skip-agents",
         "--skip-hooks",
       ],
@@ -1271,7 +1423,7 @@ async function startBdDoltServer(): Promise<BdDoltServer> {
   const fixture = await startRealDoltServer({
     identityForEndpoint: (endpoint) => externalIdentity("on", endpoint),
   });
-  const bdExecutable = process.env.BD_TEST_EXECUTABLE ?? "/opt/homebrew/bin/bd";
+  const bdExecutable = pinnedExecutable("bd");
   const workspace = join(fixture.directory, "bd-workspace");
   try {
     await mkdir(workspace);
@@ -2968,7 +3120,8 @@ test("exported Dolt transport reflection exposes no SQL operation", async () => 
   await removeFixtureDirectory(directory);
 });
 
-test("pinned bd slot process pins version, holder argv, bounded output, and secret handling", async () => {
+test("pinned bd slot process pins version, holder argv, bounded output, and secret handling", async (t) => {
+  if (await skipWithoutRealServer(t, "bd")) return;
   const secret = randomBytes(18).toString("hex");
   const requests: {
     argv: readonly string[];
@@ -3052,7 +3205,7 @@ test("pinned bd slot process pins version, holder argv, bounded output, and secr
   const directory = await mkdtemp("/private/tmp/sce-pinned-bd-");
   const executable = join(directory, "bd");
   try {
-    await symlink("/opt/homebrew/bin/bd", executable);
+    await symlink(pinnedExecutable("bd"), executable);
     const replacementAware = new PinnedBdServerProcess({
       executable,
       workspace: directory,
@@ -3080,7 +3233,7 @@ test("pinned managed bd lifecycle adopts exact servers and starts only stopped i
     await mkdir(dataDirectory);
     const process = new PinnedBdManagedServerProcess({
       dataDirectory,
-      doltExecutable: "/opt/homebrew/bin/dolt",
+      doltExecutable: pinnedExecutable("dolt"),
       executable: "/fixture/bd",
       process: async (request) => {
         if (request.argv[0] === "version")
@@ -3136,7 +3289,7 @@ test("pinned managed bd lifecycle adopts exact servers and starts only stopped i
 
     const ambiguous = new PinnedBdManagedServerProcess({
       dataDirectory,
-      doltExecutable: "/opt/homebrew/bin/dolt",
+      doltExecutable: pinnedExecutable("dolt"),
       executable: "/fixture/bd",
       process: async (request) => ({
         exitCode: 0,
@@ -3156,7 +3309,8 @@ test("pinned managed bd lifecycle adopts exact servers and starts only stopped i
   }
 });
 
-test("immutable executable pins poison self-replacing read, slot, and lifecycle children", async () => {
+test("immutable executable pins poison self-replacing read, slot, and lifecycle children", async (t) => {
+  if (await skipWithoutRealServer(t, "bd", "dolt")) return;
   const directory = await mkdtemp("/private/tmp/sce-executable-pin-");
   const doltLink = join(directory, "dolt");
   const bdLink = join(directory, "bd");
@@ -3183,7 +3337,7 @@ test("immutable executable pins poison self-replacing read, slot, and lifecycle 
     const doltTrap = await writeTrap("dolt-replacement", "dolt version 2.2.1");
     const bdTrap = await writeTrap("bd-replacement", "bd version 1.1.0");
 
-    await symlink("/opt/homebrew/bin/dolt", doltLink);
+    await symlink(pinnedExecutable("dolt"), doltLink);
     const queryCalls: readonly string[][] = [];
     const queryTransport = new DoltSqlTransport({
       executable: doltLink,
@@ -3252,7 +3406,7 @@ test("immutable executable pins poison self-replacing read, slot, and lifecycle 
     assert.deepEqual(queryCalls, [["version"]]);
     await assert.rejects(stat(doltTrap.marker));
 
-    await symlink("/opt/homebrew/bin/bd", bdLink);
+    await symlink(pinnedExecutable("bd"), bdLink);
     const slotCalls: readonly string[][] = [];
     const slotProcess = new PinnedBdServerProcess({
       executable: bdLink,
@@ -3313,8 +3467,8 @@ test("immutable executable pins poison self-replacing read, slot, and lifecycle 
     });
     assert.equal(sameInodeCalls.length, callsBeforePoison);
 
-    await pointLink(bdLink, "/opt/homebrew/bin/bd");
-    await pointLink(doltLink, "/opt/homebrew/bin/dolt");
+    await pointLink(bdLink, pinnedExecutable("bd"));
+    await pointLink(doltLink, pinnedExecutable("dolt"));
     const managerBdCalls: string[][] = [];
     const managerBd = new PinnedBdManagedServerProcess({
       dataDirectory,
@@ -3340,8 +3494,8 @@ test("immutable executable pins poison self-replacing read, slot, and lifecycle 
     assert.deepEqual(await managerBd.start(), { status: "refused" });
     assert.deepEqual(managerBdCalls, [["version"]]);
 
-    await pointLink(bdLink, "/opt/homebrew/bin/bd");
-    await pointLink(doltLink, "/opt/homebrew/bin/dolt");
+    await pointLink(bdLink, pinnedExecutable("bd"));
+    await pointLink(doltLink, pinnedExecutable("dolt"));
     const managerDoltCalls: string[][] = [];
     const managerDolt = new PinnedBdManagedServerProcess({
       dataDirectory,
@@ -3378,7 +3532,8 @@ test("immutable executable pins poison self-replacing read, slot, and lifecycle 
   }
 });
 
-test("schema-bound adapter refuses a replaced Dolt before CAS transaction dispatch", async () => {
+test("schema-bound adapter refuses a replaced Dolt before CAS transaction dispatch", async (t) => {
+  if (await skipWithoutRealServer(t, "bd", "dolt")) return;
   const fixture = await startBdDoltServer();
   const serverIdentity = externalIdentity("on", fixture.endpoint);
   const clientDirectory = await mkdtemp("/private/tmp/sce-adapter-pin-");
@@ -3861,7 +4016,7 @@ test("real transaction child accepts stdin backpressure and contains an early EP
   const executable = join(directory, "dolt");
   const epipeExecutable = join(directory, "dolt-epipe");
   const completionMarker = join(directory, "transaction-completed");
-  const value = batchForRun(denseRun(2_176));
+  const value = batchForRun(denseRun());
   const rows = {
     childBeadIds: { "unit-1": "sce-child" },
     rootBeadId: "sce-root",
@@ -4678,7 +4833,8 @@ test("SQL executor rolls back immediately when a root or child CAS affects the w
   assert.equal(executed.includes("COMMIT"), false);
 });
 
-test("real shared server atomically bootstraps an absent recovery intent before slot acquisition", async () => {
+test("real shared server atomically bootstraps an absent recovery intent before slot acquisition", async (t) => {
+  if (await skipWithoutRealServer(t, "bd", "dolt")) return;
   const fixture = await startBdDoltServer();
   const serverIdentity = externalIdentity("on", fixture.endpoint);
   const rootId = "sce-recovery-root";
@@ -4783,7 +4939,8 @@ test("real shared server atomically bootstraps an absent recovery intent before 
   }
 });
 
-test("real bd external-server workspace drives the concrete driver, adapter, and built-in slot", async () => {
+test("real bd external-server workspace drives the concrete driver, adapter, and built-in slot", async (t) => {
+  if (await skipWithoutRealServer(t, "bd", "dolt")) return;
   const fixture = await startBdDoltServer();
   const serverIdentity = externalIdentity("on", fixture.endpoint);
   const rootId = "sce-concrete-root";
@@ -4809,10 +4966,11 @@ test("real bd external-server workspace drives the concrete driver, adapter, and
       `${fixture.context.server_host}:${fixture.context.server_port}`,
       serverIdentity.endpoint,
     );
-    // This exact maximum lineage is a 95 KiB schema-valid root. Combined
-    // with the boundary test above it proves both a real large transaction
-    // and that no schema-valid max-plus-one batch can reach SQL dispatch.
-    const initialRoot = makeRootProjection(denseRun(2_176));
+    // This root carries the largest lineage `LIMITS.sessionHistory` admits.
+    // Combined with the boundary test above it proves both a real large
+    // transaction and that no schema-valid max-plus-one batch can reach SQL
+    // dispatch.
+    const initialRoot = makeRootProjection(denseRun());
     const initialChild = makeChildProjection(initialRoot, "unit-1");
     assert.ok(initialChild);
     for (const [id, title, metadata] of [
@@ -5028,14 +5186,23 @@ test("real bd external-server workspace drives the concrete driver, adapter, and
       password: fixture.writerPassword,
       stdin: `SET @@SESSION.dolt_transaction_commit = 1; UPDATE issues SET metadata = JSON_SET(metadata, '$.outside_move', true) WHERE id = ${sqlLiteral(unrelatedId)}`,
     });
-    const value = batchForRun(denseRun(2_176));
+    const dense = denseRun();
+    const value = batchForRun(dense);
     const wireBytes = Buffer.byteLength(
       canonicalJson(value as JsonValue),
       "utf8",
     );
+    // Derived, not pinned. The batch must clear its own encoded session
+    // lineage -- a function of `LIMITS.sessionHistory` -- and stay inside the
+    // exact fencing guard. A literal total here would encode the current
+    // `RepositoryRun` size and rot silently the moment that schema grew.
+    const lineageBytes = Buffer.byteLength(dense.sessionLineage, "utf8");
     assert.equal(validateMutationBatch(value).ok, true);
-    assert.ok(wireBytes > 90_000, `${wireBytes} byte concrete batch`);
-    assert.ok(wireBytes <= 256 * 1024, `${wireBytes} byte concrete batch`);
+    assert.ok(wireBytes > lineageBytes, `${wireBytes} byte concrete batch`);
+    assert.ok(
+      wireBytes <= FENCING_LIMITS.batchBytes,
+      `${wireBytes} byte concrete batch`,
+    );
     const beforeCasHead = await fixture.readWriter(
       "SELECT DOLT_HASHOF('HEAD') AS head",
     );
@@ -5252,7 +5419,8 @@ test("real bd external-server workspace drives the concrete driver, adapter, and
   }
 });
 
-test("real transaction keeps its same-session head when an unrelated writer advances HEAD", async () => {
+test("real transaction keeps its same-session head when an unrelated writer advances HEAD", async (t) => {
+  if (await skipWithoutRealServer(t, "bd", "dolt")) return;
   const fixture = await startBdDoltServer();
   const serverIdentity = externalIdentity("on", fixture.endpoint);
   const rootId = "sce-session-head-root";
@@ -5396,7 +5564,8 @@ test("real transaction keeps its same-session head when an unrelated writer adva
   }
 });
 
-test("real transport and bd workspace bindings reject same-db swaps before mutation", async () => {
+test("real transport and bd workspace bindings reject same-db swaps before mutation", async (t) => {
+  if (await skipWithoutRealServer(t, "bd", "dolt")) return;
   const first = await startBdDoltServer();
   const second = await startBdDoltServer();
   const firstIdentity = externalIdentity("on", first.endpoint);
@@ -5486,7 +5655,8 @@ test("real transport and bd workspace bindings reject same-db swaps before mutat
   }
 });
 
-test("real Dolt transaction child faults remain ambiguous until authoritative discovery", async () => {
+test("real Dolt transaction child faults remain ambiguous until authoritative discovery", async (t) => {
+  if (await skipWithoutRealServer(t, "bd", "dolt")) return;
   const fixture = await startBdDoltServer();
   const serverIdentity = externalIdentity("on", fixture.endpoint);
   let clearFaultHook: (() => void) | undefined;
@@ -5801,7 +5971,8 @@ test("real Dolt transaction child faults remain ambiguous until authoritative di
   }
 });
 
-test("managed fixture tears down its init-owned server on pre-lifecycle setup failure", async () => {
+test("managed fixture tears down its init-owned server on pre-lifecycle setup failure", async (t) => {
+  if (await skipWithoutRealServer(t, "bd", "dolt")) return;
   let fixtureDirectory: string | undefined;
   let teardown: PrivateBdServerTeardownAuthority | undefined;
   await assert.rejects(
@@ -5827,7 +5998,8 @@ test("managed fixture tears down its init-owned server on pre-lifecycle setup fa
   assert.throws(() => process.kill(ownedTeardown.pid, 0), { code: "ESRCH" });
 });
 
-test("managed bd shared-server lifecycle owns its isolated topology and recovers", async () => {
+test("managed bd shared-server lifecycle owns its isolated topology and recovers", async (t) => {
+  if (await skipWithoutRealServer(t, "bd", "dolt")) return;
   const fixture = await createManagedBdServer();
   const serverIdentity = identity("on", fixture.endpoint);
   const rootId = "sce-managed-root";
@@ -6083,7 +6255,8 @@ test("managed bd shared-server lifecycle owns its isolated topology and recovers
   }
 });
 
-test("default Dolt session leaves direct SQL pending and the driver refuses it", async () => {
+test("default Dolt session leaves direct SQL pending and the driver refuses it", async (t) => {
+  if (await skipWithoutRealServer(t, "dolt")) return;
   const fixture = await startRealDoltServer();
   const serverIdentity = identity("on", fixture.endpoint);
   const rawSqlArgs = [
@@ -6158,7 +6331,8 @@ test("real Dolt fixture cleans its private root before a port/listen setup failu
   await assert.rejects(stat(cleanupOwned), { code: "ENOENT" });
 });
 
-test("real disposable Dolt server preserves scoped envelopes, grants, CAS rollback, and outage boundaries", async () => {
+test("real disposable Dolt server preserves scoped envelopes, grants, CAS rollback, and outage boundaries", async (t) => {
+  if (await skipWithoutRealServer(t, "dolt")) return;
   const fixture = await startRealDoltServer();
   const rawSqlArgs = [
     "--no-tls",
