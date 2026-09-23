@@ -28058,8 +28058,12 @@ var SECRET_SHAPES = [
   [/([a-z][a-z0-9+.-]{0,15}:\/\/)[^\s/@]{1,256}@/giu, "$1[redacted]@"],
   // `Authorization: ...`, `token=...`, and every other named secret, redacted
   // to the end of its line because the value may itself contain separators.
+  // The name is rarely bare: `DOLT_REMOTE_PASSWORD=`, `AWS_SECRET_ACCESS_KEY=`,
+  // `secret_key=`, and `?access_token=` all decorate it, and a word boundary
+  // before the name would miss every one of them. Bound the decoration instead
+  // and refuse only a name continued from an alphanumeric run.
   [
-    /\b(api[_-]?key|authorization|bearer|cookie|credentials?|passphrase|passwd|password|private[_-]?key|secret|session[_-]?token|token)([ \t]*[:=][ \t]*)[^\n]+/giu,
+    /(?<![A-Za-z0-9])([A-Za-z0-9_.-]{0,64}(?:api[_-]?key|authorization|bearer|cookie|credentials?|passphrase|passwd|password|private[_-]?key|secret|session[_-]?token|token)[A-Za-z0-9_.-]{0,64})([ \t]*[:=][ \t]*)[^\n]+/giu,
     "$1$2[redacted]"
   ]
 ];
@@ -28097,6 +28101,13 @@ var EmbeddedResultSchema = Type.Object(
       Type.Literal("worker_mutation")
     ]),
     schema: Type.Literal("sce.beads-embedded.result"),
+    /**
+     * The redacted tail of the remote Dolt child whose failure produced this
+     * code, when one failed. It is diagnostic text so a refusal can name its
+     * cause; no code is ever derived from it, and it is absent whenever the
+     * child succeeded or wrote nothing.
+     */
+    stderrTail: Type.Optional(RemoteFailureTailSchema),
     version: Type.Literal(EMBEDDED_ADAPTER_VERSION)
   },
   { additionalProperties: false }
@@ -30551,10 +30562,11 @@ var DoltProjectionPersistence = class {
 };
 
 // src/adapters/beads-embedded/index.ts
-function result(code) {
+function result(code, stderrTail) {
   return {
     code,
     schema: "sce.beads-embedded.result",
+    ...stderrTail === void 0 ? {} : { stderrTail },
     version: EMBEDDED_ADAPTER_VERSION
   };
 }
@@ -31320,8 +31332,10 @@ var EmbeddedBeadsAdapter = class {
       return { result: result("applied"), state: before };
     const pull = await this.call({ kind: "pull" });
     if (pull?.kind !== "pull") return { result: result("ambiguous") };
-    if (pull.value === "conflict") return { result: result("conflict") };
-    if (pull.value !== "applied") return { result: result(pull.value) };
+    if (pull.value === "conflict")
+      return { result: result("conflict", pull.stderrTail) };
+    if (pull.value !== "applied")
+      return { result: result(pull.value, pull.stderrTail) };
     const after = await this.state();
     return after === void 0 || !after.reachable ? { result: result("unavailable") } : after.workingSet === "clean" ? { result: result("applied"), state: after } : { result: result("blocked") };
   }
@@ -31490,8 +31504,8 @@ var EmbeddedBeadsAdapter = class {
       return result("ambiguous");
     const push = await this.call({ kind: "push" });
     if (push?.kind !== "push") return result("ambiguous");
-    if (push.value === "conflict") return result("conflict");
-    if (push.value !== "applied") return result("ambiguous");
+    if (push.value === "conflict") return result("conflict", push.stderrTail);
+    if (push.value !== "applied") return result("ambiguous", push.stderrTail);
     const synced = await this.state();
     const remoteAfter = await this.slot("check", "remote");
     const final = await this.state();
@@ -31539,8 +31553,8 @@ var EmbeddedBeadsAdapter = class {
       return result("ambiguous");
     const push = await this.call({ kind: "push" });
     if (push?.kind !== "push") return result("ambiguous");
-    if (push.value === "conflict") return result("conflict");
-    if (push.value !== "applied") return result(push.value);
+    if (push.value === "conflict") return result("conflict", push.stderrTail);
+    if (push.value !== "applied") return result(push.value, push.stderrTail);
     const afterPush = await discover("after_push");
     const final = await this.state();
     return afterPush.status === "observed" && afterPush.baseHead === baseline.head && final !== void 0 && final.reachable && final.workingSet === "clean" && head2(final.head) && final.remoteHead === final.head && afterPush.head === final.head && afterPush.remoteHead === final.head ? result("applied") : result("ambiguous");
@@ -31579,8 +31593,8 @@ var EmbeddedBeadsAdapter = class {
       return result("ambiguous");
     const push = await this.call({ kind: "push" });
     if (push?.kind !== "push") return result("ambiguous");
-    if (push.value === "conflict") return result("conflict");
-    if (push.value !== "applied") return result(push.value);
+    if (push.value === "conflict") return result("conflict", push.stderrTail);
+    if (push.value !== "applied") return result(push.value, push.stderrTail);
     const afterPush = batch === void 0 ? void 0 : await this.discover("after_push", batch);
     if (afterPush !== void 0 && (afterPush.status !== "observed" || afterPush.head === void 0 || afterPush.remoteHead === void 0))
       return result("ambiguous");
