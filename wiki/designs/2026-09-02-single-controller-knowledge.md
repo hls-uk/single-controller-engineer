@@ -282,9 +282,10 @@ an optional **knowledge contract** in the controller configuration, parsed by
 the same strict parser as the rest of that configuration. It declares the
 alias table (alias, canonical root, marker file, mount policy, and the version
 1 namespace-control assertion), the
-provenance contract (events directory, record format version, rollup
-generator command, reproducibility command), the combined-verification
-commands, a provenance worktree root, the human driver, the domain scope, and
+provenance contract (events directory, generated directory, record format
+version, rollup generator command, reproducibility command), the
+combined-verification commands, a provenance worktree root, the human driver,
+the project identifier, the audience, the domain scope, and
 the gate targets. The controller derives it from the repository
 manifest when composing the configuration; the engine never reads the
 manifest. The `wave_planned` event carries the contract and the reducer
@@ -314,6 +315,31 @@ noncanonical, or secret-shaped value refuses configuration. K3 later requires
 it to be a real directory before creating a detached worktree child; K2 records
 the resolved path at `wave_planned` so the pure reducer never accepts a
 worktree path from controller memory.
+
+Three contract facts exist only so that K3's record projection is a function
+of journaled state. All three are required, and controller composition
+resolves each one exactly once from the manifest-shaped input; nothing reads
+the manifest again at projection time:
+
+- `projectId` is the manifest's `projectId`. Every provenance record carries
+  it under the same key.
+- `audience` is the manifest's `audience`. Every provenance record carries it
+  under the same key.
+- `provenance.generatedDirectory` is the manifest's `artifactHomes.generated`.
+  It is the rollup generator's output home: K3 invokes the declared generator
+  as `<rollupGeneratorCommand...> --output <worktree>/<generated directory>`.
+
+The contract's `domainScope` is unchanged and remains the manifest's
+`accessDomainId`; a provenance record carries that value under the key
+`accessDomainId`, and the materialisation sidecar carries the same value under
+`domainScope`. `projectId`, `audience`, and `domainScope` use the shared
+bounded identifier vocabulary (`^[A-Za-z0-9][A-Za-z0-9._:/-]*$`, at most 160
+characters); the shipped manifest schema is deliberately narrower
+(`^[a-z0-9][a-z0-9-]{1,62}$`) and a repository may only narrow, never widen.
+`provenance.generatedDirectory` is a canonical POSIX-relative owned path of at
+most 192 characters, exactly the bound `eventsDirectory` carries. A contract
+missing any of the three refuses configuration, so a knowledge run cannot
+reach the provenance step without them.
 
 `wave_planned` rejects a task with a nonempty `materialisationTargets` array
 when no knowledge contract is present, because no alias, driver, or provenance
@@ -1001,6 +1027,56 @@ identifier, writes the records under the events
 directory, runs the repository's declared rollup generator, and produces one
 deterministic commit on the integration branch.
 
+That stable identifier has one grammar: a record id is
+`<sanitized unit id>--<first 12 characters of the landed OID>`. Every
+character of the unit ID outside `[A-Za-z0-9._-]` becomes `-`, the sanitized
+result is truncated to 140 characters, and the whole id must then match
+`^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$` or the projection refuses rather than
+repairing it. The record's path is `<events directory>/<id>.md`. Two records
+that would share an id refuse the whole projection instead of overwriting one
+another, records are returned in byte-sorted path order, and the projection's
+commitment over them is
+`sha256(RFC8785({domain: "sce.provenance-records.v1", records: [{path,
+sha256(bytes)}]}))`.
+
+The record's own grammar is equally exact. Each file is frontmatter between
+two `---` lines followed by Markdown. Every frontmatter line is
+`<key>: <JSON value>`, where the value is the JSON serialization of the
+projected scalar or array: strings are double-quoted and escaped, an absent
+executor session is bare `null`, and each array is one JSON line. The keys
+appear in one fixed order: `schema` (the constant `sce.knowledge-provenance`),
+`version` (`1`), `id`, `projectId`, `accessDomainId`, `audience`, `unitId`,
+`humanDriver`, `executorTool`, `executorSessionId`, `timestampUtc`, `baseOid`,
+`landedOid`, `ownedPaths`, `acceptanceIds`, `verificationCommands`,
+`verificationResults`, `verificationEvidenceHashes`, `reviewDecision`,
+`reviewBaseOid`, `reviewHeadOid`, `reviewTreeOid`, `reviewPromptHash`,
+`reviewResponseHash`, `materialisationDestinations`, `materialisationDigests`,
+`materialisationStatuses`, `supersedes`, `tombstones`, `summary`. That key set
+and that order are exactly the required list of the shipped
+`provenance-record.schema.json`, so the engine's projection and the knowledge
+repository's fast gate cannot drift apart. A record exists only for a unit
+closed as landed, so `verificationResults` is `passed` once per recorded
+command, `verificationEvidenceHashes` repeats that closure's single
+verification evidence hash once per command, and `reviewDecision` is
+`approve`. The bounded `summary` is
+`Unit <unit> landed <landed OID> on base <base OID> in run <run> wave
+<wave>.`, and the body opens with `# Provenance record`, three bullets
+binding the unit, run, wave, gate entry, provenance base, candidate and repair
+count, and then a `## Materialisation targets` table of every target with its
+pattern, destination, resolution and outputs. The projection bounds the human
+driver to 256 characters, the summary to 8,192 characters, and one record's
+deduplicated destinations to 64, and it refuses bytes that are not canonical
+Markdown: no tab anywhere, no trailing space or tab on any line, no CR, and
+exactly one trailing LF.
+
+A record carries `reviewHeadOid` and `landedOid` as two separate observed
+facts. The reducer records the integration OID it observed rather than
+asserting that the two are equal; every shipped integration profile is a
+fast-forward, so a healthy landing projects a record whose two OIDs agree and
+the knowledge check's `reviewHeadOid === landedOid` rule passes, while a
+landing that moved the ref somewhere else is journaled exactly and refused
+downstream instead of being silently normalised.
+
 The commit is deterministic because every input is journaled: author and
 committer name is the controller holder string and email is the constant
 `sce@noreply.invalid`; author and committer dates are the intent's clock
@@ -1011,6 +1087,35 @@ the run, the wave, the set of unit identifiers, and the base OID the commit
 is built on. The commit lands under the run's authority profile through the
 same local or remote fast-forward contract as any integration, with non-force
 push and readback.
+
+The message is a two-line grammar, and the Git allowlist is what enforces it.
+The subject is `sce: provenance for wave <wave ID>` and the trailer is
+`SCE-Provenance-Key: <idempotency key>`. K3 builds the object with the
+allowlisted vector `commit-tree <tree> -p <base> -m <subject> -m <trailer>`,
+whose admission requires exactly seven arguments and tests the two message
+arguments against
+`^sce: provenance for wave [A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$` and
+`^SCE-Provenance-Key: [A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$`; a message the
+runtime did not derive from journaled facts cannot be passed to Git at all.
+The identity travels as the only six environment variables the Git runner
+admits — `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_AUTHOR_DATE`,
+`GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL`, `GIT_COMMITTER_DATE` — each at
+most 512 characters with no NUL, CR or LF, and the date rendered exactly as
+`<unix seconds> +0000`. Keyed discovery on resume is the same trailer read
+back: a bounded `rev-list --max-count=64` walk from the integration head, then
+`cat-file commit` on each candidate, matching the trailer as a whole line.
+
+K3 adds exactly these vectors to the Git allowlist and no others:
+`worktree add --detach <absolute path> <OID>`, `add --all`, `write-tree`, the
+`commit-tree` vector above, `update-ref --no-deref HEAD <OID>`,
+`cat-file commit|blob <OID>`, `rev-list --max-count=64 <OID>`, and
+`ls-tree -r -z <OID> -- <relative directory>`, whose directory argument must
+be a bounded canonical relative path with no `.`, `..`, doubled or trailing
+slash. It also widens two existing vectors: `rev-parse --verify` accepts
+`<OID>^{commit}` as well as `<OID>^{tree}`, and `for-each-ref` accepts a
+`refs/remotes/<remote>/<branch>` ref for remote-profile discovery. Record
+readback through `ls-tree` refuses more than 64 entries and refuses any entry
+that is not a non-symlink blob.
 
 The provenance step has one working directory with one journaled lifecycle.
 Before any record is written, the runtime creates a temporary detached
@@ -1036,6 +1141,27 @@ new run that imports the authoritative carry as described below. Only after
 the check passes is the local integration ref fast-forwarded or the remote
 pushed without force, then read back, under either integration profile.
 
+Both contract commands run through one execution contract. Each is spawned
+with `shell: false` from its exact argv vector, with the worktree path as
+`cwd` and a sanitized environment: only `PATH`, `TMPDIR`, `TEMP` and `TMP` are
+inherited, and `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`,
+`GIT_TERMINAL_PROMPT=0`, `HOME=/nonexistent`, `LANG=C`, `LC_ALL=C` and
+`TZ=UTC` are fixed. The rollup generator is invoked as its declared vector
+followed by `--output` and `<worktree>/<generated directory>` — the
+contract's `provenance.generatedDirectory` and nothing else — with
+`SCE_PROVENANCE_BASE_OID` added to that environment and a 120,000 ms bound;
+the commit does not exist yet, so no commit OID is offered. Its failure is
+recorded and surfaces as the reproducibility refusal rather than aborting the
+step silently. The reproducibility command runs once the commit object exists
+and adds both `SCE_PROVENANCE_BASE_OID` and `SCE_PROVENANCE_COMMIT_OID`, with
+a 600,000 ms bound. Either command is
+treated as failed on a nonzero exit, a signal, a timeout, a failure to start,
+or more than 65,536 bytes of combined output, and a failure of either is the
+one `reproducibility_failed` result, distinguished only inside its bounded
+diagnostic digest. After the check the runtime re-reads the worktree: a HEAD
+that is not the built commit is ambiguous, a dirty tree or any record byte
+that changed is `reproducibility_failed`.
+
 The same worktree, at the provenance-commit OID, is the working directory of
 the wave's aggregate verification, which is a gate entry of its own;
 `verification_failed` is reserved for that entry. The worktree is never
@@ -1055,6 +1181,31 @@ carries both that OID and the deterministic path, and the recreation is itself
 a journaled worktree act at the same path; the OID remains discoverable by key.
 A rejected push mints a new key and therefore a new path, and the earlier
 attempt's worktree is preserved like any other.
+
+The aggregate verify is adapter-executed under its own exact contract. Before
+it runs anything, the adapter rebinds: the run must hold a knowledge contract
+and a journaled provenance attempt key; the repository identity and Git object
+format must match the run; the effect's `commands` must be canonically
+byte-identical to the contract's `combinedVerificationCommands`, order
+included; `candidate.headOid` must equal the effect's `provenanceOid`; the
+worktree path must re-derive from the recorded worktree root and that attempt
+key rather than merely sit under the root; and the commit itself must read
+back with the candidate's tree and base as its tree and first parent. Any
+mismatch is ambiguous, never a verdict. The adapter then recreates the
+worktree detached at the provenance-commit OID if it is absent and runs each
+recorded argv vector with `shell: false` in that worktree under the same
+sanitized environment as the provenance commands, with exactly two added
+variables: `SCE_CANDIDATE_BASE_OID`, the candidate base OID, and
+`SCE_PROVENANCE_COMMIT_OID`, the provenance commit OID. Each vector is bounded
+to 600,000 ms and 65,536 bytes of combined output, and execution stops at the
+first vector that does not exit zero cleanly. The observation carries only
+`passed` and one evidence digest,
+`sha256(RFC8785({domain: "sce.provenance.aggregate-verify.v1", passed,
+results, worktreePath}))`, where each result is a digest over that vector's
+argv, exit code, signal, timeout, output-exceeded and failed-to-start flags,
+and the SHA-256 of its stdout and stderr. No command output ever enters the
+aggregate. The aggregate verify has no reconciliation path: a resumed run
+re-executes it rather than inferring a past verdict.
 
 Discovery on resume is by key: fetch the integration branch and look for a
 commit whose trailer carries the key; if present, verify the record paths at
@@ -1098,7 +1249,10 @@ the K2-stable target evidence snapshot copied into the provenance intent,
 which retains each target definition, source-resolution observation or
 refusal, each resolved materialisation observation, and every deferral reason
 and follow-up Bead; and the intent's own parameters, which carry the human
-driver, domain scope, alias table, provenance contract, and clock observation.
+driver, project identifier, audience, domain scope, alias table, provenance
+contract, and clock observation. The executor tool is the one fact the
+projection takes from outside those parameters: it is the run's already pinned
+harness family, which a knowledge wave cannot be planned without.
 Those values originate in the committed task metadata, gate journal, and
 controller configuration, but the projection reads them only from the
 journaled provenance intent, never from live configuration or a later mutable
@@ -1121,12 +1275,29 @@ The accounting map survives checkpointing and closure-ledger compaction. Its
 therefore commit disjoint new records, while a deferred wave retains its exact
 uncommitted membership until a later observation marks it committed.
 
+Compaction has one sibling rule, on the recorded capacities of a
+materialisation resolution. Checkpointing compacts observed effect-journal
+entries, so a settled resolution can outlive the entry that committed its
+capacities, while an unresolved attempt is never compacted. The invariant is
+therefore stated in terms of the latest surviving entry: a resolution that
+carries a current effect ID or a last refusal must bind the newest
+`materialisation_resolve` entry for its gate entry ID, meaning that entry's
+parameters hash equals the hash recomputed from live aggregate state with the
+resolution's stored capacities spliced in. When no entry for that gate entry
+survives, the resolution is admitted only if it has no attempt in flight; a
+stored capacity copy is then read as recorded and never re-derived. The trust
+granted is exactly that narrow and cannot widen a budget: the next attempt on
+the same entry recomputes its capacities from live state, and a stored copy
+only ever gates the sources of the attempt that recorded it, so the residue of
+an out-of-band run-store edit is diagnostic rather than authority.
+
 A provenance record contains at least the fields DEC-002 requires: a globally
-unique identifier, project and domain scope, human driver, executor tool and
-session identity where available, UTC timestamp, base and landed OIDs, owned
-paths, verification commands and results, review verdict binding, materialised
-destinations and digests each marked observed or deferred, and superseded or
-tombstoned records. A target deferred before source resolution has no invented
+unique identifier, project identifier, access domain, audience, human driver,
+executor tool and session identity where available, UTC timestamp, base and
+landed OIDs, owned paths, verification commands and results, review verdict
+binding, materialised destinations and digests each marked observed or
+deferred, and superseded or tombstoned records. A target deferred before
+source resolution has no invented
 path, digest, or final name: its record carries the target identifier, source
 pattern, destination alias and subpath, refusal code, follow-up Bead, and
 `deferred` disposition. It never contains secrets, transcripts, or narrative

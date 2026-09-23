@@ -1,11 +1,11 @@
 # DEC-20260903-012: Resolve Sources Before No-Clobber Materialisation
 
 **Date:** 2026-09-03
-**Status:** Accepted
+**Status:** Accepted; amended 2026-09-23 (see "Amendment 2026-09-23")
 **Scope:** Version 1 source expansion, destination naming, sidecar policy,
 filesystem publication, bounded recovery identity, alias admission, and the
 K2/K3 implementation boundary
-**Beads:** `sce-085`, `sce-7g9.2`, `sce-7g9.3`
+**Beads:** `sce-085`, `sce-7g9.2`, `sce-7g9.3`, `sce-fit`
 
 ## Context
 
@@ -291,6 +291,112 @@ precheck followed by ordinary rename.
     deferred required-probe cascades void dependent materialisation entries and
     retain evidence on the source-bound target group without recreating or
     mutating a promise.
+
+## Amendment 2026-09-23
+
+K3 (`sce-7g9.3`) implemented decisions 1, 11, 13, 14 and 17 and, in doing so,
+fixed exact grammars and an execution contract those decisions described but
+did not spell out. This amendment records those facts so the decision and the
+landed code (`src/protocol/provenance.ts`, `src/adapters/git/provenance.ts`,
+`src/adapters/git/index.ts`, `src/protocol/reducer.ts`) say the same thing. It
+grants no new authority, changes no accepted decision above, and is numbered
+`A1`–`A7` so the decision list keeps its numbering.
+
+- **A1.** The knowledge contract carries three additive required fields, each
+  resolved exactly once during controller composition from the
+  manifest-shaped input: `projectId` from the manifest's `projectId`,
+  `audience` from the manifest's `audience`, and
+  `provenance.generatedDirectory` from the manifest's
+  `artifactHomes.generated`. `domainScope` is unchanged and remains the
+  manifest's `accessDomainId`. A record carries them as `projectId`,
+  `audience` and `accessDomainId`. The generated directory is the rollup
+  generator's output home and reaches it only as
+  `--output <worktree>/<generated directory>`. `projectId`, `audience` and
+  `domainScope` use the shared identifier vocabulary
+  (`^[A-Za-z0-9][A-Za-z0-9._:/-]*$`, at most 160 characters);
+  `generatedDirectory` is a canonical POSIX-relative owned path of at most
+  192 characters. A contract missing any of the three refuses configuration.
+- **A2.** A provenance record id is `<sanitized unit id>--<first 12
+  characters of the landed OID>`: every character of the unit ID outside
+  `[A-Za-z0-9._-]` becomes `-`, the sanitized value is truncated to 140
+  characters, and the whole id must match
+  `^[A-Za-z0-9][A-Za-z0-9._-]{0,159}$` or the projection refuses. The path is
+  `<events directory>/<id>.md`, a duplicate id refuses the whole projection,
+  records are byte-sorted by path, and the commitment over them is
+  `sha256(RFC8785({domain: "sce.provenance-records.v1",
+  records: [{path, sha256(bytes)}]}))`.
+- **A3.** Record frontmatter is JSON-scalar, not YAML inference: between two
+  `---` lines every field is one `<key>: <JSON value>` line whose value is the
+  JSON serialization of the projected scalar or array. The key order is
+  fixed and identical to the required list of the shipped
+  `provenance-record.schema.json`: `schema`, `version`, `id`, `projectId`,
+  `accessDomainId`, `audience`, `unitId`, `humanDriver`, `executorTool`,
+  `executorSessionId`, `timestampUtc`, `baseOid`, `landedOid`, `ownedPaths`,
+  `acceptanceIds`, `verificationCommands`, `verificationResults`,
+  `verificationEvidenceHashes`, `reviewDecision`, `reviewBaseOid`,
+  `reviewHeadOid`, `reviewTreeOid`, `reviewPromptHash`,
+  `reviewResponseHash`, `materialisationDestinations`,
+  `materialisationDigests`, `materialisationStatuses`, `supersedes`,
+  `tombstones`, `summary`. Only landed units project, so every
+  `verificationResults` entry is `passed`, every
+  `verificationEvidenceHashes` entry is that closure's verification evidence
+  hash, and `reviewDecision` is `approve`. The projection bounds the human
+  driver to 256 characters, the summary to 8,192 characters, and one
+  record's deduplicated destinations to 64, and refuses bytes that are not
+  canonical Markdown: no tab anywhere, no trailing space or tab on a line,
+  no CR, exactly one trailing LF.
+- **A4.** The provenance commit message is exactly two lines: subject
+  `sce: provenance for wave <wave ID>` and trailer
+  `SCE-Provenance-Key: <idempotency key>`. The Git allowlist enforces both
+  on the `commit-tree <tree> -p <base> -m <subject> -m <trailer>` vector
+  against `^sce: provenance for wave [A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$`
+  and `^SCE-Provenance-Key: [A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$`. The Git
+  runner admits only the six commit-identity variables `GIT_AUTHOR_NAME`,
+  `GIT_AUTHOR_EMAIL`, `GIT_AUTHOR_DATE`, `GIT_COMMITTER_NAME`,
+  `GIT_COMMITTER_EMAIL`, `GIT_COMMITTER_DATE`, each at most 512 characters
+  with no NUL, CR or LF, with the date rendered `<unix seconds> +0000`.
+- **A5.** K3's additions to the Git allowlist are exactly
+  `worktree add --detach <absolute path> <OID>`, `add --all`, `write-tree`,
+  the `commit-tree` vector in A4, `update-ref --no-deref HEAD <OID>`,
+  `cat-file commit|blob <OID>`, `rev-list --max-count=64 <OID>` and
+  `ls-tree -r -z <OID> -- <relative directory>`, plus two widenings:
+  `rev-parse --verify` accepts `<OID>^{commit}` as well as `<OID>^{tree}`,
+  and `for-each-ref` accepts `refs/remotes/<remote>/<branch>`. Keyed
+  discovery is the bounded 64-commit `rev-list` walk plus a whole-line
+  trailer match; record readback refuses more than 64 tree entries and any
+  entry that is not a non-symlink blob.
+- **A6.** The aggregate `verify` is adapter-executed. It rebinds before
+  acting: the run's contract and journaled provenance attempt key must exist,
+  repository identity and object format must match, `commands` must be
+  canonically byte-identical to `combinedVerificationCommands` in order,
+  `candidate.headOid` must equal `provenanceOid`, the worktree path must
+  re-derive from the recorded root and that attempt key, and the commit must
+  read back with the candidate's tree and base. Any mismatch is ambiguous.
+  Each vector then runs with `shell: false` in that worktree under a
+  sanitized environment — only `PATH`, `TMPDIR`, `TEMP`, `TMP` inherited,
+  plus fixed `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`,
+  `GIT_TERMINAL_PROMPT=0`, `HOME=/nonexistent`, `LANG=C`, `LC_ALL=C`,
+  `TZ=UTC` — with exactly two added variables, `SCE_CANDIDATE_BASE_OID` and
+  `SCE_PROVENANCE_COMMIT_OID`. Each vector is bounded to 600,000 ms and
+  65,536 bytes of combined output, execution stops at the first vector that
+  does not exit zero cleanly, and the observation carries only `passed` and
+  `sha256(RFC8785({domain: "sce.provenance.aggregate-verify.v1", passed,
+  results, worktreePath}))`. The rollup generator runs in the same contract
+  with `SCE_PROVENANCE_BASE_OID` only and a 120,000 ms bound; the
+  reproducibility command adds `SCE_PROVENANCE_COMMIT_OID` once the commit
+  object exists. Aggregate verify has no reconciliation: a resumed run
+  re-executes it rather than inferring a verdict.
+- **A7.** Decision 13's capacities bind the latest attempt, and checkpointing
+  compacts observed journal entries while never compacting an unresolved
+  attempt. The invariant is therefore: a resolution carrying a current
+  effect ID or a last refusal must bind the newest `materialisation_resolve`
+  entry for its gate entry ID, its parameters hash equalling the hash
+  recomputed from live state with the stored capacities spliced in; when no
+  such entry survives, the resolution is admitted only if it has no attempt
+  in flight. A stored copy is read as recorded and never re-derived, and it
+  cannot widen a budget, because the next attempt recomputes capacities from
+  live state and a stored copy only gates the sources of the attempt that
+  recorded it.
 
 ## Rejected Alternatives
 

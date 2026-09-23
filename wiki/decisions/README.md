@@ -43,7 +43,7 @@ may recommend decisions, but the controller records the accepted disposition.
 | [DEC-20260901-009](2026-09-01-009-classified-harness-support-profiles.md) | Accepted | Harness support admission classifies trust operations instead of refusing them | `sce-366.1`, `sce-366.5` |
 | [DEC-20260901-010](2026-09-01-010-optional-install-host-declaration.md) | Accepted | The install host declaration is optional; installs always ship the full pair | `sce-366.2` |
 | [DEC-20260902-011](2026-09-02-011-knowledge-profile-extends-engine.md) | Accepted | The knowledge profile extends the engine; Beads is first class for knowledge repositories | `sce-9f5`, `sce-9f5.1` |
-| [DEC-20260903-012](2026-09-03-012-materialisation-source-and-no-clobber.md) | Accepted | Resolve exact sources before atomic no-clobber materialisation | `sce-085`, `sce-7g9.2`, `sce-7g9.3` |
+| [DEC-20260903-012](2026-09-03-012-materialisation-source-and-no-clobber.md) | Accepted; amended 2026-09-23 | Resolve exact sources before atomic no-clobber materialisation | `sce-085`, `sce-7g9.2`, `sce-7g9.3`, `sce-fit` |
 | [DEC-20260905-013](2026-09-05-013-automatic-git-and-beads-sync.md) | Accepted | Agents keep Git and Beads synchronized after every completed update | `sce-vrm` |
 | [DEC-20260905-014](2026-09-05-014-delivery-skills-sync-each-update.md) | Accepted | Both delivery skills sync each update under the adopting repository's authority | `sce-36o` |
 | [DEC-20260922-015](2026-09-22-015-compose-config-onboarding.md) | Accepted | `sce compose-config` composes and self-validates the controller configuration; pristine knowledge runs admitted | `sce-bih` |
