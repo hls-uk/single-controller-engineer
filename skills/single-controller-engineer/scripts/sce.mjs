@@ -29003,6 +29003,18 @@ var PinnedBdEmbeddedProcess = class {
       this.scope
     ) !== void 0 ? this.result("applied") : this.result("ambiguous");
   }
+  /**
+   * Publishes the pinned ancestry proof. It runs one bounded local SQL
+   * capture under the ordinary 64 KiB budget and the ordinary local time
+   * budget; no remote is contacted, so this probe can never be the thing
+   * that stalls a command.
+   */
+  async ancestry(request2) {
+    return {
+      kind: "ancestry",
+      value: await this.ancestryProof(request2.ancestor, request2.descendant)
+    };
+  }
   async execute(request2) {
     switch (request2.kind) {
       case "state": {
@@ -29664,12 +29676,21 @@ var PinnedBdEmbeddedProcess = class {
     return values.some((value) => value === void 0) || new Set(values).size !== values.length ? void 0 : values;
   }
   /**
-   * Pinned, bounded ancestry predicate. The CTE returns one exact count row,
-   * so no caller can infer reachability from a partial ancestor listing.
+   * Pinned, bounded ancestry predicate: reachable, or not proved reachable.
    */
   async isAncestor(ancestor, descendant) {
+    return await this.ancestryProof(ancestor, descendant) === "observed";
+  }
+  /**
+   * The pinned ancestry proof. The CTE returns one exact count row, so no
+   * caller can infer reachability from a partial ancestor listing, and the
+   * three values keep "provably not an ancestor" apart from "could not
+   * tell" -- a distinction only the locally-ahead reconciliation needs, and
+   * one the boolean predicate above deliberately collapses.
+   */
+  async ancestryProof(ancestor, descendant) {
     if (safeHead(ancestor) === void 0 || safeHead(descendant) === void 0)
-      return false;
+      return "ambiguous";
     const capture2 = await this.runDolt(this.databaseDirectory, [
       "sql",
       "-r",
@@ -29678,11 +29699,14 @@ var PinnedBdEmbeddedProcess = class {
       `WITH RECURSIVE ancestry(parent_hash) AS (SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash = '${descendant}' UNION SELECT edge.parent_hash FROM dolt_commit_ancestors AS edge JOIN ancestry ON edge.commit_hash = ancestry.parent_hash) SELECT COUNT(*) AS matches FROM ancestry WHERE parent_hash = '${ancestor}'`
     ]);
     if (capture2 === void 0 || capture2.code !== 0 || capture2.exceeded)
-      return false;
+      return "ambiguous";
     const raw = json2(capture2.stdout);
     const rows = raw?.rows;
     const row = Array.isArray(rows) && rows.length === 1 ? object2(rows[0]) : void 0;
-    return raw !== void 0 && hasExactKeys(raw, ["rows"]) && row !== void 0 && hasExactKeys(row, ["matches"]) && row.matches === 1;
+    if (raw === void 0 || !hasExactKeys(raw, ["rows"]) || row === void 0 || !hasExactKeys(row, ["matches"]))
+      return "ambiguous";
+    if (row.matches === 1) return "observed";
+    return row.matches === 0 ? "absent" : "ambiguous";
   }
   async soleParent(commit2) {
     const parents = await this.directParents(commit2);
@@ -31631,6 +31655,8 @@ var EmbeddedBeadsAdapter = class {
     if (before.workingSet !== "clean") return { result: result("blocked") };
     if (this.mode === "local-only")
       return { result: result("applied"), state: before };
+    const reconciled = await this.reconcileAheadOfRemote(before);
+    if (reconciled !== void 0) return { result: reconciled };
     const pull = await this.call({ kind: "pull" });
     if (pull?.kind !== "pull") return { result: result("ambiguous") };
     if (pull.value === "conflict")
@@ -31639,6 +31665,46 @@ var EmbeddedBeadsAdapter = class {
       return { result: result(pull.value, pull.stderrTail) };
     const after = await this.state();
     return after === void 0 || !after.reachable ? { result: result("unavailable") } : after.workingSet === "clean" ? { result: result("applied"), state: after } : { result: result("blocked") };
+  }
+  /**
+   * A remote Dolt push that exceeds its budget once its commit is already
+   * durable leaves this clone strictly ahead of the remote. A pull cannot
+   * fast-forward that, so it answers `conflict` and every later command
+   * refuses until an operator runs `bd dolt push` by hand. Where the remote
+   * head is provably an ancestor of the durable local head, the engine
+   * performs exactly that push itself -- same path, same budget, same
+   * observation -- immediately before the pull, and only then.
+   *
+   * `undefined` means the pull decides, exactly as it always has. A refusal
+   * is returned only for a re-push whose outcome the pull cannot re-describe.
+   */
+  async reconcileAheadOfRemote(state) {
+    if (!head2(state.head) || !head2(state.remoteHead) || state.head === state.remoteHead || await this.ancestry(state.remoteHead, state.head) !== "observed")
+      return void 0;
+    const push = await this.call({ kind: "push" });
+    if (push?.kind !== "push") return result("ambiguous");
+    return push.value === "applied" || push.value === "conflict" ? void 0 : result(push.value, push.stderrTail);
+  }
+  /**
+   * The port's bounded local ancestry proof, when it publishes one. The
+   * response crosses the process trust boundary, so only the exact two-key
+   * shape carrying one of the three proof words is admitted; everything else,
+   * including a throwing or absent probe, is `ambiguous` and proves nothing.
+   */
+  async ancestry(ancestor, descendant) {
+    if (this.process.ancestry === void 0) return "ambiguous";
+    let response;
+    try {
+      response = await this.process.ancestry({
+        ancestor,
+        descendant,
+        kind: "ancestry"
+      });
+    } catch {
+      return "ambiguous";
+    }
+    const value = object4(response);
+    return value !== void 0 && Object.keys(value).length === 2 && value.kind === "ancestry" && (value.value === "observed" || value.value === "absent" || value.value === "ambiguous") ? value.value : "ambiguous";
   }
   expectedSlot(kind, before) {
     const value = {
