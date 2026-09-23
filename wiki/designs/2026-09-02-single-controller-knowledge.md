@@ -928,6 +928,15 @@ else are decided in
 [DEC-20260922-018](../decisions/2026-09-22-018-materialisation-namespace-relocation.md),
 which amends the exclusive-namespace-control scope recorded here. Exclusive
 namespace control still governs pre-act admission, containment, and the marker.
+That binding proves where the bytes landed, not that the object they landed in
+is still the admitted destination, so the parent re-runs the admission proof
+after a positive helper result. A destination root still admissible whose
+admitted canonical path no longer resolves to the admitted device and inode is
+a proved relocation out of the authorised destination: the act keeps both
+completed no-clobber links, overwrites nothing, and records `ambiguous` rather
+than positive evidence. A destination root no longer at its own admitted path
+is the measured ancestor rename, which stays positive and still refuses the
+next admission.
 
 The complete probe and repeated materialise-admission algorithm is:
 
@@ -973,7 +982,10 @@ The complete probe and repeated materialise-admission algorithm is:
    temporary, sidecar first; an `EEXIST` race at temporary creation is
    ambiguous rather than retried; and
 4. read back size and sha256 of both files, revalidate the helper's directory
-   identity, and record the strict observation.
+   identity, and return the strict observation; the parent then repeats step 1
+   for the journaled canonical path and records the observation as positive
+   only if that path still resolves to the admitted directory object, or if the
+   destination root is itself no longer at its admitted path.
 
 The link operation is the version 1 no-clobber primitive: it fails when the
 final name already exists and therefore cannot replace another writer's file.

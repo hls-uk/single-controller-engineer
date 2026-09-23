@@ -44,6 +44,33 @@ function publishedPair(fixture: MaterialisationFixture): readonly string[] {
   ].sort();
 }
 
+/**
+ * Positive evidence is withheld when the parent's post-act admission proof no
+ * longer finds the admitted directory object at its admitted canonical path.
+ * DEC-20260922-018, amended 2026-09-23.
+ */
+function relocationHash(
+  fixture: MaterialisationFixture,
+  observed: Readonly<{
+    canonicalPath: string;
+    device: string;
+    inode: string;
+  }> | null,
+  reason: string,
+): string {
+  return sha256(
+    canonicalJson({
+      domain: "sce.materialisation-ambiguous.v1",
+      facts: {
+        alias: fixture.effect.params.destination.alias,
+        observed,
+        operation: "post-act-relocation",
+        reason,
+      },
+    }),
+  );
+}
+
 test("a same-user rename of an ancestor cannot redirect the publication syscall", async () => {
   const fixture = await materialisationFixture();
   try {
@@ -86,7 +113,7 @@ test("a same-user rename of an ancestor cannot redirect the publication syscall"
   }
 });
 
-test("a sync-client style directory swap publishes into the admitted inode and clobbers nothing", async () => {
+test("a sync-client style directory swap publishes into the admitted inode and withholds positive evidence", async () => {
   const fixture = await materialisationFixture();
   try {
     const admitted = await stat(fixture.destinationDirectory, { bigint: true });
@@ -106,15 +133,32 @@ test("a sync-client style directory swap publishes into the admitted inode and c
       port,
     ).materialise(fixture.effect);
 
-    assert.equal(result.status, "observed");
-    if (result.status === "observed") {
-      assert.equal(result.observation.sidecarStatus, "published");
-      assert.equal(result.observation.artifactStatus, "published");
-    }
+    const substitute = await stat(fixture.destinationDirectory, {
+      bigint: true,
+    });
+    assert.equal(
+      result.status,
+      "ambiguous",
+      "a substitute at the admitted path is not the admitted destination",
+    );
+    if (result.status === "ambiguous")
+      assert.equal(
+        result.observationHash,
+        relocationHash(
+          fixture,
+          {
+            canonicalPath: fixture.destinationDirectory,
+            device: String(substitute.dev),
+            inode: String(substitute.ino),
+          },
+          "substituted",
+        ),
+        "the withheld evidence names the object that took the admitted path",
+      );
     assert.deepEqual(
       (await readdir(relocated)).sort(),
       publishedPair(fixture),
-      "publication follows the admitted inode, not the admitted name",
+      "both no-clobber links still complete in the admitted inode",
     );
     const survivor = await stat(relocated, { bigint: true });
     assert.equal(survivor.dev, admitted.dev);
@@ -132,6 +176,80 @@ test("a sync-client style directory swap publishes into the admitted inode and c
       decoyBytes,
       "a final name that already exists elsewhere is never overwritten",
     );
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("a rename out of the destination root keeps both links and withholds positive evidence", async () => {
+  const fixture = await materialisationFixture();
+  try {
+    const admitted = await stat(fixture.destinationDirectory, { bigint: true });
+    const escaped = join(fixture.root, "escaped");
+    const port = interfereBeforeFirstLink(
+      `fs.renameSync(${JSON.stringify(fixture.destinationDirectory)}, ${JSON.stringify(escaped)});`,
+    );
+
+    const result = await createMaterialisationAdapter(
+      fixture.repository,
+      "sha1",
+      port,
+    ).materialise(fixture.effect);
+
+    assert.equal(
+      result.status,
+      "ambiguous",
+      "a publication that left the admitted destination is not positive evidence",
+    );
+    if (result.status === "ambiguous")
+      assert.equal(
+        result.observationHash,
+        relocationHash(fixture, null, "invalid_destination"),
+        "the admitted root still stands, so the relocation is proved, not guessed",
+      );
+    assert.deepEqual(
+      (await readdir(escaped)).sort(),
+      publishedPair(fixture),
+      "both no-clobber links still complete in the bound object",
+    );
+    const moved = await stat(escaped, { bigint: true });
+    assert.equal(moved.dev, admitted.dev);
+    assert.equal(moved.ino, admitted.ino);
+    assert.deepEqual(
+      (await readdir(fixture.destinationRoot)).sort(),
+      [fixture.effect.params.destination.markerFile],
+      "nothing is created or recreated inside the destination root",
+    );
+
+    assert.equal(
+      (await adapterFor(fixture).discoverMaterialise(fixture.effect)).status,
+      "ambiguous",
+      "recovery cannot read a pair that left the admitted destination",
+    );
+
+    await rename(escaped, fixture.destinationDirectory);
+    const recovered = await adapterFor(fixture).discoverMaterialise(
+      fixture.effect,
+    );
+    assert.equal(
+      recovered.status,
+      "observed",
+      "the restored destination reads the complete pair back",
+    );
+    if (recovered.status === "observed") {
+      assert.equal(recovered.observation.artifactStatus, "already_present");
+      assert.equal(recovered.observation.sidecarStatus, "already_present");
+    }
+    const converged = await adapterFor(fixture).materialise(fixture.effect);
+    assert.equal(
+      converged.status,
+      "observed",
+      "the next act converges on the retained pair without republishing",
+    );
+    if (converged.status === "observed") {
+      assert.equal(converged.observation.artifactStatus, "already_present");
+      assert.equal(converged.observation.sidecarStatus, "already_present");
+    }
   } finally {
     await fixture.cleanup();
   }

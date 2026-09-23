@@ -1116,6 +1116,46 @@ function sameDestinationIdentity(
   );
 }
 
+/**
+ * A positive helper result proves both no-clobber links landed in the admitted
+ * directory object and that nothing was overwritten; it does not prove that
+ * object is still the destination the controller admitted. The parent
+ * therefore re-runs the admission proof for the journaled canonical path.
+ * The same object still there keeps the positive observation. A substituted or
+ * vanished path below a destination root that is itself still admissible
+ * withholds it, because the publication demonstrably left the admitted
+ * destination and the authority model disclaims concurrent namespace
+ * relocation. A destination root no longer at its own admitted path is the
+ * ancestor-rename case the decision measured: the publication is still inside
+ * the admitted root object, it stays positive, and the next act's pre-act
+ * admission refuses. DEC-20260922-018, amended 2026-09-23.
+ */
+async function relocationAfterAct(
+  effect: MaterialiseEffect,
+  admitted: Readonly<{ canonicalPath: string; device: string; inode: string }>,
+): Promise<null | Readonly<{
+  observed: Readonly<{
+    canonicalPath: string;
+    device: string;
+    inode: string;
+  }> | null;
+  reason: "invalid_destination" | "substituted" | "unresolved";
+}>> {
+  const settled = await admittedDestination(
+    effect.params.destination,
+    effect.params.destinationSubpath,
+  );
+  if (settled.status === "observed")
+    return sameDestinationIdentity(settled.identity, admitted)
+      ? null
+      : { observed: settled.identity, reason: "substituted" };
+  if (settled.status === "refused")
+    return settled.reason === "alias_unmounted"
+      ? null
+      : { observed: null, reason: "invalid_destination" };
+  return { observed: null, reason: "unresolved" };
+}
+
 async function probeDestination(
   effect: ProbeEffect,
 ): Promise<DestinationProbeResult> {
@@ -1299,6 +1339,14 @@ async function materialiseBytes(
     return ambiguous({
       operation: "helper-result",
       outputHash: hashBytes(result.stdout),
+    });
+  const relocation = await relocationAfterAct(effect, destination.identity);
+  if (relocation !== null)
+    return ambiguous({
+      alias: effect.params.destination.alias,
+      observed: relocation.observed,
+      operation: "post-act-relocation",
+      reason: relocation.reason,
     });
   return {
     observation: {

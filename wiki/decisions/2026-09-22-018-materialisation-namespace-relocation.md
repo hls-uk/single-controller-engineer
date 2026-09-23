@@ -1,6 +1,7 @@
 # DEC-20260922-018: Publication binds to the admitted directory object
 
-Date: 2026-09-22. Status: accepted. Controller: the single-controller-engineer
+Date: 2026-09-22. Status: accepted; amended 2026-09-23 (see "Amendment
+2026-09-23"). Controller: the single-controller-engineer
 dogfood run on this repository (root sce-7g9). Amends the publication section
 of [DEC-20260903-012](2026-09-03-012-materialisation-source-and-no-clobber.md).
 
@@ -77,6 +78,48 @@ ambiguity. Exclusive namespace control remains required for everything the
 binding does not cover — pre-act admission, containment, and the marker — and a
 destination that stays relocated still refuses admission on the next act.
 
+## Amendment 2026-09-23
+
+Frontier review of this record (finding F1, bead `sce-dcx.19`) found a middle
+ground decision 3 did not weigh. The binding proves where the bytes landed, not
+that the object they landed in is still the destination the controller
+admitted. A same-user rename that carries the admitted directory *out of* an
+intact destination root between admission and the link therefore produced a
+positive `published` observation for a publication that is no longer inside the
+authorised destination, and whose journaled canonical path is stale. This
+amendment narrows decision 3's positive-evidence rule; it grants no new
+authority and changes nothing else above.
+
+- **A1.** The act always completes. Both no-clobber links are made in the bound
+  object exactly as before, so the half-publication defect this record fixed
+  stays fixed, nothing is ever overwritten, and nothing already linked is
+  deleted or rewritten.
+- **A2.** The parent then re-runs the admission proof of algorithm step 1
+  (containment, marker, canonical path equal to the lexical path below the
+  root) for the journaled canonical path, and keeps the positive observation
+  only if that path still resolves to the admitted device and inode.
+- **A3.** If the destination root is still admissible but the admitted
+  canonical path no longer resolves to the admitted object — the directory was
+  carried out of the root, swapped for a substitute, or removed — the act
+  records the existing `ambiguous` outcome with operation
+  `post-act-relocation` instead of positive evidence. The relocation is proved
+  rather than inferred: the root stayed, the object did not. Positive evidence
+  is withheld because the authority model still disclaims concurrent namespace
+  relocation, and `ambiguous` blocks and is never guessed through.
+- **A4.** If the destination root itself is no longer at its admitted path, the
+  observation stays positive. That is the ancestor rename this record measured:
+  the destination moved as a unit and the publication is still inside the
+  admitted root object. The next act's pre-act admission refuses, unchanged.
+- **A5.** Recovery disposes of `post-act-relocation` by reading, not by
+  writing. `discoverMaterialise` at the admitted path reports drift while the
+  namespace is broken, so the controller blocks until the destination is
+  restored; once it is, discovery reads the retained pair and the next act
+  converges on `already_present` without republishing.
+
+Nothing else moves: the reducer stays pure, the observation and refusal
+vocabularies are unchanged because `ambiguous` is already an admitted outcome,
+the helper is untouched, and no runtime dependency is added.
+
 ## Rejected alternatives
 
 - **Descriptor-path publication.** `/dev/fd/<fd>/<basename>`: measured
@@ -101,10 +144,14 @@ destination that stays relocated still refuses admission on the next act.
   interfere exactly once, between the helper's identity check and its
   publication syscall, so the whole remainder of the call runs in the relocated
   namespace: same-user ancestor rename, sync-client-style directory swap with a
-  foreign final of the same name left untouched in the substitute, durable
-  relocation still blocking the next admission, the unsupported-platform gate
-  running no subprocess and writing nothing, and read-only discovery surviving
-  it. The first and fourth fail against the previous adapter.
+  foreign final of the same name left untouched in the substitute, a rename
+  that carries the admitted directory out of an intact destination root,
+  durable relocation still blocking the next admission, the
+  unsupported-platform gate running no subprocess and writing nothing, and
+  read-only discovery surviving it. The first and fifth fail against the
+  adapter this record replaced. Under the amendment below the swap and the
+  rename out of the root record `post-act-relocation` rather than positive
+  evidence, and both still keep the complete pair in the bound object.
 - Those tests are discovered by the release tier; `scripts/test-tier.mjs` scopes
   the integration tier to `test/integration`. The existing integration
   publication suite covers the seam they extend and passes unchanged.
@@ -115,6 +162,10 @@ destination that stays relocated still refuses admission on the next act.
 
 ## Follow-up
 
+- Discharged by bead `sce-dcx.19`: the post-act relocation rule above, its
+  deterministic proofs (a rename out of an intact root and a substitute at the
+  admitted path both withhold positive evidence and keep both links), and the
+  recovery path that converges once the destination is restored.
 - Discharged by bead `sce-dcx.12`: the copy vocabulary now admits
   `publication_platform_unsupported` at both boundaries and the gate emits it
   before any read or write, so an unsupported platform is a decided refusal the
