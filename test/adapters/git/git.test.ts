@@ -726,6 +726,23 @@ async function git(cwd: string, ...argv: string[]): Promise<string> {
   return stdout;
 }
 
+/**
+ * The same helper with both commit dates pinned, so a history built for its
+ * listing order is a property of the history and never of the clock.
+ */
+async function gitAt(
+  cwd: string,
+  epochSeconds: number,
+  ...argv: string[]
+): Promise<string> {
+  const date = `${epochSeconds} +0000`;
+  const { stdout } = await execFile("git", argv, {
+    cwd,
+    env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date },
+  });
+  return stdout;
+}
+
 async function setupRepository(objectFormat?: "sha1" | "sha256"): Promise<{
   base: string;
   cwd: string;
@@ -1722,7 +1739,7 @@ test("the production runner admits every K3 vector and refuses its adversarial v
     ["update-ref", "--no-deref", "HEAD", parent],
     ["cat-file", "commit", parent],
     ["cat-file", "blob", tree],
-    ["rev-list", `--max-count=${DISCOVERY_DEPTH}`, parent],
+    ["rev-list", "--topo-order", `--max-count=${DISCOVERY_DEPTH}`, parent],
     ["ls-tree", "-r", "-z", parent, "--", "events"],
     [
       "fetch",
@@ -1778,10 +1795,19 @@ test("the production runner admits every K3 vector and refuses its adversarial v
     ["cat-file", "tree", parent],
     ["cat-file", "-p", parent],
     ["cat-file", "commit", "HEAD"],
-    // Keyed discovery is capped at exactly DISCOVERY_DEPTH commits.
-    ["rev-list", `--max-count=${DISCOVERY_DEPTH + 1}`, parent],
-    ["rev-list", `--max-count=${DISCOVERY_DEPTH}`, "HEAD"],
-    ["rev-list", `--max-count=${DISCOVERY_DEPTH}`, parent, "--all"],
+    // Keyed discovery is capped at exactly DISCOVERY_DEPTH commits and is
+    // ordered topologically, which is what lets a listed base prove absence.
+    ["rev-list", "--topo-order", `--max-count=${DISCOVERY_DEPTH + 1}`, parent],
+    ["rev-list", "--topo-order", `--max-count=${DISCOVERY_DEPTH}`, "HEAD"],
+    [
+      "rev-list",
+      "--topo-order",
+      `--max-count=${DISCOVERY_DEPTH}`,
+      parent,
+      "--all",
+    ],
+    ["rev-list", `--max-count=${DISCOVERY_DEPTH}`, parent],
+    ["rev-list", "--date-order", `--max-count=${DISCOVERY_DEPTH}`, parent],
     ["rev-list", parent],
     // Record reads stay inside one safe relative directory of one commit.
     ["ls-tree", "-r", "-z", parent, "--", "/events"],
@@ -2378,6 +2404,7 @@ test("keyed discovery reads commits, trailers, records, and refs within exact bo
   );
   assert.deepEqual(requested, [
     "rev-list",
+    "--topo-order",
     `--max-count=${DISCOVERY_DEPTH}`,
     sha1("c"),
   ]);
@@ -2532,4 +2559,144 @@ test("keyed discovery reads commits, trailers, records, and refs within exact bo
       await fetchIntegrationBranch(router(identity), repository(), input),
       { code: "GIT_BAD_INPUT", state: "refused" },
     );
+});
+
+test("a keyed commit under a newer-dated merge is discovered, not called absent", async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "sce-git-topo-")));
+  const cwd = join(root, "repo");
+  t.after(() => rm(root, { force: true, recursive: true }));
+  await git(root, "init", cwd);
+  await git(cwd, "config", "user.email", "test@example.invalid");
+  await git(cwd, "config", "user.name", "SCE test");
+
+  // A chain of DISCOVERY_DEPTH commits, then two children of its tip and one
+  // merge of both. The keyed child is dated well before every other commit
+  // here; everything else is dated in ascending order along the chain.
+  const recent = 1_800_000_000;
+  const stale = recent - 10_000_000;
+  await gitAt(cwd, recent, "commit", "--allow-empty", "-m", "chain 0");
+  await git(cwd, "branch", "-M", "main");
+  const tree = (await git(cwd, "rev-parse", "HEAD^{tree}")).trim();
+  const first = (await git(cwd, "rev-parse", "HEAD")).trim();
+  let chain = first;
+  for (let step = 1; step < DISCOVERY_DEPTH; step += 1)
+    chain = (
+      await gitAt(
+        cwd,
+        recent + step,
+        "commit-tree",
+        tree,
+        "-p",
+        chain,
+        "-m",
+        `chain ${step}`,
+      )
+    ).trim();
+  const base = chain;
+  const trailer = `SCE-Provenance-Key: sce:${"d".repeat(64)}`;
+  const keyed = (
+    await gitAt(
+      cwd,
+      stale,
+      "commit-tree",
+      tree,
+      "-p",
+      base,
+      "-m",
+      "sce: provenance for wave wave-1",
+      "-m",
+      trailer,
+    )
+  ).trim();
+  const competing = (
+    await gitAt(
+      cwd,
+      recent + DISCOVERY_DEPTH,
+      "commit-tree",
+      tree,
+      "-p",
+      base,
+      "-m",
+      "a competing landing on the same base",
+    )
+  ).trim();
+  const head = (
+    await gitAt(
+      cwd,
+      recent + DISCOVERY_DEPTH + 1,
+      "commit-tree",
+      tree,
+      "-p",
+      competing,
+      "-p",
+      keyed,
+      "-m",
+      "merge the competing landing",
+    )
+  ).trim();
+  await git(cwd, "update-ref", "refs/heads/main", head);
+
+  // Git's default listing is by commit date, and on this history that order
+  // is a trap: the base is listed third, ahead of its own older-dated keyed
+  // child, and the newer-dated chain then fills the window before the walk
+  // can reach that child. A walk that read "base listed" as absence there
+  // would land a second keyed commit on a key that is plainly already in.
+  const dated = (
+    await git(cwd, "rev-list", `--max-count=${DISCOVERY_DEPTH}`, head)
+  )
+    .split("\n")
+    .filter((line) => line.length > 0);
+  assert.equal(dated.length, DISCOVERY_DEPTH);
+  assert.equal(dated.includes(base), true);
+  assert.equal(dated.includes(keyed), false);
+
+  // Topological order never lists a commit before its reachable children, so
+  // the keyed child is read before the base it is built on and the walk finds
+  // it. The proof and the reach now agree.
+  const topological = (
+    await git(
+      cwd,
+      "rev-list",
+      "--topo-order",
+      `--max-count=${DISCOVERY_DEPTH}`,
+      head,
+    )
+  )
+    .split("\n")
+    .filter((line) => line.length > 0);
+  assert.equal(topological.includes(keyed), true);
+  assert.equal(topological.indexOf(keyed) < topological.indexOf(base), true);
+
+  const repo = await actualRepository(cwd);
+  const found = await findCommitByTrailer(nodeGitRunner, repo, {
+    base,
+    start: head,
+    trailer,
+  });
+  assert.equal(found.state, "found");
+  if (found.state !== "found") throw new Error("unreachable");
+  assert.equal(found.oid, keyed);
+  assert.equal(found.commit.parents[0], base);
+
+  // The same ordering keeps both other outcomes honest on this history: a key
+  // that never landed is absent because the walk reached its base, and a base
+  // that sits past the window is unreadable rather than absent.
+  const unlanded = `SCE-Provenance-Key: sce:${"e".repeat(64)}`;
+  assert.deepEqual(
+    await findCommitByTrailer(nodeGitRunner, repo, {
+      base,
+      start: head,
+      trailer: unlanded,
+    }),
+    { state: "absent" },
+  );
+  assert.equal(topological.includes(first), false);
+  assert.deepEqual(
+    await findCommitByTrailer(nodeGitRunner, repo, {
+      base: first,
+      start: head,
+      trailer: unlanded,
+    }),
+    { reason: "window_exhausted", state: "unreadable" },
+  );
 });

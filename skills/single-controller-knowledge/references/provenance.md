@@ -66,14 +66,17 @@ byte. Two projections from the same journaled inputs produce identical bytes
 and the same commit OID; a deliberate base advance produces a new one.
 
 That discovery is bounded: the walk reads at most sixty-four commits back
-from the integration head, and it proves absence only as far as it reached.
-Absence is proven when the walk meets the attempted base, because a landed
-keyed commit is built on that base and so lies between it and the head, or
-when the whole reachable history was shorter than the bound. A fresh attempt
-is proven at once, since its base is the head the walk starts from. A window
-filled without either is unreadable, so the attempt is ambiguous rather than
-absent: it blocks and asks instead of committing a second time. The bound is
-deliberate and keeps discovery one constant-cost read.
+from the integration head, in topological order, and it proves absence only
+as far as it reached. The ordering is what makes the proof exact: no commit
+is listed before every reachable child of it has been listed, so a walk that
+has met the attempted base has already read every commit built on that base,
+a landed keyed commit among them. Absence is therefore proven when the walk
+meets that base, or when the whole reachable history was shorter than the
+bound. A fresh attempt is proven at once, since its base is the head the
+walk starts from. A window filled without either is unreadable, so the
+attempt is ambiguous rather than absent: it blocks and asks instead of
+committing a second time. The bound is deliberate and keeps discovery one
+bounded read.
 
 Every commit the walk reaches spends the window, including commits merged in
 from a side branch, so the bound counts commits rather than landings and its

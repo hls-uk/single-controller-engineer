@@ -325,9 +325,10 @@ function allowedGitArgv(argv: readonly string[]): boolean {
     );
   if (command === "rev-list")
     return (
-      args.length === 2 &&
-      args[0] === `--max-count=${DISCOVERY_DEPTH}` &&
-      OID.test(args[1] ?? "")
+      args.length === 3 &&
+      args[0] === "--topo-order" &&
+      args[1] === `--max-count=${DISCOVERY_DEPTH}` &&
+      OID.test(args[2] ?? "")
     );
   if (command === "ls-tree")
     return (
@@ -2226,14 +2227,26 @@ function trailerUnreadable(reason: TrailerUnreadable): TrailerDiscovery {
  * Bounded walk for the commit whose message carries the exact trailer.
  *
  * The walk reads at most `DISCOVERY_DEPTH` commits back from `start`, so it
- * can prove absence only as far as it actually reached. It reports `absent`
- * exactly when it met `base`, the first parent the sought commit is built
- * on, so a keyed commit that landed lies between the head and that base, or
- * when the listing was shorter than the bound and therefore held the whole
- * reachable history. A window filled without either is `window_exhausted`:
- * a keyed commit may well sit just past it, and a caller that read that as
- * absence would commit a second time. A fresh attempt costs nothing extra,
- * since its base is the integration head the walk starts from.
+ * can prove absence only as far as it actually reached. `--topo-order` is
+ * what turns that reach into a proof: Git lists no commit before every
+ * reachable child of it has been listed, so a window holding `base` has
+ * already read every commit built on `base`, the sought one among them.
+ * Commit-date order carries no such guarantee. A second child of `base`
+ * dated later than the keyed commit is listed ahead of it, and enough
+ * newer-dated reachable history then pushes the keyed commit past the
+ * bound, so the walk would meet `base` without ever having seen a commit
+ * that is plainly there and a second keyed commit would land.
+ *
+ * So `absent` is exactly a window that met `base`, or one shorter than the
+ * bound and therefore the whole reachable history. A window filled without
+ * either is `window_exhausted`: a keyed commit may well sit just past it,
+ * and a caller that read it as absence would commit a second time. A fresh
+ * attempt costs nothing extra, since its base is the integration head the
+ * walk starts from.
+ *
+ * Ordering can cost Git a pass over the reachable set rather than over the
+ * first `DISCOVERY_DEPTH` commits. The adapter still reads one bounded
+ * window, and an exact proof of absence is worth that pass.
  *
  * Every commit the walk reaches spends the window, including ones merged in
  * from a side branch, so the bound counts commits rather than landings. That
@@ -2255,6 +2268,7 @@ export async function findCommitByTrailer(
     return trailerUnreadable("bad_input");
   const listed = await run(runner, repository, [
     "rev-list",
+    "--topo-order",
     `--max-count=${DISCOVERY_DEPTH}`,
     input.start,
   ]);
