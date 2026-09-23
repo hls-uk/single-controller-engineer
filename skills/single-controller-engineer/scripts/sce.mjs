@@ -27263,6 +27263,10 @@ var commandNames = [
   "release-controller",
   "feedback"
 ];
+var stateCommandNames = ["inspect", "next", "status"];
+function isStateCommandName(value) {
+  return stateCommandNames.includes(value);
+}
 var feedbackActions = [
   "prepare",
   "preview",
@@ -27711,7 +27715,7 @@ async function stateResult(command, run2) {
   return await stateOnlyCommandRunner(request2);
 }
 function isStateCommandRequest(request2) {
-  return request2.command === "inspect" || request2.command === "next" || request2.command === "status";
+  return isStateCommandName(request2.command);
 }
 function isHarnessPacketCommandRequest(request2) {
   return request2.command === "harness-packet";
@@ -38852,10 +38856,7 @@ function parseCommand(command, argv) {
     version: SCHEMA_VERSION2
   };
   if (!validateCommandRequest(request2))
-    throw new CliError(
-      "SCE_INVALID_REQUEST",
-      "The command request is invalid."
-    );
+    throw new CliError("SCE_INVALID_REQUEST", malformedRequestMessage(command));
   const controllerConfig = optionValue(values, "--controller-config");
   return {
     ...controllerConfig === void 0 ? {} : { controllerConfig: parseControllerConfigPath(controllerConfig) },
@@ -38985,6 +38986,20 @@ function parseRequest(value) {
     );
   return parsed;
 }
+function malformedRequestMessage(command) {
+  if (command === "harness-packet")
+    return "The harness-packet request is invalid: --request must be a complete sce.harness-packet payload (unitId, role, baseOid, acceptance, mandatoryVerification, ownedPaths, plus the reviewer fields when role is reviewer).";
+  if (isStateCommandName(command))
+    return `The ${command} request is invalid: --request must be '{"run":{...}}' with a valid repository run envelope, or be omitted when --controller-config supplies the run.`;
+  return "The command request is invalid.";
+}
+function refusedRequestMessage(command, controllerConfig) {
+  if (command === "harness-packet")
+    return "The harness-packet request is not a usable launch packet: --request must carry a valid sce.harness-packet payload within the bounded launch size.";
+  if (!isStateCommandName(command))
+    return "The request does not contain a valid repository run.";
+  return controllerConfig ? `The ${command} command reads its repository run from the --controller-config authoritative store, which did not supply a valid run; an explicit --request '{"run":{...}}' envelope is read only without --controller-config.` : `The ${command} command needs a repository run: pass --request '{"run":{...}}' with the run envelope, or --controller-config <absolute path> to read the run from its authoritative store.`;
+}
 async function runCli(argv, dependencies = {}) {
   try {
     const invocation = parseCliArguments(argv);
@@ -39051,7 +39066,10 @@ async function runCli(argv, dependencies = {}) {
     if (outcome.status === "invalid") {
       return failure(
         outcome.code,
-        "The request does not contain a valid repository run.",
+        refusedRequestMessage(
+          invocation.request.command,
+          invocation.controllerConfig !== void 0
+        ),
         EXIT_USAGE,
         invocation.request.command
       );
