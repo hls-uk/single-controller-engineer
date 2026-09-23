@@ -6872,6 +6872,7 @@ var require_ajv = __commonJS({
 
 // src/cli.ts
 import { realpathSync as realpathSync8 } from "node:fs";
+import { readFile as readFile5 } from "node:fs/promises";
 import {
   basename as basename5,
   dirname as dirname8,
@@ -20726,6 +20727,34 @@ function sortActions(actions) {
   });
 }
 
+// src/commands/candidate-digest.ts
+var MAX_CANDIDATE_DIFF_BYTES = 65536;
+var CANDIDATE_DIFF_DOMAIN = "sce.protocol.candidate-diff/v1";
+var CandidateDigestRequestSchema = Type.Object(
+  {
+    diff: Type.String({
+      minLength: 1,
+      maxLength: MAX_CANDIDATE_DIFF_BYTES,
+      maxUtf8Bytes: MAX_CANDIDATE_DIFF_BYTES,
+      pattern: "^[^\\u0000]*$"
+    }),
+    raw: Type.Optional(Type.Boolean())
+  },
+  { additionalProperties: false }
+);
+var CandidateDigestCommandSchema = Type.Object(
+  {
+    command: Type.Literal("candidate-digest"),
+    options: Type.Object(
+      { json: Type.Boolean(), request: CandidateDigestRequestSchema },
+      { additionalProperties: false }
+    ),
+    schema: Type.Literal("sce.command.request"),
+    version: Type.Literal(1)
+  },
+  { additionalProperties: false }
+);
+
 // src/adapters/git/index.ts
 import { spawn as spawn2 } from "node:child_process";
 import { existsSync, realpathSync as realpathSync2 } from "node:fs";
@@ -27245,6 +27274,7 @@ function executed(observedResult, result2) {
 var commandNames = [
   "inspect",
   "harness-packet",
+  "candidate-digest",
   "acquire-controller",
   "next",
   "plan-wave",
@@ -27461,6 +27491,7 @@ var ProvenanceCarryClaimCommandSchema = strictObject5({
 var CommandRequestSchema = Type.Union([
   StateCommandSchema,
   HarnessPacketCommandSchema,
+  CandidateDigestCommandSchema,
   FeedbackCommandSchema,
   ProvenanceCarryClaimCommandSchema,
   UnavailableCommandSchema
@@ -27535,6 +27566,20 @@ var stateOnlyCommandRunner = (request2) => {
       status: "ok",
       version: 1
     } : invalidStateRequest();
+  }
+  if (isCandidateDigestCommandRequest(request2)) {
+    const { diff, raw } = request2.options.request;
+    return {
+      result: {
+        candidateDiffByteCount: utf87.encode(diff).byteLength,
+        candidateDiffHash: deriveCandidateDiffHash(diff),
+        domain: CANDIDATE_DIFF_DOMAIN,
+        ...raw === true ? { sha256: sha256(diff) } : {}
+      },
+      schema: "sce.command.result",
+      status: "ok",
+      version: 1
+    };
   }
   if (!isStateCommandRequest(request2)) return unavailable3();
   if (!("request" in request2.options)) return invalidStateRequest();
@@ -27633,6 +27678,8 @@ function createRecoveryCommandRunner(runner) {
     if (!validateCommandRequest(request2)) return invalidStateRequest();
     if (isHarnessPacketCommandRequest(request2))
       return stateOnlyCommandRunner(request2);
+    if (isCandidateDigestCommandRequest(request2))
+      return stateOnlyCommandRunner(request2);
     if (isStateCommandRequest(request2)) {
       const outcome2 = await runner();
       if (!("run" in outcome2))
@@ -27724,6 +27771,9 @@ function isStateCommandRequest(request2) {
 }
 function isHarnessPacketCommandRequest(request2) {
   return request2.command === "harness-packet";
+}
+function isCandidateDigestCommandRequest(request2) {
+  return request2.command === "candidate-digest";
 }
 function invalidStateRequest() {
   return {
@@ -38539,6 +38589,9 @@ var composeFlagOptions = /* @__PURE__ */ new Set([
   "--no-knowledge",
   "--overwrite"
 ]);
+var candidateDigestCommand = "candidate-digest";
+var candidateDigestValueOptions = /* @__PURE__ */ new Set(["--file"]);
+var candidateDigestFlagOptions = /* @__PURE__ */ new Set(["--help", "--json", "--raw"]);
 var authorityProfiles = [
   "local-change-only",
   "push-branch",
@@ -38592,6 +38645,8 @@ function parseCliArguments(argv) {
   if (isInstallerCommand(first))
     return parseInstallerCommand(first, argv.slice(1));
   if (first === composeCommand) return parseComposeCommand(argv.slice(1));
+  if (first === candidateDigestCommand)
+    return parseCandidateDigestCommand(argv.slice(1));
   if (!isCommandName(first)) {
     throw new CliError("SCE_UNKNOWN_COMMAND", "Unknown command.");
   }
@@ -38775,6 +38830,51 @@ function parseComposeCommand(argv) {
     kind: "compose",
     output: parseAbsolutePath(output, "--output"),
     overwrite: values.has("--overwrite")
+  };
+}
+function parseCandidateDigestCommand(argv) {
+  const values = /* @__PURE__ */ new Map();
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (token === void 0) continue;
+    if (!token.startsWith("-"))
+      throw new CliError("SCE_UNEXPECTED_ARGUMENT", "Unexpected argument.");
+    const [option, inlineValue] = splitOption(
+      token === "-h" ? "--help" : token
+    );
+    if (candidateDigestFlagOptions.has(option)) {
+      if (inlineValue !== void 0)
+        throw new CliError(
+          "SCE_INVALID_OPTION_VALUE",
+          `${option} does not accept a value.`
+        );
+      setOption(values, option, true);
+      continue;
+    }
+    if (!candidateDigestValueOptions.has(option))
+      throw new CliError("SCE_UNKNOWN_OPTION", "Unknown option.");
+    const value = inlineValue ?? argv[++index];
+    if (value === void 0 || value === "--" || value.startsWith("--"))
+      throw new CliError(
+        "SCE_MISSING_OPTION_VALUE",
+        `${option} requires a value.`
+      );
+    setOption(values, option, value);
+  }
+  if (values.has("--help")) {
+    if (values.size !== 1)
+      throw new CliError(
+        "SCE_UNEXPECTED_ARGUMENT",
+        "--help does not accept arguments."
+      );
+    return { command: candidateDigestCommand, kind: "help" };
+  }
+  const file = optionValue(values, "--file");
+  return {
+    ...file === void 0 ? {} : { file: parseAbsolutePath(file, "--file") },
+    json: values.has("--json"),
+    kind: candidateDigestCommand,
+    raw: values.has("--raw")
   };
 }
 function isHarnessFamily(value) {
@@ -39020,6 +39120,8 @@ async function runCli(argv, dependencies = {}) {
       return await runInstaller(invocation, dependencies);
     }
     if (invocation.kind === "compose") return await runCompose(invocation);
+    if (invocation.kind === candidateDigestCommand)
+      return await runCandidateDigest(invocation, dependencies);
     if (invocation.request.command === "feedback") {
       const feedback = await runFeedbackCliAction(
         invocation.request.feedbackAction,
@@ -39098,6 +39200,134 @@ async function runCli(argv, dependencies = {}) {
       EXIT_SOFTWARE
     );
   }
+}
+async function runCandidateDigest(invocation, dependencies) {
+  const read = await readCandidateDiff(invocation, dependencies);
+  if (!read.ok)
+    return failure(
+      read.code,
+      read.message,
+      read.exitCode,
+      candidateDigestCommand
+    );
+  const request2 = {
+    command: candidateDigestCommand,
+    options: {
+      json: invocation.json,
+      request: {
+        diff: read.diff,
+        ...invocation.raw ? { raw: true } : {}
+      }
+    },
+    schema: REQUEST_SCHEMA,
+    version: SCHEMA_VERSION2
+  };
+  if (!validateCommandRequest(request2))
+    return failure(
+      "SCE_CANDIDATE_DIFF_INVALID",
+      `The reproduced diff is not bytes the candidate collector could have observed: it must be non-empty, free of NUL bytes, and at most ${MAX_CANDIDATE_DIFF_BYTES} bytes.`,
+      EXIT_USAGE,
+      candidateDigestCommand
+    );
+  const runner = dependencies.runner ?? stateOnlyCommandRunner;
+  let outcome;
+  try {
+    outcome = await runner(request2);
+  } catch {
+    return failure(
+      "SCE_RUNNER_FAILURE",
+      "The command runner failed without a usable response.",
+      EXIT_SOFTWARE,
+      candidateDigestCommand
+    );
+  }
+  if (!validateCommandRunnerResult(outcome))
+    return failure(
+      "SCE_INVALID_RUNNER_RESULT",
+      "The command runner returned an invalid result.",
+      EXIT_SOFTWARE,
+      candidateDigestCommand
+    );
+  if (outcome.status === "ok")
+    return success(outcome.result, candidateDigestCommand);
+  return failure(
+    "SCE_COMMAND_UNAVAILABLE",
+    "The candidate-digest command is unavailable.",
+    EXIT_UNAVAILABLE,
+    candidateDigestCommand
+  );
+}
+async function readCandidateDiff(invocation, dependencies) {
+  let bytes2;
+  try {
+    bytes2 = invocation.file !== void 0 ? await readFile5(invocation.file) : dependencies.standardInput !== void 0 ? await dependencies.standardInput() : await readProcessStandardInput();
+  } catch (error) {
+    if (error instanceof CliError)
+      return {
+        code: error.code,
+        exitCode: error.exitCode,
+        message: error.message,
+        ok: false
+      };
+    return {
+      code: "SCE_CANDIDATE_DIFF_UNREADABLE",
+      exitCode: EXIT_UNAVAILABLE,
+      message: invocation.file === void 0 ? "The reproduced diff could not be read from standard input." : `The reproduced diff could not be read from ${invocation.file}.`,
+      ok: false
+    };
+  }
+  const invalid2 = (message) => ({
+    code: "SCE_CANDIDATE_DIFF_INVALID",
+    exitCode: EXIT_USAGE,
+    message,
+    ok: false
+  });
+  if (bytes2.byteLength === 0)
+    return invalid2(
+      "No diff bytes were supplied: pipe the packet's candidateDiffCommand output in, or pass --file <absolute path>."
+    );
+  if (bytes2.byteLength > MAX_CANDIDATE_DIFF_BYTES)
+    return invalid2(
+      `The reproduced diff exceeds the ${MAX_CANDIDATE_DIFF_BYTES} bytes a collected candidate diff may have, so these bytes were never hashed as a candidate.`
+    );
+  let diff;
+  try {
+    diff = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      bytes2
+    );
+  } catch {
+    return invalid2(
+      "The reproduced diff is not valid UTF-8; the protocol digest is taken over the UTF-8 bytes the collector observed."
+    );
+  }
+  if (diff.includes("\0"))
+    return invalid2(
+      "The reproduced diff contains a NUL byte, which the candidate collector refuses; these bytes were never hashed as a candidate."
+    );
+  return { diff, ok: true };
+}
+async function readProcessStandardInput() {
+  if (process.stdin.isTTY === true)
+    throw new CliError(
+      "SCE_CANDIDATE_DIFF_UNREADABLE",
+      "Standard input is a terminal: pipe the packet's candidateDiffCommand output in, or pass --file <absolute path>.",
+      EXIT_UNAVAILABLE
+    );
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of process.stdin) {
+    const bytes2 = chunk;
+    chunks.push(bytes2);
+    total += bytes2.byteLength;
+    if (total > MAX_CANDIDATE_DIFF_BYTES) break;
+  }
+  const joined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    joined.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return joined;
 }
 async function runCompose(invocation) {
   const observed2 = await observeRepository(invocation.cwd, {
@@ -39295,7 +39525,7 @@ function helpResult(command, version) {
   return {
     ...command === "feedback" ? { actions: [...feedbackActions] } : {},
     command,
-    usage: command === "feedback" ? "sce feedback <prepare|preview|submit|flush> --request <json>" : command === "install-skill" ? "sce install-skill [--host <codex|claude>] --destination <absolute path> [--dry-run]" : command === "uninstall-skill" ? "sce uninstall-skill [--host <codex|claude>] --destination <absolute path>" : command === composeCommand ? "sce compose-config --harness <claude|codex> --root-bead <id> --output <absolute path> [--cwd <absolute path>] [--branch <name>] [--authority <local-change-only|push-branch|open-pr|integrate>] [--beads-mode <local-only|git-sync>] [--controller-model <id>] [--frontier-model <id>] [--workhorse-model <id>] [--knowledge|--no-knowledge] [--bd-executable <absolute path>] [--dolt-executable <absolute path>] [--bind-slot] [--overwrite] [--json]" : `sce ${command} [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]`
+    usage: command === "feedback" ? "sce feedback <prepare|preview|submit|flush> --request <json>" : command === "install-skill" ? "sce install-skill [--host <codex|claude>] --destination <absolute path> [--dry-run]" : command === "uninstall-skill" ? "sce uninstall-skill [--host <codex|claude>] --destination <absolute path>" : command === candidateDigestCommand ? "sce candidate-digest [--file <absolute path>] [--raw] [--json] (the reproduced diff is read from standard input when --file is absent)" : command === composeCommand ? "sce compose-config --harness <claude|codex> --root-bead <id> --output <absolute path> [--cwd <absolute path>] [--branch <name>] [--authority <local-change-only|push-branch|open-pr|integrate>] [--beads-mode <local-only|git-sync>] [--controller-model <id>] [--frontier-model <id>] [--workhorse-model <id>] [--knowledge|--no-knowledge] [--bd-executable <absolute path>] [--dolt-executable <absolute path>] [--bind-slot] [--overwrite] [--json]" : `sce ${command} [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]`
   };
 }
 function canonicalJson2(value) {
