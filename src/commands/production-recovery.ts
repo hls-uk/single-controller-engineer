@@ -63,6 +63,7 @@ import type {
   SlotTransitionIntent,
 } from "../protocol/schemas.js";
 import {
+  CANDIDATE_DIFF_MAX_BYTES,
   LIMITS,
   ProvenanceInputSchema,
   validate,
@@ -667,6 +668,28 @@ async function candidateObserved(
   const input = candidateInput(effect, run);
   if (input === undefined) return ambiguous();
   const result = await observeCandidate(git.runner, git.repository, input);
+  // A measured oversize diff is the one refusal the collect act can name
+  // exactly. The measurement has to land inside the event's own bounds to be
+  // an observation at all; anything else stays ambiguous, as before.
+  if (
+    result.state === "refused" &&
+    result.code === "GIT_DIFF_OVERSIZE" &&
+    result.oversize !== undefined &&
+    result.oversize.byteCount > CANDIDATE_DIFF_MAX_BYTES &&
+    result.oversize.byteCount <= CANDIDATE_DIFF_MAX_BYTES * 2
+  )
+    return {
+      observation: {
+        ...eventBase(effect, run),
+        headOid: result.oversize.head,
+        maximumByteCount: CANDIDATE_DIFF_MAX_BYTES,
+        measuredByteCount: result.oversize.byteCount,
+        reason: "diff_oversize",
+        treeOid: result.oversize.tree,
+        type: "candidate_refused",
+      } as ProtocolEvent,
+      status: "observed",
+    };
   if (result.state !== "observed" || result.snapshot === undefined)
     return ambiguous();
   return {

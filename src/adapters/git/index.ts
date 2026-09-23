@@ -125,6 +125,8 @@ export type GitEffect = Readonly<{
     | "GIT_OK"
     | "GIT_BAD_INPUT"
     | "GIT_COMMAND_FAILED"
+    /** A candidate diff measured past `MAX_OUTPUT`; see `CandidateObservation`. */
+    | "GIT_DIFF_OVERSIZE"
     | "GIT_DIRTY"
     | "GIT_ABSENT"
     | "GIT_FOREIGN_BRANCH"
@@ -141,9 +143,23 @@ export type GitEffect = Readonly<{
   state: GitEffectState;
 }>;
 
+/**
+ * The measured cause behind a `GIT_DIFF_OVERSIZE` refusal, bound to the clean
+ * branch/object pair the read reached. `byteCount` is the bytes the diff read
+ * produced: the runner keeps the chunk that crosses its cap and then stops, so
+ * it is a floor on the true diff and always past `MAX_OUTPUT`.
+ */
+export type CandidateDiffOversize = Readonly<{
+  byteCount: number;
+  head: string;
+  tree: string;
+}>;
+
 export type CandidateObservation = GitEffect &
   Readonly<{
     snapshot?: GitSnapshot;
+    /** Present exactly when `code` is `GIT_DIFF_OVERSIZE`. */
+    oversize?: CandidateDiffOversize;
   }>;
 
 const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
@@ -619,6 +635,62 @@ async function runAt(
   }
 }
 
+/**
+ * The exact fact an unparsable diff read can still prove: a stdout string past
+ * the bound, and no further than the one chunk `nodeGitRunner` keeps as it
+ * stops. Only this integer leaves the seam; the bytes themselves never do.
+ */
+function oversizeStdoutBytes(raw: unknown): number | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const { invalidUtf8, stdout, timedOut, unavailable } = raw as Readonly<
+    Record<string, unknown>
+  >;
+  if (
+    typeof stdout !== "string" ||
+    invalidUtf8 === true ||
+    timedOut === true ||
+    unavailable === true
+  )
+    return undefined;
+  const byteCount = Buffer.byteLength(stdout, "utf8");
+  return byteCount > MAX_OUTPUT && byteCount <= MAX_OUTPUT * 2
+    ? byteCount
+    : undefined;
+}
+
+/**
+ * The candidate diff read. `GitResultSchema` bounds `stdout` at exactly the
+ * reviewer packet's limit, so an oversize diff cannot arrive as a validatable
+ * result at all: the whole read is nulled and its cause is lost. The ordinary
+ * path stays on that schema; the one refusal that needs a number gets a
+ * measurement instead of an opaque failure.
+ */
+async function readCandidateDiff(
+  runner: GitRunner,
+  cwd: string,
+  argv: readonly string[],
+): Promise<
+  | Readonly<{ state: "result"; result: GitResult }>
+  | Readonly<{ state: "oversize"; byteCount: number }>
+> {
+  const unreadable = {
+    state: "result",
+    result: { exitCode: null, signal: null, stdout: "", unavailable: true },
+  } as const;
+  let raw: unknown;
+  try {
+    raw = await runner({ argv, cwd });
+  } catch {
+    return unreadable;
+  }
+  const parsed = parseGitResult(raw) as GitResult | undefined;
+  if (parsed !== undefined) return { state: "result", result: parsed };
+  const byteCount = oversizeStdoutBytes(raw);
+  return byteCount === undefined
+    ? unreadable
+    : { state: "oversize", byteCount };
+}
+
 async function refOid(
   runner: GitRunner,
   repository: GitRepository,
@@ -1017,7 +1089,7 @@ export async function observeCandidate(
     return effect("refused", "GIT_REFUSED");
   const clean = statusResult.stdout.length === 0;
   if (!clean) return effect("refused", "GIT_DIRTY");
-  const [ancestorResult, pathsResult, diffResult] = await Promise.all([
+  const [ancestorResult, pathsResult, diffRead] = await Promise.all([
     runAt(runner, wantedPath, [
       "merge-base",
       "--is-ancestor",
@@ -1035,7 +1107,7 @@ export async function observeCandidate(
       "--no-renames",
       `${input.base}..${head}`,
     ]),
-    runAt(runner, wantedPath, [
+    readCandidateDiff(runner, wantedPath, [
       "-c",
       "core.quotePath=false",
       "-c",
@@ -1058,13 +1130,20 @@ export async function observeCandidate(
       `${input.base}..${head}`,
     ]),
   ]);
-  if (
-    !commandOk(ancestorResult) ||
-    !commandOk(pathsResult) ||
-    !commandOk(diffResult) ||
-    Buffer.byteLength(diffResult.stdout, "utf8") > MAX_OUTPUT
-  )
+  if (!commandOk(ancestorResult) || !commandOk(pathsResult))
     return effect("refused", "GIT_REFUSED");
+  // Ancestry and the path listing hold, so size is the only thing left to
+  // blame, and the read measured past the bound on the clean pair above. That
+  // is a fact about the branch, not an unreadable repository: report it so the
+  // collect reconcile can route the unit to repair with a size to shed.
+  if (diffRead.state === "oversize")
+    return {
+      code: "GIT_DIFF_OVERSIZE",
+      oversize: { byteCount: diffRead.byteCount, head, tree },
+      state: "refused",
+    };
+  const diffResult = diffRead.result;
+  if (!commandOk(diffResult)) return effect("refused", "GIT_REFUSED");
   const changedPaths = nulPaths(pathsResult.stdout);
   if (changedPaths === undefined || diffResult.stdout.includes("\u0000"))
     return effect("refused", "GIT_REFUSED");

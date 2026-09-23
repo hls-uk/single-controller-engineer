@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  CANDIDATE_DIFF_MAX_BYTES,
   GateMaterialisationRefusalSchema,
   JudgmentSchema,
   MATERIALISE_REFUSAL_CODES,
@@ -414,6 +415,49 @@ test("Git object observations reject abbreviated OIDs", () => {
     }).ok,
     false,
   );
+});
+
+test("an oversize candidate refusal carries only a measurement past the bound", () => {
+  const refusal = {
+    eventId: "candidate-refused-1",
+    expectedRevision: 0,
+    unitId: "unit-1",
+    type: "candidate_refused",
+    effectId: "candidate-intent:candidate_collect",
+    effectKind: "candidate_collect",
+    observationHash: HASH,
+    reason: "diff_oversize",
+    measuredByteCount: CANDIDATE_DIFF_MAX_BYTES + 1,
+    maximumByteCount: CANDIDATE_DIFF_MAX_BYTES,
+    headOid: OID_B,
+    treeOid: OID_C,
+  };
+  assert.equal(validate(ProtocolEventSchema, refusal).ok, true);
+  // A measurement at or under the bound is not a refusal, and the bound
+  // itself is a literal no event may restate.
+  for (const measuredByteCount of [
+    CANDIDATE_DIFF_MAX_BYTES,
+    CANDIDATE_DIFF_MAX_BYTES * 2 + 1,
+  ])
+    assert.equal(
+      validate(ProtocolEventSchema, { ...refusal, measuredByteCount }).ok,
+      false,
+    );
+  for (const patch of [
+    { maximumByteCount: CANDIDATE_DIFF_MAX_BYTES - 1 },
+    { measuredByteCount: `${CANDIDATE_DIFF_MAX_BYTES + 1}` },
+    { measuredByteCount: CANDIDATE_DIFF_MAX_BYTES + 1.5 },
+    { reason: "diff_unreadable" },
+    { headOid: "a".repeat(39) },
+    { candidateDiffHash: HASH },
+    { extra: "nope" },
+  ])
+    assert.equal(
+      validate(ProtocolEventSchema, { ...refusal, ...patch }).ok,
+      false,
+    );
+  const { treeOid: _tree, ...withoutTree } = refusal;
+  assert.equal(validate(ProtocolEventSchema, withoutTree).ok, false);
 });
 
 test("runtime effects are strict executable discriminants, not opaque hashes", () => {

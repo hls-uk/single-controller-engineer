@@ -1847,6 +1847,155 @@ test("branch reconciliation is read-only and classifies positive absence", async
   );
 });
 
+/** One unit driven to `candidate_intent`: the collect act is emitted, unobserved. */
+function candidateIntentRun(): RepositoryRun {
+  let state = localRun();
+  const observe = (
+    type: Parameters<typeof event>[1],
+    kind: string,
+    fields: Record<string, unknown> = {},
+  ) => {
+    state = transition(
+      state,
+      event(state, type, {
+        effectId: state.effectJournal.at(-1)!.effectId,
+        effectKind: kind,
+        observationHash: HASH,
+        ...fields,
+      }),
+      reduce,
+    );
+  };
+  state = transition(
+    state,
+    event(state, "reservation_intent", {
+      reservations: [{ id: "res-1", namespace: "path", resource: "src" }],
+    }),
+    reduce,
+  );
+  observe("reservation_observed", "reservation_acquire");
+  state = transition(
+    state,
+    event(state, "branch_intent", { branchRef: "sce/unit-1" }),
+    reduce,
+  );
+  observe("branch_observed", "branch_create", { branchRef: "sce/unit-1" });
+  state = transition(
+    state,
+    event(state, "worktree_intent", { worktreePath: "/task" }),
+    reduce,
+  );
+  observe("worktree_observed", "worktree_create", { worktreePath: "/task" });
+  state = transition(state, event(state, "dispatch_intent"), reduce);
+  observe("dispatch_observed", "dispatch", {
+    promptHash: HASH,
+    requestedModel: "workhorse",
+    returnedModel: "workhorse-1",
+    sessionId: "worker-1",
+  });
+  state = transition(state, event(state, "collect_intent"), reduce);
+  observe("worker_collected", "worker_collect", {
+    workerResult: { residualRisks: [], status: "completed", summary: "done" },
+  });
+  return transition(state, event(state, "candidate_intent"), reduce);
+}
+
+/** Answers a whole candidate collection on a clean `/task`, with a given diff. */
+function candidateRunner(diff: string): GitRunner {
+  return async ({ argv, cwd }) => {
+    const answer = (stdout: string) => ({ exitCode: 0, signal: null, stdout });
+    if (argv[0] === "worktree")
+      return answer(
+        `worktree /task\nHEAD ${OID_B}\nbranch refs/heads/sce/unit-1\n\n`,
+      );
+    if (argv[0] === "status") return answer("");
+    if (argv[0] === "ls-files") return answer("H src/file.ts\u0000");
+    if (argv[0] === "symbolic-ref") return answer("refs/heads/sce/unit-1\n");
+    if (argv[0] === "merge-base") return answer("");
+    if (argv[0] === "-c" && argv[4] === "diff")
+      return answer(argv.includes("--name-only") ? "src/file.ts\u0000" : diff);
+    if (argv[0] === "rev-parse")
+      return answer(
+        argv[1] === "--git-common-dir"
+          ? cwd === "/task"
+            ? "/repo/.git\n"
+            : ".git\n"
+          : argv[1] === "--show-object-format"
+            ? "sha1\n"
+            : argv[2] === "HEAD^{commit}"
+              ? `${OID_B}\n`
+              : `${OID_A}\n`,
+      );
+    return { exitCode: 1, signal: null, stdout: "" };
+  };
+}
+
+// sce-dcx.21: the collect reconcile used to see only an unreadable diff here
+// and leave the effect ambiguous, which blocked the unit with no stated cause.
+test("a candidate diff past the packet bound reconciles to a typed refusal", async () => {
+  let state = candidateIntentRun();
+  const candidateEffect = state.effectJournal.at(-1)!;
+  const collectEffect = {
+    effectId: candidateEffect.effectId,
+    idempotencyKey: candidateEffect.idempotencyKey,
+    kind: "candidate_collect" as const,
+    params: { branchRef: "sce/unit-1", worktreePath: "/task" },
+    paramsHash: candidateEffect.paramsHash,
+    schemaVersion: 1 as const,
+    unitId: "unit-1",
+  };
+  const adapter = createProductionRecoveryEffectAdapter({
+    git: { repository, runner: candidateRunner("d".repeat(65_537)) },
+  });
+  const refused = await adapter.reconcile(collectEffect, state);
+  assert.equal(refused.status, "observed");
+  if (refused.status !== "observed") return;
+  assert.equal(validate(ProtocolEventSchema, refused.observation).ok, true);
+  assert.deepEqual(
+    {
+      ...(refused.observation as unknown as Record<string, unknown>),
+      eventId: undefined,
+      expectedRevision: undefined,
+      observationHash: undefined,
+    },
+    {
+      effectId: candidateEffect.effectId,
+      effectKind: "candidate_collect",
+      eventId: undefined,
+      expectedRevision: undefined,
+      headOid: OID_B,
+      maximumByteCount: 65_536,
+      measuredByteCount: 65_537,
+      observationHash: undefined,
+      reason: "diff_oversize",
+      treeOid: OID_A,
+      type: "candidate_refused",
+      unitId: "unit-1",
+    },
+  );
+
+  state = transition(state, refused.observation, reduce);
+  const repaired = state.units["unit-1"]!;
+  assert.equal(repaired.state, "repair_required");
+  assert.equal(
+    repaired.repairContext?.rationale.includes("at least 65537 bytes"),
+    true,
+  );
+  assert.equal(repaired.repairContext?.rationale.includes("65536-byte"), true);
+  assert.deepEqual(runInvariantErrors(state), []);
+
+  // One byte under the bound is an ordinary candidate, not a refusal.
+  const fitting = await createProductionRecoveryEffectAdapter({
+    git: { repository, runner: candidateRunner("d".repeat(65_536)) },
+  }).reconcile(collectEffect, candidateIntentRun());
+  assert.equal(fitting.status, "observed");
+  if (fitting.status !== "observed") return;
+  assert.equal(
+    (fitting.observation as { type: string }).type,
+    "candidate_observed",
+  );
+});
+
 test("production candidate collection and manual verification bind exact durable facts", async () => {
   let state = localRun();
   let liveHead = OID_B;

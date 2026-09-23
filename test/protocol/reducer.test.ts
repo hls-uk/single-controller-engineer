@@ -48,6 +48,7 @@ import type {
   ProvenanceInput,
 } from "../../src/protocol/schemas.js";
 import {
+  CANDIDATE_DIFF_MAX_BYTES,
   LIMITS,
   ProtocolEventSchema,
   RepositoryRunSchema,
@@ -2644,7 +2645,8 @@ function observeUnit(
     ...fields,
   });
 }
-function completeCandidate(
+/** Drives one unit to `candidate_intent`: the collect act is emitted, unobserved. */
+function candidateIntent(
   initial: RepositoryRun = run(),
   unitId = "unit-1",
 ): RepositoryRun {
@@ -2692,20 +2694,21 @@ function completeCandidate(
   state = observeUnit(state, unitId, "worker_collected", "worker_collect", {
     workerResult: { status: "completed", summary: "done", residualRisks: [] },
   });
-  state = stepUnit(state, unitId, "candidate_intent", {
+  return stepUnit(state, unitId, "candidate_intent", {
     idempotencyKey: defaultUnit ? "candidate-1" : `candidate-${unitId}`,
   });
-  state = observeUnit(
-    state,
+}
+function completeCandidate(
+  initial: RepositoryRun = run(),
+  unitId = "unit-1",
+): RepositoryRun {
+  return observeUnit(
+    candidateIntent(initial, unitId),
     unitId,
     "candidate_observed",
     "candidate_collect",
-    {
-      headOid: OID_B,
-      treeOid: OID_C,
-    },
+    { headOid: OID_B, treeOid: OID_C },
   );
-  return state;
 }
 
 test("an unsupported publication platform refuses the act and settles like any durable copy refusal", () => {
@@ -6187,6 +6190,123 @@ test("a refused refresh leaves a repairable unit bound to the conflicted head", 
   assert.equal(result.ok, true, result.ok ? "" : JSON.stringify(result));
   if (!result.ok) return;
   assert.equal(result.nextState.units[unitId]?.state, "repair_intent");
+});
+
+// sce-dcx.21: a candidate whose diff passes the packet bound used to leave the
+// collect effect unobserved, so the unit blocked with no stated cause.
+test("an oversize candidate diff repairs the unit with the exact measurement", () => {
+  const unitId = "unit-1";
+  const measuredByteCount = CANDIDATE_DIFF_MAX_BYTES + 1;
+  const refusal = {
+    headOid: OID_B,
+    maximumByteCount: CANDIDATE_DIFF_MAX_BYTES,
+    measuredByteCount,
+    reason: "diff_oversize",
+    treeOid: OID_C,
+  };
+  const intended = candidateIntent(run([unit(unitId)]));
+  const refused = observeUnit(
+    intended,
+    unitId,
+    "candidate_refused",
+    "candidate_collect",
+    refusal,
+  );
+  const repairable = refused.units[unitId]!;
+  assert.equal(repairable.state, "repair_required");
+  // Nothing reviewable was produced, so no candidate pair is bound; the
+  // repair context alone carries the head the measurement was taken on.
+  assert.equal(repairable.candidateHead, undefined);
+  assert.equal(repairable.candidateTree, undefined);
+  assert.equal(repairable.repairContext?.headOid, OID_B);
+  assert.equal(repairable.repairContext?.treeOid, OID_C);
+  assert.equal(
+    repairable.repairContext?.rationale,
+    `candidate diff measured at least ${measuredByteCount} bytes against the ${CANDIDATE_DIFF_MAX_BYTES}-byte candidate bound`,
+  );
+  assert.equal(
+    repairable.repairContext?.findings[0]?.id,
+    "candidate-diff-oversize",
+  );
+  assert.equal(
+    repairable.repairContext?.findings[0]?.detail.includes(
+      `must fit ${CANDIDATE_DIFF_MAX_BYTES} bytes and measured at least ${measuredByteCount}`,
+    ),
+    true,
+  );
+  // The collect effect is settled, not left unresolved: nothing blocks.
+  assert.equal(
+    refused.effectJournal.find((entry) => entry.kind === "candidate_collect")
+      ?.status,
+    "observed",
+  );
+  assert.equal(refused.activeModifyingUnitIds.includes(unitId), false);
+  assert.deepEqual(runInvariantErrors(refused), []);
+
+  // The refusal is legal only while the collect act is outstanding: not on a
+  // committed candidate, and not replayed onto the unit it already repaired.
+  for (const wrong of [completeCandidate(run([unit(unitId)])), refused])
+    assert.equal(
+      reduce(
+        wrong,
+        event(wrong, "candidate_refused", {
+          effectId: effectId(wrong, "candidate_collect"),
+          effectKind: "candidate_collect",
+          observationHash: HASH,
+          ...refusal,
+        }),
+      ).ok,
+      false,
+    );
+
+  // A repair on the same identity then lands an ordinary smaller candidate.
+  let state = stepUnit(refused, unitId, "repair_intent", {
+    judgment: {
+      schemaVersion: 1,
+      role: "controller",
+      kind: "repair_disposition",
+      unitId,
+      sessionId: "incarnation-1",
+      requestedModel: "frontier",
+      returnedModel: "frontier-1",
+      aggregateRevision: refused.revision,
+      promptHash: HASH,
+      responseHash: HASH,
+      rationale: "shed the bytes the measurement names",
+      factOid: OID_B,
+      decision: "repair",
+      ...repairEvidence(refused),
+    },
+  });
+  state = observeUnit(state, unitId, "repair_observed", "repair", {
+    sessionId: "worker-repair-oversize",
+    requestedModel: "workhorse",
+    returnedModel: "workhorse-1",
+    promptHash: HASH,
+  });
+  state = stepUnit(state, unitId, "collect_intent", {
+    idempotencyKey: "collect-repaired",
+  });
+  state = observeUnit(state, unitId, "worker_collected", "worker_collect", {
+    workerResult: {
+      status: "completed",
+      summary: "smaller",
+      residualRisks: [],
+    },
+  });
+  state = stepUnit(state, unitId, "candidate_intent", {
+    idempotencyKey: "candidate-repaired",
+  });
+  state = observeUnit(
+    state,
+    unitId,
+    "candidate_observed",
+    "candidate_collect",
+    { headOid: OID_C, treeOid: OID_C },
+  );
+  assert.equal(state.units[unitId]?.state, "candidate_committed");
+  assert.equal(state.units[unitId]?.candidateHead, OID_C);
+  assert.deepEqual(runInvariantErrors(state), []);
 });
 
 // A run persisted before sce-296.19 holds a refresh-conflict repair context

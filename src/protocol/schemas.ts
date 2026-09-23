@@ -47,6 +47,12 @@ export const LIMITS = {
 } as const;
 /** Four concurrent bounded packets stay well within the run envelope. */
 export const HARNESS_PACKET_BYTES = 8_192;
+/**
+ * The reviewer packet's candidate-diff bound. It is a design contract, not
+ * a tunable: a candidate whose diff measures past it cannot be carried to a
+ * reviewer, so it is refused with the measured size and repaired smaller.
+ */
+export const CANDIDATE_DIFF_MAX_BYTES = 65_536;
 const utf8 = new TextEncoder();
 const identifier = () =>
   Type.String({
@@ -353,7 +359,10 @@ export const HarnessPacketInputSchema = Type.Union([
   strictObject({ ...HarnessPacketInputCommon, role: Type.Literal("worker") }),
   strictObject({
     ...HarnessPacketInputCommon,
-    candidateDiffByteCount: Type.Integer({ minimum: 1, maximum: 65_536 }),
+    candidateDiffByteCount: Type.Integer({
+      minimum: 1,
+      maximum: CANDIDATE_DIFF_MAX_BYTES,
+    }),
     candidateDiffHash: hash(),
     candidateDiffStat: candidateDiffStat(),
     headOid: oid(),
@@ -374,7 +383,10 @@ export const HarnessPacketSchema = Type.Union([
   }),
   strictObject({
     ...HarnessPacketCommon,
-    candidateDiffByteCount: Type.Integer({ minimum: 1, maximum: 65_536 }),
+    candidateDiffByteCount: Type.Integer({
+      minimum: 1,
+      maximum: CANDIDATE_DIFF_MAX_BYTES,
+    }),
     candidateDiffCommand: Type.Array(text(), {
       minItems: 2,
       maxItems: 32,
@@ -1987,6 +1999,25 @@ export const ProtocolEventSchema = Type.Union([
     headOid: oid(),
     treeOid: oid(),
     candidateDiffHash: hash(),
+  }),
+  // An exact refusal, not an absence: the collect read reached a clean
+  // branch/object pair and measured its diff past the packet bound, so no
+  // snapshot can exist. The measured size travels into the repair context so
+  // the repair packet names how many bytes the lane has to shed. The runner
+  // keeps the one chunk that crosses its cap and then stops reading, so the
+  // count is a floor on the true diff and never exceeds twice the bound.
+  strictObject({
+    ...eventBase,
+    type: Type.Literal("candidate_refused"),
+    ...observedEffect,
+    reason: Type.Literal("diff_oversize"),
+    measuredByteCount: Type.Integer({
+      minimum: CANDIDATE_DIFF_MAX_BYTES + 1,
+      maximum: CANDIDATE_DIFF_MAX_BYTES * 2,
+    }),
+    maximumByteCount: Type.Literal(CANDIDATE_DIFF_MAX_BYTES),
+    headOid: oid(),
+    treeOid: oid(),
   }),
   // A stale base is refreshed on the same unit identity: the candidate is
   // rebased onto the current integration head, and every candidate,

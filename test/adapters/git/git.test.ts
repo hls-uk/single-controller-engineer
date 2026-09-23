@@ -216,6 +216,55 @@ test("candidate observation binds the owned worktree and exact diff bytes", asyn
   );
 });
 
+// sce-dcx.21: the 65,536-byte packet bound is a design contract, so passing it
+// is a measured fact about the branch, not an unreadable repository.
+test("a candidate diff one byte past the packet bound is refused with its size", async () => {
+  const base = sha1("1");
+  const head = sha1("2");
+  const tree = sha1("3");
+  const preamble = (): GitResult[] => [
+    ...identityResults(),
+    ok(`worktree /task\nHEAD ${head}\nbranch refs/heads/sce/task\n\n`),
+    ok("/repo/.git\n"),
+    failed(),
+    ok("H src/file.ts\u0000"),
+    ok(`${head}\n`),
+    ok(`${tree}\n`),
+    ok(),
+    ok("refs/heads/sce/task\n"),
+    ok(),
+    ok("src/file.ts\u0000"),
+  ];
+  const oversize = await observeCandidate(
+    scripted(...preamble(), ok("d".repeat(65_537))),
+    repository(),
+    { allowedPaths: ["src"], base, branch: "sce/task", worktreePath: "/task" },
+  );
+  assert.equal(oversize.state, "refused");
+  assert.equal(oversize.code, "GIT_DIFF_OVERSIZE");
+  assert.equal(oversize.snapshot, undefined);
+  assert.deepEqual(oversize.oversize, { byteCount: 65_537, head, tree });
+
+  // One byte under, the same read is an ordinary observation: the refusal
+  // begins exactly where the bound does.
+  const atBound = await observeCandidate(
+    scripted(
+      ...preamble(),
+      ok("d".repeat(65_536)),
+      ok(`${head}\n`),
+      ok(`${tree}\n`),
+      ok(),
+      ok("refs/heads/sce/task\n"),
+      ok("H src/file.ts\u0000"),
+    ),
+    repository(),
+    { allowedPaths: ["src"], base, branch: "sce/task", worktreePath: "/task" },
+  );
+  assert.equal(atBound.state, "observed");
+  assert.equal(atBound.oversize, undefined);
+  assert.equal(atBound.snapshot?.diff.length, 65_536);
+});
+
 test("candidate observation rejects a head or clean-state race after diff capture", async () => {
   const base = sha1("1");
   const head = sha1("2");

@@ -5454,6 +5454,38 @@ function reduceInternal(
         );
       }
       break;
+    case "candidate_refused":
+      if (unit.state !== "candidate_intent") return illegal(unit, event.type);
+      if (!matchesIntended(state, event, unit.id, "candidate_collect"))
+        return badObservation();
+      // The collect act reached a clean pair and proved the diff too large to
+      // review. That is a fact about the work, not an unresolved effect, so
+      // the unit repairs with the measurement in hand instead of blocking with
+      // no cause. No candidate binding is taken: there is no reviewable diff.
+      result = observe(
+        state,
+        unit,
+        "repair_required",
+        event,
+        {
+          repairContext: {
+            baseOid: unit.baseOid,
+            headOid: event.headOid,
+            treeOid: event.treeOid,
+            responseHash: event.observationHash,
+            rationale: `candidate diff measured at least ${event.measuredByteCount} bytes against the ${event.maximumByteCount}-byte candidate bound`,
+            findings: [
+              {
+                id: "candidate-diff-oversize",
+                severity: "blocking",
+                detail: `the diff against the unit base must fit ${event.maximumByteCount} bytes and measured at least ${event.measuredByteCount}; shed at least the difference on the same branch and worktree, then collect the candidate again`,
+              },
+            ],
+          },
+        },
+        clearUnitOwners(state, unit.id),
+      );
+      break;
     case "refresh_intent":
       // Refresh on the same identity: legal wherever a candidate exists or
       // is about to, and before the integration act, never during one.
@@ -6879,7 +6911,7 @@ function effectMatchesObservation(
     worktree_create: ["worktree_observed"],
     dispatch: ["dispatch_observed"],
     worker_collect: ["worker_collected"],
-    candidate_collect: ["candidate_observed"],
+    candidate_collect: ["candidate_observed", "candidate_refused"],
     verify: ["verification_observed", "verification_failed"],
     review_dispatch: ["reviewer_observed"],
     review_collect: ["review_collected"],
