@@ -538,12 +538,13 @@ test("the compact projection encoding stays strict and disjoint", () => {
     validate(ProvenanceInputSchema, projection([compactTarget])).ok,
     true,
   );
-  // No unknown property, no coercion, no partially compacted entry.
+  // No unknown property, no coercion, no partially compacted entry: a field
+  // hydration re-derives may not also be stored, and the observation keeps
+  // only its two statuses.
   for (const broken of [
     { ...compactTarget, unexpected: true },
     { ...compactTarget, version: 1 },
     { ...compactTarget, version: "2" },
-    // A field hydration re-derives may not also be stored.
     {
       ...compactTarget,
       materialisations: compactTarget.materialisations.map((item) => ({
@@ -562,7 +563,6 @@ test("the compact projection encoding stays strict and disjoint", () => {
       ...compactTarget,
       resolution: { ...compactTarget.resolution, sources: [source] },
     },
-    // The observation keeps only the two statuses.
     {
       ...compactTarget,
       materialisations: compactTarget.materialisations.map((item) => ({

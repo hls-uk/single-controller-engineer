@@ -31,8 +31,7 @@ export const LIMITS = {
   materialisationSidecarBytes: 8_192,
   materialisationWaveBytes: 64 * 1024 * 1024,
   // Canonical bytes of one frozen provenance projection snapshot, measured on
-  // the encoding actually stored. The compact projection therefore buys real
-  // output capacity instead of restating the same ceiling.
+  // the encoding actually stored, so the compact form buys real capacity.
   projectionSnapshotBytes: 65_536,
 } as const;
 /** Four concurrent bounded packets stay well within the run envelope. */
@@ -744,14 +743,13 @@ export type GateTargetState = Static<typeof GateTargetStateSchema>;
 /**
  * Compact projection evidence, version 2.
  *
- * The live gate record above repeats, once per output, everything the target
+ * The live record above repeats, once per output, everything the target
  * definition and the resolution already fix: the destination target, the
- * target and origin identifiers, the resolved source OID, the resolved source
- * tuple, and the digests the observation must equal. The frozen projection
- * stores each of those exactly once and lets every per-output entry reference
- * them positionally. Hydration is total and exact, so every commitment and
- * derived identifier is taken over the hydrated view and is unchanged by the
- * encoding; only the stored bytes and the capacity reserves shrink.
+ * target and origin identifiers, the resolved source OID and tuple, and the
+ * digests the observation must equal. The frozen projection stores each once
+ * and lets every entry reference them positionally. Hydration is total and
+ * exact and every commitment is taken over the hydrated view, so only the
+ * stored bytes and the capacity reserves change.
  */
 export const CompactMaterialisationObservationSchema = strictObject({
   artifactStatus: publicationStatus(),

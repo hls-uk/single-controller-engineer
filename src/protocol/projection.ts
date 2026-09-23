@@ -1,25 +1,15 @@
 /**
  * The provenance projection codec.
  *
- * A frozen projection snapshot is bounded by
- * `LIMITS.projectionSnapshotBytes`, and that bound is measured on the bytes
- * actually stored. The live gate record repeats, once per output, everything
- * the target definition and the resolution already fix, so a run used roughly
- * half of the bound restating facts it already held. The compact encoding
- * (`version: 2`) stores each of those facts exactly once.
- *
- * Two rules keep the change invisible to every consumer:
- *
- * 1. Hydration is total and exact. `hydrate(compact(x))` is canonically
- *    byte-identical to `x` for every projection the reducer can build, so the
- *    hydrated view is still the one semantic view.
- * 2. Every commitment and derived identifier is taken over the hydrated view,
- *    never over the stored bytes: the snapshot commitment, the provenance
- *    gate entry id, and the carry export id all bind the semantic view. An
- *    in-flight run that still holds a version-free snapshot therefore keeps
- *    exactly the identifiers it was issued.
- *
- * Nothing here reads the clock, the environment, or a subprocess.
+ * `LIMITS.projectionSnapshotBytes` is measured on the bytes actually stored,
+ * and the live gate record repeats, once per output, everything the target
+ * definition and the resolution already fix. The compact encoding
+ * (`version: 2`) stores each of those exactly once. Two rules keep that
+ * invisible: hydration is total and exact, so `hydrate(compact(x))` is
+ * canonically byte-identical to `x`; and every commitment and derived
+ * identifier binds the hydrated view rather than the stored bytes, so a run
+ * still holding a version-free snapshot keeps the identifiers it was issued.
+ * Pure: no clock, environment, subprocess, or randomness.
  */
 import { canonicalJson, type JsonValue } from "./canonical.js";
 import type {
@@ -42,11 +32,10 @@ function same(left: unknown, right: unknown): boolean {
 }
 
 /**
- * Drop every field a hydration re-derives. This is the byte shape alone: it
- * asks no questions of the record, so the reducer can measure the exact legal
- * reserve of a hypothetical future target with it. `compactProvenanceInput`
- * is the guarded entry point that proves a real record is reconstructible
- * before applying the same shape.
+ * Drop every field hydration re-derives. The byte shape alone, asking nothing
+ * of the record, so the reducer can measure the exact legal reserve of a
+ * hypothetical target with it; `compactProvenanceInput` is the guarded entry
+ * point that proves a real record reconstructible before applying it.
  */
 export function compactTargetEvidenceShape(
   target: GateTargetState,
@@ -138,10 +127,8 @@ function targetEvidenceIsCompactable(target: GateTargetState): boolean {
 }
 
 /**
- * The pure upcaster. Total: it always returns, and returns `undefined` for
- * the projections whose dropped fields would not be reconstructed exactly.
- * Compacting an already-compact projection returns it unchanged, so the
- * encoding is idempotent and the stored bytes are canonical.
+ * The pure upcaster. Total: `undefined` when a dropped field would not be
+ * reconstructed exactly, and idempotent, so stored bytes stay canonical.
  */
 export function compactProvenanceInput(
   input: ProvenanceInput,
@@ -237,8 +224,7 @@ export function hydrateProvenanceInput(
 
 /**
  * A stored projection must be exactly one of the two canonical encodings of
- * its own hydrated view. A half-compacted or non-round-tripping snapshot is
- * ambiguous machine state and is refused rather than repaired.
+ * its own hydrated view; anything else is ambiguous machine state.
  */
 export function projectionEncodingIsCanonical(
   input: ProvenanceInput,
@@ -253,11 +239,7 @@ export function projectionEncodingIsCanonical(
   );
 }
 
-/**
- * Canonical bytes of the encoding this projection is stored in. Every
- * snapshot bound and every capacity reserve is measured with this, so the
- * compact form buys capacity instead of merely restating the ceiling.
- */
+/** Canonical bytes of the encoding this projection is stored in. */
 export function projectionStorageByteLength(input: ProvenanceInput): number {
   const compact = compactProvenanceInput(input) ?? input;
   return utf8.encode(canonicalJson(compact as unknown as JsonValue)).byteLength;

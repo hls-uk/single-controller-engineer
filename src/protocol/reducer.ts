@@ -782,9 +782,8 @@ function provenanceBaseAdvancedDetailHash(
 }
 
 /**
- * A stored projection read back as the one semantic view. A snapshot that no
- * longer hydrates is ambiguous machine state: callers that must decide block
- * on the empty evidence it yields, and the aggregate invariants name it.
+ * A stored projection read back as the one semantic view. One that no longer
+ * hydrates is ambiguous machine state; the aggregate invariants name it.
  */
 function hydratedTargetEvidence(
   input: ProvenanceInput | undefined,
@@ -937,10 +936,9 @@ function projectionCollisionWitnesses(
 }
 
 /**
- * A stored projection is valid when it hydrates, is stored in exactly one of
- * the two canonical encodings of that hydrated view, and the hydrated view
- * itself is coherent. Encoding is therefore never a way to smuggle evidence
- * past the projection rules.
+ * Valid when the projection hydrates, is stored in exactly one of the two
+ * canonical encodings of that view, and that view is itself coherent, so an
+ * encoding can never smuggle evidence past the projection rules.
  */
 export function projectionInputIsValid(input: ProvenanceInput): boolean {
   const hydrated = hydrateProvenanceInput(input);
@@ -1234,8 +1232,7 @@ function createProvenanceEntry(state: RepositoryRun, gate: WaveGate): WaveGate {
   const input = provenanceInput(state, gate);
   if (!projectionInputFits(input))
     throw new Error("provenance projection input exceeds its durable bound");
-  // The entry id binds the semantic view, never the encoding, so a run that
-  // was issued one before the compact projection existed keeps it.
+  // The entry id binds the semantic view, never the encoding.
   const provenanceGateEntryId = deriveGateEntryId(
     state.controller.runId,
     gate.waveId,
@@ -2463,10 +2460,7 @@ function reachableTargetVariants(
   return { baseline: baseline as unknown as JsonValue, variants };
 }
 
-/**
- * The frozen projection stores the compact encoding, so its exact legal
- * reserve is measured on that encoding of the very same reachable shapes.
- */
+/** The frozen copy's reserve is measured on its own compact encoding. */
 function compactReachableShape(value: JsonValue): JsonValue {
   return compactTargetEvidenceShape(
     value as unknown as GateTargetState,
@@ -2588,10 +2582,9 @@ export function materialisationExpansionCost(
 }
 
 /**
- * Unit evidence is retained live in the gate and again in the frozen
- * provenance input. The live copy keeps the whole record; the frozen copy is
- * stored compactly, so the envelope reserve is the sum of the two exact
- * deltas rather than twice the larger one.
+ * Unit evidence is retained live in the gate and again, compactly, in the
+ * frozen provenance input, so the envelope reserve is the sum of the two
+ * exact deltas rather than twice the larger one.
  */
 export function materialisationAggregateExpansionCost(
   sources: readonly MaterialisationSource[],
@@ -4736,10 +4729,9 @@ function reduceGate(state: RepositoryRun, event: GateEvent): Reduction {
 }
 
 /**
- * The commitment binds the hydrated semantic view, not the stored encoding.
- * A predecessor that exported a version-free snapshot and a successor that
- * stores the compact one therefore agree, and no in-flight claim is stranded
- * by the change of encoding.
+ * The commitment binds the hydrated view, not the stored encoding, so a
+ * predecessor holding a version-free snapshot and a successor holding the
+ * compact one agree and no in-flight claim is stranded.
  */
 export function provenanceCarrySnapshotCommitment(
   input: ProvenanceInput,
@@ -4756,9 +4748,8 @@ export function provenanceCarrySnapshotCommitment(
 }
 
 /**
- * The commitment when the projection hydrates, and nothing when it does not.
- * A projection that no longer hydrates is ambiguous machine state, so the
- * comparison it feeds fails closed rather than throwing past its caller.
+ * The commitment when the projection hydrates, and nothing when it does not,
+ * so the comparison it feeds fails closed rather than throwing past it.
  */
 function carrySnapshotCommitment(input: ProvenanceInput): string | undefined {
   const hydrated = hydrateProvenanceInput(input);
@@ -4768,9 +4759,8 @@ function carrySnapshotCommitment(input: ProvenanceInput): string | undefined {
 }
 
 /**
- * An imported carry arrives in whichever encoding the predecessor stored. It
- * is re-encoded compactly on the way in, which changes no commitment and
- * keeps the successor's envelope bounded by the smaller form.
+ * An imported carry arrives in whichever encoding the predecessor stored and
+ * is re-encoded compactly, which changes no commitment.
  */
 function compactedCarry(
   carry: NonNullable<RepositoryRun["pendingProvenanceCarry"]>,
@@ -11227,8 +11217,7 @@ function gateInvariantErrors(state: RepositoryRun): string[] {
   )
     errors.push("provenance preceded settled unit materialisations");
   if (gate.provenance !== undefined) {
-    // The entry id binds the hydrated semantic view, so it survives a change
-    // of stored encoding.
+    // The entry id binds the hydrated view, so it survives a re-encoding.
     const hydrated = hydrateProvenanceInput(
       gate.provenance.projectionInputSnapshot,
     );
