@@ -5002,17 +5002,20 @@ test("intent idempotency digest rejects domain, revision, unit, and kind substit
 // incompressible: the session lineage spends `LIMITS.sessionFingerprintBytes`
 // on every `(ordinal, role, generation)` slot, and the two bounded
 // 256-entry replay windows and the deflated closure ledger sit beside it.
-// Measured on this scenario's drain order: 61 units peak at 129,614 envelope
-// bytes, 62 at 131,273 and 64 at 134,614, against the 131,072-byte limit. The
-// fully drained 64-unit end state already costs 130,569 of those bytes, less
-// than one retained unit record short of the limit, and the cheapest drain
-// order still peaks at 132,352, so no ordering of 64 units fits and 61 is the
-// exact guaranteed configuration. Raising `LIMITS.envelopeBytes` or relaxing
-// the aggregate invariant would hide that boundary rather than state it; see
+// Measured at this commit over every reduced step of this scenario's wave and
+// drain order, 61 units peak at 131,066 bytes against the 131,072-byte limit:
+// six bytes of headroom, at `unit-61`'s sixteenth `reviewer_observed`, with
+// four units still retained. 62 and 64 units do not overshoot at the end —
+// they never reach an end state at all. This same invariant refuses them
+// mid-run with `repository run envelope exceeds byte limit`: the 62-unit run
+// at `unit-59`'s eleventh `reviewer_observed`, the 64-unit run at
+// `unit-57`'s second. So 61 units is the exact capacity this order
+// guarantees. Raising `LIMITS.envelopeBytes` or relaxing the aggregate
+// invariant would hide that boundary rather than state it; see
 // the `LIMITS` block in `src/protocol/schemas.ts` and "Crash-consistent
 // protocol states" in `wiki/designs/2026-08-24-single-controller-engineer.md`.
 const ENVELOPE_REPAIR_UNITS = 61;
-const ENVELOPE_REPAIR_PEAK_BYTES = 129_614;
+const ENVELOPE_REPAIR_PEAK_BYTES = 131_066;
 const ENVELOPE_REPAIR_LINEAGE_BYTES = 66_596;
 
 // The name keeps the `64 retained units …` prefix that `test/fast.manifest.json`
@@ -5142,6 +5145,13 @@ test("64 retained units complete 16 repairs in waves of at most three within the
             promptHash: HASH,
           },
         );
+        // An attempt is at its widest here, not at its end: the unit record
+        // still carries the reviewer dispatch session and model that
+        // `review_collected` strips again. Every step of this run is bounded
+        // by one of these samples, so the run's true peak is among them.
+        // Sampling after the verdict instead reads 129,614 and claims 1,458
+        // bytes of headroom the run never has.
+        observeEnvelope(state);
         state = stepUnit(state, unitId, "review_collect_intent", {});
         state = observeUnit(
           state,
@@ -5172,10 +5182,6 @@ test("64 retained units complete 16 repairs in waves of at most three within the
           },
         );
       }
-      // Within one unit's cycle the aggregate only grows — each attempt adds
-      // two lineage slots and the sibling units are untouched — so the
-      // sixteenth repair is that unit's peak and the only one worth measuring.
-      observeEnvelope(state);
       assert.equal(state.units[unitId]?.repairCount, 16);
       assert.equal(
         reduce(
@@ -5252,11 +5258,11 @@ test("64 retained units complete 16 repairs in waves of at most three within the
     envelopeBytes <= LIMITS.envelopeBytes,
     `envelope is ${envelopeBytes} bytes; limit is ${LIMITS.envelopeBytes}`,
   );
-  // The drained aggregate is not the expensive moment: the peak is the last
-  // unit's sixteenth repair, while the lineage is already full and the
-  // remaining units are still retained. Pin it exactly so any growth in the
-  // durable per-unit or per-closure footprint has to restate this capacity
-  // instead of silently consuming the last 1,458 bytes of headroom.
+  // The drained aggregate is not the expensive moment — it costs 125,577 of
+  // the 131,072 bytes. The peak sampled above is, and it clears the limit by
+  // six. Pin it exactly so any growth in the durable per-unit, per-session or
+  // per-closure footprint has to restate this capacity, instead of crossing
+  // the boundary unseen by a scenario that only measured its cheap end.
   assert.equal(peakEnvelopeBytes, ENVELOPE_REPAIR_PEAK_BYTES);
   assert.ok(peakEnvelopeBytes <= LIMITS.envelopeBytes);
 });
