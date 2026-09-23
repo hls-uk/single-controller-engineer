@@ -36379,7 +36379,8 @@ var FeedbackOutbox = class _FeedbackOutbox {
     return {
       status: "ok",
       value: envelopes.sort(
-        (a, b) => a.packet.telemetry.fingerprint.localeCompare(
+        (a, b) => compareCodeUnits3(
+          a.packet.telemetry.fingerprint,
           b.packet.telemetry.fingerprint
         )
       )
@@ -36683,6 +36684,9 @@ token=${randomUUID()}
     return join8(this.directory, `${fingerprint}.json`);
   }
 };
+function compareCodeUnits3(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
 function outboxDirectory(commonDir) {
   try {
     if (lstatSync2(commonDir).isSymbolicLink()) return void 0;
@@ -37146,6 +37150,9 @@ var SimulatedProcessLoss = class extends Error {
 function fail2(message) {
   throw new SkillInstallError(message);
 }
+function compareCodeUnits4(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
 function asRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : void 0;
 }
@@ -37193,7 +37200,7 @@ function parseManifest(value) {
   if (files.length === 0 || SKILL_NAMES.some((name) => !seen.has(`${name}/SKILL.md`)))
     fail2("skill-install manifest lacks a complete set");
   return {
-    files: files.sort((left, right) => left.path.localeCompare(right.path)),
+    files: files.sort((left, right) => compareCodeUnits4(left.path, right.path)),
     package: PACKAGE_NAME,
     schema: "sce.skill-install",
     skills: parsedSkills,
@@ -37266,7 +37273,7 @@ async function filesAt(root, prefix = "") {
   const entries = await readdir(root, { withFileTypes: true });
   const result2 = [];
   for (const entry of entries.sort(
-    (left, right) => left.name.localeCompare(right.name)
+    (left, right) => compareCodeUnits4(left.name, right.name)
   )) {
     const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
     const fullPath = join9(root, entry.name);
@@ -37366,7 +37373,7 @@ async function validateTree(root, manifest) {
   }
   const actual = (await Promise.all(
     SKILL_NAMES.map((name) => filesAt(join9(root, name), name))
-  )).flat().sort((left, right) => left.path.localeCompare(right.path));
+  )).flat().sort((left, right) => compareCodeUnits4(left.path, right.path));
   const expected = manifest.files;
   if (actual.length !== expected.length)
     fail2("installed tree differs from manifest");
