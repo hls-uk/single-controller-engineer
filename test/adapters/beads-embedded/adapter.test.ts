@@ -15,13 +15,16 @@ import {
 import type { PreflightEnvelope } from "../../../src/preflight/index.js";
 import {
   EmbeddedBeadsAdapter,
+  EmbeddedResultSchema,
   type EmbeddedProcessIdentity,
   type EmbeddedProcessPort,
   type EmbeddedRequest,
   type EmbeddedResponse,
   type EmbeddedState,
   parsePinnedBdState,
+  redactedStderrTail,
 } from "../../../src/adapters/beads-embedded/index.js";
+import { isSchema } from "../../../src/adapters/git/schemas.js";
 import { deriveIdempotencyKey, reduce } from "../../../src/protocol/reducer.js";
 import { run as fixtureRun } from "../../protocol/fixtures.js";
 
@@ -276,6 +279,10 @@ test("acquisition uses only the built-in slot and binds actor, holder, and scope
 function syncAcquirePort(
   finalState: EmbeddedState,
   afterRemoteReadState = finalState,
+  push: Extract<EmbeddedResponse, { readonly kind: "push" }> = {
+    kind: "push",
+    value: "applied",
+  },
 ): ScriptedPort {
   const beforeHead = "b".repeat(40);
   const afterHead = "c".repeat(40);
@@ -306,12 +313,66 @@ function syncAcquirePort(
     },
     { kind: "slot", value: slot("acquired", holder) },
     { kind: "slot", value: slot("available") },
-    { kind: "push", value: "applied" },
+    push,
     { kind: "state", value: finalState },
     { kind: "slot", value: slot("acquired", holder) },
     { kind: "state", value: afterRemoteReadState },
   ]);
 }
+
+test("a refused git-sync push surfaces the failed child's redacted tail", async () => {
+  const head = "c".repeat(40);
+  const synced: EmbeddedState = {
+    autoCommit: "on",
+    head,
+    reachable: true,
+    remoteHead: head,
+    workingSet: "clean",
+  };
+  const stderrTail = redactedStderrTail(
+    [
+      "sce@dolt.example.invalid: Permission denied (publickey).",
+      "fatal: Could not read from remote repository.",
+    ].join("\n"),
+    false,
+  );
+  assert.ok(stderrTail !== undefined);
+  const port = syncAcquirePort(synced, synced, {
+    kind: "push",
+    stderrTail,
+    value: "conflict",
+  });
+  const runtime = adapter(port, "git-sync");
+  const intent = await runtime.prepareAcquireTransition();
+  assert.ok("idempotencyKey" in intent);
+  const refused = await runtime.acquire({ transition: intent });
+  // The code is exactly what it was before the tail existed; the operator now
+  // also reads why the remote refused it.
+  assert.equal(refused.code, "conflict", JSON.stringify(port.requests));
+  assert.deepEqual(refused.stderrTail, stderrTail);
+  assert.ok(
+    refused.stderrTail?.text.includes("Permission denied (publickey)."),
+  );
+  assert.equal(isSchema(EmbeddedResultSchema, refused), true);
+});
+
+test("an applied git-sync push carries no tail into its result", async () => {
+  const head = "c".repeat(40);
+  const synced: EmbeddedState = {
+    autoCommit: "on",
+    head,
+    reachable: true,
+    remoteHead: head,
+    workingSet: "clean",
+  };
+  const port = syncAcquirePort(synced);
+  const runtime = adapter(port, "git-sync");
+  const intent = await runtime.prepareAcquireTransition();
+  assert.ok("idempotencyKey" in intent);
+  const applied = await runtime.acquire({ transition: intent });
+  assert.equal(applied.code, "applied", JSON.stringify(port.requests));
+  assert.equal("stderrTail" in applied, false);
+});
 
 test("git-sync acquisition relies on final remote-head state when no journal batch is pending", async () => {
   const head = "c".repeat(40);

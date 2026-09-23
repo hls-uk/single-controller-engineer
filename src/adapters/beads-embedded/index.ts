@@ -55,6 +55,7 @@ import {
   type EmbeddedResponse,
   type EmbeddedResult,
   type EmbeddedState,
+  type RemoteFailureTail,
   type RemoteSlotTransitionProof,
   type SlotTransitionIntent,
 } from "./schemas.js";
@@ -150,10 +151,20 @@ export interface EmbeddedAdapterOptions {
   readonly scope: FencingScope;
 }
 
-function result(code: EmbeddedResult["code"]): EmbeddedResult {
+/**
+ * The public result. A refusal caused by a failed remote Dolt child carries
+ * that child's bounded, already-redacted stderr tail, so an operator reading
+ * the refusal reads its cause too. The tail is diagnostic only: the code is
+ * decided before it is attached and never from it.
+ */
+function result(
+  code: EmbeddedResult["code"],
+  stderrTail?: RemoteFailureTail,
+): EmbeddedResult {
   return {
     code,
     schema: "sce.beads-embedded.result",
+    ...(stderrTail === undefined ? {} : { stderrTail }),
     version: EMBEDDED_ADAPTER_VERSION,
   };
 }
@@ -1395,8 +1406,10 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       return { result: result("applied"), state: before };
     const pull = await this.call({ kind: "pull" });
     if (pull?.kind !== "pull") return { result: result("ambiguous") };
-    if (pull.value === "conflict") return { result: result("conflict") };
-    if (pull.value !== "applied") return { result: result(pull.value) };
+    if (pull.value === "conflict")
+      return { result: result("conflict", pull.stderrTail) };
+    if (pull.value !== "applied")
+      return { result: result(pull.value, pull.stderrTail) };
     const after = await this.state();
     return after === undefined || !after.reachable
       ? { result: result("unavailable") }
@@ -1716,8 +1729,8 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       return result("ambiguous");
     const push = await this.call({ kind: "push" });
     if (push?.kind !== "push") return result("ambiguous");
-    if (push.value === "conflict") return result("conflict");
-    if (push.value !== "applied") return result("ambiguous");
+    if (push.value === "conflict") return result("conflict", push.stderrTail);
+    if (push.value !== "applied") return result("ambiguous", push.stderrTail);
     const synced = await this.state();
     const remoteAfter = await this.slot("check", "remote");
     // `slot(check, remote)` performs a bounded fetch itself. Re-read state
@@ -1825,8 +1838,8 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       return result("ambiguous");
     const push = await this.call({ kind: "push" });
     if (push?.kind !== "push") return result("ambiguous");
-    if (push.value === "conflict") return result("conflict");
-    if (push.value !== "applied") return result(push.value);
+    if (push.value === "conflict") return result("conflict", push.stderrTail);
+    if (push.value !== "applied") return result(push.value, push.stderrTail);
     const afterPush = await discover("after_push");
     const final = await this.state();
     return afterPush.status === "observed" &&
@@ -1908,8 +1921,8 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       return result("ambiguous");
     const push = await this.call({ kind: "push" });
     if (push?.kind !== "push") return result("ambiguous");
-    if (push.value === "conflict") return result("conflict");
-    if (push.value !== "applied") return result(push.value);
+    if (push.value === "conflict") return result("conflict", push.stderrTail);
+    if (push.value !== "applied") return result(push.value, push.stderrTail);
     const afterPush =
       batch === undefined
         ? undefined

@@ -1,13 +1,17 @@
 import assert from "node:assert/strict";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
 import { PinnedBdEmbeddedProcess } from "../../../src/adapters/beads-embedded/index.js";
 import {
+  EMBEDDED_ADAPTER_VERSION,
+  EmbeddedResultSchema,
   REMOTE_FAILURE_TAIL_BYTES,
   redactedStderrTail,
 } from "../../../src/adapters/beads-embedded/schemas.js";
+import { isSchema } from "../../../src/adapters/git/schemas.js";
 
 const scope = {
   beadsStoreIdentity: "store-1",
@@ -70,7 +74,7 @@ function pinnedProcess(root: string, bdExecutable: string) {
 }
 
 test("a failed push observation names its cause without carrying a secret", async () => {
-  const root = await mkdtemp("/private/tmp/sce-stderr-tail-");
+  const root = await mkdtemp(join(tmpdir(), "sce-stderr-tail-"));
   try {
     const bd = await fakeBd(root, [
       'if [ "$1" = "dolt" ] && [ "$2" = "push" ]; then',
@@ -119,7 +123,7 @@ test("a failed push observation names its cause without carrying a secret", asyn
 });
 
 test("a flooded stderr is published as a bounded, truncated tail", async () => {
-  const root = await mkdtemp("/private/tmp/sce-stderr-flood-");
+  const root = await mkdtemp(join(tmpdir(), "sce-stderr-flood-"));
   try {
     const bd = await fakeBd(root, [
       'if [ "$1" = "dolt" ] && [ "$2" = "push" ]; then',
@@ -148,7 +152,7 @@ test("a flooded stderr is published as a bounded, truncated tail", async () => {
 });
 
 test("a push that applies carries no tail at all", async () => {
-  const root = await mkdtemp("/private/tmp/sce-stderr-applied-");
+  const root = await mkdtemp(join(tmpdir(), "sce-stderr-applied-"));
   try {
     const bd = await fakeBd(root, [
       'if [ "$1" = "dolt" ] && [ "$2" = "push" ]; then',
@@ -182,6 +186,29 @@ test("the published tail redacts every secret shape it knows and stays bounded",
       "host ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexamplehostkey label",
       "host ssh-ed25519 [redacted] label",
     ],
+    // A named secret is rarely bare: an environment variable, a compound AWS
+    // name, a snake-cased field, and a query parameter each decorate it, and
+    // a word boundary before the name would publish every one of these.
+    ["DOLT_REMOTE_PASSWORD=hunter2", "DOLT_REMOTE_PASSWORD=[redacted]"],
+    [
+      "AWS_SECRET_ACCESS_KEY=not-a-real-value",
+      "AWS_SECRET_ACCESS_KEY=[redacted]",
+    ],
+    ["secret_key=not-a-real-value", "secret_key=[redacted]"],
+    [
+      "GET https://dolt.example.invalid/sce/beads?access_token=not-a-real-value",
+      "GET https://dolt.example.invalid/sce/beads?access_token=[redacted]",
+    ],
+    ["--password=hunter2", "--password=[redacted]"],
+    // The cause itself is never a named secret, so it survives intact.
+    [
+      "sce@dolt.example.invalid: Permission denied (publickey).",
+      "sce@dolt.example.invalid: Permission denied (publickey).",
+    ],
+    [
+      "remote: error: cannot lock ref 'refs/dolt/data'",
+      "remote: error: cannot lock ref 'refs/dolt/data'",
+    ],
     [`\u001B[31mred\u001B[0m\tcause\r\n`, "red cause"],
     // A line that is nothing but base64 is a key body, never a diagnostic.
     [`\n${"A".repeat(64)}\n`, "[redacted]"],
@@ -200,4 +227,38 @@ test("the published tail redacts every secret shape it knows and stays bounded",
     Buffer.byteLength(flooded.text, "utf8"),
     REMOTE_FAILURE_TAIL_BYTES,
   );
+});
+
+test("the strict result schema admits exactly one bounded, redacted tail", () => {
+  const tail = redactedStderrTail("fatal: remote refused the push", false);
+  assert.ok(tail !== undefined);
+  const refused = {
+    code: "conflict",
+    schema: "sce.beads-embedded.result",
+    stderrTail: tail,
+    version: EMBEDDED_ADAPTER_VERSION,
+  };
+  assert.equal(isSchema(EmbeddedResultSchema, refused), true);
+  // The field is optional: a result with no failed child is still valid.
+  assert.equal(
+    isSchema(EmbeddedResultSchema, {
+      code: "applied",
+      schema: "sce.beads-embedded.result",
+      version: EMBEDDED_ADAPTER_VERSION,
+    }),
+    true,
+  );
+  // An unbounded tail, an unprintable one, and an extra property are refused
+  // rather than carried into a journalled refusal.
+  for (const invalid of [
+    {
+      ...refused,
+      stderrTail: { ...tail, text: "x".repeat(REMOTE_FAILURE_TAIL_BYTES + 1) },
+    },
+    { ...refused, stderrTail: { ...tail, text: "cause\u0000" } },
+    { ...refused, stderrTail: { ...tail, extra: 1 } },
+    { ...refused, stderrTail: tail.text },
+    { ...refused, stderr: tail.text },
+  ])
+    assert.equal(isSchema(EmbeddedResultSchema, invalid), false);
 });
