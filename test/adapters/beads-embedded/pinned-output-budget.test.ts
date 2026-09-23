@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
+import { failureTail } from "../../../src/adapters/beads-embedded/pinned-bd-process.js";
 import {
   outputBytesFor,
   PinnedBdEmbeddedProcess,
@@ -206,5 +207,35 @@ test("an ancestry capture killed at its 64 KiB budget proves nothing", async () 
       ].join("\n"),
     ),
     "ambiguous",
+  );
+});
+
+/**
+ * The kill decides the refusal, not the exit code: a child that finished
+ * writing and exited 0 an instant before SIGKILL landed still exceeded its
+ * budget, and the tail it left is the only account of the stall (sce-ul2.7).
+ */
+test("a budget-killed capture keeps its tail even when the child exited 0", () => {
+  const stderrTail = {
+    schema: "sce.beads-embedded.remote-failure-tail" as const,
+    text: "error: failed to push to origin: Operation timed out",
+    truncated: false,
+    version: 1 as const,
+  };
+  assert.deepEqual(
+    failureTail({ code: 0, exceeded: true, stderrTail, timedOut: false }),
+    { stderrTail },
+  );
+  assert.deepEqual(
+    failureTail({ code: 0, exceeded: false, stderrTail, timedOut: true }),
+    { stderrTail },
+  );
+  assert.deepEqual(
+    failureTail({ code: 0, exceeded: false, stderrTail, timedOut: false }),
+    {},
+  );
+  assert.deepEqual(
+    failureTail({ code: null, exceeded: true, timedOut: false }),
+    {},
   );
 });

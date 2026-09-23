@@ -237,10 +237,16 @@ function stderrWindow() {
  * Attaches a failed child's tail to the observation it caused. The tail never
  * changes a classification; it only lets a refusal name its cause.
  */
-function failureTail(
-  capture: Capture,
+/**
+ * A clean, in-budget exit carries no tail. A child killed at a budget keeps
+ * whatever it said even when it managed to exit 0 before the kill landed: the
+ * budget decided the refusal, so the tail is its only account (sce-ul2.7).
+ */
+export function failureTail(
+  capture: Pick<Capture, "code" | "exceeded" | "stderrTail" | "timedOut">,
 ): Readonly<{ stderrTail?: RemoteFailureTail }> {
-  return capture.code === 0 || capture.stderrTail === undefined
+  const clean = capture.code === 0 && !capture.exceeded && !capture.timedOut;
+  return clean || capture.stderrTail === undefined
     ? {}
     : { stderrTail: capture.stderrTail };
 }
