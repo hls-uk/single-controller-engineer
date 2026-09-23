@@ -5312,18 +5312,40 @@ function reduceInternal(
       if (unit.state !== "candidate_intent") return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "candidate_collect"))
         return badObservation();
-      result = observe(
-        state,
-        unit,
-        "candidate_committed",
-        event,
-        {
-          candidateHead: event.headOid,
-          candidateTree: event.treeOid,
-          candidateDiffHash: event.candidateDiffHash,
-        },
-        { qualificationQueue: insertSorted(state.qualificationQueue, unit.id) },
-      );
+      {
+        // A newly observed candidate supersedes any review bound to an
+        // earlier diff (a run persisted before sce-296.23 may still carry
+        // one after a rejected review); only the current diff can be
+        // reviewed.
+        const {
+          approvalResponseHash: _approval,
+          reviewBaseOid: _reviewBase,
+          reviewHeadOid: _reviewHead,
+          reviewPromptHash: _reviewPrompt,
+          reviewTree: _reviewTree,
+          reviewerPacket: _reviewerPacket,
+          reviewerRequestedModel: _reviewerRequested,
+          reviewerReturnedModel: _reviewerReturned,
+          reviewerSessionId: _reviewerSession,
+          ...retained
+        } = unit;
+        result = observe(
+          state,
+          unit,
+          "candidate_committed",
+          event,
+          {},
+          {
+            qualificationQueue: insertSorted(state.qualificationQueue, unit.id),
+          },
+          {
+            ...retained,
+            candidateHead: event.headOid,
+            candidateTree: event.treeOid,
+            candidateDiffHash: event.candidateDiffHash,
+          },
+        );
+      }
       break;
     case "refresh_intent":
       // Refresh on the same identity: legal wherever a candidate exists or

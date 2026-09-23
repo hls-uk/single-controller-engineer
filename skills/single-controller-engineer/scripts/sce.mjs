@@ -15485,18 +15485,36 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
       if (unit.state !== "candidate_intent") return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "candidate_collect"))
         return badObservation();
-      result2 = observe(
-        state,
-        unit,
-        "candidate_committed",
-        event,
-        {
-          candidateHead: event.headOid,
-          candidateTree: event.treeOid,
-          candidateDiffHash: event.candidateDiffHash
-        },
-        { qualificationQueue: insertSorted(state.qualificationQueue, unit.id) }
-      );
+      {
+        const {
+          approvalResponseHash: _approval,
+          reviewBaseOid: _reviewBase,
+          reviewHeadOid: _reviewHead,
+          reviewPromptHash: _reviewPrompt,
+          reviewTree: _reviewTree,
+          reviewerPacket: _reviewerPacket,
+          reviewerRequestedModel: _reviewerRequested,
+          reviewerReturnedModel: _reviewerReturned,
+          reviewerSessionId: _reviewerSession,
+          ...retained
+        } = unit;
+        result2 = observe(
+          state,
+          unit,
+          "candidate_committed",
+          event,
+          {},
+          {
+            qualificationQueue: insertSorted(state.qualificationQueue, unit.id)
+          },
+          {
+            ...retained,
+            candidateHead: event.headOid,
+            candidateTree: event.treeOid,
+            candidateDiffHash: event.candidateDiffHash
+          }
+        );
+      }
       break;
     case "refresh_intent":
       if (!["collected", "candidate_committed", "qualified", "approved"].includes(

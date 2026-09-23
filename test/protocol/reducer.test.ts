@@ -6161,3 +6161,44 @@ test("a review that requests changes discards the reviewer packet and session", 
   assert.deepEqual(runInvariantErrors(rejected), []);
   assert.ok(approved.units[unitId]?.reviewerPacket !== undefined);
 });
+
+// sce-296.23: a candidate observed while the unit still carries a review
+// bound to an earlier diff (persisted before the rejection fix) supersedes
+// that review instead of tripping the packet-binding invariant.
+test("a newly observed candidate supersedes a review bound to an earlier diff", () => {
+  const approved = approvedCandidate("integrate", "local-ff");
+  const unitId = "unit-1";
+  const stale = approved.units[unitId]!;
+  assert.ok(stale.reviewerPacket !== undefined);
+  // Emulate the persisted shape: awaiting a new candidate while the old
+  // review bindings survive.
+  const { qualificationOwnerUnitId: _owner, ...withoutOwner } = approved;
+  const persisted: RepositoryRun = {
+    ...withoutOwner,
+    units: {
+      ...approved.units,
+      [unitId]: { ...stale, state: "collected" },
+    },
+    qualificationQueue: [],
+    integrationQueue: [],
+  };
+  const intended = stepUnit(persisted, unitId, "candidate_intent", {
+    idempotencyKey: "candidate-again",
+  });
+  const observed = observeUnit(
+    intended,
+    unitId,
+    "candidate_observed",
+    "candidate_collect",
+    {
+      headOid: OID_C,
+      treeOid: OID_B,
+    },
+  );
+  const unit = observed.units[unitId]!;
+  assert.equal(unit.state, "candidate_committed");
+  assert.equal(unit.candidateHead, OID_C);
+  assert.equal(unit.reviewerPacket, undefined);
+  assert.equal(unit.reviewerSessionId, undefined);
+  assert.deepEqual(runInvariantErrors(observed), []);
+});
