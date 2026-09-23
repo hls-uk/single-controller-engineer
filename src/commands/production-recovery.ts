@@ -7,6 +7,7 @@
 import {
   type GitEffect,
   type GitRepository,
+  type GitResult,
   type GitRunner,
   type RefreshObservation,
   discoverBranch,
@@ -52,6 +53,7 @@ import {
   deriveProvenanceCarryClaimKey,
   deriveProvenanceCarryExportId,
   projectionInputIsValid,
+  refreshIsFastForward,
   rehydrateEffect,
   type ProtocolEffect,
 } from "../protocol/reducer.js";
@@ -657,6 +659,134 @@ function refreshResult(
   return ambiguous();
 }
 
+const OID_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
+
+function exactOid(format: GitRepository["objectFormat"], value: string) {
+  return (
+    OID_PATTERN.test(value) && value.length === (format === "sha1" ? 40 : 64)
+  );
+}
+
+function oneOid(result: GitResult, format: GitRepository["objectFormat"]) {
+  if (
+    result.exitCode !== 0 ||
+    result.signal !== null ||
+    result.timedOut === true ||
+    result.unavailable === true ||
+    result.invalidUtf8 === true
+  )
+    return undefined;
+  const value = result.stdout.trimEnd();
+  return exactOid(format, value) ? value : undefined;
+}
+
+/** The exact commit and tree the unit worktree rests on, or nothing. */
+async function worktreePair(
+  git: ProductionRecoveryEffectAdapterOptions["git"],
+  worktreePath: string,
+): Promise<Readonly<{ head: string; tree: string }> | undefined> {
+  const [head, tree] = await Promise.all([
+    git.runner({
+      argv: ["rev-parse", "--verify", "HEAD^{commit}"],
+      cwd: worktreePath,
+    }),
+    git.runner({
+      argv: ["rev-parse", "--verify", "HEAD^{tree}"],
+      cwd: worktreePath,
+    }),
+  ]);
+  const format = git.repository.objectFormat;
+  const headOid = oneOid(head, format);
+  const treeOid = oneOid(tree, format);
+  return headOid === undefined || treeOid === undefined
+    ? undefined
+    : { head: headOid, tree: treeOid };
+}
+
+/**
+ * Refreshing a unit that was never launched. Its branch carries no commits,
+ * so the act is a pure fast-forward of `refs/heads/<branch>` and its worktree
+ * onto the moved integration head; a branch that already carries commits, or
+ * a dirty or foreign worktree, is refused with the exact pair it still rests
+ * on and is never rebased. A worktree already on the new base is observed as
+ * is, so the act and the read-only probe agree (sce-296.18).
+ */
+async function preparedRefresh(
+  git: ProductionRecoveryEffectAdapterOptions["git"],
+  input: Readonly<{
+    base: string;
+    branch: string;
+    previousBase: string;
+    worktreePath: string;
+  }>,
+  act: boolean,
+): Promise<RefreshObservation> {
+  const settled = async (
+    pair: Readonly<{ head: string; tree: string }>,
+  ): Promise<boolean> =>
+    (
+      await verifyCandidateWorktree(git.runner, git.repository, {
+        branch: input.branch,
+        head: pair.head,
+        path: input.worktreePath,
+        tree: pair.tree,
+      })
+    ).state === "observed";
+  const before = await worktreePair(git, input.worktreePath);
+  if (before === undefined)
+    return { code: "GIT_UNRESOLVED_EFFECT", state: "ambiguous" };
+  if (!(await settled(before)))
+    return { ...before, code: "GIT_REFUSED", state: "refused" };
+  if (before.head === input.base)
+    return { ...before, code: "GIT_OK", state: "observed" };
+  if (before.head !== input.previousBase)
+    return { ...before, code: "GIT_FOREIGN_BRANCH", state: "refused" };
+  if (!act) return { ...before, code: "GIT_ABSENT", state: "refused" };
+  const merged = await git.runner({
+    argv: ["merge", "--ff-only", input.base],
+    cwd: input.worktreePath,
+  });
+  const after = await worktreePair(git, input.worktreePath);
+  if (after === undefined || !(await settled(after)))
+    return { code: "GIT_UNRESOLVED_EFFECT", state: "ambiguous" };
+  if (after.head === input.base)
+    return { ...after, code: "GIT_OK", state: "observed" };
+  return merged.exitCode !== 0 &&
+    merged.signal === null &&
+    merged.timedOut !== true &&
+    after.head === input.previousBase
+    ? { ...after, code: "GIT_NOT_FAST_FORWARD", state: "refused" }
+    : { code: "GIT_UNRESOLVED_EFFECT", state: "ambiguous" };
+}
+
+/** The pre-dispatch refresh input, or nothing when the unit was launched. */
+function preparedRefreshInput(
+  effect: Extract<ProtocolEffect, { kind: "candidate_refresh" }>,
+  run: RepositoryRun,
+):
+  | Readonly<{
+      base: string;
+      branch: string;
+      previousBase: string;
+      worktreePath: string;
+    }>
+  | undefined {
+  const unit = run.units[effect.unitId];
+  if (
+    unit === undefined ||
+    !refreshIsFastForward(unit) ||
+    unit.branchRef !== effect.params.branchRef ||
+    unit.worktreePath !== effect.params.worktreePath
+  )
+    return undefined;
+  return {
+    base: effect.params.baseOid,
+    branch: effect.params.branchRef,
+    previousBase: effect.params.previousBaseOid,
+    worktreePath: effect.params.worktreePath,
+  };
+}
+
 async function candidateObserved(
   effect: Extract<ProtocolEffect, { kind: "candidate_collect" }>,
   run: RepositoryRun,
@@ -1029,16 +1159,19 @@ export function createProductionRecoveryEffectAdapter(
     }
     if (effect.kind === "candidate_refresh") {
       if (!gitMatchesRun(git.repository, run)) return ambiguous();
+      const prepared = preparedRefreshInput(effect, run);
       try {
         return refreshResult(
           effect,
           run,
-          await discoverRefresh(git.runner, git.repository, {
-            base: effect.params.baseOid,
-            branch: effect.params.branchRef,
-            previousBase: effect.params.previousBaseOid,
-            worktreePath: effect.params.worktreePath,
-          }),
+          prepared === undefined
+            ? await discoverRefresh(git.runner, git.repository, {
+                base: effect.params.baseOid,
+                branch: effect.params.branchRef,
+                previousBase: effect.params.previousBaseOid,
+                worktreePath: effect.params.worktreePath,
+              })
+            : await preparedRefresh(git, prepared, false),
           "absent",
         );
       } catch {
@@ -1206,16 +1339,19 @@ export function createProductionRecoveryEffectAdapter(
     }
     if (effect.kind === "candidate_refresh") {
       if (!gitMatchesRun(git.repository, run)) return ambiguous();
+      const prepared = preparedRefreshInput(effect, run);
       try {
         const refreshed = refreshResult(
           effect,
           run,
-          await refreshCandidate(git.runner, git.repository, {
-            base: effect.params.baseOid,
-            branch: effect.params.branchRef,
-            previousBase: effect.params.previousBaseOid,
-            worktreePath: effect.params.worktreePath,
-          }),
+          prepared === undefined
+            ? await refreshCandidate(git.runner, git.repository, {
+                base: effect.params.baseOid,
+                branch: effect.params.branchRef,
+                previousBase: effect.params.previousBaseOid,
+                worktreePath: effect.params.worktreePath,
+              })
+            : await preparedRefresh(git, prepared, true),
           "failed",
         );
         return refreshed.status === "absent" ? ambiguous() : refreshed;

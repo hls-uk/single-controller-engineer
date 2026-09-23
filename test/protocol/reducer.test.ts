@@ -2645,8 +2645,8 @@ function observeUnit(
     ...fields,
   });
 }
-/** Drives one unit to `candidate_intent`: the collect act is emitted, unobserved. */
-function candidateIntent(
+/** Drives one unit to `worktree_observed`: prepared, never dispatched. */
+function preparedUnit(
   initial: RepositoryRun = run(),
   unitId = "unit-1",
 ): RepositoryRun {
@@ -2676,9 +2676,17 @@ function candidateIntent(
     idempotencyKey: defaultUnit ? "worktree-1" : `worktree-${unitId}`,
     worktreePath,
   });
-  state = observeUnit(state, unitId, "worktree_observed", "worktree_create", {
+  return observeUnit(state, unitId, "worktree_observed", "worktree_create", {
     worktreePath,
   });
+}
+/** Drives one unit to `candidate_intent`: the collect act is emitted, unobserved. */
+function candidateIntent(
+  initial: RepositoryRun = run(),
+  unitId = "unit-1",
+): RepositoryRun {
+  const defaultUnit = unitId === "unit-1";
+  let state = preparedUnit(initial, unitId);
   state = stepUnit(state, unitId, "dispatch_intent", {
     idempotencyKey: defaultUnit ? "dispatch-1" : `dispatch-${unitId}`,
   });
@@ -5951,6 +5959,172 @@ test("a base refresh returns a collected, qualified, or approved unit to collect
   assert.ok(rebased.workerPacket !== undefined);
   assert.equal(rebased.launchBaseOid, OID_A);
   assert.deepEqual(runInvariantErrors(approvedRefreshed), []);
+});
+
+// sce-296.18: units are composed on the integration head and dispatched hours
+// later, after siblings have landed on it. A prepared unit therefore refreshes
+// before its first launch, and the packet it is dispatched with binds the base
+// the worker actually starts on.
+test("a prepared unit refreshes onto the moved integration head before its first dispatch", () => {
+  const prepared = preparedUnit(run([unit("unit-1"), unit("unit-2")]));
+  const unitId = "unit-1";
+  const ready = prepared.units[unitId]!;
+  assert.equal(ready.state, "worktree_observed");
+  assert.equal(ready.baseOid, OID_A);
+  const emits = (state: RepositoryRun): readonly string[] =>
+    legalActions(state)
+      .filter((action) => action.unitId === unitId && action.mode === "emit")
+      .map((action) => action.type)
+      .filter(
+        (type) =>
+          ![
+            "cancel_intent",
+            "failure_intent",
+            "park_intent",
+            "timeout_intent",
+          ].includes(type),
+      )
+      .sort();
+  assert.deepEqual(emits(prepared), ["dispatch_intent", "refresh_intent"]);
+
+  const intended = stepUnit(prepared, unitId, "refresh_intent", {
+    baseOid: OID_B,
+  });
+  const pending = intended.units[unitId]!;
+  assert.equal(pending.state, "refresh_intent");
+  assert.equal(pending.refreshBaseOid, OID_B);
+  assert.deepEqual(intended.units["unit-2"], prepared.units["unit-2"]);
+  const entry = intended.effectJournal.find(
+    (item) => item.kind === "candidate_refresh" && item.status === "intended",
+  );
+  assert.ok(entry !== undefined);
+  assert.deepEqual(rehydrateEffect(intended, entry)?.params, {
+    baseOid: OID_B,
+    branchRef: ready.branchRef,
+    previousBaseOid: OID_A,
+    worktreePath: ready.worktreePath,
+  });
+
+  // The branch carried no commits, so only a head resting on the new base is
+  // an observation of this act; anything else is a rebase nobody asked for.
+  assert.equal(
+    reduce(
+      intended,
+      event(
+        intended,
+        "refresh_observed",
+        {
+          baseOid: OID_B,
+          effectId: effectId(intended, "candidate_refresh"),
+          effectKind: "candidate_refresh",
+          headOid: OID_C,
+          observationHash: HASH,
+          treeOid: OID_C,
+        },
+        unitId,
+      ),
+    ).ok,
+    false,
+  );
+
+  const refreshed = observeUnit(
+    intended,
+    unitId,
+    "refresh_observed",
+    "candidate_refresh",
+    { baseOid: OID_B, headOid: OID_B, treeOid: OID_C },
+  );
+  const advanced = refreshed.units[unitId]!;
+  assert.equal(advanced.state, "worktree_observed");
+  assert.equal(advanced.baseOid, OID_B);
+  assert.equal(advanced.refreshBaseOid, undefined);
+  // No packet was ever launched, so no launch base is retained: the first
+  // packet has to bind the refreshed base exactly.
+  assert.equal(advanced.launchBaseOid, undefined);
+  assert.equal(advanced.branchRef, ready.branchRef);
+  assert.equal(advanced.worktreePath, ready.worktreePath);
+  assert.equal(advanced.candidateHead, undefined);
+  assert.deepEqual(refreshed.units["unit-2"], prepared.units["unit-2"]);
+  assert.deepEqual(runInvariantErrors(refreshed), []);
+  assert.deepEqual(emits(refreshed), ["dispatch_intent", "refresh_intent"]);
+
+  // A2: the packet issued afterwards carries the refreshed base, and the
+  // packet composed on the stale base is refused.
+  const stale = event(
+    prepared,
+    "dispatch_intent",
+    { idempotencyKey: "dispatch-stale" },
+    unitId,
+  );
+  assert.equal(
+    reduce(refreshed, {
+      ...stale,
+      eventId: `dispatch-stale-${refreshed.revision}`,
+      expectedRevision: refreshed.revision,
+    } as ProtocolEvent).ok,
+    false,
+  );
+  const dispatched = stepUnit(refreshed, unitId, "dispatch_intent", {
+    idempotencyKey: "dispatch-refreshed",
+  });
+  assert.equal(dispatched.units[unitId]?.state, "dispatch_intent");
+  assert.equal(
+    (
+      JSON.parse(dispatched.units[unitId]!.workerPacket!.payload) as {
+        readonly baseOid: string;
+      }
+    ).baseOid,
+    OID_B,
+  );
+  assert.deepEqual(runInvariantErrors(dispatched), []);
+});
+
+test("a pre-dispatch refresh refuses a launched unit and routes its own refusal to repair", () => {
+  const unitId = "unit-1";
+  const prepared = preparedUnit();
+  // Once the unit is launched the branch may carry commits, so the refresh is
+  // a rebase of a candidate and is legal only from the candidate phases.
+  const dispatched = observeUnit(
+    stepUnit(prepared, unitId, "dispatch_intent", {
+      idempotencyKey: "dispatch-1",
+    }),
+    unitId,
+    "dispatch_observed",
+    "dispatch",
+    {
+      promptHash: HASH,
+      requestedModel: "workhorse",
+      returnedModel: "workhorse-1",
+      sessionId: "worker-1",
+    },
+  );
+  assert.equal(dispatched.units[unitId]?.state, "dispatched");
+  assert.equal(
+    reduce(
+      dispatched,
+      event(dispatched, "refresh_intent", { baseOid: OID_B }, unitId),
+    ).ok,
+    false,
+  );
+
+  // A branch that already carries commits, or a dirty worktree, refuses the
+  // fast-forward: the unit blocks on the exact head that refused it.
+  const intended = stepUnit(prepared, unitId, "refresh_intent", {
+    baseOid: OID_B,
+  });
+  const failed = observeUnit(
+    intended,
+    unitId,
+    "refresh_failed",
+    "candidate_refresh",
+    { baseOid: OID_A, headOid: OID_C, treeOid: OID_C },
+  );
+  const blocked = failed.units[unitId]!;
+  assert.equal(blocked.state, "repair_required");
+  assert.equal(blocked.baseOid, OID_A);
+  assert.equal(blocked.candidateHead, OID_C);
+  assert.equal(blocked.repairContext?.headOid, OID_C);
+  assert.deepEqual(runInvariantErrors(failed), []);
 });
 
 test("marking a unit effect ambiguous advances that unit's revision so the checkpoint stays exact", () => {

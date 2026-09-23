@@ -62,7 +62,10 @@ readback can establish.
 2. Reserve shared resources, cut isolated worktrees from one verified base,
    and generate exact worker packets with the vendored `sce harness-packet`
    command.
-3. Dispatch workhorse models only. Workers edit their owned scope and run the
+3. Refresh any unit whose base is behind the integration head before its first
+   dispatch: with no commits on the unit branch the refresh fast-forwards it
+   and its worktree, so the packet binds the base the worker starts on. Then
+   dispatch workhorse models only. Workers edit their owned scope and run the
    focused fast gate; they do not write Beads, publish, or integrate.
 4. The controller collects and observes Git/test facts, rebases or otherwise
    updates one candidate using the repository's permitted non-force strategy,

@@ -1504,6 +1504,17 @@ function reduceWavePlan(
   );
 }
 
+/**
+ * A unit that reached its worktree and was never launched holds no candidate
+ * and no launch packet, so its branch carries no commits. Refreshing it is a
+ * pure fast-forward of `refs/heads/<branch>` and the worktree onto the moved
+ * integration head, never a rebase, and it leaves the unit exactly where it
+ * was with its base advanced (sce-296.18).
+ */
+export function refreshIsFastForward(unit: Unit): boolean {
+  return unit.candidateHead === undefined && unit.workerPacket === undefined;
+}
+
 /** The base the unit's current worker packet was launched against, if any. */
 function workerPacketBase(unit: Unit): string | undefined {
   if (unit.workerPacket === undefined) return undefined;
@@ -5513,11 +5524,17 @@ function reduceInternal(
       break;
     case "refresh_intent":
       // Refresh on the same identity: legal wherever a candidate exists or
-      // is about to, and before the integration act, never during one.
+      // is about to, and before the integration act, never during one. A unit
+      // that holds its branch and worktree but was never launched refreshes
+      // too: units are composed on the integration head and dispatched after
+      // siblings land on it, so the first act on a prepared unit is the
+      // fast-forward of an empty branch onto the head that moved under it
+      // (sce-296.18).
       if (
         !["collected", "candidate_committed", "qualified", "approved"].includes(
           unit.state,
-        )
+        ) &&
+        !(unit.state === "worktree_observed" && refreshIsFastForward(unit))
       )
         return illegal(unit, event.type);
       if (event.baseOid === unit.baseOid)
@@ -5554,6 +5571,31 @@ function reduceInternal(
         return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "candidate_refresh"))
         return badObservation();
+      // A unit refreshed before its first dispatch carried no commits, so the
+      // act was a fast-forward and the observation has to show the branch
+      // resting exactly on the new base. It returns to the phase it left,
+      // with only its base advanced: no candidate, verification, or review
+      // binding exists to discard, and no launch base is recorded, because no
+      // packet was ever bound. The first worker packet therefore has to bind
+      // the refreshed base (sce-296.18).
+      if (refreshIsFastForward(unit)) {
+        if (event.headOid !== event.baseOid)
+          return reject(
+            "invalid_event",
+            "a pre-dispatch refresh must leave the unit branch on the new base",
+          );
+        const { refreshBaseOid: _pendingBase, ...prepared } = unit;
+        result = observe(
+          state,
+          unit,
+          "worktree_observed",
+          event,
+          {},
+          {},
+          { ...prepared, baseOid: event.baseOid },
+        );
+        break;
+      }
       // Every binding to the old base is discarded with it; the unit returns
       // to `collected` and re-observes its candidate on the new base.
       const {

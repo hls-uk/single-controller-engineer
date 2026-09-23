@@ -5,7 +5,11 @@ import {
   type Unit,
   validate,
 } from "./schemas.js";
-import { compareProtocolText, runInvariantErrors } from "./reducer.js";
+import {
+  compareProtocolText,
+  refreshIsFastForward,
+  runInvariantErrors,
+} from "./reducer.js";
 import { canEnterTerminalIntent } from "./guards.js";
 
 export interface ActionDescriptor {
@@ -423,9 +427,17 @@ function lifecycleActions(
         unitAction(unit, "worktree_observed", "record", "worktree_create"),
       ];
     case "worktree_observed":
-      return state.activeModifyingUnitIds.length < 3
-        ? [unitAction(unit, "dispatch_intent", "emit", "dispatch")]
-        : [];
+      // A prepared unit may still be refreshed onto a moved integration head
+      // before its first dispatch; its packet then binds the fresh base
+      // (sce-296.18).
+      return [
+        ...(state.activeModifyingUnitIds.length < 3
+          ? [unitAction(unit, "dispatch_intent", "emit", "dispatch")]
+          : []),
+        ...(refreshIsFastForward(unit)
+          ? [unitAction(unit, "refresh_intent", "emit", "candidate_refresh")]
+          : []),
+      ];
     case "dispatch_intent":
       return [unitAction(unit, "dispatch_observed", "record", "dispatch")];
     case "dispatched":

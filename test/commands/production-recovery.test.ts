@@ -1996,6 +1996,237 @@ test("a candidate diff past the packet bound reconciles to a typed refusal", asy
   );
 });
 
+/** One unit prepared to `refresh_intent` before any dispatch (sce-296.18). */
+function preparedRefreshRun(): RepositoryRun {
+  let state = localRun();
+  const observe = (
+    type: Parameters<typeof event>[1],
+    kind: string,
+    fields: Record<string, unknown> = {},
+  ) => {
+    state = transition(
+      state,
+      event(state, type, {
+        effectId: state.effectJournal.at(-1)!.effectId,
+        effectKind: kind,
+        observationHash: HASH,
+        ...fields,
+      }),
+      reduce,
+    );
+  };
+  state = transition(
+    state,
+    event(state, "reservation_intent", {
+      reservations: [{ id: "res-1", namespace: "path", resource: "src" }],
+    }),
+    reduce,
+  );
+  observe("reservation_observed", "reservation_acquire");
+  state = transition(
+    state,
+    event(state, "branch_intent", { branchRef: "sce/unit-1" }),
+    reduce,
+  );
+  observe("branch_observed", "branch_create", { branchRef: "sce/unit-1" });
+  state = transition(
+    state,
+    event(state, "worktree_intent", { worktreePath: "/task" }),
+    reduce,
+  );
+  observe("worktree_observed", "worktree_create", { worktreePath: "/task" });
+  return transition(
+    state,
+    event(state, "refresh_intent", { baseOid: OID_C }),
+    reduce,
+  );
+}
+
+/**
+ * A clean unit worktree on `sce/unit-1`. `world.head` is the exact commit the
+ * branch rests on and doubles as its tree, `merge --ff-only` advances it only
+ * when `world.fastForward` allows, and every call is recorded so the test can
+ * prove no rebase was attempted.
+ */
+function preparedWorktreeRunner(
+  world: { head: string; clean: boolean; fastForward: boolean },
+  calls: string[],
+): GitRunner {
+  return async ({ argv, cwd }) => {
+    calls.push(argv.join(" "));
+    const answer = (stdout: string) => ({ exitCode: 0, signal: null, stdout });
+    // Exit 1 with no output is git's "no configured remotes", which is what a
+    // local fixture repository with no remote URLs must report.
+    if (argv[0] === "config") return { exitCode: 1, signal: null, stdout: "" };
+    if (argv[0] === "worktree")
+      return answer(
+        `worktree /task\nHEAD ${world.head}\nbranch refs/heads/sce/unit-1\n\n`,
+      );
+    if (argv[0] === "status")
+      return answer(world.clean ? "" : " M src/file.ts\u0000");
+    if (argv[0] === "ls-files") return answer("H src/file.ts\u0000");
+    if (argv[0] === "symbolic-ref") return answer("refs/heads/sce/unit-1\n");
+    if (argv[0] === "merge") {
+      if (!world.fastForward) return { exitCode: 1, signal: null, stdout: "" };
+      world.head = argv[2]!;
+      return answer("");
+    }
+    if (argv[0] === "rev-parse") {
+      if (argv[1] === "--git-common-dir")
+        return answer(cwd === "/task" ? "/repo/.git\n" : ".git\n");
+      if (argv[1] === "--show-object-format") return answer("sha1\n");
+      const target = argv[2] ?? "";
+      return answer(
+        `${target.startsWith("HEAD") ? world.head : target.slice(0, 40)}\n`,
+      );
+    }
+    return { exitCode: 1, signal: null, stdout: "" };
+  };
+}
+
+function preparedRefreshEffect(state: RepositoryRun): ProtocolEffect {
+  const entry = state.effectJournal.at(-1)!;
+  return {
+    effectId: entry.effectId,
+    idempotencyKey: entry.idempotencyKey,
+    kind: "candidate_refresh" as const,
+    params: {
+      baseOid: OID_C,
+      branchRef: "sce/unit-1",
+      previousBaseOid: OID_A,
+      worktreePath: "/task",
+    },
+    paramsHash: entry.paramsHash,
+    schemaVersion: 1 as const,
+    unitId: "unit-1",
+  } as ProtocolEffect;
+}
+
+// sce-296.18: a unit dispatched hours after it was composed starts on stale
+// code. Refreshing it before its first dispatch is a pure fast-forward of an
+// empty branch; it must never reach for `git rebase`.
+test("a pre-dispatch refresh fast-forwards the prepared branch and refuses a diverged one", async () => {
+  const state = preparedRefreshRun();
+  assert.equal(state.units["unit-1"]?.state, "refresh_intent");
+  const effect = preparedRefreshEffect(state);
+
+  const calls: string[] = [];
+  const world = { clean: true, fastForward: true, head: OID_A };
+  const adapter = createProductionRecoveryEffectAdapter({
+    git: { repository, runner: preparedWorktreeRunner(world, calls) },
+  });
+
+  // The read-only probe sees the branch still on its old base and reports the
+  // act as absent, having touched nothing.
+  assert.equal((await adapter.reconcile(effect, state)).status, "absent");
+  assert.equal(world.head, OID_A);
+  assert.equal(
+    calls.some(
+      (call) => call.startsWith("merge ") || call.startsWith("rebase"),
+    ),
+    false,
+  );
+
+  const executed = await adapter.execute(effect, state);
+  assert.equal(executed.status, "observed");
+  if (executed.status !== "observed") return;
+  assert.equal(validate(ProtocolEventSchema, executed.observation).ok, true);
+  assert.deepEqual(
+    {
+      ...(executed.observation as unknown as Record<string, unknown>),
+      eventId: undefined,
+      expectedRevision: undefined,
+      observationHash: undefined,
+    },
+    {
+      baseOid: OID_C,
+      effectId: effect.effectId,
+      effectKind: "candidate_refresh",
+      eventId: undefined,
+      expectedRevision: undefined,
+      headOid: OID_C,
+      observationHash: undefined,
+      treeOid: OID_C,
+      type: "refresh_observed",
+      unitId: "unit-1",
+    },
+  );
+  assert.equal(calls.includes(`merge --ff-only ${OID_C}`), true);
+  assert.equal(
+    calls.some((call) => call.startsWith("rebase")),
+    false,
+  );
+
+  const refreshed = transition(state, executed.observation, reduce);
+  assert.equal(refreshed.units["unit-1"]?.state, "worktree_observed");
+  assert.equal(refreshed.units["unit-1"]?.baseOid, OID_C);
+  assert.deepEqual(runInvariantErrors(refreshed), []);
+
+  // The same act is idempotent on a worktree already resting on the new base.
+  assert.equal((await adapter.reconcile(effect, state)).status, "observed");
+
+  // A branch that already carries commits is refused with the exact pair it
+  // rests on, never rebased onto the new base.
+  const divergedCalls: string[] = [];
+  const diverged = await createProductionRecoveryEffectAdapter({
+    git: {
+      repository,
+      runner: preparedWorktreeRunner(
+        { clean: true, fastForward: true, head: OID_B },
+        divergedCalls,
+      ),
+    },
+  }).execute(effect, state);
+  assert.equal(diverged.status, "observed");
+  if (diverged.status !== "observed") return;
+  assert.deepEqual(
+    {
+      ...(diverged.observation as unknown as Record<string, unknown>),
+      eventId: undefined,
+      expectedRevision: undefined,
+      observationHash: undefined,
+    },
+    {
+      baseOid: OID_A,
+      effectId: effect.effectId,
+      effectKind: "candidate_refresh",
+      eventId: undefined,
+      expectedRevision: undefined,
+      headOid: OID_B,
+      observationHash: undefined,
+      treeOid: OID_B,
+      type: "refresh_failed",
+      unitId: "unit-1",
+    },
+  );
+  assert.equal(
+    divergedCalls.some(
+      (call) => call.startsWith("merge ") || call.startsWith("rebase"),
+    ),
+    false,
+  );
+  const blocked = transition(state, diverged.observation, reduce);
+  assert.equal(blocked.units["unit-1"]?.state, "repair_required");
+  assert.deepEqual(runInvariantErrors(blocked), []);
+
+  // A dirty worktree refuses the same way: the unit keeps its base.
+  const dirty = await createProductionRecoveryEffectAdapter({
+    git: {
+      repository,
+      runner: preparedWorktreeRunner(
+        { clean: false, fastForward: true, head: OID_A },
+        [],
+      ),
+    },
+  }).execute(effect, state);
+  assert.equal(dirty.status, "observed");
+  if (dirty.status !== "observed") return;
+  const refusal = dirty.observation as unknown as Record<string, unknown>;
+  assert.equal(refusal["type"], "refresh_failed");
+  assert.equal(refusal["baseOid"], OID_A);
+  assert.equal(refusal["headOid"], OID_A);
+});
+
 test("production candidate collection and manual verification bind exact durable facts", async () => {
   let state = localRun();
   let liveHead = OID_B;

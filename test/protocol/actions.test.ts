@@ -404,6 +404,47 @@ test("every normal lifecycle state exposes its reducer-legal progress descriptor
   ]);
 });
 
+// sce-296.18: a unit is composed on the integration head and dispatched after
+// siblings land on it, so the prepared phase advertises a base refresh beside
+// its first dispatch. A launched unit's branch may carry commits, so its
+// refresh is a candidate rebase and stays confined to the candidate phases.
+test("a prepared unit advertises a base refresh beside its first dispatch", () => {
+  let state = run();
+  state = step(state, "reservation_intent", {
+    reservations: [{ id: "res-1", namespace: "port", resource: "3001" }],
+  });
+  state = observe(state, "reservation_observed", "reservation_acquire");
+  state = step(state, "branch_intent", { branchRef: "sce/unit-1" });
+  state = observe(state, "branch_observed", "branch_create", {
+    branchRef: "sce/unit-1",
+  });
+  state = step(state, "worktree_intent", { worktreePath: "/tmp/unit-1" });
+  state = observe(state, "worktree_observed", "worktree_create", {
+    worktreePath: "/tmp/unit-1",
+  });
+  assert.deepEqual(
+    legalActions(state).filter((action) => action.type === "refresh_intent"),
+    [
+      {
+        effectKind: "candidate_refresh",
+        mode: "emit",
+        type: "refresh_intent",
+        unitId: "unit-1",
+      },
+    ],
+  );
+  assert.ok(actionTypes(state, "unit-1").includes("dispatch_intent"));
+
+  state = step(state, "dispatch_intent", {});
+  state = observe(state, "dispatch_observed", "dispatch", {
+    promptHash: HASH,
+    requestedModel: "workhorse",
+    returnedModel: "workhorse-1",
+    sessionId: "worker-1",
+  });
+  assert.equal(actionTypes(state, "unit-1").includes("refresh_intent"), false);
+});
+
 test("terminal, repair, cap, ownership, and order guards are represented", () => {
   const initial = run([unit("unit-2"), unit("unit-1")]);
   const reversed = run([unit("unit-1"), unit("unit-2")]);
