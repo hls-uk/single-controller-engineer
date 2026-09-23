@@ -53,6 +53,16 @@ import {
   verifyRepository,
   writeWorktreeTree,
 } from "../../../src/adapters/git/index.js";
+import {
+  type AggregateVerifyEffect,
+  createProvenanceAdapter,
+} from "../../../src/adapters/git/provenance.js";
+import { deriveProvenanceWorktreePath } from "../../../src/protocol/reducer.js";
+import type {
+  KnowledgeContract,
+  RepositoryRun,
+} from "../../../src/protocol/schemas.js";
+import { run as protocolRun } from "../../protocol/fixtures.js";
 
 const execFile = promisify(execFileCallback);
 const sha1 = (digit: string): string => digit.repeat(40);
@@ -765,6 +775,44 @@ async function actualRepository(cwd: string): Promise<GitRepository> {
     remoteUrls: remote === undefined ? [] : [remote.trim()],
   };
 }
+
+test("the production runner consults its gate, not the spawn, on a real repository", async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "sce-git-gate-")));
+  const cwd = join(root, "repo");
+  t.after(() => rm(root, { force: true, recursive: true }));
+  await git(root, "init", cwd);
+  await git(cwd, "config", "user.email", "test@example.invalid");
+  await git(cwd, "config", "user.name", "SCE test");
+  await git(cwd, "commit", "--allow-empty", "-m", "base");
+
+  // The directory is real and the repository readable, so an admitted vector
+  // is answered by Git itself: whatever the refusals below prove, it is not
+  // that the runner cannot spawn here.
+  const admitted = { argv: ["rev-parse", "--git-common-dir"], cwd };
+  assert.equal(allowedGitRequest(admitted), true);
+  const read = await nodeGitRunner(admitted);
+  assert.equal(read.exitCode, 0);
+  assert.equal(read.unavailable, false);
+  assert.equal(read.stdout.trim().length > 0, true);
+
+  // Git would answer every one of these in that same directory. The runner
+  // never asks: each result is the gate's own four-field refusal, and the
+  // fields a spawned read always carries are absent from it.
+  for (const refused of [
+    { argv: ["rev-parse", "--git-dir"], cwd },
+    { argv: ["log", "--oneline"], cwd },
+    { argv: ["status", "--porcelain"], cwd },
+    { ...admitted, env: { GIT_DIR: join(cwd, ".git") } },
+  ]) {
+    assert.equal(allowedGitRequest(refused), false);
+    assert.deepEqual(await nodeGitRunner(refused), {
+      exitCode: null,
+      signal: null,
+      stdout: "",
+      unavailable: true,
+    });
+  }
+});
 
 test("real no-remote repository supports the local-only fast-forward profile", async (t) => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "sce-git-local-")));
@@ -2077,6 +2125,175 @@ test("the provenance commit is built from journaled facts and a constant identit
   );
 });
 
+test("aggregate verification rebinds every journaled fact before it acts", async () => {
+  const worktreeRoot = await provenancePath("aggregate");
+  const attemptKey = "run-1:4:gate-1:provenance_commit";
+  const contract: KnowledgeContract = {
+    aliases: [],
+    audience: "example-internal",
+    combinedVerificationCommands: [
+      ["node", "--test"],
+      ["npm", "run", "check"],
+    ],
+    domainScope: "example.internal",
+    gateTargets: [],
+    humanDriver: "Example Knowledge Lead",
+    projectId: "example-knowledge",
+    provenance: {
+      eventsDirectory: "events",
+      generatedDirectory: "generated",
+      recordFormatVersion: 1,
+      reproducibilityCommand: ["node", "scripts/check-generated.mjs"],
+      rollupGeneratorCommand: ["node", "scripts/generate-rollup.mjs"],
+    },
+    provenanceWorktreeRoot: worktreeRoot,
+  };
+  const provenanceOid = sha1("1");
+  const gate: NonNullable<RepositoryRun["gate"]> = {
+    destinationProbes: [],
+    lineageAncestorDigests: [],
+    lineageCommitment: "0".repeat(64),
+    provenance: {
+      attemptIdempotencyKey: attemptKey,
+      gateEntryId: "gate-1",
+      projectionInputSnapshot: {
+        closedUnitEvidence: "",
+        closureEvidenceCommitment: "0".repeat(64),
+        destinationProbeEvidence: [],
+        targetEvidence: [],
+        unitIds: ["unit-1"],
+      },
+      status: "observed",
+    },
+    originalUnitIds: ["unit-1"],
+    provenanceUnitAccounting: [],
+    targetDefinitionCommitment: "0".repeat(64),
+    targetPromises: [],
+    targets: [],
+    waveId: "wave-1",
+  };
+  const state: RepositoryRun = {
+    ...protocolRun(),
+    gate,
+    gitObjectFormat: "sha1",
+    knowledgeContract: contract,
+    repositoryIdentity: repository().identity,
+  };
+  const effect: AggregateVerifyEffect = {
+    effectId: "event-4:verify",
+    gateEntryId: "gate-1",
+    idempotencyKey: "run-1:5:gate-1:verify",
+    kind: "verify",
+    params: {
+      candidate: {
+        baseOid: sha1("2"),
+        headOid: provenanceOid,
+        treeOid: sha1("3"),
+      },
+      commands: contract.combinedVerificationCommands,
+      gateEntryId: "gate-1",
+      provenanceOid,
+      worktreePath: deriveProvenanceWorktreePath(worktreeRoot, attemptKey),
+    },
+    paramsHash: "0".repeat(64),
+    schemaVersion: 1,
+    unitId: null,
+  };
+  const calls: string[][] = [];
+  const adapter = createProvenanceAdapter({
+    git: {
+      repository: repository(),
+      runner: async ({ argv }) => {
+        calls.push([...argv]);
+        return failed();
+      },
+    },
+  });
+
+  // Bound exactly as journaled, the verification goes on to read the
+  // repository, which this fixture refuses; that first read is the line
+  // every mutation below has to stay behind.
+  assert.deepEqual(await adapter.executeAggregateVerify(effect, state), {
+    status: "ambiguous",
+  });
+  assert.equal(calls.length > 0, true);
+
+  const { knowledgeContract: boundContract, ...withoutContract } = state;
+  const { attemptIdempotencyKey: boundKey, ...provenanceWithoutKey } =
+    gate.provenance!;
+  const mutants: ReadonlyArray<
+    readonly [string, RepositoryRun, AggregateVerifyEffect]
+  > = [
+    ["no knowledge contract", withoutContract, effect],
+    [
+      "absent attempt key",
+      { ...state, gate: { ...gate, provenance: provenanceWithoutKey } },
+      effect,
+    ],
+    [
+      "foreign repository identity",
+      { ...state, repositoryIdentity: "provider:other" },
+      effect,
+    ],
+    ["other object format", { ...state, gitObjectFormat: "sha256" }, effect],
+    [
+      "commands out of contract order",
+      state,
+      {
+        ...effect,
+        params: {
+          ...effect.params,
+          commands: [...contract.combinedVerificationCommands].reverse(),
+        },
+      },
+    ],
+    [
+      "a command the contract does not carry",
+      state,
+      {
+        ...effect,
+        params: { ...effect.params, commands: [["npm", "run", "check"]] },
+      },
+    ],
+    [
+      "candidate head is not the provenance commit",
+      state,
+      {
+        ...effect,
+        params: {
+          ...effect.params,
+          candidate: { ...effect.params.candidate, headOid: sha1("4") },
+        },
+      },
+    ],
+    [
+      "worktree path not derived from the attempt key",
+      state,
+      {
+        ...effect,
+        params: {
+          ...effect.params,
+          worktreePath: deriveProvenanceWorktreePath(
+            worktreeRoot,
+            "run-1:9:gate-1:provenance_commit",
+          ),
+        },
+      },
+    ],
+  ];
+  assert.equal(boundContract, contract);
+  assert.equal(boundKey, attemptKey);
+  for (const [label, mutantState, mutantEffect] of mutants) {
+    calls.length = 0;
+    assert.deepEqual(
+      await adapter.executeAggregateVerify(mutantEffect, mutantState),
+      { status: "ambiguous" },
+      label,
+    );
+    assert.deepEqual(calls, [], label);
+  }
+});
+
 test("keyed discovery reads commits, trailers, records, and refs within exact bounds", async () => {
   const tree = sha1("a");
   const parent = sha1("b");
@@ -2127,53 +2344,94 @@ test("keyed discovery reads commits, trailers, records, and refs within exact bo
   const found = await findCommitByTrailer(
     walk([sha1("c"), keyed, sha1("f")], keyed),
     repository(),
-    { start: sha1("c"), trailer },
+    { base: parent, start: sha1("c"), trailer },
   );
   assert.equal(found.state, "found");
   if (found.state !== "found") throw new Error("unreachable");
   assert.equal(found.oid, keyed);
   assert.equal(found.commit.tree, tree);
 
-  // The walk is capped at DISCOVERY_DEPTH commits: a keyed commit pushed past
-  // that many landings is simply not seen.
+  // The walk is capped at DISCOVERY_DEPTH commits, so a window it filled
+  // without reaching the attempted base proves nothing: a keyed commit may
+  // sit one landing past it. That is unreadable, never absent, and the exact
+  // reason distinguishes the bound from a walk that could not read at all.
   const window = Array.from({ length: DISCOVERY_DEPTH }, (_, index) =>
     index.toString(16).padStart(40, "0"),
   );
   let requested: readonly string[] = [];
-  const bounded = router(identity, ({ argv }) => {
-    if (argv[0] === "rev-list") {
-      requested = [...argv];
-      return ok(window.map((oid) => `${oid}\n`).join(""));
-    }
-    if (argv[0] === "cat-file") return commitObject(argv[2] ?? "", false);
-    return undefined;
-  });
+  const bounded = (oids: readonly string[]): GitRunner =>
+    router(identity, ({ argv }) => {
+      if (argv[0] === "rev-list") {
+        requested = [...argv];
+        return ok(oids.map((oid) => `${oid}\n`).join(""));
+      }
+      if (argv[0] === "cat-file") return commitObject(argv[2] ?? "", false);
+      return undefined;
+    });
   assert.deepEqual(
-    await findCommitByTrailer(bounded, repository(), {
+    await findCommitByTrailer(bounded(window), repository(), {
+      base: parent,
       start: sha1("c"),
       trailer,
     }),
-    { state: "absent" },
+    { reason: "window_exhausted", state: "unreadable" },
   );
   assert.deepEqual(requested, [
     "rev-list",
     `--max-count=${DISCOVERY_DEPTH}`,
     sha1("c"),
   ]);
+  // The same full window proves absence once the walk has met the base the
+  // attempt was built on, and a walk shorter than the bound proves it by
+  // having listed the whole reachable history.
   assert.deepEqual(
-    await findCommitByTrailer(walk(["refs/heads/main"]), repository(), {
+    await findCommitByTrailer(bounded(window), repository(), {
+      base: window.at(-1)!,
       start: sha1("c"),
       trailer,
     }),
-    { state: "unreadable" },
+    { state: "absent" },
   );
   assert.deepEqual(
-    await findCommitByTrailer(router(identity), repository(), {
+    await findCommitByTrailer(bounded(window.slice(1)), repository(), {
+      base: parent,
       start: sha1("c"),
-      trailer: "X-Provenance-Key: sce:1",
+      trailer,
     }),
-    { state: "unreadable" },
+    { state: "absent" },
   );
+  assert.deepEqual(
+    await findCommitByTrailer(walk(["refs/heads/main"]), repository(), {
+      base: parent,
+      start: sha1("c"),
+      trailer,
+    }),
+    { reason: "list_refused", state: "unreadable" },
+  );
+  assert.deepEqual(
+    await findCommitByTrailer(
+      router(identity, ({ argv }) =>
+        argv[0] === "rev-list" ? ok(`${sha1("c")}\n`) : failed(),
+      ),
+      repository(),
+      { base: parent, start: sha1("c"), trailer },
+    ),
+    { reason: "commit_unreadable", state: "unreadable" },
+  );
+  for (const input of [
+    { trailer: "X-Provenance-Key: sce:1" },
+    { base: "HEAD" },
+    { start: "HEAD" },
+  ])
+    assert.deepEqual(
+      await findCommitByTrailer(router(identity), repository(), {
+        base: parent,
+        start: sha1("c"),
+        trailer,
+        ...input,
+      }),
+      { reason: "bad_input", state: "unreadable" },
+    );
 
   const blob = sha1("9");
   const treeFiles = (entries: readonly string[]): GitRunner =>

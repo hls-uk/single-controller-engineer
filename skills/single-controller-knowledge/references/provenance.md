@@ -66,11 +66,22 @@ byte. Two projections from the same journaled inputs produce identical bytes
 and the same commit OID; a deliberate base advance produces a new one.
 
 That discovery is bounded: the walk reads at most sixty-four commits back
-from the integration head, so a keyed commit pushed beyond sixty-four
-landings between a deferred attempt and its resume falls outside the window.
-The attempt is then ambiguous rather than absent, which blocks and asks
-instead of committing a second time; the bound is deliberate and keeps
-discovery one constant-cost read.
+from the integration head, and it proves absence only as far as it reached.
+Absence is proven when the walk meets the attempted base, because a landed
+keyed commit is built on that base and so lies between it and the head, or
+when the whole reachable history was shorter than the bound. A fresh attempt
+is proven at once, since its base is the head the walk starts from. A window
+filled without either is unreadable, so the attempt is ambiguous rather than
+absent: it blocks and asks instead of committing a second time. The bound is
+deliberate and keeps discovery one constant-cost read.
+
+Every commit the walk reaches spends the window, including commits merged in
+from a side branch, so the bound counts commits rather than landings and its
+reach can be shorter than sixty-four landings. That costs reach, never
+proof: a walk cut short is unreadable, never absent. Walking first parents
+only would buy the reach back, but it would narrow what counts as reachable
+and call a commit that arrived through a merge absent, which is the one
+direction this discovery must never fail in.
 
 ## The frozen projection snapshot
 

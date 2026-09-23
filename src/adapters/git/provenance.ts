@@ -319,7 +319,12 @@ export function createProvenanceAdapter(
   > {
     const head = await integrationHead(run);
     if (head === undefined) return { state: "unreadable" };
+    // The attempted base bounds the proof of absence: a landed keyed commit
+    // is built on it, so a walk that has reached it has seen everything the
+    // key could be. Beyond the bound the walk is unreadable, not absent, and
+    // the caller below blocks instead of committing a second time.
     const found = await findCommitByTrailer(runner, repository, {
+      base: effect.params.baseOid,
       start: head,
       trailer: provenanceCommitTrailer(effect.idempotencyKey),
     });

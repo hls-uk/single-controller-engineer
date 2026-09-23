@@ -2205,38 +2205,72 @@ export async function readCommit(
   return { message: result.stdout.slice(separator + 2), parents, tree };
 }
 
+/**
+ * Why a bounded walk could not decide. `window_exhausted` is the one that
+ * matters to a caller: it is not absence, and acting on it as absence is how
+ * a second keyed commit lands.
+ */
+export type TrailerUnreadable =
+  "bad_input" | "list_refused" | "commit_unreadable" | "window_exhausted";
+
 export type TrailerDiscovery =
   | Readonly<{ state: "found"; oid: string; commit: CommitObject }>
   | Readonly<{ state: "absent" }>
-  | Readonly<{ state: "unreadable" }>;
+  | Readonly<{ state: "unreadable"; reason: TrailerUnreadable }>;
 
-/** Bounded walk for the commit whose message carries the exact trailer. */
+function trailerUnreadable(reason: TrailerUnreadable): TrailerDiscovery {
+  return { reason, state: "unreadable" };
+}
+
+/**
+ * Bounded walk for the commit whose message carries the exact trailer.
+ *
+ * The walk reads at most `DISCOVERY_DEPTH` commits back from `start`, so it
+ * can prove absence only as far as it actually reached. It reports `absent`
+ * exactly when it met `base`, the first parent the sought commit is built
+ * on, so a keyed commit that landed lies between the head and that base, or
+ * when the listing was shorter than the bound and therefore held the whole
+ * reachable history. A window filled without either is `window_exhausted`:
+ * a keyed commit may well sit just past it, and a caller that read that as
+ * absence would commit a second time. A fresh attempt costs nothing extra,
+ * since its base is the integration head the walk starts from.
+ *
+ * Every commit the walk reaches spends the window, including ones merged in
+ * from a side branch, so the bound counts commits rather than landings. That
+ * costs reach, never proof: a walk cut short is unreadable, never absent.
+ * Walking first parents only would buy the reach back, but it would narrow
+ * what counts as reachable and call a commit that arrived through a merge
+ * absent, the one direction this walk must never fail in.
+ */
 export async function findCommitByTrailer(
   runner: GitRunner,
   repository: GitRepository,
-  input: Readonly<{ start: string; trailer: string }>,
+  input: Readonly<{ base: string; start: string; trailer: string }>,
 ): Promise<TrailerDiscovery> {
   if (
     !exactOid(repository.objectFormat, input.start) ||
+    !exactOid(repository.objectFormat, input.base) ||
     !PROVENANCE_TRAILER.test(input.trailer)
   )
-    return { state: "unreadable" };
+    return trailerUnreadable("bad_input");
   const listed = await run(runner, repository, [
     "rev-list",
     `--max-count=${DISCOVERY_DEPTH}`,
     input.start,
   ]);
-  if (!commandOk(listed)) return { state: "unreadable" };
+  if (!commandOk(listed)) return trailerUnreadable("list_refused");
   const oids = listed.stdout.split("\n").filter((line) => line.length > 0);
   if (!oids.every((oid) => exactOid(repository.objectFormat, oid)))
-    return { state: "unreadable" };
+    return trailerUnreadable("list_refused");
   for (const oid of oids) {
     const commit = await readCommit(runner, repository, oid);
-    if (commit === undefined) return { state: "unreadable" };
+    if (commit === undefined) return trailerUnreadable("commit_unreadable");
     if (commit.message.split("\n").some((line) => line === input.trailer))
       return { state: "found", oid, commit };
   }
-  return { state: "absent" };
+  return oids.includes(input.base) || oids.length < DISCOVERY_DEPTH
+    ? { state: "absent" }
+    : trailerUnreadable("window_exhausted");
 }
 
 /** Exact bytes of every regular file under one directory at one commit. */
