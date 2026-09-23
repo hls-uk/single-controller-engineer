@@ -8,7 +8,7 @@
  */
 import { spawn } from "node:child_process";
 import { lstat, mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, join, posix } from "node:path";
+import { dirname, join } from "node:path";
 
 import { canonicalJson, type JsonValue } from "../../protocol/canonical.js";
 import { sha256 } from "../../protocol/evidence.js";
@@ -601,16 +601,23 @@ export function createProvenanceAdapter(
   ): Promise<AggregateVerifyOutcome> {
     const params = effect.params;
     const contract = run.knowledgeContract;
+    // The aggregate verification runs in the very worktree the provenance
+    // commit bound, so it recomputes that exact path from the journaled
+    // attempt key as `bound` does rather than trusting a root prefix.
+    const attemptKey = run.gate?.provenance?.attemptIdempotencyKey;
     if (
       contract === undefined ||
+      attemptKey === undefined ||
       run.repositoryIdentity !== repository.identity ||
       run.gitObjectFormat !== repository.objectFormat ||
       canonicalJson(params.commands as unknown as JsonValue) !==
         canonicalJson(contract.combinedVerificationCommands as JsonValue) ||
       params.candidate.headOid !== params.provenanceOid ||
-      !params.worktreePath.startsWith(
-        `${posix.normalize(contract.provenanceWorktreeRoot)}/sce-provenance-`,
-      )
+      params.worktreePath !==
+        deriveProvenanceWorktreePath(
+          contract.provenanceWorktreeRoot,
+          attemptKey,
+        )
     )
       return ambiguous();
     if ((await verifyRepository(runner, repository)).state !== "observed")

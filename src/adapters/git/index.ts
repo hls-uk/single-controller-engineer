@@ -155,7 +155,7 @@ const PROVENANCE_SUBJECT =
   /^sce: provenance for wave [A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u;
 const PROVENANCE_TRAILER =
   /^SCE-Provenance-Key: [A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u;
-/** Bounded key discovery walks at most this many first-parent commits. */
+/** Bounded key discovery reads at most this many commits from its start. */
 export const DISCOVERY_DEPTH = 64;
 const RELATIVE_DIRECTORY =
   /^(?![A-Za-z]:)(?!.*\/\/)(?!.*(?:^|\/)\.{1,2}(?:\/|$))[A-Za-z0-9][A-Za-z0-9._/-]{0,191}$/u;
@@ -2095,7 +2095,7 @@ export type TrailerDiscovery =
   | Readonly<{ state: "absent" }>
   | Readonly<{ state: "unreadable" }>;
 
-/** Bounded first-parent walk for the commit whose message carries the trailer. */
+/** Bounded walk for the commit whose message carries the exact trailer. */
 export async function findCommitByTrailer(
   runner: GitRunner,
   repository: GitRepository,
@@ -2198,12 +2198,22 @@ export async function fetchIntegrationBranch(
     : effect("refused", "GIT_COMMAND_FAILED");
 }
 
+/**
+ * The complete admission gate `nodeGitRunner` applies before it spawns: the
+ * working directory, the argv vector, and the runner environment. Exported so
+ * the deterministic tier can prove every vector the adapter emits is admitted,
+ * and every adversarial variant refused, without spawning Git.
+ */
+export function allowedGitRequest(request: Parameters<GitRunner>[0]): boolean {
+  return (
+    safeAbsolutePath(request.cwd) &&
+    allowedGitArgv(request.argv) &&
+    allowedRunnerEnvironment(request.env)
+  );
+}
+
 export const nodeGitRunner: GitRunner = async ({ argv, cwd, env }) => {
-  if (
-    !safeAbsolutePath(cwd) ||
-    !allowedGitArgv(argv) ||
-    !allowedRunnerEnvironment(env)
-  )
+  if (!allowedGitRequest({ argv, cwd, ...(env === undefined ? {} : { env }) }))
     return { exitCode: null, signal: null, stdout: "", unavailable: true };
   return new Promise((done) => {
     const stdoutChunks: Buffer[] = [];

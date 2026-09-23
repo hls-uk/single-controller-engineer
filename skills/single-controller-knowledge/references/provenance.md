@@ -65,6 +65,13 @@ and observes it without a second act when the records read back byte for
 byte. Two projections from the same journaled inputs produce identical bytes
 and the same commit OID; a deliberate base advance produces a new one.
 
+That discovery is bounded: the walk reads at most sixty-four commits back
+from the integration head, so a keyed commit pushed beyond sixty-four
+landings between a deferred attempt and its resume falls outside the window.
+The attempt is then ambiguous rather than absent, which blocks and asks
+instead of committing a second time; the bound is deliberate and keeps
+discovery one constant-cost read.
+
 ## Aggregate verification
 
 The same preserved worktree, at the provenance-commit OID, is the working
