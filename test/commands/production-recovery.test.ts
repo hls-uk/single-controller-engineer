@@ -2977,3 +2977,70 @@ test("reservations are journal-only effects: execute observes them and resume fi
     );
   }
 });
+
+test("a maximum-length effect ID recovers under a bounded, distinct event ID", async () => {
+  const answers: Record<string, string | undefined> = {};
+  verified(answers);
+  let created = false;
+  const adapter = createProductionRecoveryEffectAdapter({
+    git: {
+      repository,
+      runner: async ({ argv }) => {
+        if (argv[0] === "branch") {
+          created = true;
+          return { exitCode: 0, signal: null, stdout: "" };
+        }
+        if (argv[0] === "for-each-ref")
+          return {
+            exitCode: 0,
+            signal: null,
+            stdout: created ? `${OID_A}\n` : "",
+          };
+        const stdout = answers[argv.join(" ")];
+        return {
+          exitCode: stdout === undefined ? 1 : 0,
+          signal: null,
+          stdout: stdout ?? "",
+        };
+      },
+    },
+  });
+  const effectId = "x".repeat(192);
+  const effect = { ...branchEffect(), effectId } as ProtocolEffect;
+  const state = localRun();
+
+  const executed = await adapter.execute(effect, state);
+  assert.equal(executed.status, "observed");
+  if (executed.status !== "observed") return;
+  const reconciled = await adapter.reconcile(effect, state);
+  assert.equal(reconciled.status, "observed");
+  if (reconciled.status !== "observed") return;
+
+  // A durable effect ID may be 192 characters, so the legacy `recover-${id}`
+  // event ID would be 200: past the 160-character identifier bound. The
+  // production path emits the domain-separated digest instead, and the
+  // emitted observation must still validate as a protocol event.
+  const eventId = `recover-${sha256(
+    canonicalJson({ domain: "sce.recovery-event.v1", effectId }),
+  )}`;
+  assert.equal(eventId.length, 72);
+  for (const observation of [executed.observation, reconciled.observation]) {
+    assert.equal(observation.eventId, eventId);
+    assert.equal("effectId" in observation && observation.effectId, effectId);
+    assert.deepEqual(
+      validate<ProtocolEvent>(ProtocolEventSchema, observation).errors,
+      [],
+    );
+  }
+
+  // Maximal IDs that differ only in their last character stay distinct.
+  const sibling = {
+    ...effect,
+    effectId: `${effectId.slice(0, 191)}y`,
+  } as ProtocolEffect;
+  const siblingExecuted = await adapter.execute(sibling, state);
+  assert.equal(siblingExecuted.status, "observed");
+  if (siblingExecuted.status !== "observed") return;
+  assert.notEqual(siblingExecuted.observation.eventId, eventId);
+  assert.equal(siblingExecuted.observation.eventId.length, 72);
+});

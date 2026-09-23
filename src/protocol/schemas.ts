@@ -19,6 +19,11 @@ export const LIMITS = {
   reservations: 128,
   text: 8_192,
   findings: 64,
+  // Canonical JSON bytes of one verification command vector, and of a whole
+  // configured command set. Both bound a knowledge contract at runtime rather
+  // than at a schema boundary, so the reducer reads them from here.
+  commandVectorBytes: 8_192,
+  commandVectorSetBytes: 32_768,
   materialisationBlobBytes: 16 * 1024 * 1024,
   materialisationMatches: 64,
   materialisationOutputs: 128,
@@ -570,18 +575,22 @@ export const DestinationProbeRefusalSchema = refusalSchema(
 export type DestinationProbeRefusal = Static<
   typeof DestinationProbeRefusalSchema
 >;
-export const MaterialiseRefusalSchema = refusalSchema(
+/**
+ * One copy vocabulary at two boundaries. A unit materialisation observation
+ * and a gate publication entry refuse for exactly the same two reasons, so
+ * both code unions are emitted from this one definition. They stay distinct
+ * schema objects because they validate distinct effect boundaries: letting
+ * them diverge is an explicit edit here, never an accidental drift.
+ */
+const materialiseRefusalCode = () =>
   Type.Union([
     Type.Literal("source_absent"),
     Type.Literal("hard_links_unsupported"),
-  ]),
-);
+  ]);
+export const MaterialiseRefusalSchema = refusalSchema(materialiseRefusalCode());
 export type MaterialiseRefusal = Static<typeof MaterialiseRefusalSchema>;
 export const GateMaterialisationRefusalSchema = refusalSchema(
-  Type.Union([
-    Type.Literal("source_absent"),
-    Type.Literal("hard_links_unsupported"),
-  ]),
+  materialiseRefusalCode(),
 );
 export const OutputNameCollisionRefusalSchema = strictObject({
   code: Type.Literal("output_name_collision"),

@@ -435,7 +435,7 @@ function canonicalCommandVector(command: readonly string[]): boolean {
     command.length <= 32 &&
     command.every(canonicalCommandArgument) &&
     utf8.encode(canonicalJson(command as unknown as JsonValue)).byteLength <=
-      8_192
+      LIMITS.commandVectorBytes
   );
 }
 
@@ -468,7 +468,7 @@ export function knowledgeContractRuntimeValid(
     canonicalCommandVector(contract.provenance.rollupGeneratorCommand) &&
     canonicalCommandVector(contract.provenance.reproducibilityCommand) &&
     utf8.encode(canonicalJson(commands as unknown as JsonValue)).byteLength <=
-      32_768 &&
+      LIMITS.commandVectorSetBytes &&
     maximumMaterialisationSidecarBytes(contract, harness) <=
       LIMITS.materialisationSidecarBytes
   );
@@ -1700,6 +1700,19 @@ function updateGateMaterialisation(
   };
 }
 
+/**
+ * The exact marker carried by every promise a deferral voids downstream. It
+ * is a spread source, so each call site keeps its own key order and reduces
+ * byte-identically to the literal it replaces.
+ */
+function cascadeVoid(followUpBeadId: string) {
+  return {
+    disposition: "deferral_cascade" as const,
+    followUpBeadId,
+    status: "voided" as const,
+  };
+}
+
 function settleTargetPromise(gate: WaveGate, targetId: string): WaveGate {
   return updateGateTarget(gate, targetId, (target) => {
     if (
@@ -1716,13 +1729,13 @@ function settleTargetPromise(gate: WaveGate, targetId: string): WaveGate {
       ? { ...target, status: "observed" }
       : {
           ...target,
-          disposition: "deferral_cascade",
-          followUpBeadId: required(
-            deferred.followUpBeadId,
-            "materialisation deferral follow-up",
-            "materialise",
+          ...cascadeVoid(
+            required(
+              deferred.followUpBeadId,
+              "materialisation deferral follow-up",
+              "materialise",
+            ),
           ),
-          status: "voided",
         };
   });
 }
@@ -2874,9 +2887,7 @@ function maximumFixedGateVariants(
           target.definition.scope === "gate"
             ? {
                 ...target,
-                disposition: "deferral_cascade" as const,
-                followUpBeadId,
-                status: "voided" as const,
+                ...cascadeVoid(followUpBeadId),
               }
             : target,
         ),
@@ -2888,18 +2899,14 @@ function maximumFixedGateVariants(
                 followUpBeadId,
                 materialisations: target.materialisations.map((item) => ({
                   ...item,
-                  disposition: "deferral_cascade" as const,
-                  followUpBeadId,
-                  status: "voided" as const,
+                  ...cascadeVoid(followUpBeadId),
                 })),
                 ...(target.resolution === undefined
                   ? {}
                   : {
                       resolution: {
                         ...target.resolution,
-                        disposition: "deferral_cascade" as const,
-                        followUpBeadId,
-                        status: "voided" as const,
+                        ...cascadeVoid(followUpBeadId),
                       },
                     }),
                 status: "voided" as const,
@@ -2920,18 +2927,12 @@ function maximumFixedGateVariants(
     );
     return {
       ...candidate,
-      aggregateVerifyPromise: {
-        disposition: "deferral_cascade" as const,
-        followUpBeadId,
-        status: "voided" as const,
-      },
+      aggregateVerifyPromise: cascadeVoid(followUpBeadId),
       targetPromises: candidate.targetPromises.map((target) =>
         target.definition.scope === "gate"
           ? {
               ...target,
-              disposition: "deferral_cascade" as const,
-              followUpBeadId,
-              status: "voided" as const,
+              ...cascadeVoid(followUpBeadId),
             }
           : target,
       ),
@@ -3807,9 +3808,7 @@ function deferGateEntry(
           followUpBeadId,
           materialisations: target.materialisations.map((item) => ({
             ...item,
-            disposition: "deferral_cascade" as const,
-            followUpBeadId,
-            status: "voided" as const,
+            ...cascadeVoid(followUpBeadId),
           })),
           resolution: {
             ...resolution.resolution,
@@ -3848,9 +3847,7 @@ function deferGateEntry(
               followUpBeadId,
               materialisations: target.materialisations.map((item) => ({
                 ...item,
-                disposition: "deferral_cascade" as const,
-                followUpBeadId,
-                status: "voided" as const,
+                ...cascadeVoid(followUpBeadId),
               })),
               status: "voided" as const,
             }
@@ -3897,28 +3894,20 @@ function deferGateEntry(
       ...state,
       gate: {
         ...gate,
-        aggregateVerifyPromise: {
-          disposition: "deferral_cascade",
-          followUpBeadId,
-          status: "voided",
-        },
+        aggregateVerifyPromise: cascadeVoid(followUpBeadId),
         ...(gate.aggregateVerify === undefined
           ? {}
           : {
               aggregateVerify: {
                 ...gate.aggregateVerify,
-                disposition: "deferral_cascade",
-                followUpBeadId,
-                status: "voided",
+                ...cascadeVoid(followUpBeadId),
               },
             }),
         targetPromises: gate.targetPromises.map((target) =>
           target.definition.scope === "gate"
             ? {
                 ...target,
-                disposition: "deferral_cascade" as const,
-                followUpBeadId,
-                status: "voided" as const,
+                ...cascadeVoid(followUpBeadId),
               }
             : target,
         ),
@@ -3949,9 +3938,7 @@ function deferGateEntry(
           target.definition.scope === "gate"
             ? {
                 ...target,
-                disposition: "deferral_cascade" as const,
-                followUpBeadId,
-                status: "voided" as const,
+                ...cascadeVoid(followUpBeadId),
               }
             : target,
         ),
@@ -3963,18 +3950,14 @@ function deferGateEntry(
                 followUpBeadId,
                 materialisations: target.materialisations.map((item) => ({
                   ...item,
-                  disposition: "deferral_cascade" as const,
-                  followUpBeadId,
-                  status: "voided" as const,
+                  ...cascadeVoid(followUpBeadId),
                 })),
                 ...(target.resolution === undefined
                   ? {}
                   : {
                       resolution: {
                         ...target.resolution,
-                        disposition: "deferral_cascade" as const,
-                        followUpBeadId,
-                        status: "voided" as const,
+                        ...cascadeVoid(followUpBeadId),
                       },
                     }),
                 status: "voided" as const,
