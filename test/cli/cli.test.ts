@@ -14,8 +14,10 @@ import { spawnSync } from "node:child_process";
 import test from "node:test";
 
 import {
+  CANDIDATE_DIFF_DOMAIN,
   commandNames,
   createRecoveryCommandRunner,
+  MAX_CANDIDATE_DIFF_BYTES,
   MAX_CLI_RESPONSE_BYTES,
   validateCommandRequest,
 } from "../../src/commands/index.js";
@@ -32,8 +34,10 @@ import {
   type FeedbackGitHubTransport,
 } from "../../src/feedback/index.js";
 import { legalActions } from "../../src/protocol/actions.js";
+import { sha256 } from "../../src/protocol/evidence.js";
 import {
   canonicalCandidateDiffCommand,
+  deriveCandidateDiffHash,
   reduce,
 } from "../../src/protocol/reducer.js";
 import { createPacket } from "../../src/harness/index.js";
@@ -47,6 +51,7 @@ test("mutating and external commands report stable unavailability", async () => 
         "status",
         "next",
         "harness-packet",
+        "candidate-digest",
         "feedback",
         "claim-provenance-carry",
       ].includes(item),
@@ -282,6 +287,160 @@ test("public harness-packet emits immutable worker and reviewer prompt bytes", a
     JSON.stringify({ ...worker, unexpected: true }),
   ]);
   assert.equal(invalid.exitCode, 64);
+});
+
+const candidateDiff = [
+  "diff --git a/src/a.ts b/src/a.ts",
+  "index 0123456..89abcde 100644",
+  "--- a/src/a.ts",
+  "+++ b/src/a.ts",
+  "@@ -1 +1 @@",
+  "-export const answer = 41;",
+  "+export const answer = 42;",
+  "",
+].join("\n");
+const candidateDiffBytes = new TextEncoder().encode(candidateDiff);
+
+test("candidate-digest derives the packet digest a raw sha256 never matches", async () => {
+  const digest = deriveCandidateDiffHash(candidateDiff);
+  const raw = sha256(candidateDiff);
+  assert.notEqual(digest, raw);
+  // The advertised domain is the one the reducer commits, so an operator can
+  // prefix the bytes by hand and reach the same value.
+  assert.equal(sha256(`${CANDIDATE_DIFF_DOMAIN}\n${candidateDiff}`), digest);
+
+  const packet = createPacket({
+    acceptance: ["unit-1:A1"],
+    baseOid: "a".repeat(40),
+    candidateDiffByteCount: candidateDiffBytes.byteLength,
+    candidateDiffHash: digest,
+    candidateDiffStat: { deletions: 1, fileCount: 1, insertions: 1 },
+    headOid: "b".repeat(40),
+    mandatoryVerification: ["npm test"],
+    ownedPaths: ["src"],
+    role: "reviewer",
+    unitId: "unit-1",
+    worktreePath: "/tmp/unit-1",
+  });
+  assert.equal(packet.ok, true);
+  if (!packet.ok) return;
+  const advertised = JSON.parse(packet.payload);
+  assert.equal(advertised.candidateDiffHash, digest);
+  assert.equal(
+    advertised.candidateDiffByteCount,
+    candidateDiffBytes.byteLength,
+  );
+
+  const piped = await runCli(["candidate-digest", "--raw", "--json"], {
+    standardInput: async () => candidateDiffBytes,
+  });
+  assert.equal(piped.exitCode, 0);
+  assert.deepEqual(JSON.parse(piped.stdout).result, {
+    candidateDiffByteCount: candidateDiffBytes.byteLength,
+    candidateDiffHash: digest,
+    domain: CANDIDATE_DIFF_DOMAIN,
+    sha256: raw,
+  });
+
+  const directory = await mkdtemp(join(tmpdir(), "sce-candidate-digest-"));
+  try {
+    const file = join(directory, "candidate.diff");
+    await writeFile(file, candidateDiff, "utf8");
+    const fromFile = await runCli(["candidate-digest", "--file", file]);
+    assert.equal(fromFile.exitCode, 0);
+    assert.deepEqual(JSON.parse(fromFile.stdout).result, {
+      candidateDiffByteCount: candidateDiffBytes.byteLength,
+      candidateDiffHash: digest,
+      domain: CANDIDATE_DIFF_DOMAIN,
+    });
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+
+  // The documented pipeline, through a real process and its standard input.
+  const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+  const spawned = spawnSync(
+    process.execPath,
+    ["--import", "tsx", "src/cli.ts", "candidate-digest", "--raw"],
+    { cwd: root, encoding: "utf8", input: candidateDiff },
+  );
+  assert.equal(spawned.status, 0);
+  assert.deepEqual(JSON.parse(spawned.stdout).result, {
+    candidateDiffByteCount: candidateDiffBytes.byteLength,
+    candidateDiffHash: digest,
+    domain: CANDIDATE_DIFF_DOMAIN,
+    sha256: raw,
+  });
+});
+
+test("candidate-digest refuses bytes the candidate collector never hashed", async () => {
+  const refused = [
+    new Uint8Array(),
+    new TextEncoder().encode("diff\u0000"),
+    Uint8Array.of(0xff, 0xfe),
+    new TextEncoder().encode("d".repeat(MAX_CANDIDATE_DIFF_BYTES + 1)),
+  ];
+  for (const bytes of refused) {
+    const execution = await runCli(["candidate-digest"], {
+      standardInput: async () => bytes,
+    });
+    assert.equal(execution.exitCode, 64);
+    const response = JSON.parse(execution.stdout);
+    assert.equal(response.command, "candidate-digest");
+    assert.equal(response.error.code, "SCE_CANDIDATE_DIFF_INVALID");
+  }
+
+  const unreadable = await runCli([
+    "candidate-digest",
+    "--file",
+    join(tmpdir(), "sce-candidate-digest-absent", "candidate.diff"),
+  ]);
+  assert.equal(unreadable.exitCode, 69);
+  assert.equal(
+    JSON.parse(unreadable.stdout).error.code,
+    "SCE_CANDIDATE_DIFF_UNREADABLE",
+  );
+
+  const unknown = await runCli(["candidate-digest", "--request", "{}"]);
+  assert.equal(unknown.exitCode, 64);
+  assert.equal(JSON.parse(unknown.stdout).error.code, "SCE_UNKNOWN_OPTION");
+
+  const relative = await runCli([
+    "candidate-digest",
+    "--file",
+    "candidate.diff",
+  ]);
+  assert.equal(relative.exitCode, 64);
+  assert.equal(
+    JSON.parse(relative.stdout).error.code,
+    "SCE_INVALID_OPTION_VALUE",
+  );
+
+  const help = await runCli(["candidate-digest", "--help"]);
+  assert.equal(help.exitCode, 0);
+  assert.equal(JSON.parse(help.stdout).result.command, "candidate-digest");
+  assert.match(
+    JSON.parse(help.stdout).result.usage,
+    /^sce candidate-digest \[--file <absolute path>\] \[--raw\] \[--json\]/u,
+  );
+});
+
+test("reviewer guidance states the digest procedure it must not be rederived from source", async () => {
+  const skill = resolve(
+    dirname(fileURLToPath(import.meta.url)),
+    "../../skills/single-controller-engineer",
+  );
+  const reference = await readFile(
+    join(skill, "references/protocol-state.md"),
+    "utf8",
+  );
+  assert.match(reference, /sce candidate-digest --raw/u);
+  assert.ok(reference.includes(CANDIDATE_DIFF_DOMAIN));
+  assert.ok(reference.includes(String(MAX_CANDIDATE_DIFF_BYTES)));
+  assert.match(
+    await readFile(join(skill, "SKILL.md"), "utf8"),
+    /sce candidate-digest/u,
+  );
 });
 
 test("manual harness acknowledgements cross the CLI as narrow host facts", async () => {

@@ -15,19 +15,29 @@ import {
   type RepositoryRun,
 } from "../protocol/schemas.js";
 import { ambiguityRecoveryActions, legalActions } from "../protocol/actions.js";
-import { runInvariantErrors } from "../protocol/reducer.js";
+import { sha256 } from "../protocol/evidence.js";
+import {
+  deriveCandidateDiffHash,
+  runInvariantErrors,
+} from "../protocol/reducer.js";
+import {
+  CANDIDATE_DIFF_DOMAIN,
+  CandidateDigestCommandSchema,
+} from "./candidate-digest.js";
 import {
   createProductionRecoveryRunner,
   type ProductionRecoveryRunnerOptions,
 } from "./production-recovery.js";
 import type { RecoveryRequest } from "./recovery.js";
 
+export * from "./candidate-digest.js";
 export * from "./recovery.js";
 export * from "./production-recovery.js";
 
 export const commandNames = [
   "inspect",
   "harness-packet",
+  "candidate-digest",
   "acquire-controller",
   "next",
   "plan-wave",
@@ -277,6 +287,7 @@ const ProvenanceCarryClaimCommandSchema = strictObject({
 export const CommandRequestSchema = Type.Union([
   StateCommandSchema,
   HarnessPacketCommandSchema,
+  CandidateDigestCommandSchema,
   FeedbackCommandSchema,
   ProvenanceCarryClaimCommandSchema,
   UnavailableCommandSchema,
@@ -399,6 +410,20 @@ export const stateOnlyCommandRunner: CommandRunner = (request) => {
         }
       : invalidStateRequest();
   }
+  if (isCandidateDigestCommandRequest(request)) {
+    const { diff, raw } = request.options.request;
+    return {
+      result: {
+        candidateDiffByteCount: utf8.encode(diff).byteLength,
+        candidateDiffHash: deriveCandidateDiffHash(diff),
+        domain: CANDIDATE_DIFF_DOMAIN,
+        ...(raw === true ? { sha256: sha256(diff) } : {}),
+      },
+      schema: "sce.command.result",
+      status: "ok",
+      version: 1,
+    };
+  }
   if (!isStateCommandRequest(request)) return unavailable();
   if (!("request" in request.options)) return invalidStateRequest();
   const parsedRun = validate<RepositoryRun>(
@@ -515,6 +540,8 @@ export function createRecoveryCommandRunner(
   return async (request) => {
     if (!validateCommandRequest(request)) return invalidStateRequest();
     if (isHarnessPacketCommandRequest(request))
+      return stateOnlyCommandRunner(request);
+    if (isCandidateDigestCommandRequest(request))
       return stateOnlyCommandRunner(request);
     if (isStateCommandRequest(request)) {
       const outcome = await runner();
@@ -654,6 +681,15 @@ function isHarnessPacketCommandRequest(
   request: CommandRequest,
 ): request is Extract<CommandRequest, { readonly command: "harness-packet" }> {
   return request.command === "harness-packet";
+}
+
+function isCandidateDigestCommandRequest(
+  request: CommandRequest,
+): request is Extract<
+  CommandRequest,
+  { readonly command: "candidate-digest" }
+> {
+  return request.command === "candidate-digest";
 }
 
 function invalidStateRequest(): CommandRunnerResult {

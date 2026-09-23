@@ -68,8 +68,12 @@ readback can establish.
    updates one candidate using the repository's permitted non-force strategy,
    and freezes its exact base/head/tree.
 5. Generate a reviewer packet and launch a fresh read-only frontier session.
-   Batch P0/P1 repairs in the same workhorse lane, then freeze and re-review the
-   changed object. Record bounded P2/P3 follow-up instead of widening the wave.
+   The reviewer reproduces the frozen diff with the packet's
+   `candidateDiffCommand` and turns those exact bytes into the packet's
+   `candidateDiffHash` with `sce candidate-digest`; a plain checksum of the
+   same bytes is a different value. Batch P0/P1 repairs in the same workhorse
+   lane, then freeze and re-review the changed object. Record bounded P2/P3
+   follow-up instead of widening the wave.
 6. Re-read the exact pair, integrate it under the repository's CAS/protected
    contract, record the result in Beads, then qualify the next candidate.
 7. After the wave lands, run interaction-sensitive fast/affected integration
