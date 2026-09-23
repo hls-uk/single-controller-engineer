@@ -12987,6 +12987,9 @@ function reduceWavePlan(state, event) {
     []
   );
 }
+function refreshIsFastForward(unit) {
+  return unit.candidateHead === void 0 && unit.workerPacket === void 0;
+}
 function workerPacketBase(unit) {
   if (unit.workerPacket === void 0) return void 0;
   try {
@@ -15839,7 +15842,7 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
     case "refresh_intent":
       if (!["collected", "candidate_committed", "qualified", "approved"].includes(
         unit.state
-      ))
+      ) && !(unit.state === "worktree_observed" && refreshIsFastForward(unit)))
         return illegal(unit, event.type);
       if (event.baseOid === unit.baseOid)
         return reject("invalid_event", "refresh target equals the unit base");
@@ -15869,6 +15872,24 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
         return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "candidate_refresh"))
         return badObservation();
+      if (refreshIsFastForward(unit)) {
+        if (event.headOid !== event.baseOid)
+          return reject(
+            "invalid_event",
+            "a pre-dispatch refresh must leave the unit branch on the new base"
+          );
+        const { refreshBaseOid: _pendingBase, ...prepared } = unit;
+        result2 = observe(
+          state,
+          unit,
+          "worktree_observed",
+          event,
+          {},
+          {},
+          { ...prepared, baseOid: event.baseOid }
+        );
+        break;
+      }
       const {
         approvalResponseHash: _approval,
         candidateDiffHash: _diff,
@@ -21726,7 +21747,10 @@ function lifecycleActions(state, unit) {
         unitAction(unit, "worktree_observed", "record", "worktree_create")
       ];
     case "worktree_observed":
-      return state.activeModifyingUnitIds.length < 3 ? [unitAction(unit, "dispatch_intent", "emit", "dispatch")] : [];
+      return [
+        ...state.activeModifyingUnitIds.length < 3 ? [unitAction(unit, "dispatch_intent", "emit", "dispatch")] : [],
+        ...refreshIsFastForward(unit) ? [unitAction(unit, "refresh_intent", "emit", "candidate_refresh")] : []
+      ];
     case "dispatch_intent":
       return [unitAction(unit, "dispatch_observed", "record", "dispatch")];
     case "dispatched":
@@ -27159,6 +27183,71 @@ function refreshResult(effect2, run2, result2, refusal3) {
   }
   return ambiguous3();
 }
+var OID_PATTERN = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
+function exactOid3(format, value) {
+  return OID_PATTERN.test(value) && value.length === (format === "sha1" ? 40 : 64);
+}
+function oneOid(result2, format) {
+  if (result2.exitCode !== 0 || result2.signal !== null || result2.timedOut === true || result2.unavailable === true || result2.invalidUtf8 === true)
+    return void 0;
+  const value = result2.stdout.trimEnd();
+  return exactOid3(format, value) ? value : void 0;
+}
+async function worktreePair(git, worktreePath) {
+  const [head3, tree] = await Promise.all([
+    git.runner({
+      argv: ["rev-parse", "--verify", "HEAD^{commit}"],
+      cwd: worktreePath
+    }),
+    git.runner({
+      argv: ["rev-parse", "--verify", "HEAD^{tree}"],
+      cwd: worktreePath
+    })
+  ]);
+  const format = git.repository.objectFormat;
+  const headOid = oneOid(head3, format);
+  const treeOid = oneOid(tree, format);
+  return headOid === void 0 || treeOid === void 0 ? void 0 : { head: headOid, tree: treeOid };
+}
+async function preparedRefresh(git, input, act) {
+  const settled = async (pair) => (await verifyCandidateWorktree(git.runner, git.repository, {
+    branch: input.branch,
+    head: pair.head,
+    path: input.worktreePath,
+    tree: pair.tree
+  })).state === "observed";
+  const before = await worktreePair(git, input.worktreePath);
+  if (before === void 0)
+    return { code: "GIT_UNRESOLVED_EFFECT", state: "ambiguous" };
+  if (!await settled(before))
+    return { ...before, code: "GIT_REFUSED", state: "refused" };
+  if (before.head === input.base)
+    return { ...before, code: "GIT_OK", state: "observed" };
+  if (before.head !== input.previousBase)
+    return { ...before, code: "GIT_FOREIGN_BRANCH", state: "refused" };
+  if (!act) return { ...before, code: "GIT_ABSENT", state: "refused" };
+  const merged = await git.runner({
+    argv: ["merge", "--ff-only", input.base],
+    cwd: input.worktreePath
+  });
+  const after = await worktreePair(git, input.worktreePath);
+  if (after === void 0 || !await settled(after))
+    return { code: "GIT_UNRESOLVED_EFFECT", state: "ambiguous" };
+  if (after.head === input.base)
+    return { ...after, code: "GIT_OK", state: "observed" };
+  return merged.exitCode !== 0 && merged.signal === null && merged.timedOut !== true && after.head === input.previousBase ? { ...after, code: "GIT_NOT_FAST_FORWARD", state: "refused" } : { code: "GIT_UNRESOLVED_EFFECT", state: "ambiguous" };
+}
+function preparedRefreshInput(effect2, run2) {
+  const unit = run2.units[effect2.unitId];
+  if (unit === void 0 || !refreshIsFastForward(unit) || unit.branchRef !== effect2.params.branchRef || unit.worktreePath !== effect2.params.worktreePath)
+    return void 0;
+  return {
+    base: effect2.params.baseOid,
+    branch: effect2.params.branchRef,
+    previousBase: effect2.params.previousBaseOid,
+    worktreePath: effect2.params.worktreePath
+  };
+}
 async function candidateObserved(effect2, run2, git) {
   const input = candidateInput(effect2, run2);
   if (input === void 0) return ambiguous3();
@@ -27376,16 +27465,17 @@ function createProductionRecoveryEffectAdapter(options) {
     }
     if (effect2.kind === "candidate_refresh") {
       if (!gitMatchesRun(git.repository, run2)) return ambiguous3();
+      const prepared = preparedRefreshInput(effect2, run2);
       try {
         return refreshResult(
           effect2,
           run2,
-          await discoverRefresh(git.runner, git.repository, {
+          prepared === void 0 ? await discoverRefresh(git.runner, git.repository, {
             base: effect2.params.baseOid,
             branch: effect2.params.branchRef,
             previousBase: effect2.params.previousBaseOid,
             worktreePath: effect2.params.worktreePath
-          }),
+          }) : await preparedRefresh(git, prepared, false),
           "absent"
         );
       } catch {
@@ -27524,16 +27614,17 @@ function createProductionRecoveryEffectAdapter(options) {
     }
     if (effect2.kind === "candidate_refresh") {
       if (!gitMatchesRun(git.repository, run2)) return ambiguous3();
+      const prepared = preparedRefreshInput(effect2, run2);
       try {
         const refreshed = refreshResult(
           effect2,
           run2,
-          await refreshCandidate(git.runner, git.repository, {
+          prepared === void 0 ? await refreshCandidate(git.runner, git.repository, {
             base: effect2.params.baseOid,
             branch: effect2.params.branchRef,
             previousBase: effect2.params.previousBaseOid,
             worktreePath: effect2.params.worktreePath
-          }),
+          }) : await preparedRefresh(git, prepared, true),
           "failed"
         );
         return refreshed.status === "absent" ? ambiguous3() : refreshed;
