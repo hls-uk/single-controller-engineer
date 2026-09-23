@@ -116,6 +116,44 @@ export interface ProjectionPersistencePort {
   matchesBatchDelta(batch: MutationBatch, source: string): boolean;
 }
 
+/**
+ * A bounded, purely local ancestry question over the Dolt commit graph. Both
+ * hashes are closed inputs: each must match the pinned commit-hash shape or
+ * the probe refuses before spawning anything, and no other field is read. It
+ * is deliberately not an `EmbeddedRequest`: answering it costs no network and
+ * writes nothing, and it is the only read that tells a locally-ahead store
+ * from a diverged one.
+ */
+export type EmbeddedAncestryRequest = Readonly<{
+  /** The commit whose reachability from `descendant` is proved. */
+  ancestor: string;
+  /** The commit whose ancestry is walked. */
+  descendant: string;
+  kind: "ancestry";
+}>;
+
+/**
+ * `observed` proves that `ancestor` is reachable from `descendant`; `absent`
+ * proves that it is not. Everything else -- an unpinned or unreadable engine,
+ * an over-budget or malformed capture, any count that is not an exact 0 or 1
+ * -- is `ambiguous` and decides nothing.
+ */
+export type EmbeddedAncestryProof = "observed" | "absent" | "ambiguous";
+
+export type EmbeddedAncestryResponse = Readonly<{
+  kind: "ancestry";
+  value: EmbeddedAncestryProof;
+}>;
+
+/**
+ * An optional process capability, like the optional members of
+ * `ProjectionPersistencePort`. A port without it never proves ancestry, and
+ * every caller keeps exactly the behaviour it had before the probe existed.
+ */
+export interface EmbeddedAncestryPort {
+  ancestry(request: EmbeddedAncestryRequest): Promise<EmbeddedAncestryResponse>;
+}
+
 export const SLOT_INITIALIZATION_AUTHORITY =
   "sce.embedded.slot.initialize.v1" as const;
 export type SlotInitializationAuthority = typeof SLOT_INITIALIZATION_AUTHORITY;
@@ -908,7 +946,9 @@ function parseRemoteSlotDocument(
  * projection persistence is a separate topology-specific port because bd 1.1.0
  * has no atomic generic "write these arbitrary metadata rows" command.
  */
-export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
+export class PinnedBdEmbeddedProcess
+  implements EmbeddedProcessPort, EmbeddedAncestryPort
+{
   public readonly identity: EmbeddedProcessIdentity;
   private readonly bdExecutable: string;
   private readonly cwd: string;
@@ -995,6 +1035,21 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       ) !== undefined
       ? this.result("applied")
       : this.result("ambiguous");
+  }
+
+  /**
+   * Publishes the pinned ancestry proof. It runs one bounded local SQL
+   * capture under the ordinary 64 KiB budget and the ordinary local time
+   * budget; no remote is contacted, so this probe can never be the thing
+   * that stalls a command.
+   */
+  public async ancestry(
+    request: EmbeddedAncestryRequest,
+  ): Promise<EmbeddedAncestryResponse> {
+    return {
+      kind: "ancestry",
+      value: await this.ancestryProof(request.ancestor, request.descendant),
+    };
   }
 
   public async execute(request: EmbeddedRequest): Promise<EmbeddedResponse> {
@@ -1999,15 +2054,28 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
   }
 
   /**
-   * Pinned, bounded ancestry predicate. The CTE returns one exact count row,
-   * so no caller can infer reachability from a partial ancestor listing.
+   * Pinned, bounded ancestry predicate: reachable, or not proved reachable.
    */
   private async isAncestor(
     ancestor: string,
     descendant: string,
   ): Promise<boolean> {
+    return (await this.ancestryProof(ancestor, descendant)) === "observed";
+  }
+
+  /**
+   * The pinned ancestry proof. The CTE returns one exact count row, so no
+   * caller can infer reachability from a partial ancestor listing, and the
+   * three values keep "provably not an ancestor" apart from "could not
+   * tell" -- a distinction only the locally-ahead reconciliation needs, and
+   * one the boolean predicate above deliberately collapses.
+   */
+  private async ancestryProof(
+    ancestor: string,
+    descendant: string,
+  ): Promise<EmbeddedAncestryProof> {
     if (safeHead(ancestor) === undefined || safeHead(descendant) === undefined)
-      return false;
+      return "ambiguous";
     const capture = await this.runDolt(this.databaseDirectory, [
       "sql",
       "-r",
@@ -2016,18 +2084,22 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       `WITH RECURSIVE ancestry(parent_hash) AS (SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash = '${descendant}' UNION SELECT edge.parent_hash FROM dolt_commit_ancestors AS edge JOIN ancestry ON edge.commit_hash = ancestry.parent_hash) SELECT COUNT(*) AS matches FROM ancestry WHERE parent_hash = '${ancestor}'`,
     ]);
     if (capture === undefined || capture.code !== 0 || capture.exceeded)
-      return false;
+      return "ambiguous";
     const raw = json(capture.stdout);
     const rows = raw?.rows;
     const row =
       Array.isArray(rows) && rows.length === 1 ? object(rows[0]) : undefined;
-    return (
-      raw !== undefined &&
-      hasExactKeys(raw, ["rows"]) &&
-      row !== undefined &&
-      hasExactKeys(row, ["matches"]) &&
-      row.matches === 1
-    );
+    if (
+      raw === undefined ||
+      !hasExactKeys(raw, ["rows"]) ||
+      row === undefined ||
+      !hasExactKeys(row, ["matches"])
+    )
+      return "ambiguous";
+    // The recursive CTE unions its rows, so the count of one parent hash is
+    // 0 or 1. Any other number is a shape this engine was not pinned to.
+    if (row.matches === 1) return "observed";
+    return row.matches === 0 ? "absent" : "ambiguous";
   }
 
   private async soleParent(commit: string): Promise<string | undefined> {

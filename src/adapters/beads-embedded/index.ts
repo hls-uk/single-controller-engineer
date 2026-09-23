@@ -63,6 +63,10 @@ import {
   makeSlotTransitionIntent,
   validateSlotTransitionIntent,
 } from "./slot-transition.js";
+import type {
+  EmbeddedAncestryPort,
+  EmbeddedAncestryProof,
+} from "./pinned-bd-process.js";
 
 export * from "./schemas.js";
 export {
@@ -81,6 +85,10 @@ export {
   SLOT_INITIALIZATION_AUTHORITY,
 } from "./pinned-bd-process.js";
 export type {
+  EmbeddedAncestryPort,
+  EmbeddedAncestryProof,
+  EmbeddedAncestryRequest,
+  EmbeddedAncestryResponse,
   PinnedBdProcessOptions,
   ProjectionPersistencePort,
   SlotInitializationAuthority,
@@ -141,12 +149,20 @@ export type EmbeddedReleaseAuthority = Readonly<{
   transition: SlotTransitionIntent;
 }>;
 
+/**
+ * The composition root's process port, plus the optional bounded ancestry
+ * proof when that process publishes one. A port without it keeps the exact
+ * behaviour it had before the proof existed.
+ */
+export type EmbeddedAdapterProcessPort = EmbeddedProcessPort &
+  Partial<EmbeddedAncestryPort>;
+
 export interface EmbeddedAdapterOptions {
   readonly holder: string;
   readonly mode: EmbeddedMode;
   readonly prefix: string;
   readonly preflight: PreflightEnvelope;
-  readonly process: EmbeddedProcessPort;
+  readonly process: EmbeddedAdapterProcessPort;
   readonly rootIssueId?: string;
   readonly scope: FencingScope;
 }
@@ -242,7 +258,7 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
   private readonly holder: string;
   private readonly mode: EmbeddedMode;
   private readonly prefix: string;
-  private readonly process: EmbeddedProcessPort;
+  private readonly process: EmbeddedAdapterProcessPort;
   private readonly rootIssueId: string | undefined;
   private readonly scope: FencingScope;
   private readonly usable: boolean;
@@ -1407,6 +1423,8 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     if (before.workingSet !== "clean") return { result: result("blocked") };
     if (this.mode === "local-only")
       return { result: result("applied"), state: before };
+    const reconciled = await this.reconcileAheadOfRemote(before);
+    if (reconciled !== undefined) return { result: reconciled };
     const pull = await this.call({ kind: "pull" });
     if (pull?.kind !== "pull") return { result: result("ambiguous") };
     if (pull.value === "conflict")
@@ -1419,6 +1437,72 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       : after.workingSet === "clean"
         ? { result: result("applied"), state: after }
         : { result: result("blocked") };
+  }
+
+  /**
+   * A remote Dolt push that exceeds its budget once its commit is already
+   * durable leaves this clone strictly ahead of the remote. A pull cannot
+   * fast-forward that, so it answers `conflict` and every later command
+   * refuses until an operator runs `bd dolt push` by hand. Where the remote
+   * head is provably an ancestor of the durable local head, the engine
+   * performs exactly that push itself -- same path, same budget, same
+   * observation -- immediately before the pull, and only then.
+   *
+   * `undefined` means the pull decides, exactly as it always has. A refusal
+   * is returned only for a re-push whose outcome the pull cannot re-describe.
+   */
+  private async reconcileAheadOfRemote(
+    state: EmbeddedState,
+  ): Promise<EmbeddedResult | undefined> {
+    if (
+      !head(state.head) ||
+      !head(state.remoteHead) ||
+      state.head === state.remoteHead ||
+      (await this.ancestry(state.remoteHead, state.head)) !== "observed"
+    )
+      // Behind, diverged, and unprovable all keep today's classification: the
+      // pull stays the only thing allowed to move this clone's head.
+      return undefined;
+    const push = await this.call({ kind: "push" });
+    if (push?.kind !== "push") return result("ambiguous");
+    // One attempt, never a loop. A push that exceeded its budget refuses with
+    // its tail; a push the remote refused falls through to the pull, which
+    // re-reads the remote and classifies it authoritatively.
+    return push.value === "applied" || push.value === "conflict"
+      ? undefined
+      : result(push.value, push.stderrTail);
+  }
+
+  /**
+   * The port's bounded local ancestry proof, when it publishes one. The
+   * response crosses the process trust boundary, so only the exact two-key
+   * shape carrying one of the three proof words is admitted; everything else,
+   * including a throwing or absent probe, is `ambiguous` and proves nothing.
+   */
+  private async ancestry(
+    ancestor: string,
+    descendant: string,
+  ): Promise<EmbeddedAncestryProof> {
+    if (this.process.ancestry === undefined) return "ambiguous";
+    let response: unknown;
+    try {
+      response = await this.process.ancestry({
+        ancestor,
+        descendant,
+        kind: "ancestry",
+      });
+    } catch {
+      return "ambiguous";
+    }
+    const value = object(response);
+    return value !== undefined &&
+      Object.keys(value).length === 2 &&
+      value.kind === "ancestry" &&
+      (value.value === "observed" ||
+        value.value === "absent" ||
+        value.value === "ambiguous")
+      ? value.value
+      : "ambiguous";
   }
 
   private expectedSlot(

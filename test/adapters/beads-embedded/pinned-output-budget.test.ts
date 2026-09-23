@@ -8,7 +8,32 @@ import {
   outputBytesFor,
   PinnedBdEmbeddedProcess,
   REMOTE_FAILURE_TAIL_BYTES,
+  type EmbeddedAncestryProof,
 } from "../../../src/adapters/beads-embedded/index.js";
+
+const projections = {
+  async discover() {
+    return undefined;
+  },
+  async discoverAt() {
+    return undefined;
+  },
+  matchesBatchDelta() {
+    return false;
+  },
+  async mutate() {
+    return { kind: "mutation", value: "quarantined" } as const;
+  },
+  async readback() {
+    return undefined;
+  },
+};
+
+const scope = {
+  beadsStoreIdentity: "store-1",
+  gitRepositoryIdentity: "repo-1",
+  integrationBranch: "main",
+};
 
 // A checkpoint proof reads the complete data diff of the changed projection
 // rows. The projection reader admits 256 KiB per capture and a diff carries
@@ -74,28 +99,8 @@ test("a push killed at its output budget still names what the child said", async
       databaseDirectory: root,
       doltExecutable: join(root, "dolt"),
       prefix: "sce",
-      projections: {
-        async discover() {
-          return undefined;
-        },
-        async discoverAt() {
-          return undefined;
-        },
-        matchesBatchDelta() {
-          return false;
-        },
-        async mutate() {
-          return { kind: "mutation", value: "quarantined" } as const;
-        },
-        async readback() {
-          return undefined;
-        },
-      },
-      scope: {
-        beadsStoreIdentity: "store-1",
-        gitRepositoryIdentity: "repo-1",
-        integrationBranch: "main",
-      },
+      projections,
+      scope,
     }).execute({ kind: "push" });
     assert.ok(observed.kind === "push");
     // The classification is decided by the kill, never by the text below it.
@@ -114,4 +119,92 @@ test("a push killed at its output budget still names what the child said", async
   } finally {
     await rm(root, { force: true, recursive: true });
   }
+});
+
+/**
+ * Runs the pinned ancestry probe against a synthetic `dolt` whose one SQL
+ * capture is written by `body`. No `bd` is involved: the probe is a local
+ * read of this clone's own commit graph, and nothing it does can reach the
+ * network.
+ */
+async function ancestryProof(body: string): Promise<EmbeddedAncestryProof> {
+  const root = await mkdtemp(join(tmpdir(), "sce-ancestry-"));
+  try {
+    const dolt = join(root, "dolt");
+    await writeFile(
+      dolt,
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "version" ]; then printf "dolt version 2.2.1\\n"; exit 0; fi',
+        body,
+        "exit 0",
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+    await chmod(dolt, 0o700);
+    const observed = await new PinnedBdEmbeddedProcess({
+      bdExecutable: join(root, "bd"),
+      cwd: root,
+      databaseDirectory: root,
+      doltExecutable: dolt,
+      prefix: "sce",
+      projections,
+      scope,
+    }).ancestry({
+      ancestor: "a".repeat(40),
+      descendant: "b".repeat(40),
+      kind: "ancestry",
+    });
+    assert.equal(observed.kind, "ancestry");
+    return observed.value;
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}
+
+/**
+ * Re-pushing a locally-ahead head may act on nothing but an exact proof, so
+ * the probe admits one single-row count of exactly 0 or 1 and refuses every
+ * other shape. A coercible string, a second row, and engine noise each prove
+ * nothing, which leaves the pull to classify the store exactly as before.
+ */
+test("the ancestry probe admits only an exact single count row", async () => {
+  assert.equal(
+    await ancestryProof(`printf '{"rows":[{"matches":1}]}\\n'`),
+    "observed",
+  );
+  assert.equal(
+    await ancestryProof(`printf '{"rows":[{"matches":0}]}\\n'`),
+    "absent",
+  );
+  assert.equal(
+    await ancestryProof(`printf '{"rows":[{"matches":"1"}]}\\n'`),
+    "ambiguous",
+  );
+  assert.equal(
+    await ancestryProof(`printf '{"rows":[{"matches":1},{"matches":1}]}\\n'`),
+    "ambiguous",
+  );
+  assert.equal(
+    await ancestryProof(`printf 'panic: runtime error\\n'`),
+    "ambiguous",
+  );
+});
+
+/**
+ * The probe keeps the ordinary 64 KiB capture budget. A child killed at it
+ * exits with no code, and an exceeded capture is never a proof: the push is
+ * not attempted, and the pull decides.
+ */
+test("an ancestry capture killed at its 64 KiB budget proves nothing", async () => {
+  assert.equal(
+    await ancestryProof(
+      [
+        `printf '{"rows":[{"matches":1}]}'`,
+        "i=0",
+        "while [ $i -lt 96 ]; do printf '%01024d' 0; i=$((i+1)); done",
+      ].join("\n"),
+    ),
+    "ambiguous",
+  );
 });

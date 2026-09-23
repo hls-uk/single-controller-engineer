@@ -16,6 +16,10 @@ import type { PreflightEnvelope } from "../../../src/preflight/index.js";
 import {
   EmbeddedBeadsAdapter,
   EmbeddedResultSchema,
+  type EmbeddedAdapterProcessPort,
+  type EmbeddedAncestryProof,
+  type EmbeddedAncestryRequest,
+  type EmbeddedAncestryResponse,
   type EmbeddedProcessIdentity,
   type EmbeddedProcessPort,
   type EmbeddedRequest,
@@ -105,15 +109,32 @@ function processIdentity(sync: boolean): EmbeddedProcessIdentity {
 }
 
 class ScriptedPort implements EmbeddedProcessPort {
-  public readonly requests: EmbeddedRequest[] = [];
+  public readonly requests: (EmbeddedRequest | EmbeddedAncestryRequest)[] = [];
   public identity: EmbeddedProcessIdentity;
+  /**
+   * The bounded ancestry proof is an optional process capability, so a port
+   * publishes it only when a test scripts one. Every trace written before the
+   * proof existed therefore still exercises a process without it.
+   */
+  public ancestry?: (
+    request: EmbeddedAncestryRequest,
+  ) => Promise<EmbeddedAncestryResponse>;
   private responseIndex = 0;
+  private proofIndex = 0;
 
   public constructor(
     private readonly responses: readonly EmbeddedResponse[],
     identity = processIdentity(false),
+    proofs?: readonly EmbeddedAncestryProof[],
   ) {
     this.identity = identity;
+    if (proofs !== undefined)
+      this.ancestry = async (request) => {
+        this.requests.push(request);
+        const value = proofs[this.proofIndex++];
+        if (value === undefined) throw new Error("unexpected ancestry probe");
+        return { kind: "ancestry", value };
+      };
   }
   public async execute(request: EmbeddedRequest): Promise<EmbeddedResponse> {
     this.requests.push(request);
@@ -133,7 +154,7 @@ class ScriptedPort implements EmbeddedProcessPort {
 }
 
 function adapter(
-  port: EmbeddedProcessPort,
+  port: EmbeddedAdapterProcessPort,
   mode: "local-only" | "git-sync",
   actor = holder,
 ) {
@@ -521,6 +542,7 @@ test("git-sync acquisition is ambiguous when fetched remote head differs", async
   assert.equal(moved.code, "ambiguous");
 });
 
+/** A process without the ancestry capability cannot prove local-ahead. */
 test("git-sync compare-and-set does not mutate after a clean local-ahead refusal", async () => {
   const local = "b".repeat(40);
   const remote = "a".repeat(40);
@@ -557,6 +579,126 @@ test("git-sync compare-and-set does not mutate after a clean local-ahead refusal
   assert.deepEqual(
     port.requests.map((request) => request.kind),
     ["state", "discover", "state", "pull"],
+  );
+});
+
+const AHEAD_LOCAL = "b".repeat(40);
+const AHEAD_REMOTE = "a".repeat(40);
+const aheadState: EmbeddedState = {
+  autoCommit: "on",
+  head: AHEAD_LOCAL,
+  reachable: true,
+  remoteHead: AHEAD_REMOTE,
+  workingSet: "clean",
+};
+
+/** The clean local-ahead store a timed-out push leaves behind, twice read. */
+function aheadPort(
+  proofs: readonly EmbeddedAncestryProof[],
+  ...tail: readonly EmbeddedResponse[]
+): ScriptedPort {
+  return new ScriptedPort(
+    [
+      { kind: "state", value: aheadState },
+      // The ahead commit belongs to an earlier batch, so the batch-specific
+      // reconciliation in compare-and-set cannot claim it.
+      { kind: "discover", value: { status: "absent" } },
+      { kind: "state", value: aheadState },
+      ...tail,
+    ],
+    processIdentity(true),
+    proofs,
+  );
+}
+
+/**
+ * The failure this reconciliation exists for: a remote push that exceeded its
+ * budget once its Dolt commit was already durable. The commit is local, the
+ * remote is behind it, and the pull every later command starts with cannot
+ * fast-forward a local-ahead head -- it answers `conflict`, and the run stays
+ * blocked until an operator runs `bd dolt push` by hand. With the remote head
+ * proved an ancestor of the local head, the engine performs that same push
+ * itself, before the pull, and the command carries on.
+ */
+test("git-sync re-pushes a proved local-ahead head before the pull", async () => {
+  const port = aheadPort(
+    ["observed"],
+    { kind: "push", value: "applied" },
+    { kind: "pull", value: "applied" },
+    {
+      kind: "state",
+      value: { ...aheadState, remoteHead: AHEAD_LOCAL },
+    },
+    { kind: "slot", value: slot("acquired", holder) },
+    { kind: "mutation", value: "unavailable" },
+  );
+  assert.deepEqual(
+    await adapter(port, "git-sync").compareAndSet(journalBatch()),
+    { status: "unavailable" },
+  );
+  assert.deepEqual(
+    port.requests.map((request) => request.kind),
+    [
+      "state",
+      "discover",
+      "state",
+      "ancestry",
+      "push",
+      "pull",
+      "state",
+      "slot",
+      "mutation",
+    ],
+  );
+  // The probe asks exactly one question: is the remote head reachable from
+  // the durable local head? Nothing else can admit the push.
+  assert.deepEqual(
+    port.requests.find((request) => request.kind === "ancestry"),
+    { ancestor: AHEAD_REMOTE, descendant: AHEAD_LOCAL, kind: "ancestry" },
+  );
+});
+
+/**
+ * A head that is behind or diverged is not this clone's undelivered work, and
+ * pushing it would be a guess. The pull stays the only thing that classifies
+ * it, exactly as before.
+ */
+test("git-sync keeps the pull's conflict when local-ahead is not proved", async () => {
+  const port = aheadPort(["absent"], { kind: "pull", value: "conflict" });
+  assert.deepEqual(
+    await adapter(port, "git-sync").compareAndSet(journalBatch()),
+    { status: "ambiguous" },
+  );
+  assert.deepEqual(
+    port.requests.map((request) => request.kind),
+    ["state", "discover", "state", "ancestry", "pull"],
+  );
+});
+
+/**
+ * The re-push is one attempt on the ordinary push path and budget. A push
+ * killed at that budget is the very failure being reconciled, so retrying it
+ * here would only spend another two minutes; the refusal names its cause and
+ * stops.
+ */
+test("a re-push over its budget refuses with its tail and is never retried", async () => {
+  const stderrTail = redactedStderrTail(
+    "error: failed to push to origin: Operation timed out",
+    false,
+  );
+  assert.ok(stderrTail !== undefined);
+  const port = aheadPort(["observed"], {
+    kind: "push",
+    stderrTail,
+    value: "unavailable",
+  });
+  assert.deepEqual(
+    await adapter(port, "git-sync").compareAndSet(journalBatch()),
+    { status: "unavailable", stderrTail },
+  );
+  assert.deepEqual(
+    port.requests.map((request) => request.kind),
+    ["state", "discover", "state", "ancestry", "push"],
   );
 });
 
