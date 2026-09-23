@@ -413,6 +413,16 @@ function batchFor(
   });
   if (changedRows.some((row) => row === undefined)) return undefined;
   const rows = changedRows as NonNullable<(typeof changedRows)[number]>[];
+  // The retired row itself is never written, so it is not a changed row. It is
+  // still predicated, so a child-only mutation landing between this load and
+  // the root CAS is refused instead of being outlived by the closed ledger.
+  const retiredChildren = before.childRows
+    .filter((row) => nextRun.units[row.unitId] === undefined)
+    .map((row) => ({
+      expectedCommitment: row.commitment,
+      expectedRevision: row.revision,
+      unitId: row.unitId,
+    }));
   const next = withBatchCheckpoint(nextBase, rows);
   const candidate = {
     changedRows: rows,
@@ -434,6 +444,7 @@ function batchFor(
       children: rows.map((row) => makeChildProjection(next, row.unitId)!),
       root: next,
     },
+    ...(retiredChildren.length === 0 ? {} : { retiredChildren }),
     schema: "sce.fencing.batch",
     scope: next.scope,
     version: 1,

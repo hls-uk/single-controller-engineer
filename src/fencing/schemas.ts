@@ -169,6 +169,20 @@ export const MutationBatchSchema = strictObject({
     root: RootProjectionSchema,
   }),
   release: Type.Optional(ReleaseEvidenceSchema),
+  /**
+   * Predicate-only rows for units this batch retires from the root's
+   * authority set. They are never written: a retired unit's child projection
+   * stays in Beads as inert history. The CAS still reads each one inside the
+   * same transaction and refuses the batch when a retired row moved out of
+   * band. A batch that retires nothing omits the key entirely, so bytes
+   * persisted before this contract existed remain exactly valid.
+   */
+  retiredChildren: Type.Optional(
+    Type.Array(ExpectedChildRowSchema, {
+      maxItems: FENCING_LIMITS.changedRows,
+      minItems: 1,
+    }),
+  ),
   schema: Type.Literal("sce.fencing.batch"),
   scope: FencingScopeSchema,
   version: Type.Literal(FENCING_SCHEMA_VERSION),

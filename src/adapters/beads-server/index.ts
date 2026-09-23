@@ -3774,6 +3774,40 @@ function quotedIdentifier(value: string): string | undefined {
   return validIdentifier(value) ? `\`${value}\`` : undefined;
 }
 
+type ServerRetiredPredicateRow = Readonly<{
+  beadId: string;
+  row: NonNullable<MutationBatch["retiredChildren"]>[number];
+}>;
+
+/**
+ * Resolves the batch's predicate-only retired rows to their beads. A retired
+ * unit left the root's authority set, so its row is never written here; it
+ * must still be a distinct, configured bead, otherwise the request is refused
+ * rather than silently losing its predicate.
+ */
+function retiredPredicateRows(
+  batch: MutationBatch,
+  rows: ServerBeadRows,
+): readonly ServerRetiredPredicateRow[] | undefined {
+  const retired = batch.retiredChildren ?? [];
+  if (retired.length === 0) return [];
+  const resolved = retired.map((row) => {
+    const beadId = rows.childBeadIds[row.unitId];
+    return beadId === undefined || !validIdentifier(beadId)
+      ? undefined
+      : { beadId, row };
+  });
+  const owned = [
+    rows.rootBeadId,
+    ...batch.changedRows.map((row) => rows.childBeadIds[row.unitId]),
+    ...resolved.map((item) => item?.beadId),
+  ];
+  return resolved.some((item) => item === undefined) ||
+    new Set(owned).size !== owned.length
+    ? undefined
+    : (resolved as readonly ServerRetiredPredicateRow[]);
+}
+
 /**
  * Builds the one server-side transaction expected from a production SQL
  * transport.  Dynamic values are parameters only.  It locks the already
@@ -3796,6 +3830,48 @@ export function buildServerCasProgram(
   )
     return undefined;
   const value = batch.value;
+  const retired = retiredPredicateRows(value, rows);
+  if (retired === undefined) return undefined;
+  const rootUpdate: ServerSqlStatement =
+    retired.length === 0
+      ? {
+          parameters: [
+            canonicalJson(value.next.root as JsonValue),
+            rows.rootBeadId,
+            value.expectedAggregateRevision,
+            value.expectedAggregateCommitment,
+            value.expectedHolder,
+            canonicalJson(value.scope as JsonValue),
+          ],
+          sql: `UPDATE ${database}.issues SET metadata = JSON_SET(metadata, '$.sce', CAST(? AS JSON)) WHERE id = ? AND JSON_EXTRACT(metadata, '$.sce') IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.aggregateRevision')) = ? AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.aggregateCommitment')) = ? AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.holder')) = ? AND JSON_EXTRACT(metadata, '$.sce.scope') = CAST(? AS JSON)`,
+        }
+      : {
+          // The retired rows are read, never written, inside this very
+          // transaction: the derived count gates the root update, so a retired
+          // row that moved out of band zeroes the affected rows and rolls back.
+          parameters: [
+            ...retired.flatMap(({ beadId, row }) => [
+              beadId,
+              row.expectedRevision,
+              row.expectedCommitment,
+            ]),
+            canonicalJson(value.next.root as JsonValue),
+            rows.rootBeadId,
+            value.expectedAggregateRevision,
+            value.expectedAggregateCommitment,
+            value.expectedHolder,
+            canonicalJson(value.scope as JsonValue),
+            retired.length,
+          ],
+          sql: `UPDATE ${database}.issues AS target JOIN (SELECT COUNT(*) AS retired FROM ${database}.issues WHERE ${retired
+            .map(
+              () =>
+                `(id = ? AND JSON_EXTRACT(metadata, '$.sce') IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.revision')) = ? AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.commitment')) = ?)`,
+            )
+            .join(
+              " OR ",
+            )}) AS gate SET target.metadata = JSON_SET(target.metadata, '$.sce', CAST(? AS JSON)) WHERE target.id = ? AND JSON_EXTRACT(target.metadata, '$.sce') IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(target.metadata, '$.sce.aggregateRevision')) = ? AND JSON_UNQUOTE(JSON_EXTRACT(target.metadata, '$.sce.aggregateCommitment')) = ? AND JSON_UNQUOTE(JSON_EXTRACT(target.metadata, '$.sce.holder')) = ? AND JSON_EXTRACT(target.metadata, '$.sce.scope') = CAST(? AS JSON) AND gate.retired = ?`,
+        };
   const statements: ServerSqlStatement[] = [
     { parameters: [], sql: "START TRANSACTION" },
     {
@@ -3806,17 +3882,7 @@ export function buildServerCasProgram(
       ],
       sql: `SELECT id, status, metadata, external_ref FROM ${database}.issues WHERE id = ? AND status = 'in_progress' AND external_ref = ? AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.holder')) = ? FOR UPDATE`,
     },
-    {
-      parameters: [
-        canonicalJson(value.next.root as JsonValue),
-        rows.rootBeadId,
-        value.expectedAggregateRevision,
-        value.expectedAggregateCommitment,
-        value.expectedHolder,
-        canonicalJson(value.scope as JsonValue),
-      ],
-      sql: `UPDATE ${database}.issues SET metadata = JSON_SET(metadata, '$.sce', CAST(? AS JSON)) WHERE id = ? AND JSON_EXTRACT(metadata, '$.sce') IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.aggregateRevision')) = ? AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.aggregateCommitment')) = ? AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.holder')) = ? AND JSON_EXTRACT(metadata, '$.sce.scope') = CAST(? AS JSON)`,
-    },
+    rootUpdate,
     { parameters: [], sql: "SELECT ROW_COUNT() AS affected_rows" },
   ];
   for (const child of value.next.children) {
@@ -5429,6 +5495,9 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
   }
 
   #preOwnershipExistingStatement(batch: MutationBatch): string | undefined {
+    // An acquire intent never retires a unit. Refuse rather than drop a
+    // predicate this statement does not carry.
+    if (batch.retiredChildren !== undefined) return undefined;
     const children = batch.next.children.map((child) => {
       const expected = batch.expectedChildren.find(
         (value) => value.unitId === child.unitId,
@@ -5499,6 +5568,8 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
   }
 
   #casStatement(batch: MutationBatch): string | undefined {
+    const retired = retiredPredicateRows(batch, this.#rows);
+    if (retired === undefined) return undefined;
     const children = batch.next.children.map((child) => {
       const expected = batch.expectedChildren.find(
         (value) => value.unitId === child.unitId,
@@ -5524,6 +5595,13 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
         ({ expected, id }) =>
           `id = ${sqlLiteral(id)} AND JSON_EXTRACT(metadata, '$.sce') IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.revision')) = ${sqlLiteral(expected.expectedRevision)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.commitment')) = ${sqlLiteral(expected.expectedCommitment)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.holder')) = ${sqlLiteral(batch.expectedHolder)} AND JSON_EXTRACT(metadata, '$.sce.scope') = ${scope}`,
       ),
+      // Read-only rows: a retired bead keeps its historical envelope and is
+      // absent from the update's id list, so the one transaction still refuses
+      // when its commitment or revision moved between load and root CAS.
+      ...retired.map(
+        ({ beadId, row }) =>
+          `id = ${sqlLiteral(beadId)} AND JSON_EXTRACT(metadata, '$.sce') IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.revision')) = ${sqlLiteral(row.expectedRevision)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.commitment')) = ${sqlLiteral(row.expectedCommitment)}`,
+      ),
     ];
     const cases = [
       `WHEN ${sqlLiteral(this.#rows.rootBeadId)} THEN JSON_SET(target.metadata, '$.sce', ${sqlJson(batch.next.root)})`,
@@ -5532,6 +5610,6 @@ export class DoltBeadsServerDriver implements BeadsServerDriver {
           `WHEN ${sqlLiteral(id)} THEN JSON_SET(target.metadata, '$.sce', ${sqlJson(child)})`,
       ),
     ];
-    return `UPDATE ${this.#issues()} AS target JOIN (SELECT COUNT(*) AS eligible FROM ${this.#issues()} WHERE ${eligibility.map((item) => `(${item})`).join(" OR ")}) AS gate SET target.metadata = CASE target.id ${cases.join(" ")} ELSE target.metadata END WHERE target.id IN (${ids.map(sqlLiteral).join(",")}) AND gate.eligible = ${ids.length + 1}`;
+    return `UPDATE ${this.#issues()} AS target JOIN (SELECT COUNT(*) AS eligible FROM ${this.#issues()} WHERE ${eligibility.map((item) => `(${item})`).join(" OR ")}) AS gate SET target.metadata = CASE target.id ${cases.join(" ")} ELSE target.metadata END WHERE target.id IN (${ids.map(sqlLiteral).join(",")}) AND gate.eligible = ${ids.length + 1 + retired.length}`;
   }
 }

@@ -84,13 +84,15 @@ function rootOnlyClosureBatch(
   next: RepositoryRun,
 ): Readonly<{
   batch: MutationBatch;
+  legacy: MutationBatch;
   retiredChild: NonNullable<ReturnType<typeof makeChildProjection>>;
 }> {
   const beforeRoot = makeRootProjection(before);
   const retiredChild = makeChildProjection(beforeRoot, "unit-1");
   assert.ok(retiredChild);
   const root = withBatchCheckpoint(makeRootProjection(next), []);
-  const batch: MutationBatch = {
+  // The exact bytes a run persisted before retired rows were predicated.
+  const legacy: MutationBatch = {
     changedRows: [],
     checkpoint: root.checkpoint,
     expectedAggregateCommitment: beforeRoot.aggregateCommitment,
@@ -103,9 +105,81 @@ function rootOnlyClosureBatch(
     scope: root.scope,
     version: 1,
   };
-  const validated = validateMutationBatch(batch);
-  assert.equal(validated.ok, true, validated.ok ? undefined : validated.reason);
-  return { batch, retiredChild };
+  const batch: MutationBatch = {
+    ...legacy,
+    retiredChildren: [
+      {
+        expectedCommitment: retiredChild.commitment,
+        expectedRevision: retiredChild.revision,
+        unitId: retiredChild.unitId,
+      },
+    ],
+  };
+  for (const candidate of [legacy, batch]) {
+    const validated = validateMutationBatch(candidate);
+    assert.equal(
+      validated.ok,
+      true,
+      validated.ok ? undefined : validated.reason,
+    );
+  }
+  return { batch, legacy, retiredChild };
+}
+
+/**
+ * The embedded CAS is one conditional statement: its count subquery must match
+ * every predicated row, root and retired alike, or the update affects no rows.
+ */
+function casSucceeds(
+  query: string,
+  rows: ReadonlyMap<string, ReturnType<typeof envelope>>,
+): boolean {
+  const root = rows.get(rootIssueId);
+  const child = rows.get(childIssueId);
+  if (root === undefined || !query.includes(hex(root.commitment))) return false;
+  if (!query.includes(hex(childIssueId))) return true;
+  return (
+    child !== undefined &&
+    "revision" in child.projection &&
+    query.includes(hex(child.commitment)) &&
+    query.includes(hex(String(child.projection.revision)))
+  );
+}
+
+function installProjectionSql(
+  persistence: DoltProjectionPersistence,
+  rows: Map<string, ReturnType<typeof envelope>>,
+  queries: string[],
+  applied: ReturnType<typeof makeRootProjection>,
+): void {
+  Object.defineProperty(persistence, "sql", {
+    value: async (query: string): Promise<string> => {
+      queries.push(query);
+      if (query.startsWith("UPDATE issues")) {
+        const affected = casSucceeds(query, rows) ? 1 : 0;
+        if (affected === 1) rows.set(rootIssueId, envelope(applied));
+        return JSON.stringify({ rows: [{ affected }] });
+      }
+      if (query.startsWith("SELECT id")) {
+        const selected = [...rows.entries()]
+          .filter(([id]) => query.includes(hex(id)))
+          .map(([id, sce]) => ({ id, sce }));
+        return JSON.stringify({ rows: selected });
+      }
+      throw new Error("unexpected projection SQL");
+    },
+  });
+}
+
+/** Splits the one CAS statement into the rows it writes and the rows it reads. */
+function casParts(query: string): Readonly<{ written: string; read: string }> {
+  const start = query.indexOf("WHERE id IN (");
+  const end = query.indexOf(") AND (SELECT COUNT(*)");
+  assert.ok(start >= 0 && end > start);
+  return {
+    read: query.slice(end),
+    written: query.slice(start, end),
+  };
 }
 
 function envelope(
@@ -198,6 +272,7 @@ class ClosureProcess implements EmbeddedProcessPort {
     private readonly persistence: DoltProjectionPersistence,
     private readonly batch: MutationBatch,
     private readonly slot: MergeSlotObservation,
+    private readonly rootCommitment: () => string | undefined,
   ) {}
 
   public async execute(request: EmbeddedRequest): Promise<EmbeddedResponse> {
@@ -220,17 +295,30 @@ class ClosureProcess implements EmbeddedProcessPort {
         if (result.value === "applied") this.workingSet = "pending";
         return result;
       }
-      case "discover":
-        return {
-          kind: "discover",
-          value: {
-            baseHead: firstHead,
-            childCommitments: [],
-            head: this.head,
-            rootCommitment: this.batch.next.root.aggregateCommitment,
-            status: "observed",
-          },
-        };
+      case "discover": {
+        // Authoritative discovery, not a remembered write: a refused CAS must
+        // report the root the store still holds.
+        const current = this.rootCommitment();
+        return current === this.batch.next.root.aggregateCommitment
+          ? {
+              kind: "discover",
+              value: {
+                baseHead: firstHead,
+                childCommitments: [],
+                head: this.head,
+                rootCommitment: current,
+                status: "observed",
+              },
+            }
+          : {
+              kind: "discover",
+              value: {
+                baseHead: firstHead,
+                head: this.head,
+                status: "absent",
+              },
+            };
+      }
       case "commit":
         this.head = committedHead;
         this.workingSet = "clean";
@@ -263,29 +351,13 @@ test("root-only closure retires the sole child while preserving inert child hist
     doltExecutable: "/usr/bin/true",
     rootIssueId,
   });
-  Object.defineProperty(persistence, "sql", {
-    value: async (query: string): Promise<string> => {
-      sqlQueries.push(query);
-      if (query.startsWith("UPDATE issues")) {
-        assert.ok(query.includes(hex(rootIssueId)));
-        assert.equal(query.includes(hex(childIssueId)), false);
-        rows.set(rootIssueId, envelope(batch.next.root));
-        return JSON.stringify({ rows: [{ affected: 1 }] });
-      }
-      if (query.startsWith("SELECT id")) {
-        const selected = [...rows.entries()]
-          .filter(([id]) => query.includes(hex(id)))
-          .map(([id, sce]) => ({ id, sce }));
-        return JSON.stringify({ rows: selected });
-      }
-      throw new Error("unexpected projection SQL");
-    },
-  });
+  installProjectionSql(persistence, rows, sqlQueries, batch.next.root);
   const scope = scopeFor(before);
   const process = new ClosureProcess(
     persistence,
     batch,
     acquiredSlot(scope, before.controller.holder),
+    () => rows.get(rootIssueId)?.commitment,
   );
   const adapter = new EmbeddedBeadsAdapter({
     holder: before.controller.holder,
@@ -306,6 +378,19 @@ test("root-only closure retires the sole child while preserving inert child hist
   });
   assert.deepEqual(rows.get(childIssueId), retiredEnvelope);
   assert.equal(rows.size, 2);
+
+  // One statement: the retired bead is read as a predicate and is absent from
+  // the rows the update writes, so its history is never rewritten.
+  const update = sqlQueries.find((query) => query.startsWith("UPDATE issues"));
+  assert.ok(update);
+  const parts = casParts(update);
+  assert.ok(parts.written.includes(hex(rootIssueId)));
+  assert.equal(parts.written.includes(hex(childIssueId)), false);
+  assert.ok(parts.read.includes(hex(childIssueId)));
+  assert.ok(parts.read.includes(hex(retiredChild.commitment)));
+  assert.ok(parts.read.includes(hex(String(retiredChild.revision))));
+  // The count term covers the root and the one predicated retired row.
+  assert.equal(parts.read.split(";", 1)[0]?.endsWith("=2"), true);
 
   const beforeLoadQueries = sqlQueries.length;
   assert.deepEqual(await adapter.load(), {
@@ -344,4 +429,196 @@ test("root-only closure retires the sole child while preserving inert child hist
   });
   assert.equal(process.requests.length, requestsBeforeTamper);
   assert.deepEqual(rows.get(childIssueId), retiredEnvelope);
+});
+
+// The exact bd 1.1.0 issue row as Dolt 2.2.1 `-r json` prints it: NULL columns
+// (external_ref, started_at, closed_at) are omitted rather than rendered null.
+const NUMERIC_COLUMNS = [
+  "compaction_level",
+  "ephemeral",
+  "is_blocked",
+  "is_template",
+  "no_history",
+  "pinned",
+  "priority",
+  "timeout_ns",
+];
+const TEXT_COLUMNS = [
+  "acceptance_criteria",
+  "actor",
+  "agent_state",
+  "await_id",
+  "await_type",
+  "close_reason",
+  "closed_by_session",
+  "content_hash",
+  "created_by",
+  "description",
+  "design",
+  "event_kind",
+  "hook_bead",
+  "mol_type",
+  "notes",
+  "owner",
+  "payload",
+  "rig",
+  "role_bead",
+  "role_type",
+  "sender",
+  "source_repo",
+  "source_system",
+  "spec_id",
+  "target",
+  "waiters",
+  "wisp_type",
+  "work_type",
+];
+
+function issueRow(
+  id: string,
+  sce: ReturnType<typeof envelope>,
+  updatedAt: string,
+): Record<string, unknown> {
+  return {
+    ...Object.fromEntries(NUMERIC_COLUMNS.map((key) => [key, 0])),
+    ...Object.fromEntries(TEXT_COLUMNS.map((key) => [key, ""])),
+    created_at: "2026-09-22 10:00:00",
+    id,
+    issue_type: "task",
+    metadata: { sce },
+    status: "open",
+    title: "unit",
+    updated_at: updatedAt,
+  };
+}
+
+function issuesDelta(
+  changes: readonly Readonly<{ from_row: unknown; to_row: unknown }>[],
+): string {
+  return JSON.stringify({ tables: [{ data_diff: changes, name: "issues" }] });
+}
+
+function movedRetiredChild(before: RepositoryRun) {
+  const unit = before.units["unit-1"];
+  assert.ok(unit);
+  const moved = makeChildProjection(
+    makeRootProjection({
+      ...before,
+      units: { "unit-1": { ...unit, revision: unit.revision + 1 } },
+    }),
+    "unit-1",
+  );
+  assert.ok(moved);
+  return moved;
+}
+
+test("an out-of-band retired row move refuses the closure CAS", async () => {
+  const { before, next } = closingStates();
+  const { batch, legacy, retiredChild } = rootOnlyClosureBatch(before, next);
+  const moved = movedRetiredChild(before);
+  assert.notEqual(moved.commitment, retiredChild.commitment);
+  const beforeRoot = makeRootProjection(before);
+  const scope = scopeFor(before);
+
+  const attempt = async (candidate: MutationBatch) => {
+    const rows = new Map<string, ReturnType<typeof envelope>>([
+      [rootIssueId, envelope(beforeRoot)],
+      [childIssueId, envelope(moved)],
+    ]);
+    const persistence = new DoltProjectionPersistence({
+      childIssueId: (unitId) =>
+        unitId === "unit-1" ? childIssueId : undefined,
+      databaseDirectory: "/private/tmp",
+      doltExecutable: "/usr/bin/true",
+      rootIssueId,
+    });
+    installProjectionSql(persistence, rows, [], candidate.next.root);
+    const adapter = new EmbeddedBeadsAdapter({
+      holder: before.controller.holder,
+      mode: "local-only",
+      prefix: "sce",
+      preflight: preflight(),
+      process: new ClosureProcess(
+        persistence,
+        candidate,
+        acquiredSlot(scope, before.controller.holder),
+        () => rows.get(rootIssueId)?.commitment,
+      ),
+      scope,
+    });
+    const result = await adapter.compareAndSet(candidate);
+    return {
+      child: rows.get(childIssueId),
+      result,
+      root: rows.get(rootIssueId),
+    };
+  };
+
+  const predicated = await attempt(batch);
+  assert.deepEqual(predicated.result, { status: "stale" });
+  assert.deepEqual(predicated.root, envelope(beforeRoot));
+  assert.deepEqual(predicated.child, envelope(moved));
+
+  // The same pre-change bytes still behave exactly as they always did: without
+  // the predicate the child-only move is simply invisible to the root CAS.
+  const unpredicated = await attempt(legacy);
+  assert.deepEqual(unpredicated.result, {
+    affectedRowCount: 1,
+    checkpoint: legacy.checkpoint,
+    children: [],
+    root: legacy.next.root,
+    status: "applied",
+  });
+  assert.deepEqual(unpredicated.root, envelope(legacy.next.root));
+  assert.deepEqual(unpredicated.child, envelope(moved));
+});
+
+test("a predicated closure still proves a root-only Dolt delta", () => {
+  const { before, next } = closingStates();
+  const { batch, retiredChild } = rootOnlyClosureBatch(before, next);
+  const persistence = new DoltProjectionPersistence({
+    childIssueId: (unitId) => (unitId === "unit-1" ? childIssueId : undefined),
+    databaseDirectory: "/private/tmp",
+    doltExecutable: "/usr/bin/true",
+    rootIssueId,
+  });
+  const rootChange = {
+    from_row: issueRow(
+      rootIssueId,
+      envelope(makeRootProjection(before)),
+      "2026-09-22 10:00:01",
+    ),
+    to_row: issueRow(
+      rootIssueId,
+      envelope(batch.next.root),
+      "2026-09-22 10:00:02",
+    ),
+  };
+  // A predicated retired row is read, never written, so a closure checkpoint
+  // stays the exact root-only diff it was before this contract existed.
+  assert.equal(
+    persistence.matchesBatchDelta(batch, issuesDelta([rootChange])),
+    true,
+  );
+  assert.equal(
+    persistence.matchesBatchDelta(
+      batch,
+      issuesDelta([
+        rootChange,
+        {
+          from_row: issueRow(
+            childIssueId,
+            envelope(retiredChild),
+            "2026-09-22 10:00:01",
+          ),
+          to_row: issueRow(
+            childIssueId,
+            envelope(movedRetiredChild(before)),
+            "2026-09-22 10:00:02",
+          ),
+        },
+      ]),
+    ),
+    false,
+  );
 });

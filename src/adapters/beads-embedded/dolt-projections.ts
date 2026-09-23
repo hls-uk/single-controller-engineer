@@ -724,7 +724,8 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
   /**
    * The selected root/child readback above establishes the requested state.
    * This companion proof establishes that a Dolt checkpoint contains no other
-   * pending or committed data movement.
+   * pending or committed data movement. A predicated retired row is read, not
+   * written, so it contributes no delta and a closure stays a root-only diff.
    */
   public matchesBatchDelta(batchInput: MutationBatch, source: string): boolean {
     const batch = validateMutationBatch(batchInput);
@@ -851,12 +852,15 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
   ): string | undefined {
     const rows = this.rows(batch);
     if (rows === undefined) return undefined;
-    const expected = rows
-      .map(
+    const retired = this.retiredPredicates(batch, rows);
+    if (retired === undefined) return undefined;
+    const expected = [
+      ...rows.map(
         (row) =>
           `(id=${stringLiteral(row.issueId)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.sce.commitment'))=${stringLiteral(row.expectedCommitment)})`,
-      )
-      .join(" OR ");
+      ),
+      ...retired,
+    ].join(" OR ");
     const cases = rows
       .map(
         (row) =>
@@ -864,7 +868,33 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
       )
       .join(" ");
     const ids = rows.map((row) => stringLiteral(row.issueId)).join(",");
-    return `UPDATE issues SET metadata=CASE id ${cases} ELSE metadata END WHERE id IN (${ids}) AND (SELECT COUNT(*) FROM issues WHERE ${expected})=${rows.length}${slot === undefined ? "" : this.availableSlotPredicate(slot)}`;
+    return `UPDATE issues SET metadata=CASE id ${cases} ELSE metadata END WHERE id IN (${ids}) AND (SELECT COUNT(*) FROM issues WHERE ${expected})=${rows.length + retired.length}${slot === undefined ? "" : this.availableSlotPredicate(slot)}`;
+  }
+
+  /**
+   * A retired unit leaves the root's authority set but its bead stays as inert
+   * history, so it is never a changed row and is never written here. The one
+   * CAS statement still reads it: its count term zeroes the affected rows when
+   * that row's commitment or revision moved between load and root CAS.
+   */
+  private retiredPredicates(
+    batch: MutationBatch,
+    rows: readonly { readonly issueId: string }[],
+  ): readonly string[] | undefined {
+    const retired = batch.retiredChildren ?? [];
+    // A batch that retires nothing keeps the exact pre-contract statement.
+    if (retired.length === 0) return [];
+    const ids = retired.map((row) => this.childIssueId(row.unitId));
+    const every = [...rows.map((row) => row.issueId), ...ids];
+    if (
+      ids.some((id) => id === undefined) ||
+      new Set(every).size !== every.length
+    )
+      return undefined;
+    return retired.map(
+      (row, index) =>
+        `(id=${stringLiteral(ids[index]!)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.sce.commitment'))=${stringLiteral(row.expectedCommitment)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.sce.revision'))=${stringLiteral(String(row.expectedRevision))})`,
+    );
   }
 
   private availableSlotPredicate(slot: MergeSlotObservation): string {

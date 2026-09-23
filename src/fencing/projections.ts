@@ -305,6 +305,22 @@ export function validateMutationBatch(
     )
       return { ok: false, reason: "affected child row disagrees with batch" };
   }
+  const retiredIds = (batch.retiredChildren ?? []).map((row) => row.unitId);
+  if (
+    new Set(retiredIds).size !== retiredIds.length ||
+    [...retiredIds].sort().some((id, index) => id !== retiredIds[index])
+  )
+    return { ok: false, reason: "retired children are not sorted and unique" };
+  // A retired row is a predicate, never a write. It must already have left the
+  // root's authority set, so it can never collide with an affected child.
+  if (
+    retiredIds.some(
+      (unitId) =>
+        changedIds.includes(unitId) ||
+        root.value.childRows.some((row) => row.unitId === unitId),
+    )
+  )
+    return { ok: false, reason: "retired child is still an authority row" };
   if (
     batch.checkpoint.aggregateRevision !== root.value.aggregateRevision ||
     batch.checkpoint.rootCommitment !== root.value.aggregateCommitment ||

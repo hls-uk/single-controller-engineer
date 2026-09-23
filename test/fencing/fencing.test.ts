@@ -28,10 +28,12 @@ import {
   type OperationLockAcquire,
   type RootProjection,
   decideControllerSlot,
+  decodeMutationBatch,
   decodeRootProjection,
   deriveChangedRowsCommitment,
   deriveScopeCommitment,
   deriveSlotReadbackHash,
+  encodeMutationBatch,
   encodeRootProjection,
   makeChildProjection,
   makeRootProjection,
@@ -45,7 +47,7 @@ import {
 import { canonicalJson } from "../../src/protocol/canonical.js";
 import { deriveIdempotencyKey, reduce } from "../../src/protocol/reducer.js";
 import type { Reduction } from "../../src/protocol/reducer.js";
-import { event, run } from "../protocol/fixtures.js";
+import { event, HASH, run } from "../protocol/fixtures.js";
 
 const scope: FencingScope = {
   beadsStoreIdentity: "store-1",
@@ -160,6 +162,72 @@ function rootOnlyMutation(): {
       version: 1,
     },
     reduction: result,
+  };
+}
+
+/**
+ * The reducer's own closure path: the released unit leaves `units`, so its
+ * child row leaves the root's authority set while its bead stays as history.
+ */
+function closureMutation(): {
+  readonly batch: MutationBatch;
+  readonly retired: NonNullable<MutationBatch["retiredChildren"]>;
+} {
+  let state = run();
+  const step = (
+    type: Parameters<typeof event>[1],
+    fields: Record<string, unknown> = {},
+  ) => {
+    const result = reduce(state, event(state, type, fields));
+    assert.equal(
+      result.ok,
+      true,
+      result.ok ? undefined : `${result.code}: ${result.reason}`,
+    );
+    if (!result.ok) throw new Error("unreachable");
+    state = result.nextState;
+  };
+  const settle = (type: Parameters<typeof event>[1]) => {
+    const entry = state.effectJournal.at(-1);
+    assert.ok(entry);
+    step(type, {
+      effectId: entry.effectId,
+      effectKind: entry.kind,
+      observationHash: HASH,
+    });
+  };
+  step("cancel_intent");
+  settle("cancel_observed");
+  step("reservation_release_intent");
+  const before = makeRootProjection(state);
+  settle("reservation_released");
+  const previous = before.childRows[0];
+  assert.ok(previous);
+  assert.deepEqual(Object.keys(state.units), []);
+  const root = withBatchCheckpoint(makeRootProjection(state), []);
+  const retired = [
+    {
+      expectedCommitment: previous.commitment,
+      expectedRevision: previous.revision,
+      unitId: previous.unitId,
+    },
+  ];
+  return {
+    retired,
+    batch: {
+      changedRows: [],
+      checkpoint: root.checkpoint,
+      expectedAggregateCommitment: before.aggregateCommitment,
+      expectedAggregateRevision: before.aggregateRevision,
+      expectedChildren: [],
+      expectedHolder: before.holder,
+      holder: root.holder,
+      next: { children: [], root },
+      retiredChildren: retired,
+      schema: "sce.fencing.batch",
+      scope: root.scope,
+      version: 1,
+    },
   };
 }
 
@@ -291,6 +359,73 @@ test("root-only controller batch has zero child rows and an exact root checkpoin
       ...batch,
       checkpoint: { ...batch.checkpoint, aggregateRevision: 99 },
     }).ok,
+    false,
+  );
+});
+
+test("closure batch predicates retired child rows it never writes", () => {
+  const { batch, retired } = closureMutation();
+  const predicate = retired[0];
+  assert.ok(predicate);
+  assert.deepEqual(batch.changedRows, []);
+  assert.deepEqual(batch.next.root.childRows, []);
+  assert.equal(validateMutationBatch(batch).ok, true);
+
+  // A batch persisted before this contract existed carries no key at all and
+  // must still validate, encode, and decode to exactly the same value.
+  const { retiredChildren: _dropped, ...legacy } = batch;
+  assert.equal(validateMutationBatch(legacy).ok, true);
+  const legacyBytes = encodeMutationBatch(legacy as MutationBatch);
+  if (!legacyBytes.ok) assert.fail(legacyBytes.reason);
+  assert.equal(legacyBytes.value.includes("retiredChildren"), false);
+  assert.deepEqual(decodeMutationBatch(legacyBytes.value), {
+    ok: true,
+    value: legacy,
+  });
+  const bytes = encodeMutationBatch(batch);
+  if (!bytes.ok) assert.fail(bytes.reason);
+  assert.equal(bytes.value.includes('"retiredChildren"'), true);
+  assert.deepEqual(decodeMutationBatch(bytes.value), {
+    ok: true,
+    value: batch,
+  });
+
+  // "Nothing retired" has exactly one encoding: the absent key.
+  assert.equal(
+    validateMutationBatch({ ...batch, retiredChildren: [] }).ok,
+    false,
+  );
+  assert.equal(
+    validateMutationBatch({
+      ...batch,
+      retiredChildren: [predicate, predicate],
+    }).ok,
+    false,
+  );
+  assert.equal(
+    validateMutationBatch({
+      ...batch,
+      retiredChildren: [{ ...predicate, unexpected: "field" }],
+    }).ok,
+    false,
+  );
+  assert.equal(
+    validateMutationBatch({
+      ...batch,
+      retiredChildren: Array.from({ length: 65 }, (_, index) => ({
+        ...predicate,
+        unitId: `unit-${String(index).padStart(3, "0")}`,
+      })),
+    }).ok,
+    false,
+  );
+
+  // A unit still inside the root's authority set is never a retired row.
+  const live = mutation().batch;
+  const affected = live.expectedChildren[0];
+  assert.ok(affected);
+  assert.equal(
+    validateMutationBatch({ ...live, retiredChildren: [affected] }).ok,
     false,
   );
 });

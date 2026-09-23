@@ -340,6 +340,8 @@ function batch(): MutationBatch {
 function rootOnlyClosureBatch(): Readonly<{
   batch: MutationBatch;
   before: RootProjection;
+  legacy: MutationBatch;
+  retired: RootProjection["childRows"][number];
 }> {
   let current = run();
   const apply = (type: Parameters<typeof event>[1], fields = {}) => {
@@ -362,24 +364,39 @@ function rootOnlyClosureBatch(): Readonly<{
   });
   const base = makeRootProjection(current);
   const root = withBatchCheckpoint(base, []);
+  const retired = before.childRows[0];
+  if (retired === undefined) assert.fail("closure fixture lost its child row");
+  // The exact bytes a run persisted before retired rows were predicated.
+  const legacy: MutationBatch = {
+    changedRows: [],
+    checkpoint: {
+      aggregateRevision: root.aggregateRevision,
+      changedRowsCommitment: deriveChangedRowsCommitment([]),
+      rootCommitment: root.aggregateCommitment,
+    },
+    expectedAggregateCommitment: before.aggregateCommitment,
+    expectedAggregateRevision: before.aggregateRevision,
+    expectedChildren: [],
+    expectedHolder: holder,
+    holder,
+    next: { children: [], root },
+    schema: "sce.fencing.batch",
+    scope,
+    version: 1,
+  };
   return {
     before,
+    legacy,
+    retired,
     batch: {
-      changedRows: [],
-      checkpoint: {
-        aggregateRevision: root.aggregateRevision,
-        changedRowsCommitment: deriveChangedRowsCommitment([]),
-        rootCommitment: root.aggregateCommitment,
-      },
-      expectedAggregateCommitment: before.aggregateCommitment,
-      expectedAggregateRevision: before.aggregateRevision,
-      expectedChildren: [],
-      expectedHolder: holder,
-      holder,
-      next: { children: [], root },
-      schema: "sce.fencing.batch",
-      scope,
-      version: 1,
+      ...legacy,
+      retiredChildren: [
+        {
+          expectedCommitment: retired.commitment,
+          expectedRevision: retired.revision,
+          unitId: retired.unitId,
+        },
+      ],
     },
   };
 }
@@ -1570,6 +1587,11 @@ class FakeServer implements BeadsServerDriver {
   disarmCalls = 0;
   discoveryChildren: readonly unknown[] | undefined;
   discoveryMode: "malformed" | "misbound" | "ok" | "outage" | "throw" = "ok";
+  /** Predicate-only rows: a retired unit's bead keeps its historical envelope. */
+  readonly retiredRows = new Map<
+    string,
+    Readonly<{ commitment: string; revision: number }>
+  >();
 
   constructor(
     serverIdentity: ServerIdentity,
@@ -1713,6 +1735,20 @@ class FakeServer implements BeadsServerDriver {
       if (
         actual?.revision !== expected.expectedRevision ||
         actual.commitment !== expected.expectedCommitment
+      )
+        return {
+          status: "ok" as const,
+          value: {
+            commit: this.commit(),
+            result: { status: "stale" as const },
+          },
+        };
+    }
+    for (const retired of value.retiredChildren ?? []) {
+      const actual = this.retiredRows.get(retired.unitId);
+      if (
+        actual?.revision !== retired.expectedRevision ||
+        actual.commitment !== retired.expectedCommitment
       )
         return {
           status: "ok" as const,
@@ -4774,8 +4810,39 @@ test("allowlisted SQL program predicates every owned row and parser rejects non-
         statement.sql.includes(`$.sce.aggregateCommitment`),
     ),
   );
+  // The retired bead is read inside this transaction and written nowhere: it
+  // is absent from every update id list and gates the root update instead.
+  const closureUpdate = closureProgram.statements.find((statement) =>
+    statement.sql.startsWith("UPDATE"),
+  );
+  assert.ok(closureUpdate);
+  assert.ok(closureUpdate.sql.includes("SELECT COUNT(*) AS retired"));
+  assert.ok(closureUpdate.sql.endsWith("AND gate.retired = ?"));
+  assert.deepEqual(closureUpdate.parameters.slice(0, 3), [
+    "sce-2",
+    closureFixture.retired.revision,
+    closureFixture.retired.commitment,
+  ]);
+  assert.equal(closureUpdate.parameters.at(-1), 1);
+  const legacyProgram = buildServerCasProgram(
+    identity(),
+    closureFixture.legacy,
+    { childBeadIds: { "unit-1": "sce-2" }, rootBeadId: "sce-1" },
+  );
+  assert.ok(legacyProgram);
+  assert.equal(
+    legacyProgram.statements.some((statement) =>
+      statement.sql.includes("gate.retired"),
+    ),
+    false,
+  );
+
   const closureServer = new FakeServer(identity());
   closureServer.root = closureFixture.before;
+  closureServer.retiredRows.set(closureFixture.retired.unitId, {
+    commitment: closureFixture.retired.commitment,
+    revision: closureFixture.retired.revision,
+  });
   await closureServer.mergeSlotAcquire({ actor: holder, prefix: "sce", scope });
   const closureRaw = await closureServer.mutate({
     batch: closure,
@@ -4831,6 +4898,63 @@ test("SQL executor rolls back immediately when a root or child CAS affects the w
   assert.deepEqual(result, { status: "rolled_back" });
   assert.equal(executed.at(-1), "ROLLBACK");
   assert.equal(executed.includes("COMMIT"), false);
+
+  // A retired row that moved out of band zeroes the gated root update, so the
+  // closure transaction rolls back instead of committing a root-only write.
+  const closureProgram = buildServerCasProgram(
+    identity(),
+    rootOnlyClosureBatch().batch,
+    { childBeadIds: { "unit-1": "sce-2" }, rootBeadId: "sce-1" },
+  );
+  assert.ok(closureProgram);
+  const closureExecuted: string[] = [];
+  assert.deepEqual(
+    await executeServerSqlProgram(closureProgram, async (statement) => {
+      closureExecuted.push(statement.sql);
+      return statement.sql === "SELECT ROW_COUNT() AS affected_rows"
+        ? [{ affected_rows: 0 }]
+        : [];
+    }),
+    { status: "rolled_back" },
+  );
+  assert.equal(closureExecuted.at(-1), "ROLLBACK");
+  assert.equal(closureExecuted.includes("COMMIT"), false);
+});
+
+test("an out-of-band retired row move refuses the closure CAS", async () => {
+  const closure = rootOnlyClosureBatch();
+  const attempt = async (
+    candidate: MutationBatch,
+    actual: Readonly<{ commitment: string; revision: number }>,
+  ) => {
+    const fake = new FakeServer(identity());
+    const adapter = new BeadsServerAdapter({
+      driver: fake,
+      identity: identity(),
+      process: fakeManagedProcess,
+    });
+    assert.equal((await adapter.preflight()).status, "ready");
+    await adapter.acquire({ holder, prefix: "sce", scope });
+    fake.root = closure.before;
+    fake.retiredRows.set(closure.retired.unitId, actual);
+    const result = await adapter.compareAndSet(candidate);
+    return { result, root: fake.root };
+  };
+
+  const intact = {
+    commitment: closure.retired.commitment,
+    revision: closure.retired.revision,
+  };
+  const moved = { commitment: "f".repeat(64), revision: intact.revision + 1 };
+  assert.equal((await attempt(closure.batch, intact)).result.status, "applied");
+  const refused = await attempt(closure.batch, moved);
+  assert.deepEqual(refused.result, { status: "stale" });
+  assert.deepEqual(refused.root, closure.before);
+
+  // The same pre-change bytes still behave exactly as they always did: without
+  // the predicate the child-only move is invisible to the root CAS.
+  const unpredicated = await attempt(closure.legacy, moved);
+  assert.equal(unpredicated.result.status, "applied");
 });
 
 test("real shared server atomically bootstraps an absent recovery intent before slot acquisition", async (t) => {
@@ -6444,6 +6568,66 @@ test("real disposable Dolt server preserves scoped envelopes, grants, CAS rollba
       outside: "owned-scope",
       outside_move: 1,
     });
+
+    // A closure predicates the retired bead it never writes. Dolt must run the
+    // gated root update and refuse it while that row's envelope disagrees.
+    const closure = rootOnlyClosureBatch();
+    const closureRootId = "sce-closure-root";
+    const closureChildId = "sce-closure-child";
+    const closureRetired = makeChildProjection(
+      closure.before,
+      closure.retired.unitId,
+    );
+    assert.ok(closureRetired);
+    const closureProgram = buildServerCasProgram(
+      identity("on", fixture.endpoint),
+      closure.batch,
+      {
+        childBeadIds: { [closure.retired.unitId]: closureChildId },
+        rootBeadId: closureRootId,
+      },
+    );
+    assert.ok(closureProgram);
+    const closureSql = `${closureProgram.statements.map(renderSqlStatement).join(";\n")};`;
+    const readClosureRoot = async () => {
+      const read = await fixture.readWriter(
+        `SELECT JSON_UNQUOTE(JSON_EXTRACT(metadata, '$')) AS metadata FROM issues WHERE id = ${sqlLiteral(closureRootId)}`,
+      );
+      assert.equal(read.status, "ok");
+      if (read.status !== "ok") throw new Error("closure readback failed");
+      return jsonObject(read.rows[0]?.metadata).sce;
+    };
+    await runDolt(rawSqlArgs, {
+      cwd: fixture.directory,
+      password: fixture.writerPassword,
+      stdin: `INSERT INTO issues VALUES (${sqlLiteral(closureRootId)}, 'open', CAST(${sqlLiteral(JSON.stringify({ sce: closure.before }))} AS JSON), NULL), (${sqlLiteral(closureChildId)}, 'closed', CAST(${sqlLiteral(JSON.stringify({ sce: { ...closureRetired, revision: closureRetired.revision + 1 } }))} AS JSON), NULL)`,
+    });
+    await runDolt(rawSqlArgs, {
+      cwd: fixture.directory,
+      password: fixture.writerPassword,
+      stdin: closureSql,
+    });
+    assert.deepEqual(await readClosureRoot(), closure.before);
+    await runDolt(rawSqlArgs, {
+      cwd: fixture.directory,
+      password: fixture.writerPassword,
+      stdin: `UPDATE issues SET metadata = JSON_SET(metadata, '$.sce', CAST(${sqlLiteral(JSON.stringify(closureRetired))} AS JSON)) WHERE id = ${sqlLiteral(closureChildId)}`,
+    });
+    await runDolt(rawSqlArgs, {
+      cwd: fixture.directory,
+      password: fixture.writerPassword,
+      stdin: closureSql,
+    });
+    assert.deepEqual(await readClosureRoot(), closure.batch.next.root);
+    const retainedRetired = await fixture.readWriter(
+      `SELECT JSON_UNQUOTE(JSON_EXTRACT(metadata, '$')) AS metadata FROM issues WHERE id = ${sqlLiteral(closureChildId)}`,
+    );
+    assert.equal(retainedRetired.status, "ok");
+    if (retainedRetired.status === "ok")
+      assert.deepEqual(
+        jsonObject(retainedRetired.rows[0]?.metadata).sce,
+        closureRetired,
+      );
 
     await runDolt(
       [

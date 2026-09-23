@@ -112,6 +112,7 @@ function readback(runState: RepositoryRun): AuthoritativeRunReadback {
 class MemoryStore {
   public current: AuthoritativeRunReadback | undefined;
   public lastBatch: MutationBatch | undefined;
+  public lastPriorRoot: AuthoritativeRunReadback["root"] | undefined;
   public malformedCreateResult = false;
   public createCalls = 0;
   public casCalls = 0;
@@ -145,6 +146,7 @@ class MemoryStore {
   async compareAndSet(batch: MutationBatch): Promise<RunStoreResult> {
     this.casCalls += 1;
     this.lastBatch = batch;
+    this.lastPriorRoot = this.current?.root;
     if (
       this.current === undefined ||
       this.current.root.aggregateRevision !== batch.expectedAggregateRevision ||
@@ -674,6 +676,20 @@ test("reservation release persists a root-only closure batch and drains the auth
   assert.deepEqual(store.lastBatch?.expectedChildren, []);
   assert.deepEqual(store.lastBatch?.next.children, []);
   assert.deepEqual(store.lastBatch?.next.root.childRows, []);
+  // The retired row is predicated, never written: its expectation is exactly
+  // the authority row the closed run removed.
+  assert.deepEqual(
+    store.lastPriorRoot?.childRows.map((row) => row.unitId),
+    ["unit-1"],
+  );
+  assert.deepEqual(
+    store.lastBatch?.retiredChildren,
+    store.lastPriorRoot?.childRows.map((row) => ({
+      expectedCommitment: row.commitment,
+      expectedRevision: row.revision,
+      unitId: row.unitId,
+    })),
+  );
   assert.equal(
     store.lastBatch?.checkpoint.changedRowsCommitment,
     deriveChangedRowsCommitment([]),
