@@ -9588,6 +9588,11 @@ var LIMITS = {
   reservations: 128,
   text: 8192,
   findings: 64,
+  // Canonical JSON bytes of one verification command vector, and of a whole
+  // configured command set. Both bound a knowledge contract at runtime rather
+  // than at a schema boundary, so the reducer reads them from here.
+  commandVectorBytes: 8192,
+  commandVectorSetBytes: 32768,
   materialisationBlobBytes: 16 * 1024 * 1024,
   materialisationMatches: 64,
   materialisationOutputs: 128,
@@ -10053,17 +10058,13 @@ var DestinationProbeRefusalSchema = refusalSchema(
     Type.Literal("invalid_destination")
   ])
 );
-var MaterialiseRefusalSchema = refusalSchema(
-  Type.Union([
-    Type.Literal("source_absent"),
-    Type.Literal("hard_links_unsupported")
-  ])
-);
+var materialiseRefusalCode = () => Type.Union([
+  Type.Literal("source_absent"),
+  Type.Literal("hard_links_unsupported")
+]);
+var MaterialiseRefusalSchema = refusalSchema(materialiseRefusalCode());
 var GateMaterialisationRefusalSchema = refusalSchema(
-  Type.Union([
-    Type.Literal("source_absent"),
-    Type.Literal("hard_links_unsupported")
-  ])
+  materialiseRefusalCode()
 );
 var OutputNameCollisionRefusalSchema = strictObject({
   code: Type.Literal("output_name_collision"),
@@ -12086,7 +12087,7 @@ function canonicalCommandArgument(value) {
   return true;
 }
 function canonicalCommandVector(command) {
-  return command.length >= 1 && command.length <= 32 && command.every(canonicalCommandArgument) && utf82.encode(canonicalJson(command)).byteLength <= 8192;
+  return command.length >= 1 && command.length <= 32 && command.every(canonicalCommandArgument) && utf82.encode(canonicalJson(command)).byteLength <= LIMITS.commandVectorBytes;
 }
 function knowledgeContractRuntimeValid(contract, harness) {
   const aliases = contract.aliases.map((item) => item.alias);
@@ -12099,7 +12100,7 @@ function knowledgeContractRuntimeValid(contract, harness) {
     (root, index) => roots.slice(index + 1).every(
       (other) => root !== other && !root.startsWith(`${other}/`) && !other.startsWith(`${root}/`)
     )
-  ) && commands.length >= 1 && commands.length <= 32 && commands.every(canonicalCommandVector) && canonicalCommandVector(contract.provenance.rollupGeneratorCommand) && canonicalCommandVector(contract.provenance.reproducibilityCommand) && utf82.encode(canonicalJson(commands)).byteLength <= 32768 && maximumMaterialisationSidecarBytes(contract, harness) <= LIMITS.materialisationSidecarBytes;
+  ) && commands.length >= 1 && commands.length <= 32 && commands.every(canonicalCommandVector) && canonicalCommandVector(contract.provenance.rollupGeneratorCommand) && canonicalCommandVector(contract.provenance.reproducibilityCommand) && utf82.encode(canonicalJson(commands)).byteLength <= LIMITS.commandVectorSetBytes && maximumMaterialisationSidecarBytes(contract, harness) <= LIMITS.materialisationSidecarBytes;
 }
 function knowledgeContractAwaitsFirstWave(state) {
   return (state.state === "initializing" || state.state === "active") && state.knowledgeContract === void 0 && state.gate === void 0 && state.pendingProvenanceCarry === void 0 && state.provenanceCarryClaim === void 0 && state.lastProvenanceCarryRefusal === void 0 && state.wave.unitIds.length === 0 && Object.values(state.units).every((unit) => unit.state === "planned") && Object.keys(state.reservations).length === 0 && state.activeModifyingUnitIds.length === 0 && state.qualificationQueue.length === 0 && state.integrationQueue.length === 0 && state.effectJournal.every(
@@ -12860,6 +12861,13 @@ function updateGateMaterialisation(gate, gateEntryId, update) {
     targets: gate.targets.map(map)
   };
 }
+function cascadeVoid(followUpBeadId) {
+  return {
+    disposition: "deferral_cascade",
+    followUpBeadId,
+    status: "voided"
+  };
+}
 function settleTargetPromise(gate, targetId) {
   return updateGateTarget(gate, targetId, (target) => {
     if (target.status !== "pending" || target.resolution?.status !== "observed" || target.materialisations.length === 0 || target.materialisations.some((item) => item.status === "pending"))
@@ -12869,13 +12877,13 @@ function settleTargetPromise(gate, targetId) {
     );
     return deferred === void 0 ? { ...target, status: "observed" } : {
       ...target,
-      disposition: "deferral_cascade",
-      followUpBeadId: required(
-        deferred.followUpBeadId,
-        "materialisation deferral follow-up",
-        "materialise"
-      ),
-      status: "voided"
+      ...cascadeVoid(
+        required(
+          deferred.followUpBeadId,
+          "materialisation deferral follow-up",
+          "materialise"
+        )
+      )
     };
   });
 }
@@ -13690,9 +13698,7 @@ function maximumFixedGateVariants(state, gate, stage) {
         targetPromises: candidate.targetPromises.map(
           (target) => target.definition.scope === "gate" ? {
             ...target,
-            disposition: "deferral_cascade",
-            followUpBeadId,
-            status: "voided"
+            ...cascadeVoid(followUpBeadId)
           } : target
         ),
         targets: candidate.targets.map(
@@ -13702,16 +13708,12 @@ function maximumFixedGateVariants(state, gate, stage) {
             followUpBeadId,
             materialisations: target.materialisations.map((item) => ({
               ...item,
-              disposition: "deferral_cascade",
-              followUpBeadId,
-              status: "voided"
+              ...cascadeVoid(followUpBeadId)
             })),
             ...target.resolution === void 0 ? {} : {
               resolution: {
                 ...target.resolution,
-                disposition: "deferral_cascade",
-                followUpBeadId,
-                status: "voided"
+                ...cascadeVoid(followUpBeadId)
               }
             },
             status: "voided"
@@ -13731,17 +13733,11 @@ function maximumFixedGateVariants(state, gate, stage) {
     );
     return {
       ...candidate,
-      aggregateVerifyPromise: {
-        disposition: "deferral_cascade",
-        followUpBeadId,
-        status: "voided"
-      },
+      aggregateVerifyPromise: cascadeVoid(followUpBeadId),
       targetPromises: candidate.targetPromises.map(
         (target) => target.definition.scope === "gate" ? {
           ...target,
-          disposition: "deferral_cascade",
-          followUpBeadId,
-          status: "voided"
+          ...cascadeVoid(followUpBeadId)
         } : target
       )
     };
@@ -14341,9 +14337,7 @@ function deferGateEntry(state, gateEntryId, followUpBeadId) {
           followUpBeadId,
           materialisations: target.materialisations.map((item) => ({
             ...item,
-            disposition: "deferral_cascade",
-            followUpBeadId,
-            status: "voided"
+            ...cascadeVoid(followUpBeadId)
           })),
           resolution: {
             ...resolution.resolution,
@@ -14375,9 +14369,7 @@ function deferGateEntry(state, gateEntryId, followUpBeadId) {
           followUpBeadId,
           materialisations: target.materialisations.map((item) => ({
             ...item,
-            disposition: "deferral_cascade",
-            followUpBeadId,
-            status: "voided"
+            ...cascadeVoid(followUpBeadId)
           })),
           status: "voided"
         } : target
@@ -14413,25 +14405,17 @@ function deferGateEntry(state, gateEntryId, followUpBeadId) {
       ...state,
       gate: {
         ...gate,
-        aggregateVerifyPromise: {
-          disposition: "deferral_cascade",
-          followUpBeadId,
-          status: "voided"
-        },
+        aggregateVerifyPromise: cascadeVoid(followUpBeadId),
         ...gate.aggregateVerify === void 0 ? {} : {
           aggregateVerify: {
             ...gate.aggregateVerify,
-            disposition: "deferral_cascade",
-            followUpBeadId,
-            status: "voided"
+            ...cascadeVoid(followUpBeadId)
           }
         },
         targetPromises: gate.targetPromises.map(
           (target) => target.definition.scope === "gate" ? {
             ...target,
-            disposition: "deferral_cascade",
-            followUpBeadId,
-            status: "voided"
+            ...cascadeVoid(followUpBeadId)
           } : target
         ),
         provenance: {
@@ -14456,9 +14440,7 @@ function deferGateEntry(state, gateEntryId, followUpBeadId) {
         targetPromises: gate.targetPromises.map(
           (target) => target.definition.scope === "gate" ? {
             ...target,
-            disposition: "deferral_cascade",
-            followUpBeadId,
-            status: "voided"
+            ...cascadeVoid(followUpBeadId)
           } : target
         ),
         targets: gate.targets.map(
@@ -14468,16 +14450,12 @@ function deferGateEntry(state, gateEntryId, followUpBeadId) {
             followUpBeadId,
             materialisations: target.materialisations.map((item) => ({
               ...item,
-              disposition: "deferral_cascade",
-              followUpBeadId,
-              status: "voided"
+              ...cascadeVoid(followUpBeadId)
             })),
             ...target.resolution === void 0 ? {} : {
               resolution: {
                 ...target.resolution,
-                disposition: "deferral_cascade",
-                followUpBeadId,
-                status: "voided"
+                ...cascadeVoid(followUpBeadId)
               }
             },
             status: "voided"
