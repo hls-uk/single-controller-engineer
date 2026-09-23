@@ -9598,7 +9598,10 @@ var LIMITS = {
   materialisationOutputs: 128,
   materialisationPathBytes: 192,
   materialisationSidecarBytes: 8192,
-  materialisationWaveBytes: 64 * 1024 * 1024
+  materialisationWaveBytes: 64 * 1024 * 1024,
+  // Canonical bytes of one frozen provenance projection snapshot, measured on
+  // the encoding actually stored, so the compact form buys real capacity.
+  projectionSnapshotBytes: 65536
 };
 var HARNESS_PACKET_BYTES = 8192;
 var utf8 = new TextEncoder();
@@ -10113,27 +10116,26 @@ var GateTargetDefinitionSchema = strictObject({
   targetId: identifier(),
   targetOrdinal: Type.Integer({ minimum: 0, maximum: 63 })
 });
+var ResolutionCapacitiesSchema = strictObject({
+  remainingAggregateEnvelopeByteCapacity: Type.Integer({
+    minimum: 0,
+    maximum: LIMITS.envelopeBytes
+  }),
+  remainingItemCapacity: Type.Integer({
+    minimum: 0,
+    maximum: LIMITS.materialisationOutputs
+  }),
+  remainingProjectionSnapshotByteCapacity: Type.Integer({
+    minimum: 0,
+    maximum: LIMITS.projectionSnapshotBytes
+  }),
+  remainingSourceByteCapacity: Type.Integer({
+    minimum: 0,
+    maximum: LIMITS.materialisationWaveBytes
+  })
+});
 var GateResolutionSchema = strictObject({
-  capacities: Type.Optional(
-    strictObject({
-      remainingAggregateEnvelopeByteCapacity: Type.Integer({
-        minimum: 0,
-        maximum: LIMITS.envelopeBytes
-      }),
-      remainingItemCapacity: Type.Integer({
-        minimum: 0,
-        maximum: LIMITS.materialisationOutputs
-      }),
-      remainingProjectionSnapshotByteCapacity: Type.Integer({
-        minimum: 0,
-        maximum: 65536
-      }),
-      remainingSourceByteCapacity: Type.Integer({
-        minimum: 0,
-        maximum: LIMITS.materialisationWaveBytes
-      })
-    })
-  ),
+  capacities: Type.Optional(ResolutionCapacitiesSchema),
   currentEffectId: Type.Optional(effectIdentifier()),
   disposition: Type.Optional(gateDisposition()),
   followUpBeadId: Type.Optional(identifier()),
@@ -10149,25 +10151,18 @@ var GateResolutionSchema = strictObject({
   status: gateStatus(),
   targetId: identifier()
 });
+var publicationStatus = () => Type.Union([Type.Literal("published"), Type.Literal("already_present")]);
+var sidecarByteCount = () => Type.Integer({ minimum: 1, maximum: LIMITS.materialisationSidecarBytes });
 var MaterialisationObservationSchema = strictObject({
   artifactByteCount: Type.Integer({
     minimum: 0,
     maximum: LIMITS.materialisationBlobBytes
   }),
   artifactSha256: hash(),
-  artifactStatus: Type.Union([
-    Type.Literal("published"),
-    Type.Literal("already_present")
-  ]),
-  sidecarByteCount: Type.Integer({
-    minimum: 1,
-    maximum: LIMITS.materialisationSidecarBytes
-  }),
+  artifactStatus: publicationStatus(),
+  sidecarByteCount: sidecarByteCount(),
   sidecarSha256: hash(),
-  sidecarStatus: Type.Union([
-    Type.Literal("published"),
-    Type.Literal("already_present")
-  ])
+  sidecarStatus: publicationStatus()
 });
 var GateMaterialisationSchema = strictObject({
   artifactName: Type.Optional(plainBasename()),
@@ -10179,12 +10174,7 @@ var GateMaterialisationSchema = strictObject({
   lastRefusal: Type.Optional(GateMaterialisationEntryRefusalSchema),
   observation: Type.Optional(MaterialisationObservationSchema),
   originUnitId: nullableIdentifier(),
-  sidecarByteCount: Type.Optional(
-    Type.Integer({
-      minimum: 1,
-      maximum: LIMITS.materialisationSidecarBytes
-    })
-  ),
+  sidecarByteCount: Type.Optional(sidecarByteCount()),
   sidecarName: Type.Optional(plainBasename()),
   sidecarSha256: Type.Optional(hash()),
   source: MaterialisationSourceSchema,
@@ -10204,6 +10194,51 @@ var GateTargetStateSchema = strictObject({
   resolution: Type.Optional(GateResolutionSchema),
   status: gateStatus()
 });
+var CompactMaterialisationObservationSchema = strictObject({
+  artifactStatus: publicationStatus(),
+  sidecarStatus: publicationStatus()
+});
+var CompactGateMaterialisationSchema = strictObject({
+  artifactName: Type.Optional(plainBasename()),
+  currentEffectId: Type.Optional(effectIdentifier()),
+  destinationProbeGateEntryId: identifier(),
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  gateEntryId: identifier(),
+  lastRefusal: Type.Optional(GateMaterialisationEntryRefusalSchema),
+  observation: Type.Optional(CompactMaterialisationObservationSchema),
+  sidecarByteCount: Type.Optional(sidecarByteCount()),
+  sidecarName: Type.Optional(plainBasename()),
+  sidecarSha256: Type.Optional(hash()),
+  source: MaterialisationSourceSchema,
+  status: gateStatus(),
+  timestamp: Type.Optional(utcSecond())
+});
+var CompactGateResolutionSchema = strictObject({
+  capacities: Type.Optional(ResolutionCapacitiesSchema),
+  currentEffectId: Type.Optional(effectIdentifier()),
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  gateEntryId: identifier(),
+  lastRefusal: Type.Optional(MaterialisationResolveRefusalSchema),
+  sourceOid: oid(),
+  status: gateStatus()
+});
+var CompactGateTargetStateSchema = strictObject({
+  definition: GateTargetDefinitionSchema,
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  materialisations: Type.Array(CompactGateMaterialisationSchema, {
+    maxItems: LIMITS.materialisationMatches
+  }),
+  resolution: Type.Optional(CompactGateResolutionSchema),
+  status: gateStatus(),
+  version: Type.Literal(2)
+});
+var ProvenanceTargetEvidenceSchema = Type.Union([
+  GateTargetStateSchema,
+  CompactGateTargetStateSchema
+]);
 var GateTargetPromiseSchema = strictObject({
   definition: GateTargetDefinitionSchema,
   disposition: Type.Optional(gateDisposition()),
@@ -10231,7 +10266,7 @@ var GateDestinationProbeSchema = strictObject({
   stage: Type.Union([Type.Literal("unit"), Type.Literal("gate")]),
   status: gateStatus()
 });
-var ProvenanceInputSchema = strictObject({
+var provenanceInputShape = (targetEvidence) => ({
   closedUnitEvidence: Type.String({
     maxLength: LIMITS.envelopeBytes,
     pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
@@ -10240,9 +10275,15 @@ var ProvenanceInputSchema = strictObject({
   destinationProbeEvidence: Type.Array(GateDestinationProbeSchema, {
     maxItems: 128
   }),
-  targetEvidence: Type.Array(GateTargetStateSchema, { maxItems: 192 }),
+  targetEvidence: Type.Array(targetEvidence, { maxItems: 192 }),
   unitIds: Type.Array(identifier(), { maxItems: LIMITS.units })
 });
+var ProvenanceInputSchema = strictObject(
+  provenanceInputShape(ProvenanceTargetEvidenceSchema)
+);
+var HydratedProvenanceInputSchema = strictObject(
+  provenanceInputShape(GateTargetStateSchema)
+);
 var ProvenanceCarryClaimRecordSchema = strictObject({
   schema: Type.Literal("sce.provenance-carry-claim"),
   version: Type.Literal(1),
@@ -11855,8 +11896,144 @@ function canEnterTerminalIntent(state) {
   return TERMINAL_INTENT_STATES.has(state);
 }
 
-// src/protocol/reducer.ts
+// src/protocol/projection.ts
 var utf82 = new TextEncoder();
+function same(left, right) {
+  return canonicalJson(left) === canonicalJson(right);
+}
+function compactTargetEvidenceShape(target) {
+  const { materialisations, resolution, ...rest } = target;
+  return {
+    ...rest,
+    materialisations: materialisations.map(compactMaterialisationShape),
+    ...resolution === void 0 ? {} : { resolution: compactResolutionShape(resolution) },
+    version: 2
+  };
+}
+function compactResolutionShape(resolution) {
+  const { sources: _sources, targetId: _targetId, ...rest } = resolution;
+  return rest;
+}
+function compactMaterialisationShape(item) {
+  const {
+    observation,
+    originUnitId: _originUnitId,
+    sourceOid: _sourceOid,
+    target: _target,
+    targetId: _targetId,
+    ...rest
+  } = item;
+  return {
+    ...rest,
+    ...observation === void 0 ? {} : {
+      observation: {
+        artifactStatus: observation.artifactStatus,
+        sidecarStatus: observation.sidecarStatus
+      }
+    }
+  };
+}
+function materialisationIsCompactable(item, definition, sourceOid) {
+  if (item.targetId !== definition.targetId || item.originUnitId !== definition.originUnitId || item.sourceOid !== sourceOid || !same(item.target, definition.target))
+    return false;
+  if (item.observation === void 0) return true;
+  return item.sidecarByteCount !== void 0 && item.sidecarSha256 !== void 0 && item.observation.artifactByteCount === item.source.byteCount && item.observation.artifactSha256 === item.source.sha256 && item.observation.sidecarByteCount === item.sidecarByteCount && item.observation.sidecarSha256 === item.sidecarSha256;
+}
+function targetEvidenceIsCompactable(target) {
+  const resolution = target.resolution;
+  if (resolution === void 0) return target.materialisations.length === 0;
+  if (resolution.sources !== void 0 !== (resolution.status === "observed"))
+    return false;
+  if (resolution.targetId !== target.definition.targetId) return false;
+  if (resolution.sources !== void 0 && (resolution.sources.length !== target.materialisations.length || resolution.sources.some(
+    (source, index) => !same(source, target.materialisations[index]?.source)
+  )))
+    return false;
+  return target.materialisations.every(
+    (item) => materialisationIsCompactable(item, target.definition, resolution.sourceOid)
+  );
+}
+function compactProvenanceInput(input) {
+  const targetEvidence = [];
+  for (const target of input.targetEvidence) {
+    if ("version" in target) {
+      targetEvidence.push(target);
+      continue;
+    }
+    if (!targetEvidenceIsCompactable(target)) return void 0;
+    targetEvidence.push(compactTargetEvidenceShape(target));
+  }
+  return { ...input, targetEvidence };
+}
+function hydrateMaterialisation(item, definition, sourceOid) {
+  const { observation, sidecarByteCount: sidecarByteCount2, sidecarSha256, ...rest } = item;
+  const derived = observation === void 0 ? void 0 : sidecarByteCount2 === void 0 || sidecarSha256 === void 0 ? "unreconstructible" : {
+    artifactByteCount: item.source.byteCount,
+    artifactSha256: item.source.sha256,
+    artifactStatus: observation.artifactStatus,
+    sidecarByteCount: sidecarByteCount2,
+    sidecarSha256,
+    sidecarStatus: observation.sidecarStatus
+  };
+  if (derived === "unreconstructible") return void 0;
+  return {
+    ...rest,
+    ...sidecarByteCount2 === void 0 ? {} : { sidecarByteCount: sidecarByteCount2 },
+    ...sidecarSha256 === void 0 ? {} : { sidecarSha256 },
+    originUnitId: definition.originUnitId,
+    sourceOid,
+    target: definition.target,
+    targetId: definition.targetId,
+    ...derived === void 0 ? {} : { observation: derived }
+  };
+}
+function hydrateTargetEvidence(target) {
+  if (!("version" in target)) return target;
+  const { materialisations, resolution, version: _version, ...rest } = target;
+  if (resolution === void 0)
+    return materialisations.length === 0 ? { ...rest, materialisations: [] } : void 0;
+  const hydrated = [];
+  for (const item of materialisations) {
+    const entry = hydrateMaterialisation(
+      item,
+      target.definition,
+      resolution.sourceOid
+    );
+    if (entry === void 0) return void 0;
+    hydrated.push(entry);
+  }
+  return {
+    ...rest,
+    materialisations: hydrated,
+    resolution: {
+      ...resolution,
+      targetId: target.definition.targetId,
+      ...resolution.status === "observed" ? { sources: hydrated.map((item) => item.source) } : {}
+    }
+  };
+}
+function hydrateProvenanceInput(input) {
+  const targetEvidence = [];
+  for (const target of input.targetEvidence) {
+    const hydrated = hydrateTargetEvidence(target);
+    if (hydrated === void 0) return void 0;
+    targetEvidence.push(hydrated);
+  }
+  return { ...input, targetEvidence };
+}
+function projectionEncodingIsCanonical(input, hydrated) {
+  const stored = canonicalJson(input);
+  if (stored === canonicalJson(hydrated)) return true;
+  const compact = compactProvenanceInput(hydrated);
+  return compact !== void 0 && stored === canonicalJson(compact);
+}
+function projectionStorageByteLength(input) {
+  const compact = compactProvenanceInput(input) ?? input;
+  return utf82.encode(canonicalJson(compact)).byteLength;
+}
+
+// src/protocol/reducer.ts
+var utf83 = new TextEncoder();
 function compareProtocolText(left, right) {
   return left === right ? 0 : left < right ? -1 : 1;
 }
@@ -12074,7 +12251,7 @@ function targetAliasesAreValid(metadata, contract, harness) {
   ].every((target) => known.has(target.destinationAlias));
 }
 function canonicalCommandArgument(value) {
-  if (value.length === 0 || utf82.encode(value).byteLength > 1024) return false;
+  if (value.length === 0 || utf83.encode(value).byteLength > 1024) return false;
   for (let index = 0; index < value.length; index += 1) {
     const unit = value.charCodeAt(index);
     if (unit === 0 || unit >= 56320 && unit <= 57343) return false;
@@ -12087,7 +12264,7 @@ function canonicalCommandArgument(value) {
   return true;
 }
 function canonicalCommandVector(command) {
-  return command.length >= 1 && command.length <= 32 && command.every(canonicalCommandArgument) && utf82.encode(canonicalJson(command)).byteLength <= LIMITS.commandVectorBytes;
+  return command.length >= 1 && command.length <= 32 && command.every(canonicalCommandArgument) && utf83.encode(canonicalJson(command)).byteLength <= LIMITS.commandVectorBytes;
 }
 function knowledgeContractRuntimeValid(contract, harness) {
   const aliases = contract.aliases.map((item) => item.alias);
@@ -12100,7 +12277,7 @@ function knowledgeContractRuntimeValid(contract, harness) {
     (root, index) => roots.slice(index + 1).every(
       (other) => root !== other && !root.startsWith(`${other}/`) && !other.startsWith(`${root}/`)
     )
-  ) && commands.length >= 1 && commands.length <= 32 && commands.every(canonicalCommandVector) && canonicalCommandVector(contract.provenance.rollupGeneratorCommand) && canonicalCommandVector(contract.provenance.reproducibilityCommand) && utf82.encode(canonicalJson(commands)).byteLength <= LIMITS.commandVectorSetBytes && maximumMaterialisationSidecarBytes(contract, harness) <= LIMITS.materialisationSidecarBytes;
+  ) && commands.length >= 1 && commands.length <= 32 && commands.every(canonicalCommandVector) && canonicalCommandVector(contract.provenance.rollupGeneratorCommand) && canonicalCommandVector(contract.provenance.reproducibilityCommand) && utf83.encode(canonicalJson(commands)).byteLength <= LIMITS.commandVectorSetBytes && maximumMaterialisationSidecarBytes(contract, harness) <= LIMITS.materialisationSidecarBytes;
 }
 function knowledgeContractAwaitsFirstWave(state) {
   return (state.state === "initializing" || state.state === "active") && state.knowledgeContract === void 0 && state.gate === void 0 && state.pendingProvenanceCarry === void 0 && state.provenanceCarryClaim === void 0 && state.lastProvenanceCarryRefusal === void 0 && state.wave.unitIds.length === 0 && Object.values(state.units).every((unit) => unit.state === "planned") && Object.keys(state.reservations).length === 0 && state.activeModifyingUnitIds.length === 0 && state.qualificationQueue.length === 0 && state.integrationQueue.length === 0 && state.effectJournal.every(
@@ -12142,7 +12319,7 @@ function maximumMaterialisationSidecarBytes(contract, harness) {
     version: 1,
     waveId: "a".repeat(160)
   };
-  return utf82.encode(`${canonicalJson(value)}
+  return utf83.encode(`${canonicalJson(value)}
 `).byteLength;
 }
 function deriveProvenanceWorktreePath(root, idempotencyKey2) {
@@ -12274,10 +12451,17 @@ function provenanceBaseAdvancedDetailHash(advancedBaseOid, attemptedCommitOid, a
     })
   );
 }
+function hydratedTargetEvidence(input) {
+  if (input === void 0) return [];
+  return hydrateProvenanceInput(input)?.targetEvidence ?? [];
+}
 function provenanceInput(state, gate) {
   const details = decodeClosedUnitEvidenceDetails(state.closedUnitEvidence);
   const evidence = details?.evidence ?? {};
-  const carried = gate.carriedProjectionInputSnapshot;
+  const stored = gate.carriedProjectionInputSnapshot;
+  const carried = stored === void 0 ? void 0 : hydrateProvenanceInput(stored);
+  if (stored !== void 0 && carried === void 0)
+    throw new Error("carried provenance projection does not hydrate");
   const carriedEvidence = carried === void 0 ? {} : decodeClosedUnitEvidence(carried.closedUnitEvidence) ?? {};
   const mergedEvidence = {
     ...carriedEvidence
@@ -12372,6 +12556,10 @@ function projectionCollisionWitnesses(input) {
   return witnesses;
 }
 function projectionInputIsValid(input) {
+  const hydrated = hydrateProvenanceInput(input);
+  return hydrated !== void 0 && projectionEncodingIsCanonical(input, hydrated) && hydratedProjectionIsValid(hydrated);
+}
+function hydratedProjectionIsValid(input) {
   const details = decodeClosedUnitEvidenceDetails(input.closedUnitEvidence);
   if (details === void 0 || details.commitment !== input.closureEvidenceCommitment)
     return false;
@@ -12497,10 +12685,10 @@ function currentProjectionInput(state, gate, unitIds) {
 }
 function projectionInputWithinBounds(input) {
   try {
-    return input.unitIds.length <= 64 && input.targetEvidence.reduce(
+    return input.unitIds.length <= LIMITS.units && input.targetEvidence.reduce(
       (count, target) => count + target.materialisations.length,
       0
-    ) <= 128 && utf82.encode(canonicalJson(input)).byteLength <= 65536;
+    ) <= LIMITS.materialisationOutputs && projectionStorageByteLength(input) <= LIMITS.projectionSnapshotBytes;
   } catch {
     return false;
   }
@@ -12562,7 +12750,7 @@ function createProvenanceEntry(state, gate) {
       "provenance_commit"
     ),
     gateEntryId: provenanceGateEntryId,
-    projectionInputSnapshot: input,
+    projectionInputSnapshot: compactProvenanceInput(input) ?? input,
     status: "pending"
   };
   const {
@@ -12660,9 +12848,7 @@ function reduceWavePlan(state, event) {
   const byUnitId = new Map(metadata.map((task) => [task.unitId, task]));
   const carriedProjectionInputSnapshot = state.gate?.provenance?.status === "voided" && state.gate.provenance.disposition === "deferred_by_controller" ? state.gate.provenance.projectionInputSnapshot : state.pendingProvenanceCarry?.projectionInputSnapshot;
   const carriedProvenanceBaseOid = state.gate?.provenance?.status === "voided" && state.gate.provenance.disposition === "deferred_by_controller" ? state.gate.provenance.advancedBaseOid ?? state.gate.provenance.baseOid ?? state.gate.currentIntegrationOid : state.pendingProvenanceCarry?.integrationOid;
-  const carriedSnapshotCommitment = state.gate?.provenance?.status === "voided" && state.gate.provenance.disposition === "deferred_by_controller" ? provenanceCarrySnapshotCommitment(
-    state.gate.provenance.projectionInputSnapshot
-  ) : state.pendingProvenanceCarry?.snapshotCommitment;
+  const carriedSnapshotCommitment = state.gate?.provenance?.status === "voided" && state.gate.provenance.disposition === "deferred_by_controller" ? carrySnapshotCommitment(state.gate.provenance.projectionInputSnapshot) : state.pendingProvenanceCarry?.snapshotCommitment;
   const lineageAncestorDigests = state.gate?.provenance?.status === "voided" && state.gate.provenance.disposition === "deferred_by_controller" ? state.gate.lineageAncestorDigests : state.pendingProvenanceCarry?.lineageAncestorDigests ?? [];
   if (carriedProjectionInputSnapshot !== void 0 && event.knowledgeContract === void 0)
     return reject(
@@ -12671,7 +12857,7 @@ function reduceWavePlan(state, event) {
     );
   if (carriedProjectionInputSnapshot !== void 0 && !projectionInputFits(carriedProjectionInputSnapshot))
     return reject("invalid_event", "carried provenance exceeds its bound");
-  if (carriedProjectionInputSnapshot === void 0 !== (carriedSnapshotCommitment === void 0) || carriedProjectionInputSnapshot !== void 0 && (carriedSnapshotCommitment !== provenanceCarrySnapshotCommitment(carriedProjectionInputSnapshot) || carriedProjectionInputSnapshot.unitIds.length === 0 || carriedProjectionInputSnapshot.unitIds.some(
+  if (carriedProjectionInputSnapshot === void 0 !== (carriedSnapshotCommitment === void 0) || carriedProjectionInputSnapshot !== void 0 && (carriedSnapshotCommitment !== carrySnapshotCommitment(carriedProjectionInputSnapshot) || carriedProjectionInputSnapshot.unitIds.length === 0 || carriedProjectionInputSnapshot.unitIds.some(
     (unitId) => selected.value.includes(unitId)
   )))
     return reject(
@@ -12741,7 +12927,7 @@ function canonicalTaskMetadata(task) {
 }
 function metadataFitsEnvelope(metadata) {
   try {
-    return utf82.encode(canonicalJson(metadata)).byteLength <= LIMITS.envelopeBytes / 2;
+    return utf83.encode(canonicalJson(metadata)).byteLength <= LIMITS.envelopeBytes / 2;
   } catch {
     return false;
   }
@@ -13007,9 +13193,9 @@ function destinationIdentityForMaterialisation(gate, stage, item) {
 function observedUnitMaterialisations(gate) {
   const entries = /* @__PURE__ */ new Map();
   for (const item of [
-    ...projectionSnapshot(gate)?.targetEvidence.flatMap(
+    ...hydratedTargetEvidence(projectionSnapshot(gate)).flatMap(
       (target) => target.materialisations
-    ) ?? [],
+    ),
     ...gateMaterialisations(gate, "unit")
   ])
     if (item.status === "observed") entries.set(item.gateEntryId, item);
@@ -13083,10 +13269,12 @@ function sidecarFor(state, gate, item, artifactName, timestamp) {
 `, value };
 }
 function sourceTotals(gate) {
-  const settledUnitTargets = gate.provenance?.projectionInputSnapshot.targetEvidence ?? [
-    ...gate.carriedProjectionInputSnapshot?.targetEvidence ?? [],
-    ...gate.targets.filter((target) => target.definition.scope === "unit")
-  ];
+  const settledUnitTargets = gate.provenance === void 0 ? [
+    ...hydratedTargetEvidence(gate.carriedProjectionInputSnapshot),
+    ...gate.targets.filter(
+      (target) => target.definition.scope === "unit"
+    )
+  ] : hydratedTargetEvidence(gate.provenance.projectionInputSnapshot);
   const sources = [
     ...settledUnitTargets,
     ...gate.targets.filter((target) => target.definition.scope === "gate")
@@ -13097,7 +13285,7 @@ function sourceTotals(gate) {
   };
 }
 function canonicalByteLength(value) {
-  return utf82.encode(canonicalJson(value)).byteLength;
+  return utf83.encode(canonicalJson(value)).byteLength;
 }
 var MAX_GATE_EVENT_ID_BYTES = 160;
 var GATE_IDEMPOTENCY_KEY_BYTES = 68;
@@ -13105,7 +13293,7 @@ function canonicalAsciiArrayBytes(lengths) {
   return 2 + lengths.reduce((total, length) => total + length + 2, 0) + Math.max(0, lengths.length - 1);
 }
 function maximumFifoHistoryGrowth(current, appendedItemBytes) {
-  const currentLengths = current.map((item) => utf82.encode(item).byteLength);
+  const currentLengths = current.map((item) => utf83.encode(item).byteLength);
   const currentBytes = canonicalAsciiArrayBytes(currentLengths);
   let maximumBytes = currentBytes;
   for (let appended = 1; appended <= LIMITS.eventHistory; appended += 1) {
@@ -13180,7 +13368,7 @@ function maximumSidecarByteCountForSource(source, binding, artifactName) {
     version: 1,
     waveId: binding.waveId
   };
-  return utf82.encode(`${canonicalJson(sidecar)}
+  return utf83.encode(`${canonicalJson(sidecar)}
 `).byteLength;
 }
 function reachableMaterialisationVariants(source, binding) {
@@ -13198,7 +13386,7 @@ function reachableMaterialisationVariants(source, binding) {
     binding.target.namingPolicy,
     "9999-12-31T23:59:59Z"
   );
-  const sidecarByteCount = maximumSidecarByteCountForSource(
+  const sidecarByteCount2 = maximumSidecarByteCountForSource(
     source,
     binding,
     artifactName
@@ -13206,7 +13394,7 @@ function reachableMaterialisationVariants(source, binding) {
   const named = {
     ...base,
     artifactName,
-    sidecarByteCount,
+    sidecarByteCount: sidecarByteCount2,
     sidecarName: `${artifactName}.sce-provenance.json`,
     sidecarSha256: "a".repeat(64),
     timestamp: "9999-12-31T23:59:59Z"
@@ -13240,7 +13428,7 @@ function reachableMaterialisationVariants(source, binding) {
         artifactByteCount: source.byteCount,
         artifactSha256: "a".repeat(64),
         artifactStatus: "already_present",
-        sidecarByteCount,
+        sidecarByteCount: sidecarByteCount2,
         sidecarSha256: "a".repeat(64),
         sidecarStatus: "already_present"
       },
@@ -13385,21 +13573,31 @@ function reachableTargetVariants(sources, binding) {
   ];
   return { baseline, variants };
 }
-function materialisationExpansionCost(sources, binding) {
-  const { baseline, variants } = reachableTargetVariants(sources, binding);
-  const baselineBytes = canonicalByteLength(baseline);
-  return Math.max(
-    ...variants.map(
-      (target) => canonicalByteLength(target) - baselineBytes
-    )
+function compactReachableShape(value) {
+  return compactTargetEvidenceShape(
+    value
   );
 }
+function largestReachableDelta(baseline, variants) {
+  const baselineBytes = canonicalByteLength(baseline);
+  return Math.max(
+    ...variants.map((target) => canonicalByteLength(target) - baselineBytes)
+  );
+}
+function materialisationExpansionCost(sources, binding) {
+  const { baseline, variants } = reachableTargetVariants(sources, binding);
+  return largestReachableDelta(baseline, variants);
+}
 function materialisationAggregateExpansionCost(sources, binding) {
-  const expansion = materialisationExpansionCost(sources, binding);
-  return binding.stage === "unit" ? 2 * expansion : expansion;
+  return materialisationExpansionCost(sources, binding) + materialisationProjectionExpansionCost(sources, binding);
 }
 function materialisationProjectionExpansionCost(sources, binding) {
-  return binding.stage === "unit" ? materialisationExpansionCost(sources, binding) : 0;
+  if (binding.stage !== "unit") return 0;
+  const { baseline, variants } = reachableTargetVariants(sources, binding);
+  return largestReachableDelta(
+    compactReachableShape(baseline),
+    variants.map(compactReachableShape)
+  );
 }
 function maximumReachableDestinationProbeValue(destinationAlias, destinationSubpath, gateEntryId = `sce:gate:${"a".repeat(64)}`, stage = "unit") {
   const base = {
@@ -13496,7 +13694,7 @@ function maximumUnitProbeProjectionGrowth(state, gate) {
   });
   return Math.max(
     0,
-    canonicalByteLength(future) - canonicalByteLength(current)
+    projectionStorageByteLength(future) - projectionStorageByteLength(current)
   );
 }
 function maximumGateJournalEntry(kind) {
@@ -13538,7 +13736,7 @@ function maximumFixedGateVariants(state, gate, stage) {
   const provenanceBase = {
     baseOid,
     gateEntryId: provenanceGateEntryId,
-    projectionInputSnapshot
+    projectionInputSnapshot: compactProvenanceInput(projectionInputSnapshot) ?? projectionInputSnapshot
   };
   const provenanceAttempt = {
     ...provenanceBase,
@@ -13780,7 +13978,7 @@ function materialisationFixedCompletionReserve(state, gate, stage) {
 function resolutionCapacities(state, gate, stage) {
   const compacted = compactJournal(state);
   const totals = sourceTotals(gate);
-  const projectionBytes = canonicalByteLength(
+  const projectionBytes = projectionStorageByteLength(
     provenanceInput(state, gate)
   );
   const futureUnitProbeBytes = stage === "unit" ? maximumUnitProbeProjectionGrowth(state, gate) : 0;
@@ -13805,7 +14003,7 @@ function resolutionCapacities(state, gate, stage) {
     ),
     remainingProjectionSnapshotByteCapacity: Math.max(
       0,
-      stage === "unit" ? 65536 - projectionBytes - futureUnitProbeBytes : 0
+      stage === "unit" ? LIMITS.projectionSnapshotBytes - projectionBytes - futureUnitProbeBytes : 0
     ),
     remainingSourceByteCapacity: Math.max(
       0,
@@ -13897,7 +14095,7 @@ function resolutionIntentCompletionFits(state, gate, target, capacities) {
       )
     );
     const completedMaximum = repositoryEnvelopeBytes(deferredState) + materialisationFixedCompletionReserve(deferredState, deferredGate, stage);
-    const projectionMaximum = stage === "unit" ? canonicalByteLength(
+    const projectionMaximum = stage === "unit" ? projectionStorageByteLength(
       provenanceInput(compacted, {
         ...deferredGate,
         destinationProbes: [
@@ -13909,7 +14107,7 @@ function resolutionIntentCompletionFits(state, gate, target, capacities) {
         ]
       })
     ) : 0;
-    return Math.max(immediateMaximum, completedMaximum) <= LIMITS.envelopeBytes && projectionMaximum <= 65536;
+    return Math.max(immediateMaximum, completedMaximum) <= LIMITS.envelopeBytes && projectionMaximum <= LIMITS.projectionSnapshotBytes;
   } catch {
     return false;
   }
@@ -13955,9 +14153,7 @@ function nameCollisionWitnesses(gate, stage, includeVoided = false) {
       item,
       pending: item.status === "pending" || includeVoided && item.status === "voided" && item.lastRefusal?.code === "output_name_collision"
     })),
-    ...(stage === "gate" ? observedUnitMaterialisations(gate) : (gate.carriedProjectionInputSnapshot?.targetEvidence.flatMap(
-      (target) => target.materialisations
-    ) ?? []).filter((item) => item.status === "observed")).map((item) => ({ item, pending: false }))
+    ...(stage === "gate" ? observedUnitMaterialisations(gate) : hydratedTargetEvidence(gate.carriedProjectionInputSnapshot).flatMap((target) => target.materialisations).filter((item) => item.status === "observed")).map((item) => ({ item, pending: false }))
   ];
   for (const { item, pending } of candidates) {
     if (!pending && item.status !== "observed" || item.artifactName === void 0 || item.sidecarName === void 0)
@@ -13999,7 +14195,7 @@ function observedFinalNamesAreUnique(gate) {
   const destinations = /* @__PURE__ */ new Map();
   const targets = /* @__PURE__ */ new Map();
   for (const target of [
-    ...projectionSnapshot(gate)?.targetEvidence ?? [],
+    ...hydratedTargetEvidence(projectionSnapshot(gate)),
     ...gate.targets
   ])
     targets.set(target.definition.targetId, target);
@@ -14522,7 +14718,7 @@ function reduceGate(state, event) {
         artifactName,
         event.timestamp
       );
-      if (utf82.encode(sidecar.bytes).byteLength > LIMITS.materialisationSidecarBytes)
+      if (utf83.encode(sidecar.bytes).byteLength > LIMITS.materialisationSidecarBytes)
         return reject(
           "invalid_event",
           "canonical sidecar exceeds its byte bound"
@@ -14533,7 +14729,7 @@ function reduceGate(state, event) {
         (item) => ({
           ...item,
           artifactName,
-          sidecarByteCount: utf82.encode(sidecar.bytes).byteLength,
+          sidecarByteCount: utf83.encode(sidecar.bytes).byteLength,
           sidecarName: `${artifactName}.sce-provenance.json`,
           sidecarSha256: sha256(sidecar.bytes),
           timestamp: event.timestamp
@@ -15003,12 +15199,23 @@ function reduceGate(state, event) {
   return reject("illegal_transition", "unsupported aggregate gate event");
 }
 function provenanceCarrySnapshotCommitment(input) {
+  const hydrated = hydrateProvenanceInput(input);
+  if (hydrated === void 0)
+    throw new Error("provenance projection does not hydrate");
   return sha256(
     canonicalJson({
       domain: "sce.provenance-carry-snapshot.v1",
-      projectionInputSnapshot: input
+      projectionInputSnapshot: hydrated
     })
   );
+}
+function carrySnapshotCommitment(input) {
+  const hydrated = hydrateProvenanceInput(input);
+  return hydrated === void 0 ? void 0 : provenanceCarrySnapshotCommitment(hydrated);
+}
+function compactedCarry(carry) {
+  const compact = compactProvenanceInput(carry.projectionInputSnapshot);
+  return compact === void 0 ? carry : { ...carry, projectionInputSnapshot: compact };
 }
 function provenanceCarryLineageCommitment(lineageAncestorDigests) {
   return sha256(
@@ -15132,7 +15339,7 @@ function reduceProvenanceCarry(state, event) {
     return badObservation();
   if (event.result.status === "imported") {
     const carry = event.result.carry;
-    if (carry.exportId !== claim.exportId || carry.predecessorRootBeadId !== claim.predecessorRootBeadId || carry.predecessorRunId !== claim.predecessorRunId || carry.predecessorWaveId !== claim.predecessorWaveId || carry.predecessorFinalRevision !== claim.predecessorFinalRevision || carry.predecessorJournalCheckpointCommitment !== claim.predecessorJournalCheckpointCommitment || carry.predecessorRootAggregateCommitment !== claim.predecessorRootAggregateCommitment || carry.snapshotCommitment !== claim.snapshotCommitment || carry.snapshotCommitment !== provenanceCarrySnapshotCommitment(carry.projectionInputSnapshot) || carry.claimRecordDigest !== expectedCarryClaimRecordDigest(state, claim) || carry.predecessorRunId === state.controller.runId || carry.lineageCommitment !== provenanceCarryLineageCommitment(carry.lineageAncestorDigests) || carry.lineageAncestorDigests.at(-1) !== provenanceCarryAncestorDigest(
+    if (carry.exportId !== claim.exportId || carry.predecessorRootBeadId !== claim.predecessorRootBeadId || carry.predecessorRunId !== claim.predecessorRunId || carry.predecessorWaveId !== claim.predecessorWaveId || carry.predecessorFinalRevision !== claim.predecessorFinalRevision || carry.predecessorJournalCheckpointCommitment !== claim.predecessorJournalCheckpointCommitment || carry.predecessorRootAggregateCommitment !== claim.predecessorRootAggregateCommitment || carry.snapshotCommitment !== claim.snapshotCommitment || carry.snapshotCommitment !== carrySnapshotCommitment(carry.projectionInputSnapshot) || carry.claimRecordDigest !== expectedCarryClaimRecordDigest(state, claim) || carry.predecessorRunId === state.controller.runId || carry.lineageCommitment !== provenanceCarryLineageCommitment(carry.lineageAncestorDigests) || carry.lineageAncestorDigests.at(-1) !== provenanceCarryAncestorDigest(
       carry.predecessorRootBeadId,
       carry.predecessorRunId
     ) || carry.projectionInputSnapshot.unitIds.length === 0 || !projectionInputFits(carry.projectionInputSnapshot))
@@ -15143,7 +15350,7 @@ function reduceProvenanceCarry(state, event) {
     state,
     event.effectId,
     event.observationHash,
-    event.result.status === "imported" ? { pendingProvenanceCarry: event.result.carry } : { lastProvenanceCarryRefusal: event.result }
+    event.result.status === "imported" ? { pendingProvenanceCarry: compactedCarry(event.result.carry) } : { lastProvenanceCarryRefusal: event.result }
   );
   const { provenanceCarryClaim: _claim, ...withoutClaim } = observed2;
   return commit(settleAmbiguityState(withoutClaim), event, []);
@@ -17062,7 +17269,7 @@ function aggregateRuntimeEffectParams(state, gateEntryId, kind) {
       artifactName,
       timestamp
     ).bytes;
-    if (utf82.encode(sidecarBytes).byteLength !== required(found.sidecarByteCount, "sidecar byte count", kind) || sha256(sidecarBytes) !== required(found.sidecarSha256, "sidecar digest", kind))
+    if (utf83.encode(sidecarBytes).byteLength !== required(found.sidecarByteCount, "sidecar byte count", kind) || sha256(sidecarBytes) !== required(found.sidecarSha256, "sidecar digest", kind))
       throw new Error("materialisation sidecar binding mismatch");
     return {
       artifactName,
@@ -17078,7 +17285,7 @@ function aggregateRuntimeEffectParams(state, gateEntryId, kind) {
       originUnitId: found.originUnitId,
       repositoryIdentity: state.repositoryIdentity,
       runId: state.controller.runId,
-      sidecarByteCount: utf82.encode(sidecarBytes).byteLength,
+      sidecarByteCount: utf83.encode(sidecarBytes).byteLength,
       sidecarBytes,
       sidecarName: required(found.sidecarName, "sidecar name", kind),
       sidecarSha256: sha256(sidecarBytes),
@@ -18249,7 +18456,7 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
     entries.push(entry);
     unresolvedByUnit.set(entry.unitId, entries);
   };
-  if (utf82.encode(
+  if (utf83.encode(
     JSON.stringify({
       schema: "sce.repository-run",
       version: SCHEMA_VERSION,
@@ -18281,6 +18488,11 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
       errors.push("queue contains a unit outside the current wave");
   }
   const oidLength = state.gitObjectFormat === "sha1" ? 40 : 64;
+  const storedProjections = [
+    state.pendingProvenanceCarry?.projectionInputSnapshot,
+    state.gate?.carriedProjectionInputSnapshot,
+    state.gate?.provenance?.projectionInputSnapshot
+  ].filter((snapshot) => snapshot !== void 0);
   const knowledgeOids = [
     state.pendingProvenanceCarry?.integrationOid,
     state.gate?.currentIntegrationOid,
@@ -18306,12 +18518,15 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
     ...state.gate?.provenanceUnitAccounting.flatMap(
       (item) => item.status === "committed" ? [item.provenanceCommitOid] : []
     ) ?? [],
-    ...state.pendingProvenanceCarry === void 0 ? [] : projectionInputOids(
-      state.pendingProvenanceCarry.projectionInputSnapshot
-    ),
-    ...state.gate?.carriedProjectionInputSnapshot === void 0 ? [] : projectionInputOids(state.gate.carriedProjectionInputSnapshot),
-    ...state.gate?.provenance === void 0 ? [] : projectionInputOids(state.gate.provenance.projectionInputSnapshot)
+    ...storedProjections.flatMap((snapshot) => {
+      const hydrated = hydrateProvenanceInput(snapshot);
+      return hydrated === void 0 ? [] : projectionInputOids(hydrated);
+    })
   ];
+  if (storedProjections.some(
+    (snapshot) => hydrateProvenanceInput(snapshot) === void 0
+  ))
+    errors.push("knowledge gate has an unhydratable provenance projection");
   if (knowledgeOids.some(
     (value) => value !== void 0 && value.length !== oidLength
   ))
@@ -18325,9 +18540,7 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
       pendingCarry.exportId,
       pendingCarry.predecessorRootBeadId
     );
-    if (state.gate !== void 0 || state.wave.unitIds.length !== 0 || state.provenanceCarryClaim !== void 0 || !carryClaimIsBeforeFirstWave(state) || !projectionInputFits(pendingCarry.projectionInputSnapshot) || pendingCarry.projectionInputSnapshot.unitIds.length === 0 || pendingCarry.snapshotCommitment !== provenanceCarrySnapshotCommitment(
-      pendingCarry.projectionInputSnapshot
-    ) || pendingCarry.exportId !== deriveProvenanceCarryExportId({
+    if (state.gate !== void 0 || state.wave.unitIds.length !== 0 || state.provenanceCarryClaim !== void 0 || !carryClaimIsBeforeFirstWave(state) || !projectionInputFits(pendingCarry.projectionInputSnapshot) || pendingCarry.projectionInputSnapshot.unitIds.length === 0 || pendingCarry.snapshotCommitment !== carrySnapshotCommitment(pendingCarry.projectionInputSnapshot) || pendingCarry.exportId !== deriveProvenanceCarryExportId({
       finalRevision: pendingCarry.predecessorFinalRevision,
       integrationBranch: state.integrationBranch,
       predecessorRootAggregateCommitment: pendingCarry.predecessorRootAggregateCommitment,
@@ -18992,29 +19205,29 @@ function gateInvariantErrors(state) {
     errors.push("knowledge gate does not bind the current wave");
   if (gate.carriedProjectionInputSnapshot !== void 0 && !projectionInputFits(gate.carriedProjectionInputSnapshot) || gate.provenance !== void 0 && !projectionInputFits(gate.provenance.projectionInputSnapshot))
     errors.push("knowledge gate has an invalid provenance input snapshot");
-  if (gate.provenance === void 0 && gate.carriedProjectionInputSnapshot === void 0 !== (gate.carriedSnapshotCommitment === void 0) || gate.provenance !== void 0 && gate.carriedProjectionInputSnapshot !== void 0 || gate.carriedProjectionInputSnapshot !== void 0 && (gate.carriedSnapshotCommitment !== provenanceCarrySnapshotCommitment(
-    gate.carriedProjectionInputSnapshot
-  ) || gate.carriedProjectionInputSnapshot.unitIds.some(
+  if (gate.provenance === void 0 && gate.carriedProjectionInputSnapshot === void 0 !== (gate.carriedSnapshotCommitment === void 0) || gate.provenance !== void 0 && gate.carriedProjectionInputSnapshot !== void 0 || gate.carriedProjectionInputSnapshot !== void 0 && (gate.carriedSnapshotCommitment !== carrySnapshotCommitment(gate.carriedProjectionInputSnapshot) || gate.carriedProjectionInputSnapshot.unitIds.some(
     (unitId) => gate.originalUnitIds.includes(unitId)
   )))
     errors.push("knowledge gate has an invalid carried snapshot commitment");
   if (gate.provenance !== void 0) {
-    const snapshot = gate.provenance.projectionInputSnapshot;
+    const snapshot = hydrateProvenanceInput(
+      gate.provenance.projectionInputSnapshot
+    );
     const durableClosureEvidence2 = decodeClosedUnitEvidence(
       state.closedUnitEvidence
     );
     const expectedCurrentIds = gate.originalUnitIds.filter(
       (unitId) => durableClosureEvidence2?.[unitId]?.outcome === "landed"
     ).sort(compareProtocolText);
-    const currentIds = snapshot.unitIds.filter(
+    const currentIds = (snapshot?.unitIds ?? []).filter(
       (unitId) => gate.originalUnitIds.includes(unitId)
     );
-    const carriedIds = snapshot.unitIds.filter(
+    const carriedIds = (snapshot?.unitIds ?? []).filter(
       (unitId) => !gate.originalUnitIds.includes(unitId)
     );
-    const currentSlice = projectionInputSlice(snapshot, currentIds);
+    const currentSlice = snapshot === void 0 ? void 0 : projectionInputSlice(snapshot, currentIds);
     const expectedCurrent = currentProjectionInput(state, gate, currentIds);
-    const carriedSlice = projectionInputSlice(snapshot, carriedIds);
+    const carriedSlice = snapshot === void 0 ? void 0 : projectionInputSlice(snapshot, carriedIds);
     if (!sameStringArray(currentIds, expectedCurrentIds) || currentSlice === void 0 || expectedCurrent === void 0 || canonicalJson(currentSlice) !== canonicalJson(expectedCurrent))
       errors.push("provenance snapshot does not bind current landed evidence");
     if (gate.carriedSnapshotCommitment === void 0 ? carriedIds.length !== 0 : carriedSlice === void 0 || provenanceCarrySnapshotCommitment(carriedSlice) !== gate.carriedSnapshotCommitment)
@@ -19278,7 +19491,7 @@ function gateInvariantErrors(state) {
             artifactName,
             item.timestamp
           );
-          if (item.artifactName !== artifactName || item.sidecarName !== `${artifactName}.sce-provenance.json` || item.sidecarByteCount !== utf82.encode(sidecar.bytes).byteLength || item.sidecarSha256 !== sha256(sidecar.bytes))
+          if (item.artifactName !== artifactName || item.sidecarName !== `${artifactName}.sce-provenance.json` || item.sidecarByteCount !== utf83.encode(sidecar.bytes).byteLength || item.sidecarSha256 !== sha256(sidecar.bytes))
             errors.push(
               `materialisation ${item.gateEntryId} has invalid planned bytes`
             );
@@ -19375,11 +19588,14 @@ function gateInvariantErrors(state) {
   if (gate.provenance !== void 0 && gate.provenance.status !== "voided" && !stageMaterialisationsSettled(gate, "unit"))
     errors.push("provenance preceded settled unit materialisations");
   if (gate.provenance !== void 0) {
-    const expected = deriveGateEntryId(
+    const hydrated = hydrateProvenanceInput(
+      gate.provenance.projectionInputSnapshot
+    );
+    const expected = hydrated === void 0 ? void 0 : deriveGateEntryId(
       state.controller.runId,
       gate.waveId,
       "provenance",
-      gate.provenance.projectionInputSnapshot
+      hydrated
     );
     if (gate.provenance.gateEntryId !== expected)
       errors.push("provenance entry has invalid identity");
@@ -20791,7 +21007,7 @@ var BD_VERSION = "1.1.0";
 var BD_CONTEXT_SCHEMA_VERSION = 1;
 var MAX_PATH_BYTES = 4096;
 var MAX_TEXT_BYTES = 8192;
-var utf83 = new TextEncoder();
+var utf84 = new TextEncoder();
 function strictObject3(properties) {
   return Type.Object(properties, { additionalProperties: false });
 }
@@ -20818,7 +21034,7 @@ ajv2.addKeyword({
   keyword: "maxUtf8Bytes",
   type: "string",
   schemaType: "number",
-  validate: (limit, value) => utf83.encode(value).byteLength <= limit,
+  validate: (limit, value) => utf84.encode(value).byteLength <= limit,
   errors: false
 });
 function isSchema(schema, value) {
@@ -21908,7 +22124,7 @@ async function inspectPreflight(cwd, options = {}) {
 
 // src/adapters/git/schemas.ts
 var import_ajv3 = __toESM(require_ajv(), 1);
-var utf84 = new TextEncoder();
+var utf85 = new TextEncoder();
 var ajv3 = new import_ajv3.Ajv({
   allErrors: true,
   coerceTypes: false,
@@ -21920,7 +22136,7 @@ ajv3.addKeyword({
   keyword: "maxUtf8Bytes",
   type: "string",
   schemaType: "number",
-  validate: (limit, value) => utf84.encode(value).byteLength <= limit,
+  validate: (limit, value) => utf85.encode(value).byteLength <= limit,
   errors: false
 });
 function strictObject4(properties) {
@@ -24405,7 +24621,9 @@ function provenanceRecordsCommitment(records) {
   );
 }
 function projectProvenanceRecords(params, executorTool) {
-  const snapshot = params.projectionInputSnapshot;
+  const snapshot = hydrateProvenanceInput(params.projectionInputSnapshot);
+  if (snapshot === void 0)
+    return { ok: false, reason: "projection snapshot does not hydrate" };
   const evidence = decodeClosedUnitEvidence(snapshot.closedUnitEvidence);
   if (evidence === void 0)
     return { ok: false, reason: "closure evidence is undecodable" };
@@ -25214,7 +25432,7 @@ var OperationLockStateSchema = strictObject({
 });
 
 // src/fencing/projections.ts
-var utf85 = new TextEncoder();
+var utf86 = new TextEncoder();
 function json(value) {
   return value;
 }
@@ -25430,7 +25648,7 @@ var SOCKET_NAME = "l";
 var STATE_NAME = "s";
 var STATE_MAX_BYTES = 4096;
 var MAX_ACQUIRE_ATTEMPTS = 4;
-var utf86 = new TextEncoder();
+var utf87 = new TextEncoder();
 function ownerMatches(uid) {
   return typeof process.getuid !== "function" || uid === process.getuid();
 }
@@ -25480,7 +25698,7 @@ function captureState(path2) {
     if (!opened.isFile() || !ownerMatches(opened.uid) || (opened.mode & 511) !== 384 || opened.dev !== before.dev || opened.ino !== before.ino || opened.size > STATE_MAX_BYTES)
       return { kind: "invalid" };
     const source = readFileSync(descriptor, "utf8");
-    if (utf86.encode(source).byteLength > STATE_MAX_BYTES)
+    if (utf87.encode(source).byteLength > STATE_MAX_BYTES)
       return { kind: "invalid" };
     const input = JSON.parse(source);
     const parsed = validate(
@@ -25717,7 +25935,7 @@ var OperationLock = class _OperationLock {
 };
 
 // src/fencing/merge-slot.ts
-function same(left, right) {
+function same2(left, right) {
   return canonicalJson(left) === canonicalJson(right);
 }
 function slotReadbackPayload(observation) {
@@ -25755,7 +25973,7 @@ function validateMergeSlotObservation(input, prefix, scope) {
   if (!parsed.ok || parsed.value === void 0)
     return { ok: false, reason: parsed.errors.join("; ") };
   const observation = parsed.value;
-  if (observation.slotId !== slotId(prefix) || !same(observation.scope, scope) || observation.scopeCommitment !== deriveScopeCommitment(scope) || observation.readbackHash !== deriveSlotReadbackHash(observation))
+  if (observation.slotId !== slotId(prefix) || !same2(observation.scope, scope) || observation.scopeCommitment !== deriveScopeCommitment(scope) || observation.readbackHash !== deriveSlotReadbackHash(observation))
     return { ok: false, reason: "slot identity or readback is invalid" };
   if (observation.status === "available" && observation.holder !== void 0 || observation.status === "acquired" && (observation.holder === void 0 || observation.actor !== observation.holder))
     return { ok: false, reason: "slot status and holder disagree" };
@@ -25768,7 +25986,7 @@ function continuationMatches(input, prefix, scope, holder4, knownHolder, observa
   );
   if (!parsed.ok || parsed.value === void 0) return false;
   const evidence = parsed.value;
-  if (evidence.nextHolder !== holder4 || evidence.previousHolder === holder4 || knownHolder !== evidence.previousHolder || runId(evidence.previousHolder) !== runId(holder4) || !same(evidence.after, observation))
+  if (evidence.nextHolder !== holder4 || evidence.previousHolder === holder4 || knownHolder !== evidence.previousHolder || runId(evidence.previousHolder) !== runId(holder4) || !same2(evidence.after, observation))
     return false;
   const before = validateMergeSlotObservation(evidence.before, prefix, scope);
   const after = validateMergeSlotObservation(evidence.after, prefix, scope);
@@ -25855,7 +26073,7 @@ function isRecoverableEffect(effect2) {
     return "slotTransition" in effect2.params && effect2.params.slotTransition !== void 0;
   return true;
 }
-function same2(left, right) {
+function same3(left, right) {
   return canonicalJson(left) === canonicalJson(right);
 }
 function isRun(value) {
@@ -25867,7 +26085,7 @@ function effectFor(entry, run2) {
 function validReadback(readback, scope) {
   if (readback === void 0) return void 0;
   const root = validateRootProjection(readback.root);
-  if (!root.ok || !same2(root.value.scope, scope)) return void 0;
+  if (!root.ok || !same3(root.value.scope, scope)) return void 0;
   const expected = root.value.childRows;
   if (readback.children.length !== expected.length) return void 0;
   for (const row of expected) {
@@ -25875,7 +26093,7 @@ function validReadback(readback, scope) {
       (candidate) => candidate.unitId === row.unitId
     );
     const parsed = child === void 0 ? void 0 : validateChildProjection(child);
-    if (parsed === void 0 || !parsed.ok || parsed.value.commitment !== row.commitment || parsed.value.revision !== row.revision || !same2(parsed.value.unit, root.value.run.units[row.unitId]) || parsed.value.holder !== root.value.holder || !same2(parsed.value.scope, scope))
+    if (parsed === void 0 || !parsed.ok || parsed.value.commitment !== row.commitment || parsed.value.revision !== row.revision || !same3(parsed.value.unit, root.value.run.units[row.unitId]) || parsed.value.holder !== root.value.holder || !same3(parsed.value.scope, scope))
       return void 0;
   }
   return root.value.run;
@@ -25885,7 +26103,7 @@ function loadOutcome(status) {
 }
 function batchFor(before, nextRun) {
   const nextBase = makeRootProjection(nextRun);
-  const changedIds = Object.keys(nextRun.units).filter((unitId) => !same2(before.run.units[unitId], nextRun.units[unitId])).sort();
+  const changedIds = Object.keys(nextRun.units).filter((unitId) => !same3(before.run.units[unitId], nextRun.units[unitId])).sort();
   const changedRows = changedIds.map((unitId) => {
     const prior = before.childRows.find((row) => row.unitId === unitId);
     const child = makeChildProjection(nextBase, unitId);
@@ -25938,7 +26156,7 @@ function isPreOwnershipAcquire(before, next) {
 }
 function isInitialAcquire(next, holder4, scope) {
   const run2 = next.run;
-  return next.holder === holder4 && same2(next.scope, scope) && run2.revision === 1 && run2.state === "initializing" && run2.controller.state === "acquire_intent" && next.childRows.length === Object.keys(run2.units).length && run2.effectJournal.length === 1 && run2.effectJournal[0]?.kind === "controller_acquire" && run2.effectJournal[0]?.status === "intended" && run2.effectJournal[0]?.slotTransition !== void 0;
+  return next.holder === holder4 && same3(next.scope, scope) && run2.revision === 1 && run2.state === "initializing" && run2.controller.state === "acquire_intent" && next.childRows.length === Object.keys(run2.units).length && run2.effectJournal.length === 1 && run2.effectJournal[0]?.kind === "controller_acquire" && run2.effectJournal[0]?.status === "intended" && run2.effectJournal[0]?.slotTransition !== void 0;
 }
 function initialRequest(run2, holder4, scope) {
   const root = makeRootProjection(run2);
@@ -26022,7 +26240,7 @@ function createRecoveryRunner(options) {
       return {
         status: parsed.value.status === "holder_mismatch" ? "blocked" : parsed.value.status
       };
-    if (parsed.value.affectedRowCount !== batch.changedRows.length + 1 || !same2(parsed.value.root, batch.next.root) || !same2(parsed.value.children, batch.next.children) || !same2(parsed.value.checkpoint, batch.checkpoint))
+    if (parsed.value.affectedRowCount !== batch.changedRows.length + 1 || !same3(parsed.value.root, batch.next.root) || !same3(parsed.value.children, batch.next.children) || !same3(parsed.value.checkpoint, batch.checkpoint))
       return { status: "quarantined" };
     let authoritative;
     try {
@@ -26032,7 +26250,7 @@ function createRecoveryRunner(options) {
     }
     if (authoritative.status !== "observed") return { status: "quarantined" };
     const read = validReadback(authoritative.value, before.scope);
-    return read === void 0 || !same2(read, reduction.nextState) ? { status: "quarantined" } : read;
+    return read === void 0 || !same3(read, reduction.nextState) ? { status: "quarantined" } : read;
   }
   async function persistEvent(beforeRoot, run2, event, preOwnership = false) {
     return persist(beforeRoot, reduce(run2, event), preOwnership);
@@ -26128,7 +26346,7 @@ function createRecoveryRunner(options) {
           options.initialRun
         );
         const first = validate(ProtocolEventSchema, requested);
-        if (!initial.ok || initial.value === void 0 || !first.ok || first.value === void 0 || initial.value.controller.holder !== proof.holder || initial.value.state !== "initializing" || initial.value.controller.state !== "unacquired" || !same2(
+        if (!initial.ok || initial.value === void 0 || !first.ok || first.value === void 0 || initial.value.controller.holder !== proof.holder || initial.value.state !== "initializing" || initial.value.controller.state !== "unacquired" || !same3(
           {
             beadsStoreIdentity: initial.value.storeIdentity,
             gitRepositoryIdentity: initial.value.repositoryIdentity,
@@ -26166,7 +26384,7 @@ function createRecoveryRunner(options) {
           return {
             status: parsedResult.value.status === "holder_mismatch" ? "blocked" : parsedResult.value.status
           };
-        if (parsedResult.value.affectedRowCount !== creation.next.children.length + 1 || !same2(parsedResult.value.root, creation.next.root) || !same2(parsedResult.value.children, creation.next.children) || !same2(parsedResult.value.checkpoint, creation.next.root.checkpoint))
+        if (parsedResult.value.affectedRowCount !== creation.next.children.length + 1 || !same3(parsedResult.value.root, creation.next.root) || !same3(parsedResult.value.children, creation.next.children) || !same3(parsedResult.value.checkpoint, creation.next.root.checkpoint))
           return { status: "quarantined" };
         const createdRun = validReadback(
           {
@@ -26175,7 +26393,7 @@ function createRecoveryRunner(options) {
           },
           proof.scope
         );
-        if (createdRun === void 0 || !same2(createdRun, created.nextState))
+        if (createdRun === void 0 || !same3(createdRun, created.nextState))
           return { status: "quarantined" };
         loaded = {
           children: parsedResult.value.children,
@@ -27606,12 +27824,12 @@ var ajv4 = new import_ajv4.Ajv({
   useDefaults: false,
   strict: true
 });
-var utf87 = new TextEncoder();
+var utf88 = new TextEncoder();
 ajv4.addKeyword({
   keyword: "maxUtf8Bytes",
   type: "string",
   schemaType: "number",
-  validate: (limit, value) => utf87.encode(value).byteLength <= limit,
+  validate: (limit, value) => utf88.encode(value).byteLength <= limit,
   errors: false
 });
 var requestValidator = ajv4.compile(
@@ -27649,7 +27867,7 @@ var stateOnlyCommandRunner = (request2) => {
     const { diff, raw } = request2.options.request;
     return {
       result: {
-        candidateDiffByteCount: utf87.encode(diff).byteLength,
+        candidateDiffByteCount: utf88.encode(diff).byteLength,
         candidateDiffHash: deriveCandidateDiffHash(diff),
         domain: CANDIDATE_DIFF_DOMAIN,
         ...raw === true ? { sha256: sha256(diff) } : {}
@@ -27880,7 +28098,7 @@ import { isAbsolute as isAbsolute9, normalize as normalize5, relative as relativ
 
 // src/adapters/beads-embedded/schemas.ts
 var import_ajv5 = __toESM(require_ajv(), 1);
-var utf88 = new TextEncoder();
+var utf89 = new TextEncoder();
 var ajv5 = new import_ajv5.Ajv({
   allErrors: true,
   coerceTypes: false,
@@ -27892,7 +28110,7 @@ ajv5.addKeyword({
   keyword: "maxUtf8Bytes",
   type: "string",
   schemaType: "number",
-  validate: (limit, value) => utf88.encode(value).byteLength <= limit,
+  validate: (limit, value) => utf89.encode(value).byteLength <= limit,
   errors: false
 });
 var PINNED_BD_ISSUE_BASE_KEYS = [
@@ -28124,7 +28342,7 @@ var EmbeddedResultSchema = Type.Object(
 );
 
 // src/adapters/beads-embedded/slot-transition.ts
-function same3(left, right) {
+function same4(left, right) {
   return canonicalJson(left) === canonicalJson(right);
 }
 function head(value) {
@@ -28180,7 +28398,7 @@ function validateSlotTransitionIntent(input, prefix, scope, mode, expectedHolder
       "scope",
       "version"
     ].includes(key)
-  ) || value.schema !== "sce.beads-embedded.slot-transition" || value.version !== 1 || value.kind !== "acquire" && value.kind !== "release" || !holder2(value.holder) || expectedHolder !== void 0 && value.holder !== expectedHolder || !same3(value.scope, scope) || typeof value.idempotencyKey !== "string" || !/^[0-9a-f]{64}$/u.test(value.idempotencyKey))
+  ) || value.schema !== "sce.beads-embedded.slot-transition" || value.version !== 1 || value.kind !== "acquire" && value.kind !== "release" || !holder2(value.holder) || expectedHolder !== void 0 && value.holder !== expectedHolder || !same4(value.scope, scope) || typeof value.idempotencyKey !== "string" || !/^[0-9a-f]{64}$/u.test(value.idempotencyKey))
     return false;
   const before = object(value.before);
   if (before === void 0 || Object.keys(before).some(
@@ -29809,7 +30027,7 @@ function executableDigest2(path2, size) {
   }
 }
 var PROJECTION_INITIALIZATION_AUTHORITY = "sce.embedded.projection.initialize.v1";
-function same4(left, right) {
+function same5(left, right) {
   try {
     return canonicalJson(left) === canonicalJson(right);
   } catch {
@@ -29912,7 +30130,7 @@ var DoltProjectionPersistence = class {
       `UPDATE issues SET metadata=CASE id ${cases} ELSE metadata END WHERE id IN (${ids}) AND (SELECT COUNT(*) FROM issues WHERE ${absent})=${rows.length}${slotPredicate}; SELECT ROW_COUNT() AS affected`
     );
     const readback = source === void 0 || this.affected(source) !== rows.length ? void 0 : await this.load();
-    return readback?.status === "observed" && same4(readback.value.root, initial.root) && same4(readback.value.children, initial.children) ? { kind: "mutation", value: "applied" } : { kind: "mutation", value: "stale" };
+    return readback?.status === "observed" && same5(readback.value.root, initial.root) && same5(readback.value.children, initial.children) ? { kind: "mutation", value: "applied" } : { kind: "mutation", value: "stale" };
   }
   async initializeLegacy(batch, slot) {
     const rows = this.rows(batch);
@@ -29983,7 +30201,7 @@ var DoltProjectionPersistence = class {
         return { status: "ambiguous" };
       const child = validateChildProjection(envelope.projection);
       const reference = child.ok ? expected.get(child.value.unitId) : void 0;
-      if (!child.ok || reference === void 0 || child.value.commitment !== envelope.commitment || this.childIssueId(child.value.unitId) !== record4.id || child.value.revision !== reference.revision || child.value.commitment !== reference.commitment || !same4(child.value.scope, parsedRoot.value.scope) || child.value.holder !== parsedRoot.value.holder || !same4(child.value.unit, parsedRoot.value.run.units[child.value.unitId]))
+      if (!child.ok || reference === void 0 || child.value.commitment !== envelope.commitment || this.childIssueId(child.value.unitId) !== record4.id || child.value.revision !== reference.revision || child.value.commitment !== reference.commitment || !same5(child.value.scope, parsedRoot.value.scope) || child.value.holder !== parsedRoot.value.holder || !same5(child.value.unit, parsedRoot.value.run.units[child.value.unitId]))
         return { status: "ambiguous" };
       children.push(child.value);
     }
@@ -30049,7 +30267,7 @@ var DoltProjectionPersistence = class {
     if (Object.keys(claims).length === 0)
       return { head: currentHead, status: "absent" };
     const singleton = { [intent2.exportDigest]: intent2.record };
-    return Object.keys(claims).length === 1 && same4(claims, singleton) ? {
+    return Object.keys(claims).length === 1 && same5(claims, singleton) ? {
       head: currentHead,
       rootCommitment: root.value.aggregateCommitment,
       status: "observed"
@@ -30072,7 +30290,7 @@ var DoltProjectionPersistence = class {
     ))
       return false;
     for (const key of Object.keys(before)) {
-      if (key !== "metadata" && key !== "updated_at" && !same4(before[key], after[key]))
+      if (key !== "metadata" && key !== "updated_at" && !same5(before[key], after[key]))
         return false;
     }
     const beforeMetadata = object3(before.metadata);
@@ -30080,7 +30298,7 @@ var DoltProjectionPersistence = class {
     if (beforeMetadata === void 0 || afterMetadata === void 0)
       return false;
     const beforeClaims = beforeMetadata.sce_carry_claims;
-    if (!(beforeClaims === void 0 || object3(beforeClaims) !== void 0 && Object.keys(object3(beforeClaims)).length === 0) || !same4(afterMetadata.sce_carry_claims, {
+    if (!(beforeClaims === void 0 || object3(beforeClaims) !== void 0 && Object.keys(object3(beforeClaims)).length === 0) || !same5(afterMetadata.sce_carry_claims, {
       [intent2.exportDigest]: intent2.record
     }))
       return false;
@@ -30089,11 +30307,11 @@ var DoltProjectionPersistence = class {
       ...Object.keys(afterMetadata)
     ]);
     for (const key of siblingKeys) {
-      if (key !== "sce_carry_claims" && !same4(beforeMetadata[key], afterMetadata[key]))
+      if (key !== "sce_carry_claims" && !same5(beforeMetadata[key], afterMetadata[key]))
         return false;
     }
     const sce = object3(beforeMetadata.sce);
-    return sce?.commitment === intent2.expectedAggregateCommitment && same4(beforeMetadata.sce, afterMetadata.sce);
+    return sce?.commitment === intent2.expectedAggregateCommitment && same5(beforeMetadata.sce, afterMetadata.sce);
   }
   validCarryCheckpointIntent(intent2) {
     const record4 = validate(
@@ -30132,7 +30350,7 @@ var DoltProjectionPersistence = class {
       return { kind: "carry_claim", value: { status: "stale" } };
     const rootEnvelope = object3(row.root_sce);
     const root = validateRootProjection(rootEnvelope?.projection);
-    if (Object.keys(row).length !== 12 || row.root_id !== request2.predecessorRootIssueId || !root.ok || root.value.aggregateCommitment !== request2.expectedAggregateCommitment || rootEnvelope?.commitment !== request2.expectedAggregateCommitment || !same4(row.claims, singleton) || row.slot_id !== slot.slotId || row.slot_title !== slot.title || row.slot_status !== "in_progress" || row.slot_external_ref !== `sce-scope:v1:${slot.scopeCommitment}` || row.slot_design !== canonicalJson(slot.scope) || !same4(row.slot_metadata, { holder: slotHolder }) || row.label_count !== 1 || row.matching_label_count !== 1)
+    if (Object.keys(row).length !== 12 || row.root_id !== request2.predecessorRootIssueId || !root.ok || root.value.aggregateCommitment !== request2.expectedAggregateCommitment || rootEnvelope?.commitment !== request2.expectedAggregateCommitment || !same5(row.claims, singleton) || row.slot_id !== slot.slotId || row.slot_title !== slot.title || row.slot_status !== "in_progress" || row.slot_external_ref !== `sce-scope:v1:${slot.scopeCommitment}` || row.slot_design !== canonicalJson(slot.scope) || !same5(row.slot_metadata, { holder: slotHolder }) || row.label_count !== 1 || row.matching_label_count !== 1)
       return { kind: "carry_claim", value: { status: "unavailable" } };
     return {
       kind: "carry_claim",
@@ -30160,9 +30378,9 @@ var DoltProjectionPersistence = class {
     if (actual === void 0 || head3 === void 0) return void 0;
     const rootCommitment = actual.root.aggregateCommitment;
     const childCommitments = actual.children.map((child) => child.commitment);
-    if (same4(actual.root, request2.batch.next.root) && same4(actual.children, request2.batch.next.children))
+    if (same5(actual.root, request2.batch.next.root) && same5(actual.children, request2.batch.next.children))
       return { childCommitments, head: head3, rootCommitment, status: "observed" };
-    return rootCommitment === request2.batch.expectedAggregateCommitment && same4(
+    return rootCommitment === request2.batch.expectedAggregateCommitment && same5(
       childCommitments,
       request2.batch.expectedChildren.map((child) => child.expectedCommitment)
     ) ? { head: head3, status: "absent" } : { head: head3, status: "ambiguous" };
@@ -30220,14 +30438,14 @@ var DoltProjectionPersistence = class {
       const next = expected.get(before.id);
       const beforeMetadata = object3(before.metadata);
       const afterMetadata = object3(after.metadata);
-      if (next === void 0 || beforeMetadata === void 0 || afterMetadata === void 0 || beforeMetadata.sce !== void 0 || !same4(afterMetadata.sce, next))
+      if (next === void 0 || beforeMetadata === void 0 || afterMetadata === void 0 || beforeMetadata.sce !== void 0 || !same5(afterMetadata.sce, next))
         return false;
       for (const key of Object.keys(before)) {
-        if (key !== "metadata" && key !== "updated_at" && !same4(before[key], after[key]))
+        if (key !== "metadata" && key !== "updated_at" && !same5(before[key], after[key]))
           return false;
       }
       for (const key of Object.keys(beforeMetadata)) {
-        if (key !== "sce" && !same4(beforeMetadata[key], afterMetadata[key]))
+        if (key !== "sce" && !same5(beforeMetadata[key], afterMetadata[key]))
           return false;
       }
       seen.add(before.id);
@@ -30285,7 +30503,7 @@ var DoltProjectionPersistence = class {
     }
     values.sort((left, right) => compareCodeUnits2(left.unitId, right.unitId));
     if (values.length !== root.value.childRows.length || values.some(
-      (child, index) => root.value.childRows[index]?.unitId !== child.unitId || root.value.childRows[index]?.revision !== child.revision || root.value.childRows[index]?.commitment !== child.commitment || !same4(child.scope, root.value.scope) || child.holder !== root.value.holder || !same4(child.unit, root.value.run.units[child.unitId])
+      (child, index) => root.value.childRows[index]?.unitId !== child.unitId || root.value.childRows[index]?.revision !== child.revision || root.value.childRows[index]?.commitment !== child.commitment || !same5(child.scope, root.value.scope) || child.holder !== root.value.holder || !same5(child.unit, root.value.run.units[child.unitId])
     ))
       return void 0;
     const rows = [
@@ -30358,7 +30576,7 @@ var DoltProjectionPersistence = class {
     ))
       return false;
     for (const key of Object.keys(from)) {
-      if (key !== "metadata" && key !== "updated_at" && !same4(from[key], to[key]))
+      if (key !== "metadata" && key !== "updated_at" && !same5(from[key], to[key]))
         return false;
     }
     if (typeof from.updated_at !== "string" || typeof to.updated_at !== "string" || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u.test(from.updated_at) || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u.test(to.updated_at))
@@ -30370,7 +30588,7 @@ var DoltProjectionPersistence = class {
     ))
       return false;
     for (const key of Object.keys(before)) {
-      if (key !== "sce" && !same4(before[key], after[key])) return false;
+      if (key !== "sce" && !same5(before[key], after[key])) return false;
     }
     const previous = object3(before.sce);
     if (previous === void 0 || Object.keys(previous).length !== 2 || previous.commitment !== expectedCommitment || !Object.prototype.hasOwnProperty.call(previous, "projection"))
@@ -30383,11 +30601,11 @@ var DoltProjectionPersistence = class {
       const valid = validateRootProjection(projection);
       return valid.ok ? valid.value.aggregateCommitment : void 0;
     })();
-    return commitment === expectedCommitment && same4(after.sce, next) && !same4(before.sce, after.sce);
+    return commitment === expectedCommitment && same5(after.sce, next) && !same5(before.sce, after.sce);
   }
   parseReadback(source, batch) {
     const actual = this.projectionRows(source, batch);
-    return actual === void 0 || !same4(actual.root, batch.next.root) || !same4(
+    return actual === void 0 || !same5(actual.root, batch.next.root) || !same5(
       actual.children,
       [...batch.next.children].sort(
         (a, b) => compareCodeUnits2(a.unitId, b.unitId)
@@ -30580,7 +30798,7 @@ function result(code, stderrTail) {
     version: EMBEDDED_ADAPTER_VERSION
   };
 }
-function same5(left, right) {
+function same6(left, right) {
   return canonicalJson(left) === canonicalJson(right);
 }
 function object4(value) {
@@ -30658,7 +30876,7 @@ var EmbeddedBeadsAdapter = class {
       return result("ambiguous");
     const check = await this.slot("check");
     if (check === void 0) return result("quarantined");
-    if (authority.transition !== void 0 && same5(check, authority.transition.after))
+    if (authority.transition !== void 0 && same6(check, authority.transition.after))
       return this.reconcileLostSlotTransition(
         "acquire",
         authority.transition,
@@ -30689,7 +30907,7 @@ var EmbeddedBeadsAdapter = class {
       return result("quarantined");
     const acquired = await this.slot("acquire");
     if (acquired === void 0) return result("quarantined");
-    if (!same5(acquired, transition.after)) return result("blocked");
+    if (!same6(acquired, transition.after)) return result("blocked");
     return this.durableSlotTransition(transition);
   }
   /**
@@ -30708,7 +30926,7 @@ var EmbeddedBeadsAdapter = class {
     if (before === void 0) return result("quarantined");
     if (this.mode === "git-sync") {
       const remote2 = await this.slot("check", "remote");
-      if (remote2 === void 0 || !same5(remote2, before))
+      if (remote2 === void 0 || !same6(remote2, before))
         return result("ambiguous");
     }
     const decision = decideControllerSlot(
@@ -30747,7 +30965,7 @@ var EmbeddedBeadsAdapter = class {
     if (initial.workingSet !== "clean" || this.mode === "git-sync" && initial.head !== initial.remoteHead)
       return this.recoverSlotTransition("release", authority?.transition);
     const before = await this.slot("check");
-    if (before !== void 0 && same5(before, authority.transition.after))
+    if (before !== void 0 && same6(before, authority.transition.after))
       return this.reconcileLostSlotTransition(
         "release",
         authority.transition,
@@ -30769,7 +30987,7 @@ var EmbeddedBeadsAdapter = class {
       return result("quarantined");
     const released = await this.slot("release");
     if (released === void 0) return result("quarantined");
-    if (!same5(released, transition.after)) return result("blocked");
+    if (!same6(released, transition.after)) return result("blocked");
     return this.durableSlotTransition(transition);
   }
   /** Read-only planning half of release; see `prepareAcquireTransition`. */
@@ -30784,7 +31002,7 @@ var EmbeddedBeadsAdapter = class {
       return result("blocked");
     if (this.mode === "git-sync") {
       const remote2 = await this.slot("check", "remote");
-      if (remote2 === void 0 || !same5(remote2, before))
+      if (remote2 === void 0 || !same6(remote2, before))
         return result("ambiguous");
     }
     return makeSlotTransitionIntent(
@@ -30801,7 +31019,7 @@ var EmbeddedBeadsAdapter = class {
   }
   /** Generic read-only planning port used by production CLI composition. */
   async prepareControllerTransition(input) {
-    if (input.holder !== this.holder || !same5(input.scope, this.scope))
+    if (input.holder !== this.holder || !same6(input.scope, this.scope))
       return { status: "quarantined" };
     const planned = input.kind === "acquire" ? await this.prepareAcquireTransition() : await this.prepareReleaseTransition();
     if (!("code" in planned)) return { status: "planned", transition: planned };
@@ -30830,7 +31048,7 @@ var EmbeddedBeadsAdapter = class {
       return { status: "unavailable" };
     if (!state.reachable || state.workingSet !== "clean" || state.head === void 0 || this.mode === "git-sync" && state.remoteHead === void 0)
       return { status: "ambiguous" };
-    if (same5(current, transition.after)) {
+    if (same6(current, transition.after)) {
       const proof = await this.call({
         kind: "slot_transition",
         intent: transition
@@ -30839,14 +31057,14 @@ var EmbeddedBeadsAdapter = class {
         return { status: "ambiguous" };
       if (this.mode === "git-sync") {
         const remote2 = await this.slot("check", "remote");
-        if (remote2 === void 0 || !same5(remote2, transition.after))
+        if (remote2 === void 0 || !same6(remote2, transition.after))
           return { status: "ambiguous" };
       }
       return { status: "observed" };
     }
     if (current.status === "acquired" && current.holder !== this.holder)
       return { status: "blocked" };
-    if (same5(current, transition.before.slot) && await this.slotLineage(transition, state.head) === "observed" && (this.mode === "local-only" || state.remoteHead !== void 0 && await this.slotLineage(transition, state.remoteHead) === "observed"))
+    if (same6(current, transition.before.slot) && await this.slotLineage(transition, state.head) === "observed" && (this.mode === "local-only" || state.remoteHead !== void 0 && await this.slotLineage(transition, state.remoteHead) === "observed"))
       return { status: "absent" };
     return { status: "ambiguous" };
   }
@@ -30868,7 +31086,7 @@ var EmbeddedBeadsAdapter = class {
   }
   /** One validated aggregate/child mutation batch, followed by exact readback. */
   async compareAndSet(batch) {
-    if (!this.usable || !validateMutationBatch(batch).ok || !same5(batch.scope, this.scope) || batch.holder !== this.holder)
+    if (!this.usable || !validateMutationBatch(batch).ok || !same6(batch.scope, this.scope) || batch.holder !== this.holder)
       return { status: "quarantined" };
     const recovery = await this.state();
     if (recovery === void 0 || !recovery.reachable)
@@ -30885,7 +31103,7 @@ var EmbeddedBeadsAdapter = class {
       const durable2 = await this.durableCheckpoint(batch, baseline2);
       if (durable2.code !== "applied") return this.storeFailure(durable2.code);
       const readback2 = await this.readback(batch);
-      return readback2 === void 0 || !same5(readback2.root, batch.next.root) || !same5(readback2.children, batch.next.children) ? { status: "quarantined" } : {
+      return readback2 === void 0 || !same6(readback2.root, batch.next.root) || !same6(readback2.children, batch.next.children) ? { status: "quarantined" } : {
         affectedRowCount: 1 + batch.changedRows.length,
         checkpoint: batch.checkpoint,
         children: [...readback2.children],
@@ -30906,7 +31124,7 @@ var EmbeddedBeadsAdapter = class {
         });
         if (durable2.code !== "applied") return this.storeFailure(durable2.code);
         const readback2 = await this.readback(batch);
-        return readback2 === void 0 || !same5(readback2.root, batch.next.root) || !same5(readback2.children, batch.next.children) ? { status: "quarantined" } : {
+        return readback2 === void 0 || !same6(readback2.root, batch.next.root) || !same6(readback2.children, batch.next.children) ? { status: "quarantined" } : {
           affectedRowCount: 1 + batch.changedRows.length,
           checkpoint: batch.checkpoint,
           children: [...readback2.children],
@@ -30936,7 +31154,7 @@ var EmbeddedBeadsAdapter = class {
           status: discovered2.status === "absent" ? "stale" : "ambiguous"
         };
       const readback2 = await this.readback(batch);
-      return readback2 === void 0 || !same5(readback2.root, batch.next.root) || !same5(readback2.children, batch.next.children) ? { status: "quarantined" } : {
+      return readback2 === void 0 || !same6(readback2.root, batch.next.root) || !same6(readback2.children, batch.next.children) ? { status: "quarantined" } : {
         affectedRowCount: 1 + batch.changedRows.length,
         checkpoint: batch.checkpoint,
         children: [...readback2.children],
@@ -30947,7 +31165,7 @@ var EmbeddedBeadsAdapter = class {
     const durable = await this.durableCheckpoint(batch, baseline);
     if (durable.code !== "applied") return this.storeFailure(durable.code);
     const readback = await this.readback(batch);
-    if (readback === void 0 || !same5(readback.root, batch.next.root) || !same5(readback.children, batch.next.children))
+    if (readback === void 0 || !same6(readback.root, batch.next.root) || !same6(readback.children, batch.next.children))
       return { status: "quarantined" };
     return {
       affectedRowCount: 1 + batch.changedRows.length,
@@ -31098,7 +31316,7 @@ var EmbeddedBeadsAdapter = class {
     if (response?.kind !== "load") return { status: "unavailable" };
     if (response.value.status !== "observed") return response.value;
     const root = validateRootProjection(response.value.value.root);
-    if (!root.ok || !same5(root.value.scope, this.scope))
+    if (!root.ok || !same6(root.value.scope, this.scope))
       return { status: "corrupt" };
     const expected = root.value.childRows;
     const children = response.value.value.children;
@@ -31107,7 +31325,7 @@ var EmbeddedBeadsAdapter = class {
     for (const child of children) {
       const parsed = validateChildProjection(child);
       const reference = parsed.ok ? expected.find((row) => row.unitId === parsed.value.unitId) : void 0;
-      if (!parsed.ok || reference === void 0 || seen.has(parsed.value.unitId) || parsed.value.revision !== reference.revision || parsed.value.commitment !== reference.commitment || !same5(parsed.value.scope, root.value.scope) || parsed.value.holder !== root.value.holder)
+      if (!parsed.ok || reference === void 0 || seen.has(parsed.value.unitId) || parsed.value.revision !== reference.revision || parsed.value.commitment !== reference.commitment || !same6(parsed.value.scope, root.value.scope) || parsed.value.holder !== root.value.holder)
         return { status: "corrupt" };
       seen.add(parsed.value.unitId);
     }
@@ -31151,7 +31369,7 @@ var EmbeddedBeadsAdapter = class {
       InitialControllerAcquireSchema,
       request2
     );
-    if (!this.usable || !parsed.ok || parsed.value === void 0 || !same5(parsed.value.expected.scope, this.scope) || parsed.value.expected.holder !== this.holder)
+    if (!this.usable || !parsed.ok || parsed.value === void 0 || !same6(parsed.value.expected.scope, this.scope) || parsed.value.expected.holder !== this.holder)
       return { status: "quarantined" };
     const projection = parsed.value.next;
     if (!this.validInitialProjection(projection))
@@ -31180,7 +31398,7 @@ var EmbeddedBeadsAdapter = class {
   }
   validInitialProjection(input) {
     const root = validateRootProjection(input.root);
-    if (!root.ok || !same5(root.value.scope, this.scope)) return false;
+    if (!root.ok || !same6(root.value.scope, this.scope)) return false;
     if (root.value.aggregateRevision !== 1) return false;
     const values = [];
     for (const inputChild of input.children) {
@@ -31191,14 +31409,14 @@ var EmbeddedBeadsAdapter = class {
     values.sort(
       (a, b) => a.unitId < b.unitId ? -1 : a.unitId > b.unitId ? 1 : 0
     );
-    if (!same5(values, input.children) || values.length !== root.value.childRows.length || values.some(
+    if (!same6(values, input.children) || values.length !== root.value.childRows.length || values.some(
       (child, index) => root.value.childRows[index]?.unitId !== child.unitId || root.value.childRows[index]?.revision !== child.revision || root.value.childRows[index]?.commitment !== child.commitment
     ))
       return false;
     return root.value.run.revision === 1 && root.value.run.effectJournal.length === 1 && this.isPreOwnershipTransition(void 0, root.value);
   }
   validPreOwnershipBatch(batch) {
-    return this.usable && validateMutationBatch(batch).ok && same5(batch.scope, this.scope) && batch.holder === this.holder && this.isPreOwnershipTransition(void 0, batch.next.root);
+    return this.usable && validateMutationBatch(batch).ok && same6(batch.scope, this.scope) && batch.holder === this.holder && this.isPreOwnershipTransition(void 0, batch.next.root);
   }
   /**
    * An ordinary controller write requires the built-in slot to be held by
@@ -31221,7 +31439,7 @@ var EmbeddedBeadsAdapter = class {
     const prior = before?.run;
     const run2 = next.run;
     const entry = run2.effectJournal.at(-1);
-    return next.holder === this.holder && same5(next.scope, this.scope) && run2.state === "initializing" && run2.controller.holder === this.holder && run2.controller.state === "acquire_intent" && run2.effectJournal.length === (prior?.effectJournal.length ?? 0) + 1 && entry?.kind === "controller_acquire" && entry.status === "intended" && entry.slotTransition !== void 0 && validateSlotTransitionIntent(
+    return next.holder === this.holder && same6(next.scope, this.scope) && run2.state === "initializing" && run2.controller.holder === this.holder && run2.controller.state === "acquire_intent" && run2.effectJournal.length === (prior?.effectJournal.length ?? 0) + 1 && entry?.kind === "controller_acquire" && entry.status === "intended" && entry.slotTransition !== void 0 && validateSlotTransitionIntent(
       entry.slotTransition,
       this.prefix,
       this.scope,
@@ -31230,13 +31448,13 @@ var EmbeddedBeadsAdapter = class {
     ) && (prior === void 0 || prior.state === "initializing" && prior.controller.holder === this.holder && prior.controller.state === "unacquired" && prior.effectJournal.length === 0 && run2.effectJournal.length === prior.effectJournal.length + 1);
   }
   isExactIntentReadback(readback, batch) {
-    if (!same5(readback.root, batch.next.root)) return false;
+    if (!same6(readback.root, batch.next.root)) return false;
     return batch.next.children.every(
-      (expected) => readback.children.some((actual) => same5(actual, expected))
+      (expected) => readback.children.some((actual) => same6(actual, expected))
     );
   }
   isExactInitialReadback(readback, input) {
-    return same5(readback.root, input.root) && same5(readback.children, input.children);
+    return same6(readback.root, input.root) && same6(readback.children, input.children);
   }
   async availablePreOwnershipSlot() {
     const prepared = await this.prepareSharedState();
@@ -31246,7 +31464,7 @@ var EmbeddedBeadsAdapter = class {
       return void 0;
     if (this.mode === "local-only") return local;
     const remote2 = await this.slot("check", "remote");
-    return remote2 !== void 0 && same5(remote2, local) ? local : void 0;
+    return remote2 !== void 0 && same6(remote2, local) ? local : void 0;
   }
   async durablePreOwnershipIntent(batch) {
     const durable = await this.durableCheckpoint(batch);
@@ -31331,7 +31549,7 @@ var EmbeddedBeadsAdapter = class {
     const state = await this.state();
     const slot = await this.slot("check");
     if (state === void 0 || slot === void 0) return result("ambiguous");
-    return state.workingSet === "clean" && state.head === baseline.head && state.remoteHead === baseline.remoteHead && slot.status === "acquired" && slot.actor === this.holder && slot.holder === this.holder && same5(slot, baseline.slot) ? result("applied") : result("worker_mutation");
+    return state.workingSet === "clean" && state.head === baseline.head && state.remoteHead === baseline.remoteHead && slot.status === "acquired" && slot.actor === this.holder && slot.holder === this.holder && same6(slot, baseline.slot) ? result("applied") : result("worker_mutation");
   }
   async prepareSharedState() {
     const before = await this.state();
@@ -31377,7 +31595,7 @@ var EmbeddedBeadsAdapter = class {
       this.scope,
       this.mode,
       this.holder
-    ) && transition.kind === kind && state.head !== void 0 && (this.mode === "git-sync" ? state.remoteHead === state.head : state.remoteHead === transition.before.remoteHead) && same5(transition.before.slot, slot) && same5(transition.after, this.expectedSlot(kind, slot)) && await this.slotLineage(transition, state.head) === "observed";
+    ) && transition.kind === kind && state.head !== void 0 && (this.mode === "git-sync" ? state.remoteHead === state.head : state.remoteHead === transition.before.remoteHead) && same6(transition.before.slot, slot) && same6(transition.after, this.expectedSlot(kind, slot)) && await this.slotLineage(transition, state.head) === "observed";
   }
   /**
    * Resumes only a controller-journalled built-in transition. The process
@@ -31394,7 +31612,7 @@ var EmbeddedBeadsAdapter = class {
       return result("ambiguous");
     const state = await this.state();
     const local = await this.slot("check");
-    if (state === void 0 || !state.reachable || state.workingSet === "unknown" || local === void 0 || !same5(local, transition.after) || state.head === void 0 || // A pending change retains its slot-untouched base head; an
+    if (state === void 0 || !state.reachable || state.workingSet === "unknown" || local === void 0 || !same6(local, transition.after) || state.head === void 0 || // A pending change retains its slot-untouched base head; an
     // auto-committed change must have created a new head. Either other
     // shape is unrelated state.
     state.workingSet === "pending" && await this.slotLineage(transition, state.head) !== "observed" || state.workingSet === "clean" && state.head === transition.before.head)
@@ -31403,7 +31621,7 @@ var EmbeddedBeadsAdapter = class {
       const remoteLineage = state.remoteHead === void 0 ? "ambiguous" : await this.slotLineage(transition, state.remoteHead);
       if (remoteLineage === "observed") {
         const remote2 = await this.slot("check", "remote");
-        if (remote2 === void 0 || !same5(remote2, transition.before.slot))
+        if (remote2 === void 0 || !same6(remote2, transition.before.slot))
           return result("ambiguous");
       } else if (remoteLineage === "absent" && state.workingSet === "clean") {
         return this.reconcileRemoteSlotTransition(
@@ -31432,7 +31650,7 @@ var EmbeddedBeadsAdapter = class {
       this.scope,
       "git-sync",
       this.holder
-    ) || transition.kind !== kind || !state.reachable || state.workingSet !== "clean" || state.head === void 0 || state.remoteHead === void 0 || state.head === transition.before.head || state.remoteHead === transition.before.remoteHead || !same5(local, transition.after))
+    ) || transition.kind !== kind || !state.reachable || state.workingSet !== "clean" || state.head === void 0 || state.remoteHead === void 0 || state.head === transition.before.head || state.remoteHead === transition.before.remoteHead || !same6(local, transition.after))
       return result("ambiguous");
     const proof = await this.call({
       kind: "remote_slot_transition",
@@ -31442,7 +31660,7 @@ var EmbeddedBeadsAdapter = class {
       return result("ambiguous");
     const remote2 = await this.slot("check", "remote");
     const final = await this.state();
-    return remote2 !== void 0 && same5(remote2, transition.after) && final !== void 0 && final.reachable && final.workingSet === "clean" && final.head === state.head && final.remoteHead === state.remoteHead ? result("applied") : result("ambiguous");
+    return remote2 !== void 0 && same6(remote2, transition.after) && final !== void 0 && final.reachable && final.workingSet === "clean" && final.head === state.head && final.remoteHead === state.remoteHead ? result("applied") : result("ambiguous");
   }
   /**
    * Reconciles a clean, already-durable slot transition after its caller lost
@@ -31456,7 +31674,7 @@ var EmbeddedBeadsAdapter = class {
       this.scope,
       this.mode,
       this.holder
-    ) || transition.kind !== kind || !state.reachable || state.workingSet !== "clean" || state.head === void 0 || state.head === transition.before.head || !same5(local, transition.after) || this.mode === "git-sync" && (state.remoteHead === void 0 || state.remoteHead !== state.head))
+    ) || transition.kind !== kind || !state.reachable || state.workingSet !== "clean" || state.head === void 0 || state.head === transition.before.head || !same6(local, transition.after) || this.mode === "git-sync" && (state.remoteHead === void 0 || state.remoteHead !== state.head))
       return result("ambiguous");
     const prove = await this.call({
       kind: "slot_transition",
@@ -31470,7 +31688,7 @@ var EmbeddedBeadsAdapter = class {
     }
     const remote2 = await this.slot("check", "remote");
     const final = await this.state();
-    return remote2 !== void 0 && same5(remote2, transition.after) && final !== void 0 && final.reachable && final.workingSet === "clean" && final.head === state.head && final.remoteHead === state.head ? result("applied") : result("ambiguous");
+    return remote2 !== void 0 && same6(remote2, transition.after) && final !== void 0 && final.reachable && final.workingSet === "clean" && final.head === state.head && final.remoteHead === state.head ? result("applied") : result("ambiguous");
   }
   /**
    * Applies a transition only after a semantic process proof that its delta
@@ -31504,13 +31722,13 @@ var EmbeddedBeadsAdapter = class {
     if (state === void 0 || !state.reachable || state.workingSet !== "clean" || state.head === void 0)
       return result("ambiguous");
     const local = await this.slot("check");
-    if (local === void 0 || !same5(local, transition.after))
+    if (local === void 0 || !same6(local, transition.after))
       return result("ambiguous");
     if (this.mode === "local-only") return result("applied");
     if (state.remoteHead === void 0 || state.head === state.remoteHead || await this.slotLineage(transition, state.remoteHead) !== "observed")
       return result("ambiguous");
     const remoteBefore = await this.slot("check", "remote");
-    if (remoteBefore === void 0 || !same5(remoteBefore, transition.before.slot))
+    if (remoteBefore === void 0 || !same6(remoteBefore, transition.before.slot))
       return result("ambiguous");
     const push = await this.call({ kind: "push" });
     if (push?.kind !== "push") return result("ambiguous");
@@ -31519,14 +31737,14 @@ var EmbeddedBeadsAdapter = class {
     const synced = await this.state();
     const remoteAfter = await this.slot("check", "remote");
     const final = await this.state();
-    return synced !== void 0 && synced.reachable && synced.workingSet === "clean" && synced.head !== void 0 && synced.remoteHead === synced.head && same5(synced.head, state.head) && remoteAfter !== void 0 && same5(remoteAfter, transition.after) && final !== void 0 && final.reachable && final.workingSet === "clean" && final.head === state.head && final.remoteHead === state.head ? result("applied") : result("ambiguous");
+    return synced !== void 0 && synced.reachable && synced.workingSet === "clean" && synced.head !== void 0 && synced.remoteHead === synced.head && same6(synced.head, state.head) && remoteAfter !== void 0 && same6(remoteAfter, transition.after) && final !== void 0 && final.reachable && final.workingSet === "clean" && final.head === state.head && final.remoteHead === state.head ? result("applied") : result("ambiguous");
   }
   async confirmDurableSlot(local) {
     if (this.mode === "local-only") return result("applied");
     const state = await this.state();
     const remote2 = await this.slot("check", "remote");
     const final = await this.state();
-    return state !== void 0 && state.reachable && state.workingSet === "clean" && state.head !== void 0 && state.remoteHead === state.head && remote2 !== void 0 && same5(remote2, local) && final !== void 0 && final.reachable && final.workingSet === "clean" && final.head === state.head && final.remoteHead === state.head ? result("applied") : result("ambiguous");
+    return state !== void 0 && state.reachable && state.workingSet === "clean" && state.head !== void 0 && state.remoteHead === state.head && remote2 !== void 0 && same6(remote2, local) && final !== void 0 && final.reachable && final.workingSet === "clean" && final.head === state.head && final.remoteHead === state.head ? result("applied") : result("ambiguous");
   }
   /** Commit state and sync it without force; discovery brackets commit/push. */
   async durableCarryCheckpoint(intent2, baseline) {
@@ -31896,7 +32114,7 @@ var EmbeddedBeadsAdapter = class {
         ),
         status: "observed"
       };
-    if (!same5(parsed.value, expected))
+    if (!same6(parsed.value, expected))
       return {
         result: {
           claimRecordDigest,
@@ -35776,7 +35994,7 @@ async function createControllerConfigRunner(path2, dependencies = {}) {
 
 // src/feedback/schemas.ts
 var import_ajv6 = __toESM(require_ajv(), 1);
-var utf89 = new TextEncoder();
+var utf810 = new TextEncoder();
 var ajv6 = new import_ajv6.Ajv({
   allErrors: true,
   coerceTypes: false,
@@ -35788,7 +36006,7 @@ ajv6.addKeyword({
   keyword: "maxUtf8Bytes",
   type: "string",
   schemaType: "number",
-  validate: (limit, value) => utf89.encode(value).byteLength <= limit,
+  validate: (limit, value) => utf810.encode(value).byteLength <= limit,
   errors: false
 });
 function strictObject6(properties) {
@@ -35893,14 +36111,14 @@ function isFeedbackSchema(schema, value) {
 }
 
 // src/feedback/normalize.ts
-var utf810 = new TextEncoder();
+var utf811 = new TextEncoder();
 var MAX_NARRATIVE_BYTES = 4 * 1024;
 var DISALLOWED = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u200e\u200f\u061c\u202a-\u202e\u2066-\u2069]/u;
 function normalizedText(value, maxBytes) {
   if (typeof value !== "string" || value.includes("\r") || hasUnpairedSurrogate(value))
     return void 0;
   const normalized = value.normalize("NFC");
-  if (DISALLOWED.test(normalized) || utf810.encode(normalized).byteLength > maxBytes)
+  if (DISALLOWED.test(normalized) || utf811.encode(normalized).byteLength > maxBytes)
     return void 0;
   return normalized;
 }
