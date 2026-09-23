@@ -806,6 +806,13 @@ test("subprocess classifier is pure, stable, and cannot accept injected commands
  * case leaves the cap nothing to trip on. A loaded machine can then only make
  * a child slower, never change the outcome it is observed to have. Both
  * budgets below are the widest the request contract admits.
+ *
+ * sce-g7b swept the rest of the fast tier for that class. Only this file and
+ * `test/cli/cli.test.ts` spawn anything there, and the latter sets no timeout
+ * at all, so it has nothing to race. Every fake program below is therefore the
+ * last of the kind, and each is now `#!/bin/sh`: a builtin, or a direct `exec`
+ * of one small utility. No interpreter start-up is left between a spawn and
+ * the outcome an assertion reads.
  */
 const unreachableTimeoutMs = 15_000;
 const unreachableOutputBytes = 65_536;
@@ -875,11 +882,13 @@ test("allowlisted subprocess execution caps output on either stream", async () =
 
 test("allowlisted subprocess execution times out a silent child", async () => {
   await withFakeBd(async (writeFakeBd, directory) => {
-    // Silent and non-exiting: no byte can reach the cap, so a slow start only
-    // delays the kill; the timeout stays the single reachable outcome.
-    await writeFakeBd(
-      "#!/usr/bin/env node\nsetInterval(() => undefined, 1_000);",
-    );
+    // Silent, and alive far past the budget: no byte can reach the cap, so the
+    // timeout is the single reachable outcome. `exec` keeps the child at the
+    // shell's own pid, so the executor's SIGKILL lands on it; `sleep` is the
+    // one utility spawned anywhere in this file, and it replaces the node
+    // start-up this budget used to race. This is the only sub-second budget
+    // left in the fast tier.
+    await writeFakeBd("#!/bin/sh\nexec sleep 30");
     assert.deepEqual(
       await executeSanitizedInspection(
         inspectBd(directory, unreachableOutputBytes, 200),
@@ -924,22 +933,28 @@ test("the remote-url query reads a silent no-match as an empty remote list", asy
   const directory = await mkdtemp(join(tmpdir(), "sce-preflight-remotes-"));
   const executable = join(directory, "git");
   const originalPath = process.env.PATH;
-  const writeFakeGit = async (body: string): Promise<void> => {
-    await writeFile(executable, `#!/usr/bin/env node\n${body}\n`, "utf8");
+  // sce-g7b: shell builtins, like the fake `bd` programs above. These run at
+  // the request contract's own 10 s budget rather than a test-chosen one, so
+  // they were never racing, but dropping the interpreter keeps the fast tier
+  // free of the whole class and of six node start-ups.
+  const writeFakeGit = async (program: string): Promise<void> => {
+    await writeFile(executable, `${program}\n`, "utf8");
     await chmod(executable, 0o700);
   };
   try {
     process.env.PATH = `${directory}${delimiter}${originalPath ?? ""}`;
 
     // A repository with no configured remote: git exits 1 and says nothing.
-    await writeFakeGit("process.exit(1);");
+    await writeFakeGit("#!/bin/sh\nexit 1");
     assert.deepEqual(await observeGitRemoteUrls(directory), {
       ok: true,
       urls: [],
     });
 
+    // A NUL terminates the record this parser reads; `\000` is the POSIX octal
+    // escape for it, which dash and bash both emit.
     await writeFakeGit(
-      'process.stdout.write("remote.origin.url\\ngit@github.com:hls-uk/single-controller-engineer.git\\u0000");',
+      "#!/bin/sh\nprintf 'remote.origin.url\\ngit@github.com:hls-uk/single-controller-engineer.git\\000'",
     );
     assert.deepEqual(await observeGitRemoteUrls(directory), {
       ok: true,
@@ -947,12 +962,12 @@ test("the remote-url query reads a silent no-match as an empty remote list", asy
     });
 
     // Every other terminal shape stays fail-closed.
-    for (const body of [
-      'process.stderr.write("fatal: not a git repository"); process.exit(1);',
-      'process.stdout.write("remote.origin.url"); process.exit(1);',
-      "process.exit(2);",
+    for (const program of [
+      "#!/bin/sh\nprintf '%s' 'fatal: not a git repository' >&2\nexit 1",
+      "#!/bin/sh\nprintf '%s' 'remote.origin.url'\nexit 1",
+      "#!/bin/sh\nexit 2",
     ]) {
-      await writeFakeGit(body);
+      await writeFakeGit(program);
       assert.deepEqual(await observeGitRemoteUrls(directory), {
         ok: false,
         code: "PF_SUBPROCESS_EXIT",
@@ -960,7 +975,7 @@ test("the remote-url query reads a silent no-match as an empty remote list", asy
     }
 
     // A zero exit still has to prove its own output.
-    await writeFakeGit('process.stdout.write("remote.origin.url");');
+    await writeFakeGit("#!/bin/sh\nprintf '%s' 'remote.origin.url'");
     assert.deepEqual(await observeGitRemoteUrls(directory), {
       ok: true,
       urls: undefined,
