@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, readdir, rename, stat } from "node:fs/promises";
+import { readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 
@@ -65,6 +65,24 @@ function relocationHash(
         alias: fixture.effect.params.destination.alias,
         observed,
         operation: "post-act-relocation",
+        reason,
+      },
+    }),
+  );
+}
+
+/**
+ * The pre-act admission proof of the next act refuses a destination whose
+ * admitted path no longer holds the bound object, before any syscall on it.
+ * DEC-20260922-018.
+ */
+function driftHash(fixture: MaterialisationFixture, reason: string): string {
+  return sha256(
+    canonicalJson({
+      domain: "sce.materialisation-ambiguous.v1",
+      facts: {
+        alias: fixture.effect.params.destination.alias,
+        operation: "destination-drift",
         reason,
       },
     }),
@@ -226,6 +244,28 @@ test("a rename out of the destination root keeps both links and withholds positi
       "ambiguous",
       "recovery cannot read a pair that left the admitted destination",
     );
+    const blocked = await adapterFor(fixture).materialise(fixture.effect);
+    assert.equal(
+      blocked.status,
+      "ambiguous",
+      "and the next act blocks instead of republishing into the broken namespace",
+    );
+    if (blocked.status === "ambiguous")
+      assert.equal(
+        blocked.observationHash,
+        driftHash(fixture, "invalid_destination"),
+        "pre-act admission refuses the vacated path before any act on it",
+      );
+    assert.deepEqual(
+      (await readdir(escaped)).sort(),
+      publishedPair(fixture),
+      "the retained pair is neither moved nor rewritten by the blocked act",
+    );
+    assert.deepEqual(
+      (await readdir(fixture.destinationRoot)).sort(),
+      [fixture.effect.params.destination.markerFile],
+      "and nothing is recreated under the intact root",
+    );
 
     await rename(escaped, fixture.destinationDirectory);
     const recovered = await adapterFor(fixture).discoverMaterialise(
@@ -250,6 +290,72 @@ test("a rename out of the destination root keeps both links and withholds positi
       assert.equal(converged.observation.artifactStatus, "already_present");
       assert.equal(converged.observation.sidecarStatus, "already_present");
     }
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("a marker lost with the moved object is a relocation, not an unmounted alias", async () => {
+  const fixture = await materialisationFixture();
+  try {
+    const admitted = await stat(fixture.destinationDirectory, { bigint: true });
+    const escaped = join(fixture.root, "escaped");
+    const marker = join(
+      fixture.destinationRoot,
+      fixture.effect.params.destination.markerFile,
+    );
+    const decoy = join(
+      fixture.destinationRoot,
+      fixture.effect.params.artifactName,
+    );
+    const decoyBytes = "a foreign file that must survive untouched\n";
+    await writeFile(decoy, decoyBytes);
+    const port = interfereBeforeFirstLink(
+      [
+        `fs.renameSync(${JSON.stringify(fixture.destinationDirectory)}, ${JSON.stringify(escaped)});`,
+        `fs.unlinkSync(${JSON.stringify(marker)});`,
+      ].join(" "),
+    );
+
+    const result = await createMaterialisationAdapter(
+      fixture.repository,
+      "sha1",
+      port,
+    ).materialise(fixture.effect);
+
+    assert.equal(
+      result.status,
+      "ambiguous",
+      "a root that still stands carried nothing with it, marker or no marker",
+    );
+    if (result.status === "ambiguous")
+      assert.equal(
+        result.observationHash,
+        relocationHash(fixture, null, "invalid_destination"),
+        "a lost marker must not read as the measured ancestor rename",
+      );
+    assert.deepEqual(
+      (await readdir(escaped)).sort(),
+      publishedPair(fixture),
+      "both no-clobber links still complete in the bound object",
+    );
+    const moved = await stat(escaped, { bigint: true });
+    assert.equal(moved.dev, admitted.dev);
+    assert.equal(moved.ino, admitted.ino);
+    assert.ok(
+      (await stat(fixture.destinationRoot, { bigint: true })).isDirectory(),
+      "the destination root is still a directory at its admitted path",
+    );
+    assert.deepEqual(
+      (await readdir(fixture.destinationRoot)).sort(),
+      [fixture.effect.params.artifactName],
+      "nothing is created inside the root the publication left",
+    );
+    assert.equal(
+      await readFile(decoy, "utf8"),
+      decoyBytes,
+      "and a foreign final of the same name outside the bound object survives",
+    );
   } finally {
     await fixture.cleanup();
   }

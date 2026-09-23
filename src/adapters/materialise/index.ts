@@ -1117,6 +1117,24 @@ function sameDestinationIdentity(
 }
 
 /**
+ * `admittedDestination` reports `alias_unmounted` for two different ENOENTs:
+ * the destination root itself gone from its admitted path, and the root still
+ * standing without its marker. Only the first carries the publication with it,
+ * so the positive branch reads the root once more and keeps positive evidence
+ * solely when the root is absent; a marker lost under an intact root leaves the
+ * bound object outside a destination that still stands, which is a relocation
+ * like any other. DEC-20260922-018 A4, amended 2026-09-23.
+ */
+async function destinationRootAbsent(root: string): Promise<boolean> {
+  try {
+    await lstat(root);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+}
+
+/**
  * A positive helper result proves both no-clobber links landed in the admitted
  * directory object and that nothing was overwritten; it does not prove that
  * object is still the destination the controller admitted. The parent
@@ -1125,7 +1143,7 @@ function sameDestinationIdentity(
  * vanished path below a destination root that is itself still admissible
  * withholds it, because the publication demonstrably left the admitted
  * destination and the authority model disclaims concurrent namespace
- * relocation. A destination root no longer at its own admitted path is the
+ * relocation. Only a destination root gone from its own admitted path is the
  * ancestor-rename case the decision measured: the publication is still inside
  * the admitted root object, it stays positive, and the next act's pre-act
  * admission refuses. DEC-20260922-018, amended 2026-09-23.
@@ -1150,7 +1168,8 @@ async function relocationAfterAct(
       ? null
       : { observed: settled.identity, reason: "substituted" };
   if (settled.status === "refused")
-    return settled.reason === "alias_unmounted"
+    return settled.reason === "alias_unmounted" &&
+      (await destinationRootAbsent(effect.params.destination.canonicalRoot))
       ? null
       : { observed: null, reason: "invalid_destination" };
   return { observed: null, reason: "unresolved" };

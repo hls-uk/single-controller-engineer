@@ -106,10 +106,25 @@ authority and changes nothing else above.
   rather than inferred: the root stayed, the object did not. Positive evidence
   is withheld because the authority model still disclaims concurrent namespace
   relocation, and `ambiguous` blocks and is never guessed through.
-- **A4.** If the destination root itself is no longer at its admitted path, the
-  observation stays positive. That is the ancestor rename this record measured:
-  the destination moved as a unit and the publication is still inside the
-  admitted root object. The next act's pre-act admission refuses, unchanged.
+- **A4.** If the destination root itself is *absent* from its admitted path,
+  the observation stays positive. That is the ancestor rename this record
+  measured: the destination moved as a unit and the publication is still inside
+  the admitted root object. The next act's pre-act admission refuses,
+  unchanged. The admission proof collapses two different ENOENTs into one
+  `alias_unmounted` refusal — the root gone, and the root still standing
+  without its marker — so the parent reads the root once more and takes this
+  branch only when the root is genuinely absent. A marker lost under an intact
+  root leaves the bound object outside a destination that still stands, which
+  is an A3 relocation and is withheld (finding F1).
+- **A4.1.** That positive branch is trusted, not proved. The root's own device
+  and inode are not journaled at admission, so a publication carried out of the
+  root and then followed by a rename of the root reads exactly like the
+  measured ancestor rename; the act still completes, overwrites nothing, and
+  the trust is bounded by the exclusive namespace control the rest of this
+  record already requires. Deciding it instead of trusting it needs the
+  destination root's device and inode journaled at admission and compared here,
+  a `destination` params schema change outside this unit, recorded as follow-up
+  (finding F2).
 - **A5.** Recovery disposes of `post-act-relocation` by reading, not by
   writing. `discoverMaterialise` at the admitted path reports drift while the
   namespace is broken, so the controller blocks until the destination is
@@ -145,13 +160,15 @@ the helper is untouched, and no runtime dependency is added.
   publication syscall, so the whole remainder of the call runs in the relocated
   namespace: same-user ancestor rename, sync-client-style directory swap with a
   foreign final of the same name left untouched in the substitute, a rename
-  that carries the admitted directory out of an intact destination root,
-  durable relocation still blocking the next admission, the
-  unsupported-platform gate running no subprocess and writing nothing, and
-  read-only discovery surviving it. The first and fifth fail against the
-  adapter this record replaced. Under the amendment below the swap and the
-  rename out of the root record `post-act-relocation` rather than positive
-  evidence, and both still keep the complete pair in the bound object.
+  that carries the admitted directory out of an intact destination root, the
+  same rename with the destination root's marker lost alongside it, durable
+  relocation still blocking the next admission, the unsupported-platform gate
+  running no subprocess and writing nothing, and read-only discovery surviving
+  it. The first and sixth fail against the adapter this record replaced. Under
+  the amendment below the swap, the rename out of the root, and the marker lost
+  with it record `post-act-relocation` rather than positive evidence, all three
+  still keep the complete pair in the bound object, and the next act blocks on
+  the broken namespace instead of republishing.
 - Those tests are discovered by the release tier; `scripts/test-tier.mjs` scopes
   the integration tier to `test/integration`. The existing integration
   publication suite covers the seam they extend and passes unchanged.
