@@ -334,8 +334,10 @@ The contract's `domainScope` is unchanged and remains the manifest's
 `accessDomainId`, and the materialisation sidecar carries the same value under
 `domainScope`. `projectId`, `audience`, and `domainScope` use the shared
 bounded identifier vocabulary (`^[A-Za-z0-9][A-Za-z0-9._:/-]*$`, at most 160
-characters); the shipped manifest schema is deliberately narrower
-(`^[a-z0-9][a-z0-9-]{1,62}$`) and a repository may only narrow, never widen.
+characters), and the shipped manifest schema is deliberately narrower on each
+of the three: `^[a-z0-9][a-z0-9-]{1,62}$` for `projectId` and `audience`, and
+`^[a-z0-9][a-z0-9.-]{1,126}$` for the `accessDomainId` that becomes
+`domainScope`. A repository may only narrow, never widen.
 `provenance.generatedDirectory` is a canonical POSIX-relative owned path of at
 most 192 characters, exactly the bound `eventsDirectory` carries. A contract
 missing any of the three refuses configuration, so a knowledge run cannot
@@ -1062,9 +1064,12 @@ verification evidence hash once per command, and `reviewDecision` is
 `Unit <unit> landed <landed OID> on base <base OID> in run <run> wave
 <wave>.`, and the body opens with `# Provenance record`, three bullets
 binding the unit, run, wave, gate entry, provenance base, candidate and repair
-count, and then a `## Materialisation targets` table of every target with its
-pattern, destination, resolution and outputs. The projection bounds the human
-driver to 256 characters, the summary to 8,192 characters, and one record's
+count, and then a `## Materialisation targets` section. That section is always
+present: it carries one table row per target, with the target's pattern,
+destination, resolution and outputs, or, when the unit declared no targets,
+the single sentence `No materialisation targets were declared.` in place of
+the table. The projection bounds the human driver to 256 characters, the
+summary to 8,192 characters, and one record's
 deduplicated destinations to 64, and it refuses bytes that are not canonical
 Markdown: no tab anywhere, no trailing space or tab on any line, no CR, and
 exactly one trailing LF.
@@ -1108,11 +1113,21 @@ back: a bounded `rev-list --max-count=64` walk from the integration head, then
 K3 adds exactly these vectors to the Git allowlist and no others:
 `worktree add --detach <absolute path> <OID>`, `add --all`, `write-tree`, the
 `commit-tree` vector above, `update-ref --no-deref HEAD <OID>`,
-`cat-file commit|blob <OID>`, `rev-list --max-count=64 <OID>`, and
+`cat-file commit|blob <OID>`, `rev-list --max-count=64 <OID>`,
 `ls-tree -r -z <OID> -- <relative directory>`, whose directory argument must
 be a bounded canonical relative path with no `.`, `..`, doubled or trailing
-slash. It also widens two existing vectors: `rev-parse --verify` accepts
-`<OID>^{commit}` as well as `<OID>^{tree}`, and `for-each-ref` accepts a
+slash, and
+`fetch --no-tags <remote> +refs/heads/<branch>:refs/remotes/<remote>/<branch>`,
+the one vector that touches the network. Its admission is exactly three
+arguments, a literal `--no-tags`, a bounded remote name, and a refspec
+matching `^\+refs/heads/(.+):refs/remotes/([^/]+)/(.+)$` whose remote segment
+equals the remote argument, whose source and destination branch names are the
+same string, and whose branch is a safe ref; so a fetch can only refresh the
+remote-tracking ref of the branch it names, never a head and never a third
+party's ref. Remote-profile keyed discovery reads the integration head through
+that refreshed remote-tracking ref. K3 also widens two existing vectors:
+`rev-parse --verify` accepts `<OID>^{commit}` as well as `<OID>^{tree}`, and
+`for-each-ref` accepts a
 `refs/remotes/<remote>/<branch>` ref for remote-profile discovery. Record
 readback through `ls-tree` refuses more than 64 entries and refuses any entry
 that is not a non-symlink blob.
@@ -1276,10 +1291,13 @@ therefore commit disjoint new records, while a deferred wave retains its exact
 uncommitted membership until a later observation marks it committed.
 
 Compaction has one sibling rule, on the recorded capacities of a
-materialisation resolution. Checkpointing compacts observed effect-journal
-entries, so a settled resolution can outlive the entry that committed its
-capacities, while an unresolved attempt is never compacted. The invariant is
-therefore stated in terms of the latest surviving entry: a resolution that
+materialisation resolution. Checkpointing drops an effect-journal entry only
+when it is observed and unanchored: an entry an unreleased reservation holds
+as its acquire, or a released reservation holds as its release, is retained,
+and an unresolved entry is never dropped at all. A settled resolution can
+therefore outlive the entry that committed its capacities, while an in-flight
+attempt cannot. The invariant is therefore stated in terms of the latest
+surviving entry: a resolution that
 carries a current effect ID or a last refusal must bind the newest
 `materialisation_resolve` entry for its gate entry ID, meaning that entry's
 parameters hash equals the hash recomputed from live aggregate state with the

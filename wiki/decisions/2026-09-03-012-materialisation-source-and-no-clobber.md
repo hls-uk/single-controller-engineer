@@ -358,12 +358,21 @@ grants no new authority, changes no accepted decision above, and is numbered
 - **A5.** K3's additions to the Git allowlist are exactly
   `worktree add --detach <absolute path> <OID>`, `add --all`, `write-tree`,
   the `commit-tree` vector in A4, `update-ref --no-deref HEAD <OID>`,
-  `cat-file commit|blob <OID>`, `rev-list --max-count=64 <OID>` and
-  `ls-tree -r -z <OID> -- <relative directory>`, plus two widenings:
-  `rev-parse --verify` accepts `<OID>^{commit}` as well as `<OID>^{tree}`,
-  and `for-each-ref` accepts `refs/remotes/<remote>/<branch>`. Keyed
-  discovery is the bounded 64-commit `rev-list` walk plus a whole-line
-  trailer match; record readback refuses more than 64 tree entries and any
+  `cat-file commit|blob <OID>`, `rev-list --max-count=64 <OID>`,
+  `ls-tree -r -z <OID> -- <relative directory>` and `fetch --no-tags
+  <remote> +refs/heads/<branch>:refs/remotes/<remote>/<branch>`, the only
+  added vector that touches the network. The fetch admission is exactly three
+  arguments, a literal `--no-tags`, a bounded remote name, and a refspec
+  matching `^\+refs/heads/(.+):refs/remotes/([^/]+)/(.+)$` whose remote
+  segment equals the remote argument, whose source and destination branch
+  names are the same string, and whose branch is a safe ref; it can therefore
+  refresh only the remote-tracking ref of the branch it names, never a head.
+  K3 also widens two existing vectors: `rev-parse --verify` accepts
+  `<OID>^{commit}` as well as `<OID>^{tree}`, and `for-each-ref` accepts
+  `refs/remotes/<remote>/<branch>`, which is how remote-profile discovery
+  reads the integration head after that fetch. Keyed discovery is the bounded
+  64-commit `rev-list` walk plus a whole-line trailer match; record readback
+  refuses more than 64 tree entries and any
   entry that is not a non-symlink blob.
 - **A6.** The aggregate `verify` is adapter-executed. It rebinds before
   acting: the run's contract and journaled provenance attempt key must exist,
@@ -387,10 +396,12 @@ grants no new authority, changes no accepted decision above, and is numbered
   object exists. Aggregate verify has no reconciliation: a resumed run
   re-executes it rather than inferring a verdict.
 - **A7.** Decision 13's capacities bind the latest attempt, and checkpointing
-  compacts observed journal entries while never compacting an unresolved
-  attempt. The invariant is therefore: a resolution carrying a current
-  effect ID or a last refusal must bind the newest `materialisation_resolve`
-  entry for its gate entry ID, its parameters hash equalling the hash
+  drops a journal entry only when it is observed and unanchored — an entry
+  held as an unreleased reservation's acquire or a released reservation's
+  release is retained, and an unresolved entry is never dropped. The invariant
+  is therefore: a resolution carrying a current effect ID or a last refusal
+  must bind the newest `materialisation_resolve` entry for its gate entry ID,
+  its parameters hash equalling the hash
   recomputed from live state with the stored capacities spliced in; when no
   such entry survives, the resolution is admitted only if it has no attempt
   in flight. A stored copy is read as recorded and never re-derived, and it
