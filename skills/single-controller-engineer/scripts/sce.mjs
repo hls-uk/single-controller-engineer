@@ -21095,6 +21095,7 @@ var RefusalCodeSchema = Type.Union([
   Type.Literal("PF_BOOTSTRAP_PLAN_INVALID"),
   Type.Literal("PF_GIT_INSPECTION_INVALID"),
   Type.Literal("PF_GIT_IDENTITY_AMBIGUOUS"),
+  Type.Literal("PF_GIT_LOCAL_IDENTITY_UNREPRESENTABLE"),
   Type.Literal("PF_SUBPROCESS_UNAVAILABLE"),
   Type.Literal("PF_SUBPROCESS_EXIT"),
   Type.Literal("PF_SUBPROCESS_SIGNAL"),
@@ -21278,8 +21279,13 @@ function normalizedSyncRemote(value, localBareCanonicalizer) {
   if (value === void 0) return void 0;
   return normalizeGitRemote(value, localBareCanonicalizer);
 }
+var IDENTIFIER_MAX_LENGTH = 160;
+var identifierVocabulary = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u;
+function fitsIdentifierVocabulary(value) {
+  return value.length <= IDENTIFIER_MAX_LENGTH && identifierVocabulary.test(value);
+}
 function validPrefix(value) {
-  return /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u.test(value);
+  return fitsIdentifierVocabulary(value);
 }
 function baseIdentity(context, localBareCanonicalizer, configuration) {
   const beadsDir = context.beads_dir === void 0 ? void 0 : canonicalAbsolutePath2(context.beads_dir);
@@ -21368,6 +21374,12 @@ function classifyTopology(context, bootstrap, embeddedStore, localBareCanonicali
     };
   return refused("PF_TOPOLOGY_CONTRADICTORY");
 }
+function unrepresentableLocalIdentity(commonDir) {
+  return {
+    code: "PF_GIT_LOCAL_IDENTITY_UNREPRESENTABLE",
+    message: `A repository with no configured Git remote is identified by local:${commonDir}, and that identity does not fit the shared identifier vocabulary (a leading letter or digit, then at most ${IDENTIFIER_MAX_LENGTH} characters drawn from A-Za-z0-9._:/- in total). Configure a Git remote, or move the repository to a path that is representable.`
+  };
+}
 function deriveGitIdentity(input, localBareCanonicalizer) {
   const inspection = parseGitInspection(input);
   if (!inspection.ok) return { ok: false };
@@ -21384,6 +21396,8 @@ function deriveGitIdentity(input, localBareCanonicalizer) {
     identity2 = `provider:${inspection.value.providerId}`;
   } else if (aliases.length === 0) {
     identity2 = `local:${commonDir}`;
+    if (!fitsIdentifierVocabulary(identity2))
+      return { ok: false, refusal: unrepresentableLocalIdentity(commonDir) };
   } else {
     const distinct = new Set(aliases);
     if (distinct.size !== 1) return { ok: false };
@@ -21884,6 +21898,11 @@ async function inspectPreflight(cwd, options = {}) {
     },
     localBareRemoteCanonicalizer
   );
+  if (!git.ok && git.refusal !== void 0)
+    return preflightEnvelope(
+      { status: "refused", code: git.refusal.code },
+      void 0
+    );
   return preflightEnvelope(topology, git.ok ? git.value : void 0);
 }
 
