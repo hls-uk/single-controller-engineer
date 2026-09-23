@@ -19,7 +19,9 @@ import {
 } from "../../src/protocol/reducer.js";
 import {
   compactProvenanceInput,
+  frozenTargetEvidence,
   hydrateProvenanceInput,
+  projectionEncodingIsCanonical,
   projectionStorageByteLength,
 } from "../../src/protocol/projection.js";
 import {
@@ -33,6 +35,7 @@ import {
 import type { MaterialisationExpansionBinding } from "../../src/protocol/reducer.js";
 import type {
   CompactGateTargetState,
+  CompactGateTargetStateV3,
   GateTargetState,
   HydratedProvenanceInput,
   KnowledgeContract,
@@ -808,15 +811,41 @@ function largestFittingOutputCount(
   return best;
 }
 
+/** The projection as freezing keeps it: every resolution's live budget gone. */
+const retiredProjection = (
+  input: HydratedProvenanceInput,
+): HydratedProvenanceInput => ({
+  ...input,
+  targetEvidence: input.targetEvidence.map(frozenTargetEvidence),
+});
+
+/** The opposite shape: `targets` minimal targets holding one output each. */
+function widestLegalProjection(targets: number): HydratedProvenanceInput {
+  return {
+    ...minimalLegalProjection(1),
+    targetEvidence: Array.from({ length: targets }, (_, ordinal) =>
+      minimalLegalTarget(ordinal, 1),
+    ),
+  };
+}
+
 test("the frozen projection is stored compactly and hydrates byte-identically", () => {
   const contract = knowledgeContract();
   const knowledge = provenanceIntent(contract);
   const stored = knowledge.state.gate!.provenance!.projectionInputSnapshot;
   assert.ok(stored.targetEvidence.length > 0);
-  for (const target of stored.targetEvidence)
-    assert.equal((target as CompactGateTargetState).version, 2);
+  // Every resolved entry freezes at version 3, which retires the resolution's
+  // remaining live budget instead of storing it anywhere.
+  for (const target of stored.targetEvidence) {
+    assert.equal((target as CompactGateTargetStateV3).version, 3);
+    assert.ok(
+      !("capacities" in (target as CompactGateTargetStateV3).resolution),
+    );
+  }
   const hydrated = hydrateProvenanceInput(stored);
   assert.ok(hydrated !== undefined);
+  for (const target of hydrated.targetEvidence)
+    assert.equal(target.resolution?.capacities, undefined);
 
   // Round trip, both directions, byte for byte.
   const recompacted = compactProvenanceInput(hydrated);
@@ -920,6 +949,108 @@ test("the projection upcaster is total and refuses evidence it cannot reconstruc
   assert.equal(projectionInputIsValid(mixed), false);
 });
 
+test("version 3 retires the live budget at freeze, so no frozen view moves", () => {
+  const knowledge = provenanceIntent(knowledgeContract());
+  const stored = knowledge.state.gate!.provenance!.projectionInputSnapshot;
+  const view = hydrateProvenanceInput(stored)!;
+  assert.ok(view.targetEvidence.length > 0);
+
+  // The same projection as a run frozen before version 3 still holds it.
+  const priorView: HydratedProvenanceInput = {
+    ...view,
+    targetEvidence: view.targetEvidence.map((target) => ({
+      ...target,
+      resolution: { ...target.resolution!, capacities: FULL_CAPACITIES },
+    })),
+  };
+  const priorStored = compactProvenanceInput(priorView)!;
+  for (const target of priorStored.targetEvidence)
+    assert.equal((target as CompactGateTargetState).version, 2);
+
+  // A version-2 snapshot still hydrates, stays valid, and keeps the exact
+  // view it was frozen with.
+  assert.ok(validate(ProvenanceInputSchema, priorStored).ok);
+  assert.ok(projectionInputIsValid(priorStored));
+  assert.ok(projectionInputIsValid(priorView));
+  assert.equal(
+    canonicalJson(hydrateProvenanceInput(priorStored) as unknown as JsonValue),
+    canonicalJson(priorView as unknown as JsonValue),
+  );
+  // Commitments bind the hydrated view, so each view's two encodings agree.
+  for (const [encoded, hydrated] of [
+    [priorStored, priorView],
+    [stored, view],
+  ] as const)
+    assert.equal(
+      provenanceCarrySnapshotCommitment(encoded),
+      provenanceCarrySnapshotCommitment(hydrated),
+    );
+  // Retiring is a freeze-time decision and never a re-encoding, so the two
+  // views stay distinct and a run already holding the older one is untouched.
+  assert.notEqual(
+    provenanceCarrySnapshotCommitment(priorView),
+    provenanceCarrySnapshotCommitment(view),
+  );
+  assert.ok(
+    projectionStorageByteLength(stored) <
+      projectionStorageByteLength(priorStored),
+  );
+
+  // A carried version-2 entry beside a newly frozen version-3 one: each entry
+  // is the one canonical encoding of itself, so the projection is canonical.
+  const wide = widestLegalProjection(2);
+  const partlyRetired: HydratedProvenanceInput = {
+    ...wide,
+    targetEvidence: [
+      wide.targetEvidence[0]!,
+      frozenTargetEvidence(wide.targetEvidence[1]!),
+    ],
+  };
+  const mixed = compactProvenanceInput(partlyRetired)!;
+  assert.equal((mixed.targetEvidence[0] as CompactGateTargetState).version, 2);
+  assert.equal(
+    (mixed.targetEvidence[1] as CompactGateTargetStateV3).version,
+    3,
+  );
+  assert.ok(validate(ProvenanceInputSchema, mixed).ok);
+  assert.ok(projectionEncodingIsCanonical(mixed, partlyRetired));
+  assert.equal(
+    canonicalJson(hydrateProvenanceInput(mixed) as unknown as JsonValue),
+    canonicalJson(partlyRetired as unknown as JsonValue),
+  );
+
+  // Anything that is not one of those encodings fails closed. A version-3
+  // entry is always resolved and never restates the budget it retired.
+  const entry = mixed.targetEvidence[1] as CompactGateTargetStateV3;
+  const { resolution: retiredResolution, ...unresolved } = entry;
+  for (const broken of [
+    unresolved,
+    {
+      ...entry,
+      resolution: { ...retiredResolution, capacities: FULL_CAPACITIES },
+    },
+  ])
+    assert.equal(
+      validate(ProvenanceInputSchema, { ...mixed, targetEvidence: [broken] })
+        .ok,
+      false,
+    );
+  // A version-2 entry that dropped the budget anyway is schema-legal and is
+  // still refused: it is not the canonical encoding of its own view.
+  const downgraded = {
+    ...mixed,
+    targetEvidence: [{ ...entry, version: 2 as const }],
+  };
+  assert.ok(validate(ProvenanceInputSchema, downgraded).ok);
+  assert.equal(
+    projectionEncodingIsCanonical(
+      downgraded,
+      hydrateProvenanceInput(downgraded)!,
+    ),
+    false,
+  );
+});
+
 test("the compact projection buys real output capacity inside unchanged bounds", () => {
   // No bound moves, and neither does the per-target ceiling.
   assert.equal(LIMITS.projectionSnapshotBytes, 65_536);
@@ -937,17 +1068,42 @@ test("the compact projection buys real output capacity inside unchanged bounds",
     ])
       assert.ok(validate(ProvenanceInputSchema, encoded).ok);
 
-  // Exact marginal cost of one more minimal legal output.
+  const retiredBytes = (outputs: number) =>
+    projectionStorageByteLength(
+      retiredProjection(minimalLegalProjection(outputs)),
+    );
+
+  // Exact marginal cost of one more minimal legal output. The retired budget
+  // is per resolution, not per output, so the per-output cost is unchanged.
   assert.equal(legacyBytes(2) - legacyBytes(1), 1_307);
   assert.equal(compactBytes(2) - compactBytes(1), 645);
+  assert.equal(retiredBytes(2) - retiredBytes(1), 645);
 
   // 64 minimal outputs did not fit and now do, with headroom to spare.
   assert.equal(legacyBytes(64), 89_093);
   assert.equal(compactBytes(64), 46_585);
+  assert.equal(retiredBytes(64), 46_407);
   assert.ok(legacyBytes(64) > LIMITS.projectionSnapshotBytes);
-  assert.ok(compactBytes(64) <= LIMITS.projectionSnapshotBytes);
+  assert.ok(retiredBytes(64) <= LIMITS.projectionSnapshotBytes);
   assert.equal(largestFittingOutputCount(legacyBytes), 46);
   assert.equal(largestFittingOutputCount(compactBytes), 92);
+  assert.equal(largestFittingOutputCount(retiredBytes), 92);
+
+  // Per target, which is what version 3 actually pays for: one minimal target
+  // holding one output costs 178 stored bytes less, and seven more of them
+  // fit inside the same unchanged ceiling.
+  const wideCompactBytes = (targets: number) =>
+    projectionStorageByteLength(widestLegalProjection(targets));
+  const wideRetiredBytes = (targets: number) =>
+    projectionStorageByteLength(
+      retiredProjection(widestLegalProjection(targets)),
+    );
+  assert.equal(wideCompactBytes(2) - wideCompactBytes(1), 1_346);
+  assert.equal(wideRetiredBytes(2) - wideRetiredBytes(1), 1_168);
+  assert.equal(wideCompactBytes(64), 90_748);
+  assert.equal(wideRetiredBytes(64), 79_356);
+  assert.equal(largestFittingOutputCount(wideCompactBytes), 45);
+  assert.equal(largestFittingOutputCount(wideRetiredBytes), 52);
 });
 
 test("the exact legal reserve is measured on the encoding each copy is stored in", () => {
@@ -977,11 +1133,15 @@ test("the exact legal reserve is measured on the encoding each copy is stored in
   };
   const live = materialisationExpansionCost(sources, binding);
   const frozen = materialisationProjectionExpansionCost(sources, binding);
-  // Live record plus compact frozen copy, not twice the live one.
+  // Live record plus compact frozen copy, not twice the live one. Exact, not
+  // bounded: the frozen copy is compact and its live budget is retired.
+  assert.equal(live, 1_903);
+  assert.equal(frozen, 1_239);
   assert.equal(
     materialisationAggregateExpansionCost(sources, binding),
     live + frozen,
   );
+  assert.equal(materialisationAggregateExpansionCost(sources, binding), 3_142);
   assert.ok(frozen < live);
   assert.ok(live + frozen < 2 * live);
   // A gate-stage tuple never enters the frozen projection at all.

@@ -45,6 +45,7 @@ import { canEnterTerminalIntent } from "./guards.js";
 import {
   compactProvenanceInput,
   compactTargetEvidenceShape,
+  frozenTargetEvidence,
   hydrateProvenanceInput,
   projectionEncodingIsCanonical,
   projectionStorageByteLength,
@@ -52,6 +53,7 @@ import {
 
 export {
   compactProvenanceInput,
+  frozenTargetEvidence,
   hydrateProvenanceInput,
   projectionStorageByteLength,
 } from "./projection.js";
@@ -829,9 +831,14 @@ function provenanceInput(
     mergedEvidence[item.unitId] = item;
   }
   const targets = new Map<string, GateTargetState>();
+  // Freezing a live target retires its remaining budget; carried evidence
+  // arrives already frozen and is passed through exactly as the predecessor
+  // stored it, so its commitment survives the encoding it was taken over.
   for (const target of [
     ...(carried?.targetEvidence ?? []),
-    ...gate.targets.filter((target) => target.definition.scope === "unit"),
+    ...gate.targets
+      .filter((target) => target.definition.scope === "unit")
+      .map(frozenTargetEvidence),
   ]) {
     const previous = targets.get(target.definition.targetId);
     if (
@@ -998,7 +1005,7 @@ function hydratedProjectionIsValid(input: HydratedProvenanceInput): boolean {
       target.resolution === undefined ||
       target.resolution.targetId !== target.definition.targetId ||
       entryIds.has(target.resolution.gateEntryId) ||
-      !resolutionRecordIsCoherent(target.resolution) ||
+      !frozenResolutionRecordIsCoherent(target.resolution) ||
       (target.resolution.status === "observed" &&
         (target.resolution.sources === undefined ||
           target.resolution.sources.length !==
@@ -2471,10 +2478,13 @@ function reachableTargetVariants(
   return { baseline: baseline as unknown as JsonValue, variants };
 }
 
-/** The frozen copy's reserve is measured on its own compact encoding. */
+/**
+ * The frozen copy's reserve is measured on the bytes it is actually stored
+ * in: the live budget retired, then compacted.
+ */
 function compactReachableShape(value: JsonValue): JsonValue {
   return compactTargetEvidenceShape(
-    value as unknown as GateTargetState,
+    frozenTargetEvidence(value as unknown as GateTargetState),
   ) as unknown as JsonValue;
 }
 
@@ -9167,6 +9177,31 @@ function gatePlaceholderIsCoherent(value: {
   );
 }
 
+/** A frozen resolution has no live budget left; the rules read it as spent. */
+const RETIRED_RESOLUTION_BUDGET = {
+  remainingAggregateEnvelopeByteCapacity: 0,
+  remainingItemCapacity: 0,
+  remainingProjectionSnapshotByteCapacity: 0,
+  remainingSourceByteCapacity: 0,
+} as const;
+
+/**
+ * The same rule for a resolution read out of a frozen projection, where the
+ * live budget is retired: a version-3 entry stores none at all, and one frozen
+ * before it still carries the record it was frozen with. Nothing else about
+ * the record is relaxed.
+ */
+function frozenResolutionRecordIsCoherent(value: GateResolution): boolean {
+  return (
+    resolutionRecordIsCoherent(value) ||
+    (value.capacities === undefined &&
+      resolutionRecordIsCoherent({
+        ...value,
+        capacities: RETIRED_RESOLUTION_BUDGET,
+      }))
+  );
+}
+
 function resolutionRecordIsCoherent(value: GateResolution): boolean {
   if (!settlementMetadataIsCoherent(value)) return false;
   if (value.status === "observed")
@@ -10589,6 +10624,17 @@ function gateInvariantErrors(state: RepositoryRun): string[] {
         ? undefined
         : projectionInputSlice(snapshot, currentIds);
     const expectedCurrent = currentProjectionInput(state, gate, currentIds);
+    // The snapshot binds the live evidence in exactly one of the two frozen
+    // forms: the live budget retired, or the budget it was frozen with before
+    // version 3 retired it. Both are exact; neither is normalised away.
+    const expectedRetired =
+      expectedCurrent === undefined
+        ? undefined
+        : {
+            ...expectedCurrent,
+            targetEvidence:
+              expectedCurrent.targetEvidence.map(frozenTargetEvidence),
+          };
     const carriedSlice =
       snapshot === undefined
         ? undefined
@@ -10597,8 +10643,11 @@ function gateInvariantErrors(state: RepositoryRun): string[] {
       !sameStringArray(currentIds, expectedCurrentIds) ||
       currentSlice === undefined ||
       expectedCurrent === undefined ||
-      canonicalJson(currentSlice as unknown as JsonValue) !==
-        canonicalJson(expectedCurrent as unknown as JsonValue)
+      ![expectedRetired, expectedCurrent].some(
+        (expected) =>
+          canonicalJson(currentSlice as unknown as JsonValue) ===
+          canonicalJson(expected as unknown as JsonValue),
+      )
     )
       errors.push("provenance snapshot does not bind current landed evidence");
     if (

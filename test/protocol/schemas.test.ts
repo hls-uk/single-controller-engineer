@@ -661,4 +661,32 @@ test("the compact projection encoding stays strict and disjoint", () => {
     ).ok,
     true,
   );
+  // Version 3 is that encoding with the resolution's live budget retired: it
+  // is always resolved and never restates the budget it dropped.
+  const retiredTarget = { ...compactTarget, version: 3 };
+  assert.equal(
+    validate(ProvenanceInputSchema, projection([retiredTarget])).ok,
+    true,
+  );
+  for (const broken of [
+    { ...compactTarget, version: 4 },
+    {
+      ...retiredTarget,
+      resolution: {
+        ...retiredTarget.resolution,
+        capacities: {
+          remainingAggregateEnvelopeByteCapacity: 0,
+          remainingItemCapacity: 0,
+          remainingProjectionSnapshotByteCapacity: 0,
+          remainingSourceByteCapacity: 0,
+        },
+      },
+    },
+    { definition, materialisations: [], status: "observed", version: 3 },
+  ])
+    assert.equal(
+      validate(ProvenanceInputSchema, projection([broken])).ok,
+      false,
+      JSON.stringify(Object.keys(broken)),
+    );
 });

@@ -23,6 +23,7 @@ import {
   deriveProvenanceCarryClaimKey,
   deriveCandidateDiffHash,
   deriveIdempotencyKey,
+  deriveMaterialisationTargetId,
   deriveProvenanceCarryExportId,
   projectionInputIsValid,
   provenanceCarryAncestorDigest,
@@ -32,9 +33,16 @@ import {
   runInvariantErrors,
   type ProtocolEffect,
 } from "../../src/protocol/reducer.js";
-import { canonicalJson } from "../../src/protocol/canonical.js";
+import { canonicalJson, type JsonValue } from "../../src/protocol/canonical.js";
+import {
+  compactProvenanceInput,
+  frozenTargetEvidence,
+} from "../../src/protocol/projection.js";
 import { sha256 } from "../../src/protocol/evidence.js";
 import type {
+  GateDestinationProbe,
+  GateTargetState,
+  HydratedProvenanceInput,
   KnowledgeContract,
   ProtocolEvent,
   ProvenanceCarry,
@@ -579,9 +587,13 @@ async function configuredCarryRefusalStore(
   return store;
 }
 
-function carryPredecessorProjection(lineageAncestorDigests: readonly string[]) {
+function carryPredecessorProjection(
+  lineageAncestorDigests: readonly string[],
+  projectionInputSnapshot: ProvenanceInput = carryProjectionInput(),
+  targets: readonly GateTargetState[] = [],
+  destinationProbes: readonly GateDestinationProbe[] = [],
+) {
   const base = carryRun("local-ff");
-  const projectionInputSnapshot = carryProjectionInput();
   const predecessor: RepositoryRun = {
     ...base,
     closedUnitEvidence: projectionInputSnapshot.closedUnitEvidence,
@@ -600,7 +612,7 @@ function carryPredecessorProjection(lineageAncestorDigests: readonly string[]) {
         status: "voided",
       },
       currentIntegrationOid: OID_A,
-      destinationProbes: [],
+      destinationProbes: [...destinationProbes],
       lineageAncestorDigests: [...lineageAncestorDigests],
       lineageCommitment: provenanceCarryLineageCommitment(
         lineageAncestorDigests,
@@ -625,7 +637,7 @@ function carryPredecessorProjection(lineageAncestorDigests: readonly string[]) {
       provenanceUnitAccounting: [],
       targetDefinitionCommitment: HASH,
       targetPromises: [],
-      targets: [],
+      targets: [...targets],
       waveId: "wave-predecessor",
     },
     knowledgeContract: configuredKnowledgeContract(),
@@ -634,6 +646,157 @@ function carryPredecessorProjection(lineageAncestorDigests: readonly string[]) {
   };
   return makeRootProjection(predecessor);
 }
+
+/** One settled unit target and its probe, as a carried projection holds them. */
+function carriedUnitEvidence(): Readonly<{
+  probe: GateDestinationProbe;
+  target: GateTargetState;
+}> {
+  const destination = {
+    destinationAlias: "drive",
+    destinationSubpath: "published",
+    namingPolicy: "source-basename" as const,
+    sidecarRequired: true as const,
+    sourcePattern: "docs/file*.md",
+  };
+  const targetId = deriveMaterialisationTargetId(
+    "unit",
+    "unit-1",
+    0,
+    destination,
+  );
+  const source = {
+    blobOid: OID_A,
+    byteCount: 1,
+    path: "docs/a.md",
+    sha256: HASH,
+  };
+  const probeId = `sce:gate:${"d".repeat(64)}`;
+  return {
+    probe: {
+      destinationAlias: destination.destinationAlias,
+      destinationSubpath: destination.destinationSubpath,
+      gateEntryId: probeId,
+      identity: {
+        canonicalPath: "/repo/published",
+        device: "1",
+        inode: "2",
+      },
+      stage: "unit",
+      status: "observed",
+    },
+    target: {
+      definition: {
+        originUnitId: "unit-1",
+        scope: "unit",
+        target: destination,
+        targetId,
+        targetOrdinal: 0,
+      },
+      materialisations: [
+        {
+          artifactName: "a.md",
+          destinationProbeGateEntryId: probeId,
+          gateEntryId: `sce:gate:${"b".repeat(64)}`,
+          observation: {
+            artifactByteCount: source.byteCount,
+            artifactSha256: source.sha256,
+            artifactStatus: "already_present",
+            sidecarByteCount: 1,
+            sidecarSha256: HASH,
+            sidecarStatus: "already_present",
+          },
+          originUnitId: "unit-1",
+          sidecarByteCount: 1,
+          sidecarName: "a.md.sidecar",
+          sidecarSha256: HASH,
+          source,
+          sourceOid: OID_A,
+          status: "observed",
+          target: destination,
+          targetId,
+          timestamp: "2026-09-03T12:00:00Z",
+        },
+      ],
+      resolution: {
+        capacities: {
+          remainingAggregateEnvelopeByteCapacity: 1_024,
+          remainingItemCapacity: 8,
+          remainingProjectionSnapshotByteCapacity: 2_048,
+          remainingSourceByteCapacity: 4_096,
+        },
+        gateEntryId: `sce:gate:${"c".repeat(64)}`,
+        sourceOid: OID_A,
+        sources: [source],
+        status: "observed",
+        targetId,
+      },
+      status: "observed",
+    },
+  };
+}
+
+test("direct carry planner carries a version-3 predecessor snapshot verbatim", () => {
+  const current = carryRun("local-ff");
+  const { probe, target } = carriedUnitEvidence();
+  const base = carryProjectionInput();
+  // The predecessor's view before version 3, and the same evidence as a
+  // version-3 run freezes it.
+  const priorView: HydratedProvenanceInput = {
+    ...base,
+    destinationProbeEvidence: [probe],
+    targetEvidence: [target],
+  };
+  const retiredView: HydratedProvenanceInput = {
+    ...priorView,
+    targetEvidence: [frozenTargetEvidence(target)],
+  };
+  const retired = compactProvenanceInput(retiredView)!;
+  assert.equal((retired.targetEvidence[0] as { version: number }).version, 3);
+  for (const snapshot of [priorView, retired])
+    assert.equal(projectionInputIsValid(snapshot), true);
+
+  const plan = (snapshot: ProvenanceInput) =>
+    planProvenanceCarryFromProjection(
+      predecessorRootBeadId,
+      "sce-current-root",
+      current,
+      carryPredecessorProjection([], snapshot, [target], [probe]),
+    );
+  const carried = plan(retired);
+  assert.equal(
+    carried.status,
+    "planned",
+    carried.status === "refused" ? carried.reason : undefined,
+  );
+  assert.ok(carried.status === "planned");
+  // The snapshot crosses verbatim: no sibling record travels beside it and
+  // nothing is re-attached, because the budget was retired at freeze time.
+  assert.equal(
+    canonicalJson(
+      carried.value.carry.projectionInputSnapshot as unknown as JsonValue,
+    ),
+    canonicalJson(retired as unknown as JsonValue),
+  );
+  assert.equal(
+    carried.value.plan.snapshotCommitment,
+    provenanceCarrySnapshotCommitment(retired),
+  );
+
+  // A predecessor frozen before version 3 keeps its own view, commitment, and
+  // export id; neither snapshot is migrated into the other.
+  const prior = plan(priorView);
+  assert.ok(prior.status === "planned");
+  assert.equal(
+    prior.value.plan.snapshotCommitment,
+    provenanceCarrySnapshotCommitment(priorView),
+  );
+  assert.notEqual(
+    prior.value.plan.snapshotCommitment,
+    carried.value.plan.snapshotCommitment,
+  );
+  assert.notEqual(prior.value.plan.exportId, carried.value.plan.exportId);
+});
 
 test("direct carry planner refuses cyclic, duplicate, and over-limit lineage", () => {
   const current = carryRun("local-ff");

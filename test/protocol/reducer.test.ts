@@ -32,10 +32,13 @@ import {
   runInvariantErrors,
   sessionLineageCount,
 } from "../../src/protocol/reducer.js";
-import { hydrateProvenanceInput } from "../../src/protocol/projection.js";
+import {
+  compactProvenanceInput,
+  hydrateProvenanceInput,
+} from "../../src/protocol/projection.js";
 import { canEnterTerminalIntent } from "../../src/protocol/guards.js";
 import type {
-  CompactGateTargetState,
+  CompactGateTargetStateV3,
   EffectJournalEntry,
   MaterialiseRefusal,
   ProtocolEvent,
@@ -1080,11 +1083,13 @@ test("optional probe refusal voids only expanded dependents and retains evidence
     }).some((error) => error.includes("contradicts mount policy")),
   );
   // The reducer freezes the compact encoding, so the stored entry is the
-  // compact arm of the projection union; the assertion below proves it.
+  // compact arm of the projection union; the assertion below proves it. A
+  // resolved entry freezes at version 3, which retires the live budget.
   const provenanceTarget = state.gate?.provenance?.projectionInputSnapshot
-    .targetEvidence[0] as CompactGateTargetState | undefined;
+    .targetEvidence[0] as CompactGateTargetStateV3 | undefined;
   assert.ok(provenanceTarget);
-  assert.equal(provenanceTarget.version, 2);
+  assert.equal(provenanceTarget.version, 3);
+  assert.ok(!("capacities" in provenanceTarget.resolution));
   assert.ok(
     runInvariantErrors({
       ...state,
@@ -1595,6 +1600,63 @@ test("final-name collisions carry exact witnesses and permit deterministic retry
   assert.deepEqual(runInvariantErrors(deferred), []);
 });
 
+test("a snapshot frozen before version 3 still binds its run's live evidence", () => {
+  const prior = completeKnowledgeTarget(
+    landedKnowledgeRun(knowledgeContract(), {
+      destinationAlias: "drive",
+      destinationSubpath: "published",
+      namingPolicy: "source-basename" as const,
+      sidecarRequired: true as const,
+      sourcePattern: "docs/report.md",
+    }),
+    "docs/report.md",
+    "2026-09-03T12:00:00Z",
+  );
+  assert.deepEqual(runInvariantErrors(prior), []);
+  const gate = prior.gate!;
+  const view = hydrateProvenanceInput(
+    gate.provenance!.projectionInputSnapshot,
+  )!;
+  // The same run as it would have been frozen before version 3: the live
+  // budget is still inside the snapshot, and the entry id binds that view.
+  const priorView = {
+    ...view,
+    targetEvidence: view.targetEvidence.map((entry) => ({
+      ...entry,
+      resolution: {
+        ...entry.resolution!,
+        capacities: gate.targets.find(
+          (live) => live.definition.targetId === entry.definition.targetId,
+        )!.resolution!.capacities!,
+      },
+    })),
+  };
+  const legacy = {
+    ...prior,
+    gate: {
+      ...gate,
+      provenance: {
+        ...gate.provenance!,
+        gateEntryId: deriveGateEntryId(
+          prior.controller.runId,
+          gate.waveId,
+          "provenance",
+          priorView as unknown as JsonValue,
+        ),
+        projectionInputSnapshot: compactProvenanceInput(priorView)!,
+      },
+    },
+  };
+  assert.notEqual(
+    legacy.gate.provenance.gateEntryId,
+    gate.provenance!.gateEntryId,
+  );
+  // Nothing is migrated: the older snapshot keeps the identity and the
+  // commitment it was issued, and the run stays invariant-clean beside a
+  // live gate that still carries the budget the snapshot retired.
+  assert.deepEqual(runInvariantErrors(legacy), []);
+});
+
 test("a later unit wave refuses an exact final-name collision with carried output evidence", () => {
   const target = {
     destinationAlias: "drive",
@@ -1615,8 +1677,8 @@ test("a later unit wave refuses an exact final-name collision with carried outpu
   // The predecessor froze the compact encoding, so this whole carry, and the
   // collision evidence it supplies below, arrives compact.
   assert.equal(
-    (snapshot.targetEvidence[0] as CompactGateTargetState).version,
-    2,
+    (snapshot.targetEvidence[0] as CompactGateTargetStateV3).version,
+    3,
   );
   // A predecessor that still stores the version-free encoding commits to the
   // very same snapshot, so no in-flight carry is stranded by the change.

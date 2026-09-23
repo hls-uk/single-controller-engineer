@@ -810,13 +810,56 @@ export const CompactGateTargetStateSchema = strictObject({
 export type CompactGateTargetState = Static<
   typeof CompactGateTargetStateSchema
 >;
+
+/**
+ * Compact projection evidence, version 3.
+ *
+ * `capacities` is the controller's remaining live budget at the moment the
+ * resolve intent was issued: gate bookkeeping the live record still holds and
+ * no provenance reader can act on. Version 3 retires it from the frozen
+ * projection outright rather than storing it beside the snapshot, so the bytes
+ * leave the snapshot reserve, the carry, and the provenance commit at once.
+ * The drop happens where a live target is frozen, never when a stored
+ * projection is re-encoded, so a projection frozen before version 3 keeps its
+ * budget, hydrates to the exact view it was issued against, and keeps every
+ * commitment taken over that view.
+ */
+export const CompactGateResolutionV3Schema = strictObject({
+  currentEffectId: Type.Optional(effectIdentifier()),
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  gateEntryId: identifier(),
+  lastRefusal: Type.Optional(MaterialisationResolveRefusalSchema),
+  sourceOid: oid(),
+  status: gateStatus(),
+});
+export type CompactGateResolutionV3 = Static<
+  typeof CompactGateResolutionV3Schema
+>;
+/** A version-3 entry is always resolved; an unresolved one stays version 2. */
+export const CompactGateTargetStateV3Schema = strictObject({
+  definition: GateTargetDefinitionSchema,
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  materialisations: Type.Array(CompactGateMaterialisationSchema, {
+    maxItems: LIMITS.materialisationMatches,
+  }),
+  resolution: CompactGateResolutionV3Schema,
+  status: gateStatus(),
+  version: Type.Literal(3),
+});
+export type CompactGateTargetStateV3 = Static<
+  typeof CompactGateTargetStateV3Schema
+>;
 /**
  * A stored projection carries one encoding per entry: the version-free live
- * record that persisted runs already hold, or the compact record above.
+ * record that persisted runs already hold, or one of the compact records
+ * above.
  */
 export const ProvenanceTargetEvidenceSchema = Type.Union([
   GateTargetStateSchema,
   CompactGateTargetStateSchema,
+  CompactGateTargetStateV3Schema,
 ]);
 export type ProvenanceTargetEvidence = Static<
   typeof ProvenanceTargetEvidenceSchema

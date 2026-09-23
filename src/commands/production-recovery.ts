@@ -206,6 +206,11 @@ export function planProvenanceCarryFromProjection(
     provenance.disposition !== "deferred_by_controller"
   )
     return refuse("provenance_not_deferred");
+  // The predecessor's snapshot crosses into the claim exactly as it was
+  // frozen, in whichever encoding that was. A version-3 snapshot retired the
+  // resolution's live budget at freeze time rather than parking it beside the
+  // snapshot, so nothing has to travel with it and nothing is re-attached
+  // here: it hydrates on its own bytes and commits to its own hydrated view.
   const snapshot = validate<ProvenanceInput>(
     ProvenanceInputSchema,
     provenance.projectionInputSnapshot,

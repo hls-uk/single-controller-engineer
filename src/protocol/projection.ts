@@ -4,18 +4,22 @@
  * `LIMITS.projectionSnapshotBytes` is measured on the bytes actually stored,
  * and the live gate record repeats, once per output, everything the target
  * definition and the resolution already fix. The compact encoding
- * (`version: 2`) stores each of those exactly once. Two rules keep that
- * invisible: hydration is total and exact, so `hydrate(compact(x))` is
- * canonically byte-identical to `x`; and every commitment and derived
- * identifier binds the hydrated view rather than the stored bytes, so a run
- * still holding a version-free snapshot keeps the identifiers it was issued.
+ * (`version: 2`) stores each of those exactly once. `version: 3` additionally
+ * retires the resolution's live budget, which `frozenTargetEvidence` drops
+ * when the live target is frozen. Two rules keep all of it invisible:
+ * hydration is total and exact, so `hydrate(compact(x))` is canonically
+ * byte-identical to `x`; and every commitment and derived identifier binds the
+ * hydrated view rather than the stored bytes, so a run still holding a
+ * version-free or version-2 snapshot keeps the identifiers it was issued.
  * Pure: no clock, environment, subprocess, or randomness.
  */
 import { canonicalJson, type JsonValue } from "./canonical.js";
 import type {
   CompactGateMaterialisation,
   CompactGateResolution,
+  CompactGateResolutionV3,
   CompactGateTargetState,
+  CompactGateTargetStateV3,
   GateMaterialisation,
   GateResolution,
   GateTargetDefinition,
@@ -39,11 +43,22 @@ function same(left: unknown, right: unknown): boolean {
  */
 export function compactTargetEvidenceShape(
   target: GateTargetState,
-): CompactGateTargetState {
+): CompactGateTargetState | CompactGateTargetStateV3 {
   const { materialisations, resolution, ...rest } = target;
+  const entries = materialisations.map(compactMaterialisationShape);
+  // The version is decided by what there is to drop, never by the producer, so
+  // re-encoding a projection frozen before version 3 reproduces its own bytes
+  // and the canonicality rule stays a single deterministic form per view.
+  if (resolution !== undefined && resolution.capacities === undefined)
+    return {
+      ...rest,
+      materialisations: entries,
+      resolution: retiredResolutionShape(resolution),
+      version: 3,
+    };
   return {
     ...rest,
-    materialisations: materialisations.map(compactMaterialisationShape),
+    materialisations: entries,
     ...(resolution === undefined
       ? {}
       : { resolution: compactResolutionShape(resolution) }),
@@ -51,10 +66,37 @@ export function compactTargetEvidenceShape(
   };
 }
 
+/**
+ * The live target as the frozen projection keeps it: the resolution without
+ * the controller's remaining live budget, which the live gate record still
+ * holds and no provenance reader can act on. Freezing is the only place the
+ * budget is dropped, so a projection frozen before version 3 keeps the exact
+ * view its commitments were taken over.
+ */
+export function frozenTargetEvidence(target: GateTargetState): GateTargetState {
+  const resolution = target.resolution;
+  if (resolution?.capacities === undefined) return target;
+  const { capacities: _capacities, ...retired } = resolution;
+  return { ...target, resolution: retired };
+}
+
 function compactResolutionShape(
   resolution: GateResolution,
 ): CompactGateResolution {
   const { sources: _sources, targetId: _targetId, ...rest } = resolution;
+  return rest;
+}
+
+/** Only reachable for a resolution whose budget is already retired. */
+function retiredResolutionShape(
+  resolution: GateResolution,
+): CompactGateResolutionV3 {
+  const {
+    capacities: _capacities,
+    sources: _sources,
+    targetId: _targetId,
+    ...rest
+  } = resolution;
   return rest;
 }
 
@@ -223,8 +265,9 @@ export function hydrateProvenanceInput(
 }
 
 /**
- * A stored projection must be exactly one of the two canonical encodings of
- * its own hydrated view; anything else is ambiguous machine state.
+ * A stored projection must be exactly the version-free encoding of its own
+ * hydrated view or the single compact encoding of it; anything else, a
+ * half-compacted projection included, is ambiguous machine state.
  */
 export function projectionEncodingIsCanonical(
   input: ProvenanceInput,
