@@ -10063,8 +10063,12 @@ var DestinationProbeRefusalSchema = refusalSchema(
 );
 var materialiseRefusalCode = () => Type.Union([
   Type.Literal("source_absent"),
-  Type.Literal("hard_links_unsupported")
+  Type.Literal("hard_links_unsupported"),
+  Type.Literal("publication_platform_unsupported")
 ]);
+var MATERIALISE_REFUSAL_CODES = materialiseRefusalCode().anyOf.map(
+  (literal) => literal.const
+);
 var MaterialiseRefusalSchema = refusalSchema(materialiseRefusalCode());
 var GateMaterialisationRefusalSchema = refusalSchema(
   materialiseRefusalCode()
@@ -13371,6 +13375,9 @@ function maximumSidecarByteCountForSource(source, binding, artifactName) {
   return utf83.encode(`${canonicalJson(sidecar)}
 `).byteLength;
 }
+var WIDEST_MATERIALISE_REFUSAL_CODE = MATERIALISE_REFUSAL_CODES.reduce(
+  (widest, code) => canonicalByteLength(code) > canonicalByteLength(widest) ? code : widest
+);
 function reachableMaterialisationVariants(source, binding) {
   const base = {
     destinationProbeGateEntryId: binding.destinationProbeGateEntryId,
@@ -13417,7 +13424,7 @@ function reachableMaterialisationVariants(source, binding) {
     materialRefusal: {
       ...named,
       lastRefusal: {
-        code: "hard_links_unsupported",
+        code: WIDEST_MATERIALISE_REFUSAL_CODE,
         detailHash: "a".repeat(64)
       },
       status: "pending"
@@ -13449,7 +13456,7 @@ function reachableMaterialisationVariants(source, binding) {
       disposition: "deferred_by_controller",
       followUpBeadId: "a".repeat(160),
       lastRefusal: {
-        code: "hard_links_unsupported",
+        code: WIDEST_MATERIALISE_REFUSAL_CODE,
         detailHash: "a".repeat(64)
       },
       status: "voided"
@@ -25144,7 +25151,7 @@ async function probeDestination(effect2) {
 }
 async function materialiseBytes(cwd, effect2, processPort, objectFormat, platform) {
   if (!NAMESPACE_BOUND_PLATFORMS.has(platform))
-    return ambiguous({ operation: "namespace-binding-unsupported", platform });
+    return refusal2("publication_platform_unsupported", { platform });
   if (!await objectFormatMatches(cwd, processPort, objectFormat))
     return ambiguous({ operation: "object-format" });
   const blobInfo = await readGitObjectInfo(
