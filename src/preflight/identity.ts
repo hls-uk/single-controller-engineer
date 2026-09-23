@@ -10,7 +10,6 @@ import {
   type GitInspection,
   type PreflightEnvelope,
   type RefusalCode,
-  type SafeParse,
   containsSecretShape,
   parseGitInspection,
 } from "./schemas.js";
@@ -213,8 +212,22 @@ function normalizedSyncRemote(
   return normalizeGitRemote(value, localBareCanonicalizer);
 }
 
+/**
+ * The shared identifier vocabulary. Every identity derived here is validated
+ * against exactly this shape once the run is composed, so anything that
+ * cannot be spelled in it has to be refused while the path is still in hand.
+ */
+const IDENTIFIER_MAX_LENGTH = 160;
+const identifierVocabulary = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/u;
+
+function fitsIdentifierVocabulary(value: string): boolean {
+  return (
+    value.length <= IDENTIFIER_MAX_LENGTH && identifierVocabulary.test(value)
+  );
+}
+
 function validPrefix(value: string): boolean {
-  return /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u.test(value);
+  return fitsIdentifierVocabulary(value);
 }
 
 function baseIdentity(
@@ -379,10 +392,40 @@ export function classifyTopology(
   return refused("PF_TOPOLOGY_CONTRADICTORY");
 }
 
+/** A refusal that already names its preflight code and the offending path. */
+export type GitIdentityRefusal = Readonly<{
+  code: RefusalCode;
+  message: string;
+}>;
+
+/** A derived identity, or a failure that may carry a named refusal. */
+export type GitIdentityDerivation =
+  | { readonly ok: true; readonly value: GitIdentity }
+  | { readonly ok: false; readonly refusal?: GitIdentityRefusal };
+
+/**
+ * A remoteless repository is identified by `local:<common dir>`, which the
+ * composed run validates as a plain identifier. A path that cannot be spelled
+ * there is refused here, by name, instead of failing an opaque run invariant
+ * one layer later with no way back to the directory that caused it.
+ */
+function unrepresentableLocalIdentity(commonDir: string): GitIdentityRefusal {
+  return {
+    code: "PF_GIT_LOCAL_IDENTITY_UNREPRESENTABLE",
+    message:
+      `A repository with no configured Git remote is identified by ` +
+      `local:${commonDir}, and that identity does not fit the shared ` +
+      `identifier vocabulary (a leading letter or digit, then at most ` +
+      `${IDENTIFIER_MAX_LENGTH} characters drawn from A-Za-z0-9._:/- in ` +
+      `total). Configure a Git remote, or move the repository to a path ` +
+      `that is representable.`,
+  };
+}
+
 export function deriveGitIdentity(
   input: unknown,
   localBareCanonicalizer?: LocalBareRemoteCanonicalizer,
-): SafeParse<GitIdentity> {
+): GitIdentityDerivation {
   const inspection = parseGitInspection(input);
   if (!inspection.ok) return { ok: false };
   const topLevel = canonicalAbsolutePath(inspection.value.topLevel);
@@ -401,6 +444,8 @@ export function deriveGitIdentity(
     // common directory: the same local identity the Git adapter recomputes
     // before every mutating effect.
     identity = `local:${commonDir}`;
+    if (!fitsIdentifierVocabulary(identity))
+      return { ok: false, refusal: unrepresentableLocalIdentity(commonDir) };
   } else {
     const distinct = new Set(aliases);
     if (distinct.size !== 1) return { ok: false };

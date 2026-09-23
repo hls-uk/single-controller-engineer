@@ -366,6 +366,7 @@ export const RefusalCodeSchema = Type.Union([
   Type.Literal("PF_BOOTSTRAP_PLAN_INVALID"),
   Type.Literal("PF_GIT_INSPECTION_INVALID"),
   Type.Literal("PF_GIT_IDENTITY_AMBIGUOUS"),
+  Type.Literal("PF_GIT_LOCAL_IDENTITY_UNREPRESENTABLE"),
   Type.Literal("PF_SUBPROCESS_UNAVAILABLE"),
   Type.Literal("PF_SUBPROCESS_EXIT"),
   Type.Literal("PF_SUBPROCESS_SIGNAL"),

@@ -57,6 +57,8 @@ export type {
 export type { ProcessClassificationInput } from "./subprocess.js";
 export type {
   EmbeddedStoreProof,
+  GitIdentityDerivation,
+  GitIdentityRefusal,
   LocalBareRemoteCanonicalizer,
   TopologyConfiguration,
   TopologyClassification,

@@ -108,8 +108,13 @@ sce compose-config --harness claude --root-bead <epic-id> \
   already be on the remote (`bd dolt push`), or the first acquire refuses the
   store as ambiguous; the result's `doltSync` field says where you stand. A
   repository with no Git remote at all composes in `local-only` mode and is
-  identified by its canonical `.git` directory; only the `push-branch` and
-  `open-pr` authority profiles need a remote.
+  identified by its canonical `.git` directory; only the `push-branch`,
+  `open-pr` and `integrate` authority profiles need a remote. That local
+  identity has to be a plain identifier, so a canonical `.git` path that
+  holds a space, `@`, `~`, `+`, a non-ASCII character, or more than 154
+  characters is refused up front with
+  `PF_GIT_LOCAL_IDENTITY_UNREPRESENTABLE` instead of failing a later run
+  invariant.
 - `--bind-slot` performs the one authorized bootstrap the engine's normal
   acquire path never does: it binds the fresh `<prefix>-merge-slot` bead to
   the run's scope (and pushes the Dolt data in `git-sync` mode). Without it

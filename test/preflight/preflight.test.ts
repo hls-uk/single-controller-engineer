@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 
 import {
@@ -606,6 +606,60 @@ test("Git identity normalizes every configured alias and refuses ambiguity or cr
     undefined,
   );
   assert.equal(normalizeGitRemote("file:///srv/%E0%A4%A.git"), undefined);
+});
+
+test("a remoteless identity that cannot be spelled as an identifier is refused by name", () => {
+  const remoteless = (commonDir: string) =>
+    deriveGitIdentity({
+      ...gitInspection,
+      commonDir,
+      remoteUrls: [],
+      topLevel: dirname(commonDir),
+    });
+  for (const commonDir of [
+    "/workspace/my repo/.git",
+    "/workspace/repo@host/.git",
+    "/workspace/~repo/.git",
+    "/workspace/repo+mirror/.git",
+    "/workspace/reposit\u00f3rio/.git",
+    `/w/${"a".repeat(147)}/.git`,
+  ]) {
+    const derived = remoteless(commonDir);
+    assert.equal(derived.ok, false);
+    if (derived.ok) continue;
+    assert.equal(
+      derived.refusal?.code,
+      "PF_GIT_LOCAL_IDENTITY_UNREPRESENTABLE",
+    );
+    assert.equal(derived.refusal?.message.includes(commonDir), true);
+  }
+  for (const commonDir of [
+    "/workspace/repo/.git",
+    `/w/${"a".repeat(146)}/.git`,
+  ]) {
+    const derived = remoteless(commonDir);
+    assert.equal(derived.ok, true);
+    if (derived.ok) assert.equal(derived.value.identity, `local:${commonDir}`);
+  }
+  assert.equal(
+    deriveGitIdentity({
+      ...gitInspection,
+      commonDir: "/workspace/my repo/.git",
+      providerId: "immutable-provider-123",
+      remoteUrls: [],
+      topLevel: "/workspace/my repo",
+    }).ok,
+    true,
+  );
+  const envelope = preflightEnvelope(
+    { status: "refused", code: "PF_GIT_LOCAL_IDENTITY_UNREPRESENTABLE" },
+    undefined,
+  );
+  assert.deepEqual(envelope.payload, {
+    status: "refused",
+    code: "PF_GIT_LOCAL_IDENTITY_UNREPRESENTABLE",
+  });
+  assert.equal(isSchema(PreflightEnvelopeSchema, envelope), true);
 });
 
 test("all-remotes NUL parser retains equivalent aliases but refuses malformed or contradictory records", () => {

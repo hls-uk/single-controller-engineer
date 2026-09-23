@@ -397,6 +397,11 @@ export type RemoteUrlsObservation =
  * answers this query, so that one silent shape observes an empty remote list.
  * Any other non-zero exit, signal, timeout, output byte, or stderr byte stays
  * a refusal, and matching output is still proved by the private parser.
+ *
+ * A cwd that is not a repository at all answers with that same silent shape,
+ * so this reading is only safe because `inspectPreflight` proves the
+ * repository with its `git rev-parse` observations before the empty remote
+ * list is ever used.
  */
 export async function observeGitRemoteUrls(
   cwd: string,
@@ -689,5 +694,10 @@ export async function inspectPreflight(
     },
     localBareRemoteCanonicalizer,
   );
+  if (!git.ok && git.refusal !== undefined)
+    return preflightEnvelope(
+      { status: "refused", code: git.refusal.code },
+      undefined,
+    );
   return preflightEnvelope(topology, git.ok ? git.value : undefined);
 }
