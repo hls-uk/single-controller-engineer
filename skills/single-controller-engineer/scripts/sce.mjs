@@ -23174,8 +23174,11 @@ async function fetchIntegrationBranch(runner, repository, input) {
     return effect("ambiguous", "GIT_UNRESOLVED_EFFECT");
   return fetched.exitCode === 0 ? effect("observed", "GIT_OK") : effect("refused", "GIT_COMMAND_FAILED");
 }
+function allowedGitRequest(request2) {
+  return safeAbsolutePath(request2.cwd) && allowedGitArgv(request2.argv) && allowedRunnerEnvironment(request2.env);
+}
 var nodeGitRunner = async ({ argv, cwd, env }) => {
-  if (!safeAbsolutePath(cwd) || !allowedGitArgv(argv) || !allowedRunnerEnvironment(env))
+  if (!allowedGitRequest({ argv, cwd, ...env === void 0 ? {} : { env } }))
     return { exitCode: null, signal: null, stdout: "", unavailable: true };
   return new Promise((done) => {
     const stdoutChunks = [];
@@ -24279,7 +24282,7 @@ function createMaterialisationAdapter(repositoryCwd, objectFormat, processPort =
 // src/adapters/git/provenance.ts
 import { spawn as spawn4 } from "node:child_process";
 import { lstat as lstat2, mkdir, readFile, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname3, join as join4, posix as posix2 } from "node:path";
+import { dirname as dirname3, join as join4 } from "node:path";
 
 // src/protocol/provenance.ts
 var PROVENANCE_KEY_TRAILER = "SCE-Provenance-Key";
@@ -24901,8 +24904,10 @@ function createProvenanceAdapter(options) {
   async function executeAggregateVerify(effect2, run2) {
     const params = effect2.params;
     const contract = run2.knowledgeContract;
-    if (contract === void 0 || run2.repositoryIdentity !== repository.identity || run2.gitObjectFormat !== repository.objectFormat || canonicalJson(params.commands) !== canonicalJson(contract.combinedVerificationCommands) || params.candidate.headOid !== params.provenanceOid || !params.worktreePath.startsWith(
-      `${posix2.normalize(contract.provenanceWorktreeRoot)}/sce-provenance-`
+    const attemptKey = run2.gate?.provenance?.attemptIdempotencyKey;
+    if (contract === void 0 || attemptKey === void 0 || run2.repositoryIdentity !== repository.identity || run2.gitObjectFormat !== repository.objectFormat || canonicalJson(params.commands) !== canonicalJson(contract.combinedVerificationCommands) || params.candidate.headOid !== params.provenanceOid || params.worktreePath !== deriveProvenanceWorktreePath(
+      contract.provenanceWorktreeRoot,
+      attemptKey
     ))
       return ambiguous2();
     if ((await verifyRepository(runner, repository)).state !== "observed")
