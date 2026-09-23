@@ -37732,6 +37732,9 @@ var DRIVE_ALIAS = /^[a-z][a-z0-9-]{0,62}$/u;
 var DRIVE_HOME = /^([a-z][a-z0-9-]{0,62}):([A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*)$/u;
 var CANONICAL_SUBPATH = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/u;
 var CANONICAL_SOURCE_PATTERN = /^(?!.*(?:^|\/)\.\.?(?:\/|$))(?!.*\/\/)(?!.*\\)(?!.*\*\*)[A-Za-z0-9][A-Za-z0-9._*?-]*(?:\/[A-Za-z0-9][A-Za-z0-9._*?-]*)*$/u;
+var SAFE_BASENAME = /^(?!\.\.?$)[A-Za-z0-9.][A-Za-z0-9._-]*$/u;
+var MARKER_FILE_BYTES = 255;
+var DRIVE_ALIASES = 64;
 var MAX_MANIFEST_BYTES = 256 * 1024;
 var defaultModelRoutes = {
   claude: {
@@ -37830,6 +37833,9 @@ function harnessSupportFor(family, models) {
     }
   };
 }
+function boundedText2(value) {
+  return typeof value === "string" && value.length >= 1 && value.length <= LIMITS.text && new TextEncoder().encode(value).length <= LIMITS.text;
+}
 function bounded2(value, expression) {
   return typeof value === "string" && value.length <= LIMITS.materialisationPathBytes && expression.test(value) ? value : void 0;
 }
@@ -37848,16 +37854,18 @@ function knowledgeContractFromManifest(manifest) {
   const provenance = record3(value?.provenance);
   const verification = record3(value?.verification);
   const artifactHomes = record3(value?.artifactHomes);
-  if (value === void 0 || value.schema !== "sce.knowledge-manifest" || value.version !== 1 || provenance === void 0 || verification === void 0 || artifactHomes === void 0 || typeof artifactHomes.generated !== "string" || !Array.isArray(value.driveAliases) || !Array.isArray(value.materialisationTargets))
+  if (value === void 0 || value.schema !== "sce.knowledge-manifest" || value.version !== 1 || provenance === void 0 || verification === void 0 || artifactHomes === void 0 || typeof artifactHomes.generated !== "string" || !boundedText2(value.humanDriver) || !Array.isArray(value.driveAliases) || value.driveAliases.length > DRIVE_ALIASES || !Array.isArray(value.materialisationTargets))
     return void 0;
   const variables = [];
+  const variableNames = /* @__PURE__ */ new Set();
   const aliases = [];
   const aliasNames = /* @__PURE__ */ new Set();
   for (const candidate of value.driveAliases) {
     const alias = record3(candidate);
-    if (alias === void 0 || typeof alias.mountPathVariable !== "string" || !ENVIRONMENT_NAME2.test(alias.mountPathVariable) || typeof alias.alias !== "string" || !DRIVE_ALIAS.test(alias.alias) || aliasNames.has(alias.alias))
+    if (alias === void 0 || typeof alias.mountPathVariable !== "string" || !ENVIRONMENT_NAME2.test(alias.mountPathVariable) || variableNames.has(alias.mountPathVariable) || typeof alias.alias !== "string" || !DRIVE_ALIAS.test(alias.alias) || aliasNames.has(alias.alias) || typeof alias.markerFile !== "string" || alias.markerFile.length > MARKER_FILE_BYTES || !SAFE_BASENAME.test(alias.markerFile))
       return void 0;
     aliasNames.add(alias.alias);
+    variableNames.add(alias.mountPathVariable);
     variables.push(alias.mountPathVariable);
     aliases.push({
       alias: alias.alias,
@@ -37876,7 +37884,7 @@ function knowledgeContractFromManifest(manifest) {
     if (target === void 0 || bounded2(target.sourcePattern, CANONICAL_SOURCE_PATTERN) === void 0 || typeof target.destinationAlias !== "string" || !aliasNames.has(target.destinationAlias) || bounded2(target.destinationSubpath, CANONICAL_SUBPATH) === void 0)
       return void 0;
   }
-  if (typeof provenance.worktreeRootVariable !== "string" || !ENVIRONMENT_NAME2.test(provenance.worktreeRootVariable))
+  if (typeof provenance.worktreeRootVariable !== "string" || !ENVIRONMENT_NAME2.test(provenance.worktreeRootVariable) || variableNames.has(provenance.worktreeRootVariable))
     return void 0;
   variables.push(provenance.worktreeRootVariable);
   return {
