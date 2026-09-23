@@ -14,6 +14,10 @@ import {
   type ProtocolEvent,
   type RepositoryRun,
 } from "../protocol/schemas.js";
+import {
+  StoreFailureTailSchema,
+  type StoreFailureTail,
+} from "../fencing/index.js";
 import { ambiguityRecoveryActions, legalActions } from "../protocol/actions.js";
 import { sha256 } from "../protocol/evidence.js";
 import {
@@ -309,12 +313,19 @@ export const CommandRunnerResultSchema = Type.Union([
   }),
   strictObject({
     schema: Type.Literal("sce.command.result"),
+    /**
+     * The redacted tail of the remote child whose failure made the command
+     * unavailable, when the recovery coordinator attributed one. Diagnostic
+     * text for the operator; nothing branches on it.
+     */
+    stderrTail: Type.Optional(StoreFailureTailSchema),
     status: Type.Literal("unavailable"),
     version: Type.Literal(1),
   }),
   strictObject({
     code: Type.Literal("SCE_RECOVERY_BLOCKED"),
     schema: Type.Literal("sce.command.result"),
+    stderrTail: Type.Optional(StoreFailureTailSchema),
     status: Type.Literal("blocked"),
     version: Type.Literal(1),
   }),
@@ -334,12 +345,14 @@ export type CommandRunnerResult =
     }
   | {
       readonly schema: "sce.command.result";
+      readonly stderrTail?: StoreFailureTail;
       readonly status: "unavailable";
       readonly version: 1;
     }
   | {
       readonly code: "SCE_RECOVERY_BLOCKED";
       readonly schema: "sce.command.result";
+      readonly stderrTail?: StoreFailureTail;
       readonly status: "blocked";
       readonly version: 1;
     };
@@ -529,7 +542,12 @@ const commandEvent: Readonly<
  */
 export function createRecoveryCommandRunner(
   runner: (request?: RecoveryRequest) => Promise<
-    | { readonly status: string }
+    /**
+     * A refusal may carry the diagnostic tail of the remote child that caused
+     * it. It is deliberately `unknown` here: this seam is structural, so the
+     * value is re-validated at `storeFailureTail` before it reaches a message.
+     */
+    | { readonly status: string; readonly stderrTail?: unknown }
     | {
         readonly status: string;
         readonly revision: number;
@@ -545,10 +563,12 @@ export function createRecoveryCommandRunner(
       return stateOnlyCommandRunner(request);
     if (isStateCommandRequest(request)) {
       const outcome = await runner();
-      if (!("run" in outcome))
+      if (!("run" in outcome)) {
+        const tail = storeFailureTail(outcome);
         return outcome.status === "unavailable"
-          ? unavailable()
-          : recoveryBlocked();
+          ? unavailable(tail)
+          : recoveryBlocked(tail);
+      }
       return await stateResult(request.command, outcome.run);
     }
     if (request.command === "feedback") return unavailable();
@@ -558,10 +578,12 @@ export function createRecoveryCommandRunner(
           predecessorRootBeadId: request.options.request.predecessorRootBeadId,
         },
       });
-      if (!("revision" in outcome) || outcome.revision < 0)
+      if (!("revision" in outcome) || outcome.revision < 0) {
+        const tail = storeFailureTail(outcome);
         return outcome.status === "unavailable"
-          ? unavailable()
-          : recoveryBlocked();
+          ? unavailable(tail)
+          : recoveryBlocked(tail);
+      }
       return {
         result: { revision: outcome.revision, state: outcome.run.state },
         schema: "sce.command.result",
@@ -607,10 +629,12 @@ export function createRecoveryCommandRunner(
         ? event
         : { harnessAcknowledgement: acknowledgement },
     );
-    if (!("revision" in outcome) || outcome.revision < 0)
+    if (!("revision" in outcome) || outcome.revision < 0) {
+      const tail = storeFailureTail(outcome);
       return outcome.status === "unavailable"
-        ? unavailable()
-        : recoveryBlocked();
+        ? unavailable(tail)
+        : recoveryBlocked(tail);
+    }
     return {
       result: {
         revision: outcome.revision,
@@ -649,13 +673,34 @@ export function createProductionRecoveryCommandRunner(
   return createRecoveryCommandRunner(createProductionRecoveryRunner(options));
 }
 
-function recoveryBlocked(): CommandRunnerResult {
+function recoveryBlocked(
+  tail: Readonly<{ stderrTail?: StoreFailureTail }> = {},
+): CommandRunnerResult {
   return {
     code: "SCE_RECOVERY_BLOCKED",
     schema: "sce.command.result",
+    ...tail,
     status: "blocked",
     version: 1,
   };
+}
+
+/**
+ * Re-validates the coordinator's diagnostic tail at this boundary. The runner
+ * seam is structurally typed, so an unbounded or malformed value is dropped
+ * here rather than carried into a CLI message.
+ */
+function storeFailureTail(
+  outcome: Readonly<{ status: string; stderrTail?: unknown }>,
+): Readonly<{ stderrTail?: StoreFailureTail }> {
+  if (outcome.stderrTail === undefined) return {};
+  const parsed = validate<StoreFailureTail>(
+    StoreFailureTailSchema,
+    outcome.stderrTail,
+  );
+  return parsed.ok && parsed.value !== undefined
+    ? { stderrTail: parsed.value }
+    : {};
 }
 
 async function stateResult(
@@ -701,8 +746,15 @@ function invalidStateRequest(): CommandRunnerResult {
   };
 }
 
-function unavailable(): CommandRunnerResult {
-  return { schema: "sce.command.result", status: "unavailable", version: 1 };
+function unavailable(
+  tail: Readonly<{ stderrTail?: StoreFailureTail }> = {},
+): CommandRunnerResult {
+  return {
+    schema: "sce.command.result",
+    ...tail,
+    status: "unavailable",
+    version: 1,
+  };
 }
 
 export function isCommandName(value: string): value is CommandName {

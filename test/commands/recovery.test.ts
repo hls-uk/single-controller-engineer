@@ -759,3 +759,61 @@ test("generic recovery rejects direct provenance carry intent and observation in
   );
   assert.equal(adapterCalls, 0);
 });
+
+/**
+ * The coordinator never reads the tail; it decides `unavailable` from the
+ * store's status alone and then carries the remote child's own words up to
+ * whoever has to act on the refusal.
+ */
+test("a store refusal carries the remote child's cause into the recovery outcome", async () => {
+  const state = run();
+  const store = new MemoryStore();
+  store.current = readback(state);
+  const stderrTail = {
+    schema: "sce.beads-embedded.remote-failure-tail" as const,
+    text: [
+      "error: failed to push to origin: Operation timed out",
+      "fatal: Could not read from remote repository.",
+    ].join("\n"),
+    truncated: false,
+    version: 1 as const,
+  };
+  let refusal: RunStoreResult = { status: "unavailable", stderrTail };
+  store.compareAndSet = async () => refusal;
+  const runner = createRunner({
+    adapter: {
+      // The effect is admitted so the refusal can only come from the store.
+      canExecute: () => true,
+      async execute() {
+        throw new Error("must not act after a refused intent persist");
+      },
+      async reconcile() {
+        throw new Error("must not reconcile a clean journal");
+      },
+    },
+    acquireOperationLock: async () => ({
+      status: "acquired" as const,
+      lock: { release: async () => ({ status: "released" as const }) },
+    }),
+    nonce: "nonce-store-cause",
+    preOwnership: store,
+    proveTopology: async () => ({ commonDir: "/repo/.git", holder, scope }),
+    store,
+  });
+  const intent = () =>
+    event(state, "reservation_intent", {
+      reservations: [{ id: "res-1", namespace: "path", resource: "src" }],
+    });
+  assert.deepEqual(await runner(intent()), {
+    status: "unavailable",
+    stderrTail,
+  });
+
+  // `holder_mismatch` is reported as blocked; the cause survives the rename.
+  refusal = { status: "holder_mismatch", stderrTail };
+  assert.deepEqual(await runner(intent()), { status: "blocked", stderrTail });
+
+  // A refusal with no failed remote child stays exactly the bare status.
+  refusal = { status: "unavailable" };
+  assert.deepEqual(await runner(intent()), { status: "unavailable" });
+});

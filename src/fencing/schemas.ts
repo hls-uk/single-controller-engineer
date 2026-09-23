@@ -189,12 +189,55 @@ export const MutationBatchSchema = strictObject({
 });
 export type MutationBatch = Static<typeof MutationBatchSchema>;
 
+/**
+ * Bytes of a refusal's diagnostic stderr tail. It restates the embedded
+ * adapter's own bound exactly: fencing sits below every adapter and must not
+ * import one, so the contract is declared here rather than shared.
+ */
+export const STORE_FAILURE_TAIL_BYTES = 2_048;
+
+/**
+ * The already-redacted tail of the remote child whose failure produced a
+ * refusal. A failed remote Dolt child is the only witness to why it failed,
+ * and a bare `unavailable` tells an operator nothing; this carries the cause
+ * to them. It is structurally identical to the embedded adapter's
+ * `RemoteFailureTail`, so an adapter passes its own value through untouched.
+ * Diagnostic only: the status is decided before the tail is attached and
+ * never from it, and the effect journal never carries it.
+ */
+export const StoreFailureTailSchema = strictObject({
+  schema: Type.Literal("sce.beads-embedded.remote-failure-tail"),
+  /** Printable ASCII and newline only, so one character is exactly one byte. */
+  text: Type.String({
+    maxLength: STORE_FAILURE_TAIL_BYTES,
+    maxUtf8Bytes: STORE_FAILURE_TAIL_BYTES,
+    minLength: 1,
+    pattern: "^[\\n\\x20-\\x7E]+$",
+  }),
+  /** Earlier stderr was dropped to hold the bound; this is a tail. */
+  truncated: Type.Boolean(),
+  version: Type.Literal(1),
+});
+export type StoreFailureTail = Static<typeof StoreFailureTailSchema>;
+
+/**
+ * One refused CAS arm. Every arm admits the optional tail so a store never
+ * has to choose a different status in order to name its cause; a refusal with
+ * no failed remote child simply omits the key.
+ */
+function refusal<T extends string>(status: T) {
+  return strictObject({
+    status: Type.Literal(status),
+    stderrTail: Type.Optional(StoreFailureTailSchema),
+  });
+}
+
 export const RunStoreNonAppliedResultSchema = Type.Union([
-  strictObject({ status: Type.Literal("stale") }),
-  strictObject({ status: Type.Literal("holder_mismatch") }),
-  strictObject({ status: Type.Literal("ambiguous") }),
-  strictObject({ status: Type.Literal("unavailable") }),
-  strictObject({ status: Type.Literal("quarantined") }),
+  refusal("stale"),
+  refusal("holder_mismatch"),
+  refusal("ambiguous"),
+  refusal("unavailable"),
+  refusal("quarantined"),
 ]);
 
 /**

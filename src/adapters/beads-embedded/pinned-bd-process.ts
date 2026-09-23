@@ -1282,7 +1282,15 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
           return { kind: "pull", value: "conflict" };
         const capture = await this.run(["dolt", request.kind, "--json"]);
         if (capture === undefined || capture.exceeded || capture.timedOut)
-          return { kind: "pull", value: "unavailable" };
+          return {
+            kind: "pull",
+            // A child killed at its time or output budget exits with no code,
+            // so `failureTail` publishes what it managed to say. Whatever it
+            // wrote before the kill is the only account of the stall an
+            // operator will ever get; the classification is already decided.
+            ...(capture === undefined ? {} : failureTail(capture)),
+            value: "unavailable",
+          };
         const after = await this.doltHead(this.databaseDirectory);
         const afterRemote = await this.remoteHead(
           this.databaseDirectory,
@@ -1310,7 +1318,11 @@ export class PinnedBdEmbeddedProcess implements EmbeddedProcessPort {
       case "push": {
         const capture = await this.run(["dolt", request.kind, "--json"]);
         if (capture === undefined || capture.exceeded || capture.timedOut)
-          return { kind: "push", value: "unavailable" };
+          return {
+            kind: "push",
+            ...(capture === undefined ? {} : failureTail(capture)),
+            value: "unavailable",
+          };
         return {
           kind: "push",
           ...failureTail(capture),

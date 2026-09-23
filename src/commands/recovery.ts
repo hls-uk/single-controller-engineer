@@ -31,6 +31,7 @@ import {
   type RunStorePort,
   type RunStoreResult,
   RunStoreResultSchema,
+  type StoreFailureTail,
 } from "../fencing/index.js";
 import { Type } from "@sinclair/typebox";
 import { ambiguityRecoveryActions, legalActions } from "../protocol/actions.js";
@@ -289,6 +290,13 @@ export type RecoveryOutcome =
         | "stale"
         | "unavailable"
         | "quarantined";
+      /**
+       * The redacted tail of the remote child whose failure caused this
+       * refusal, present only when the refusal came from a store push or
+       * pull. It is diagnostic text for the operator: no coordinator decision
+       * reads it, and it is never journalled.
+       */
+      stderrTail?: StoreFailureTail;
     }>;
 
 /** A command may submit either a reducer event or a narrow host acknowledgement. */
@@ -621,6 +629,10 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
           parsed.value.status === "holder_mismatch"
             ? "blocked"
             : parsed.value.status,
+        // The store already decided this status; the tail only explains it.
+        ...(parsed.value.stderrTail === undefined
+          ? {}
+          : { stderrTail: parsed.value.stderrTail }),
       };
     if (
       parsed.value.affectedRowCount !== batch.changedRows.length + 1 ||

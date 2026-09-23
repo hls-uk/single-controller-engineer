@@ -39,12 +39,19 @@ import {
   makeRootProjection,
   persistReducerIntent,
   type RunStorePort,
+  RunStoreResultSchema,
+  STORE_FAILURE_TAIL_BYTES,
   validateMergeSlotObservation,
   validateMutationBatch,
   validateSlotRelease,
   withBatchCheckpoint,
 } from "../../src/fencing/index.js";
+import {
+  REMOTE_FAILURE_TAIL_BYTES,
+  redactedStderrTail,
+} from "../../src/adapters/beads-embedded/schemas.js";
 import { canonicalJson } from "../../src/protocol/canonical.js";
+import { validate } from "../../src/protocol/schemas.js";
 import { deriveIdempotencyKey, reduce } from "../../src/protocol/reducer.js";
 import type { Reduction } from "../../src/protocol/reducer.js";
 import { event, HASH, run } from "../protocol/fixtures.js";
@@ -917,5 +924,65 @@ test("operation lock recovers only proven crash boundaries and preserves replace
     assert.deepEqual(await finalRecovery.release(), { status: "released" });
   } finally {
     await rm(root, { force: true, recursive: true });
+  }
+});
+
+/**
+ * Fencing sits below every adapter, so the diagnostic tail's contract is
+ * restated here rather than imported. This pins the restatement to the
+ * adapter that produces the value: the two must stay one contract, and the
+ * refusal arm must admit exactly one bounded tail and nothing else.
+ */
+test("a refused run-store result admits exactly one bounded, adapter-shaped cause", () => {
+  assert.equal(STORE_FAILURE_TAIL_BYTES, REMOTE_FAILURE_TAIL_BYTES);
+  const produced = redactedStderrTail(
+    "fatal: unable to access the remote: Operation timed out",
+    false,
+  );
+  assert.ok(produced !== undefined);
+  const refusals = [
+    "stale",
+    "holder_mismatch",
+    "ambiguous",
+    "unavailable",
+    "quarantined",
+  ] as const;
+  for (const status of refusals) {
+    // A refusal with no failed remote child stays exactly what it was.
+    assert.equal(validate(RunStoreResultSchema, { status }).ok, true);
+    assert.equal(
+      validate(RunStoreResultSchema, { status, stderrTail: produced }).ok,
+      true,
+    );
+    assert.equal(
+      validate(RunStoreResultSchema, {
+        status,
+        stderrTail: {
+          ...produced,
+          text: "x".repeat(STORE_FAILURE_TAIL_BYTES),
+        },
+      }).ok,
+      true,
+    );
+    for (const refused of [
+      // One byte past the bound, an unprintable byte, a missing field, a
+      // coerced field, an extra field on the tail, and an extra field on the
+      // refusal itself.
+      { ...produced, text: "x".repeat(STORE_FAILURE_TAIL_BYTES + 1) },
+      { ...produced, text: "cause\u0000" },
+      { ...produced, text: "" },
+      { schema: produced.schema, text: produced.text, version: 1 },
+      { ...produced, truncated: "false" },
+      { ...produced, command: "dolt push" },
+    ])
+      assert.equal(
+        validate(RunStoreResultSchema, { status, stderrTail: refused }).ok,
+        false,
+        canonicalJson(refused),
+      );
+    assert.equal(
+      validate(RunStoreResultSchema, { status, stderr: "raw child output" }).ok,
+      false,
+    );
   }
 });

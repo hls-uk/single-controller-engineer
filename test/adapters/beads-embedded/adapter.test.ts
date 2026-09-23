@@ -560,9 +560,70 @@ test("git-sync compare-and-set does not mutate after a clean local-ahead refusal
   );
 });
 
+/**
+ * A remote child killed at its time or output budget is reported as
+ * `unavailable`, and until now that word was everything the operator got. The
+ * store result is the seam where the code used to be kept and the cause
+ * thrown away.
+ */
+test("a compare-and-set refused by a timed-out push carries the cause into the store result", async () => {
+  const stderrTail = redactedStderrTail(
+    [
+      "error: failed to push to origin: Operation timed out",
+      "fatal: Could not read from remote repository.",
+    ].join("\n"),
+    false,
+  );
+  assert.ok(stderrTail !== undefined);
+  const port = postPushPort({ status: "ambiguous" }, undefined, {
+    kind: "push",
+    stderrTail,
+    value: "unavailable",
+  });
+  assert.deepEqual(
+    await adapter(port, "git-sync").compareAndSet(journalBatch()),
+    {
+      status: "unavailable",
+      stderrTail,
+    },
+  );
+});
+
+test("a compare-and-set refused by an over-budget pull carries the cause into the store result", async () => {
+  const stderrTail = redactedStderrTail(
+    "fatal: unable to access the remote: Connection timed out",
+    true,
+  );
+  assert.ok(stderrTail !== undefined);
+  const head = "a".repeat(40);
+  const clean = {
+    autoCommit: "on" as const,
+    head,
+    reachable: true,
+    remoteHead: head,
+    workingSet: "clean" as const,
+  };
+  const port = new ScriptedPort([
+    { kind: "state", value: clean },
+    { kind: "state", value: clean },
+    { kind: "pull", stderrTail, value: "unavailable" },
+  ]);
+  assert.deepEqual(
+    await adapter(port, "git-sync").compareAndSet(journalBatch()),
+    {
+      status: "unavailable",
+      stderrTail,
+    },
+  );
+});
+
 function postPushPort(
   afterPush: Extract<EmbeddedResponse, { readonly kind: "discover" }>["value"],
   finalState?: EmbeddedState,
+  push: Extract<EmbeddedResponse, { readonly kind: "push" }> = {
+    kind: "push",
+    value: "applied",
+  },
 ) {
   const head = "a".repeat(40);
   return new ScriptedPort([
@@ -653,7 +714,7 @@ function postPushPort(
         status: "observed",
       },
     },
-    { kind: "push", value: "applied" },
+    push,
     { kind: "discover", value: afterPush },
     ...(finalState === undefined
       ? []

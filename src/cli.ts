@@ -52,6 +52,7 @@ import type {
   CommandRunner,
   JsonObject,
 } from "./commands/index.js";
+import type { StoreFailureTail } from "./fencing/index.js";
 
 export const CLI_VERSION = "0.1.0";
 export const REQUEST_SCHEMA = "sce.command.request";
@@ -863,7 +864,10 @@ export async function runCli(
     if (outcome.status === "unavailable") {
       return failure(
         "SCE_COMMAND_UNAVAILABLE",
-        `The ${invocation.request.command} command is unavailable.`,
+        withCause(
+          `The ${invocation.request.command} command is unavailable`,
+          outcome.stderrTail,
+        ),
         EXIT_UNAVAILABLE,
         invocation.request.command,
       );
@@ -882,7 +886,10 @@ export async function runCli(
     if (outcome.status === "blocked") {
       return failure(
         outcome.code,
-        `The ${invocation.request.command} command is blocked pending authoritative recovery.`,
+        withCause(
+          `The ${invocation.request.command} command is blocked pending authoritative recovery`,
+          outcome.stderrTail,
+        ),
         EXIT_UNAVAILABLE,
         invocation.request.command,
       );
@@ -1243,6 +1250,17 @@ function success(result: JsonObject, command?: CliCommandName): CliExecution {
     },
     0,
   );
+}
+
+/**
+ * A refusal an operator can act on. Without a tail this is exactly the
+ * sentence it always was; with one, the trailing full stop gives way to the
+ * remote child's own already-redacted words, which are the only account of
+ * why the store refused. The tail is bounded at 2 KiB by its schema, so the
+ * message stays far inside the CLI response limit.
+ */
+function withCause(sentence: string, tail?: StoreFailureTail): string {
+  return tail === undefined ? `${sentence}.` : `${sentence}: ${tail.text}`;
 }
 
 function failure(

@@ -1652,3 +1652,108 @@ test("refused harness packets name the packet request, not a repository run", as
       "The harness-packet request is not a usable launch packet: --request must carry a valid sce.harness-packet payload within the bounded launch size.",
   });
 });
+
+/**
+ * `The wave command is unavailable.` was true and useless: the two-minute
+ * Dolt push timeout behind it left no trace an operator could read. The
+ * refusal now ends in the remote child's own already-redacted words.
+ */
+test("a refused command names the remote cause the store attributed to it", async () => {
+  const stderrTail = {
+    schema: "sce.beads-embedded.remote-failure-tail" as const,
+    text: [
+      "error: failed to push to origin: Operation timed out",
+      "fatal: Could not read from remote repository.",
+    ].join("\n"),
+    truncated: false,
+    version: 1 as const,
+  };
+  const state = run();
+  const refused = async (
+    outcome: Readonly<{ status: string; stderrTail?: unknown }>,
+  ) =>
+    await runCli(
+      ["next", "--json", "--request", JSON.stringify({ run: state })],
+      { runner: createRecoveryCommandRunner(async () => outcome) },
+    );
+
+  const unavailable = await refused({ status: "unavailable", stderrTail });
+  assert.equal(unavailable.exitCode, 69);
+  assert.deepEqual(JSON.parse(unavailable.stdout), {
+    command: "next",
+    error: {
+      code: "SCE_COMMAND_UNAVAILABLE",
+      message:
+        "The next command is unavailable: error: failed to push to origin: Operation timed out\nfatal: Could not read from remote repository.",
+    },
+    ok: false,
+    schema: "sce.cli.response",
+    version: 1,
+  });
+
+  const blocked = await refused({ status: "blocked", stderrTail });
+  assert.equal(blocked.exitCode, 69);
+  assert.deepEqual(JSON.parse(blocked.stdout).error, {
+    code: "SCE_RECOVERY_BLOCKED",
+    message:
+      "The next command is blocked pending authoritative recovery: error: failed to push to origin: Operation timed out\nfatal: Could not read from remote repository.",
+  });
+
+  // Without an attributed cause the sentence is exactly what it always was.
+  assert.deepEqual(
+    JSON.parse((await refused({ status: "unavailable" })).stdout).error,
+    {
+      code: "SCE_COMMAND_UNAVAILABLE",
+      message: "The next command is unavailable.",
+    },
+  );
+  assert.deepEqual(
+    JSON.parse((await refused({ status: "blocked" })).stdout).error,
+    {
+      code: "SCE_RECOVERY_BLOCKED",
+      message: "The next command is blocked pending authoritative recovery.",
+    },
+  );
+
+  // The runner seam is structurally typed, so an unbounded or malformed tail
+  // is dropped at the command boundary rather than printed.
+  for (const bad of [
+    { ...stderrTail, text: "x".repeat(2_049) },
+    { ...stderrTail, text: "cause\u0000" },
+    { ...stderrTail, truncated: "false" },
+    "error: failed to push",
+  ])
+    assert.equal(
+      JSON.parse(
+        (await refused({ status: "unavailable", stderrTail: bad })).stdout,
+      ).error.message,
+      "The next command is unavailable.",
+    );
+
+  // The mutating path reads the same refusal from the same coordinator.
+  const mutating = await runCli(
+    [
+      "configure-harness",
+      "--request",
+      JSON.stringify({
+        event: {
+          configuration: state.harness!,
+          eventId: "configure-harness",
+          expectedRevision: state.revision,
+          type: "harness_configured" as const,
+        },
+      }),
+    ],
+    {
+      runner: createRecoveryCommandRunner(async () => ({
+        status: "blocked",
+        stderrTail,
+      })),
+    },
+  );
+  assert.equal(mutating.exitCode, 69);
+  assert.equal(
+    JSON.parse(mutating.stdout).error.message,
+    "The configure-harness command is blocked pending authoritative recovery: error: failed to push to origin: Operation timed out\nfatal: Could not read from remote repository.",
+  );
+});

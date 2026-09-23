@@ -662,7 +662,7 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       if (!this.slotAdmitsBatch(slot, batch))
         return { status: "holder_mismatch" };
       const durable = await this.durableCheckpoint(batch, baseline);
-      if (durable.code !== "applied") return this.storeFailure(durable.code);
+      if (durable.code !== "applied") return this.storeFailure(durable);
       const readback = await this.readback(batch);
       return readback === undefined ||
         !same(readback.root, batch.next.root) ||
@@ -700,7 +700,7 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
           head: discovered.baseHead,
           remoteHead: discovered.remoteHead,
         });
-        if (durable.code !== "applied") return this.storeFailure(durable.code);
+        if (durable.code !== "applied") return this.storeFailure(durable);
         const readback = await this.readback(batch);
         return readback === undefined ||
           !same(readback.root, batch.next.root) ||
@@ -717,7 +717,7 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     }
     const prepared = await this.prepareSharedState();
     if (prepared.result.code !== "applied")
-      return this.storeFailure(prepared.result.code);
+      return this.storeFailure(prepared.result);
     const slot = await this.slot("check");
     if (!this.slotAdmitsBatch(slot, batch))
       return { status: "holder_mismatch" };
@@ -757,7 +757,7 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
           };
     }
     const durable = await this.durableCheckpoint(batch, baseline);
-    if (durable.code !== "applied") return this.storeFailure(durable.code);
+    if (durable.code !== "applied") return this.storeFailure(durable);
     const readback = await this.readback(batch);
     if (
       readback === undefined ||
@@ -1251,7 +1251,7 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     batch: MutationBatch,
   ): Promise<RunStoreResult> {
     const durable = await this.durableCheckpoint(batch);
-    if (durable.code !== "applied") return this.storeFailure(durable.code);
+    if (durable.code !== "applied") return this.storeFailure(durable);
     const readback = await this.readback(batch);
     return readback === undefined ||
       !this.isExactIntentReadback(readback, batch)
@@ -1301,6 +1301,9 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
         const pushed = await this.call({ kind: "initial_push", input });
         if (pushed?.kind !== "push" || pushed.value !== "applied")
           return {
+            ...(pushed?.kind === "push" && pushed.stderrTail !== undefined
+              ? { stderrTail: pushed.stderrTail }
+              : {}),
             status:
               pushed?.kind === "push" && pushed.value === "unavailable"
                 ? "unavailable"
@@ -2567,16 +2570,25 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     }
   }
 
-  private storeFailure(code: EmbeddedResult["code"]) {
-    switch (code) {
+  /**
+   * Collapses an embedded refusal into the store contract. The status mapping
+   * is unchanged; the failed remote child's redacted tail rides along so the
+   * refusal can still name its cause several seams above here.
+   */
+  private storeFailure(failure: EmbeddedResult): RunStoreResult {
+    const tail =
+      failure.stderrTail === undefined
+        ? {}
+        : { stderrTail: failure.stderrTail };
+    switch (failure.code) {
       case "stale":
       case "holder_mismatch":
       case "ambiguous":
       case "unavailable":
       case "quarantined":
-        return { status: code } as const;
+        return { ...tail, status: failure.code };
       default:
-        return { status: "ambiguous" } as const;
+        return { ...tail, status: "ambiguous" };
     }
   }
 }
