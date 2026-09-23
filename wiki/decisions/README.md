@@ -47,6 +47,6 @@ may recommend decisions, but the controller records the accepted disposition.
 | [DEC-20260905-013](2026-09-05-013-automatic-git-and-beads-sync.md) | Accepted | Agents keep Git and Beads synchronized after every completed update | `sce-vrm` |
 | [DEC-20260905-014](2026-09-05-014-delivery-skills-sync-each-update.md) | Accepted | Both delivery skills sync each update under the adopting repository's authority | `sce-36o` |
 | [DEC-20260922-015](2026-09-22-015-compose-config-onboarding.md) | Accepted | `sce compose-config` composes and self-validates the controller configuration; pristine knowledge runs admitted | `sce-bih` |
-| [DEC-20260922-016](2026-09-22-016-candidate-base-refresh.md) | Accepted | Candidate base refresh on the same unit identity: rebase onto the integration head, discard old-base bindings, record the launch base | `sce-296.8` |
+| [DEC-20260922-016](2026-09-22-016-candidate-base-refresh.md) | Accepted; amended 2026-09-23 | Candidate base refresh on the same unit identity: rebase onto the integration head, discard old-base bindings, record the launch base | `sce-296.8` |
 | [DEC-20260922-018](2026-09-22-018-materialisation-namespace-relocation.md) | Accepted; amended 2026-09-23 | Publication binds to the admitted directory object, not its name; platforms without that binding fail closed | `sce-7g9.2.2` |
 | [DEC-20260922-019](2026-09-22-019-bytewise-protocol-ordering.md) | Accepted | Protocol order is UTF-16 code-unit order: no reducer or adapter comparison consults a collation | `sce-7g9.2.3` |

@@ -1,6 +1,7 @@
 # DEC-20260922-016: Candidate base refresh on the same unit identity
 
-Date: 2026-09-22. Status: accepted. Controller: the single-controller-engineer
+Date: 2026-09-22. Status: accepted; amended 2026-09-23 (see "Amendment
+2026-09-23"). Controller: the single-controller-engineer
 dogfood run on this repository (roots sce-296 and sce-dtj).
 
 ## Context
@@ -51,3 +52,25 @@ that way.
 - Recorded as bead sce-296.8 under the dogfood epic; tests: reducer lifecycle,
   git adapter real-repository rebase and conflict refusal, golden software
   traces unchanged.
+
+## Amendment 2026-09-23
+
+Decision 1 also admits `refresh_intent` from `worktree_observed`, and only
+there while the unit holds no candidate head and no launch packet. Units are
+composed on the integration head and dispatched hours later, after siblings
+have landed on files they own, so the first act on a prepared unit is not a
+rebase: its branch carries no commits, and the adapter fast-forwards
+`refs/heads/unit/<id>` and the unit worktree with `merge --ff-only`, refusing
+a branch that already carries commits, or a dirty or foreign worktree, with
+the exact pair it rests on and never reaching for `git rebase`; the read-only
+probe reports absence instead, and a worktree already on the new base is
+observed as is. Amending decision 3, such an observation must carry
+`headOid == baseOid` and returns the unit to `worktree_observed` with only
+`baseOid` advanced: no candidate, verification, or review binding exists to
+discard, and no `launchBaseOid` is recorded, because no packet was ever bound,
+so the worker packet issued afterwards has to bind the refreshed base. A
+refused pre-dispatch refresh routes to `repair_required` on the conflicting
+head like any other refused refresh. Recorded as bead sce-296.18; tests: the
+reducer's pre-dispatch refresh and its refusals, the advertised legal action,
+and a production-recovery fast-forward, diverged-branch and dirty-worktree
+trio with a fake Git runner.
