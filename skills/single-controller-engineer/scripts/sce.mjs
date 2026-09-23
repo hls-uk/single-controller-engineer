@@ -9577,6 +9577,17 @@ function sha256(value) {
 var import_ajv = __toESM(require_ajv(), 1);
 var SCHEMA_VERSION = 1;
 var LIMITS = {
+  // The whole aggregate envelope. Under maximum repair pressure it is spent
+  // almost entirely on incompressible durable evidence: the session lineage
+  // costs `sessionFingerprintBytes` per occupied slot, and the two bounded
+  // `eventHistory` replay windows and the deflated closure ledger sit beside
+  // it. That buys 61 retained units at 16 bounded repairs each, not all
+  // `units` of them, and it is this invariant that says so: a 62-unit run is
+  // refused partway through its fifty-ninth unit and a 64-unit one partway
+  // through its fifty-seventh, so neither ever reaches an end state to
+  // measure. The reducer stress scenario in `test/protocol/reducer.test.ts`
+  // pins that capacity and its exact per-step peak, six bytes under this
+  // limit.
   envelopeBytes: 131072,
   effectJournal: 256,
   eventHistory: 256,
