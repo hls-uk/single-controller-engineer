@@ -24,6 +24,7 @@ import {
   type MergeSlotObservation,
   type RootProjection,
 } from "../../../src/fencing/index.js";
+import { planProvenanceCarryFromProjection } from "../../../src/commands/production-recovery.js";
 import type { PreflightEnvelope } from "../../../src/preflight/index.js";
 import {
   canonicalJson,
@@ -38,6 +39,7 @@ import {
   deriveProvenanceWorktreePath,
   deriveTargetDefinitionCommitment,
   projectionInputIsValid,
+  provenanceCarryAncestorDigest,
   provenanceCarryLineageCommitment,
   unitClosureEvidenceCommitment,
   type ProtocolEffect,
@@ -119,19 +121,29 @@ function preflight(sync: boolean): ReadyPreflight {
   };
 }
 
-function acquiredSlot(): MergeSlotObservation {
-  const value = {
+type SlotFacts = Omit<MergeSlotObservation, "readbackHash">;
+
+function acquiredSlotFacts(): SlotFacts {
+  return {
     actor: holder,
     holder,
     label: MERGE_SLOT_LABEL,
     scope,
     scopeCommitment: deriveScopeCommitment(scope),
     slotId: "sce-merge-slot",
-    status: "acquired" as const,
+    status: "acquired",
     title: MERGE_SLOT_TITLE,
-    version: 1 as const,
+    version: 1,
   };
+}
+
+/** Self-consistent readback, so only the slot facts are the negative. */
+function slotFrom(value: SlotFacts): MergeSlotObservation {
   return { ...value, readbackHash: deriveSlotReadbackHash(value) };
+}
+
+function acquiredSlot(): MergeSlotObservation {
+  return slotFrom(acquiredSlotFacts());
 }
 
 function currentRun(): RepositoryRun {
@@ -411,6 +423,47 @@ function predecessorWithMalformedCarrySnapshot(): RepositoryRun {
   };
 }
 
+function predecessorWithUnsettledEffect(): RepositoryRun {
+  const value = predecessorRun();
+  const intent = {
+    effectId: "carry-event:provenance_commit",
+    idempotencyKey: "provenance-commit-unsettled",
+    intentRevision: 1,
+    kind: "provenance_commit" as const,
+    paramsHash: "5".repeat(64),
+    schemaVersion: 1 as const,
+    unitId: null,
+  };
+  return {
+    ...value,
+    effectJournal: [
+      {
+        ...intent,
+        intentCommitment: deriveIntentCommitment(intent),
+        status: "intended",
+      },
+    ],
+  };
+}
+
+function predecessorWithLineage(
+  lineageAncestorDigests: readonly string[],
+): RepositoryRun {
+  const value = predecessorRun();
+  const gate = value.gate;
+  assert.ok(gate);
+  return {
+    ...value,
+    gate: {
+      ...gate,
+      lineageAncestorDigests: [...lineageAncestorDigests],
+      lineageCommitment: provenanceCarryLineageCommitment(
+        lineageAncestorDigests,
+      ),
+    },
+  };
+}
+
 function claimToken(exportId: string, claimantRunId: string): string {
   return `carry-claim:${sha256(
     canonicalJson({
@@ -500,6 +553,7 @@ class CarryPort implements EmbeddedProcessPort {
   readonly identity: EmbeddedProcessIdentity;
   claims: unknown = {};
   predecessor: RootProjection = makeRootProjection(predecessorRun());
+  slot: MergeSlotObservation = acquiredSlot();
   claimResult: "applied" | "stale" | "unavailable" = "applied";
   staleClaims: unknown;
   commitResult: "applied" | "ambiguous" | "unavailable" = "applied";
@@ -551,7 +605,7 @@ class CarryPort implements EmbeddedProcessPort {
           },
         };
       case "slot":
-        return { kind: "slot", value: acquiredSlot() };
+        return { kind: "slot", value: this.slot };
       case "carry_claim":
         if (this.claimResult !== "applied") {
           if (this.claimResult === "stale" && this.staleClaims !== undefined) {
@@ -855,6 +909,145 @@ test("embedded carry refuses empty or malformed provenance before claim CAS", as
   }
 });
 
+/**
+ * An unsettled predecessor journal never reaches the planner through the
+ * adapter: the run invariants reject that projection first. Both facts are
+ * proved on the exact inputs the adapter would pass through.
+ */
+test("embedded carry refuses an unsettled predecessor journal as an invalid projection", async () => {
+  const value = await fixture();
+  const predecessor = makeRootProjection(predecessorWithUnsettledEffect());
+  const planned = planProvenanceCarryFromProjection(
+    predecessorRootBeadId,
+    currentRootBeadId,
+    value.current,
+    predecessor,
+  );
+  assert.equal(planned.status, "refused");
+  if (planned.status === "refused")
+    assert.equal(planned.reason, "effects_unsettled");
+
+  value.port.predecessor = predecessor;
+  const result = await value.adapter.executeProvenanceCarryClaim(
+    value.effect,
+    value.current,
+  );
+  assert.equal(result.status, "observed");
+  if (result.status === "observed") {
+    assert.equal(result.result.status, "predecessor_refused");
+    if (result.result.status === "predecessor_refused")
+      assert.equal(result.result.reason, "projection_invalid");
+  }
+  assert.equal(
+    value.port.requests.some((request) => request.kind === "carry_claim"),
+    false,
+  );
+});
+
+test("embedded carry refuses invalid or exhausted lineage before any claim", async () => {
+  const currentAncestor = provenanceCarryAncestorDigest(
+    currentRootBeadId,
+    "run-2",
+  );
+  for (const candidate of [
+    {
+      label: "lineage already carries this root",
+      predecessor: predecessorWithLineage([currentAncestor]),
+      reason: "lineage_invalid" as const,
+    },
+    {
+      label: "lineage depth exhausted",
+      predecessor: predecessorWithLineage(
+        Array.from({ length: 128 }, (_, index) =>
+          sha256(`carry-ancestor-${index}`),
+        ),
+      ),
+      reason: "lineage_limit_exceeded" as const,
+    },
+  ]) {
+    const value = await fixture();
+    value.port.predecessor = makeRootProjection(candidate.predecessor);
+    const result = await value.adapter.executeProvenanceCarryClaim(
+      value.effect,
+      value.current,
+    );
+    assert.equal(result.status, "observed", candidate.label);
+    if (result.status === "observed") {
+      assert.equal(
+        result.result.status,
+        "predecessor_refused",
+        candidate.label,
+      );
+      if (result.result.status === "predecessor_refused")
+        assert.equal(result.result.reason, candidate.reason, candidate.label);
+    }
+    assert.equal(
+      value.port.requests.some((request) => request.kind === "carry_claim"),
+      false,
+      candidate.label,
+    );
+  }
+});
+
+test("embedded carry claims nothing without this holder's acquired merge slot", async () => {
+  const competitor = "run-competitor/incarnation-1";
+  const { holder: _held, ...unheld } = acquiredSlotFacts();
+  for (const candidate of [
+    {
+      label: "competing holder",
+      slot: slotFrom({
+        ...acquiredSlotFacts(),
+        actor: competitor,
+        holder: competitor,
+      }),
+    },
+    {
+      label: "released slot",
+      slot: slotFrom({ ...unheld, status: "available" }),
+    },
+    {
+      label: "foreign label",
+      slot: slotFrom({
+        ...acquiredSlotFacts(),
+        label: "sce-not-the-merge-slot",
+      } as unknown as SlotFacts),
+    },
+  ]) {
+    const claimant = await fixture();
+    claimant.port.slot = candidate.slot;
+    assert.deepEqual(
+      await claimant.adapter.executeProvenanceCarryClaim(
+        claimant.effect,
+        claimant.current,
+      ),
+      { status: "ambiguous" },
+      `${candidate.label} execute`,
+    );
+    assert.equal(
+      claimant.port.requests.some((request) => request.kind === "carry_claim"),
+      false,
+      candidate.label,
+    );
+
+    const recovering = await fixture();
+    recovering.port.slot = candidate.slot;
+    recovering.port.claims = {
+      [recovering.effect.params.exportId.slice("sce:carry:".length)]: recordFor(
+        recovering.effect,
+      ),
+    };
+    recovering.port.setCheckpoint("clean", committedHead);
+    assert.deepEqual(
+      await recovering.adapter.reconcileProvenanceCarryClaim(
+        recovering.effect,
+        recovering.current,
+      ),
+      { status: "ambiguous" },
+      `${candidate.label} reconcile`,
+    );
+  }
+});
+
 test("embedded carry refuses invalid scope and terminal provenance without mutation", async () => {
   const scopeMismatch = await fixture();
   const mismatched = predecessorRun();
@@ -1105,6 +1298,14 @@ test("embedded checkpoint proof admits only the sibling carry singleton delta", 
     doltExecutable: join(directory, "unused-dolt"),
     rootIssueId: currentRootBeadId,
   });
+  const reprojected = {
+    ...fixtureValue.port.predecessor,
+    aggregateRevision: fixtureValue.port.predecessor.aggregateRevision + 1,
+  };
+  const unbound = {
+    ...fixtureValue.port.predecessor,
+    aggregateCommitment: "0".repeat(64),
+  };
   for (const beforeClaims of [undefined, {}]) {
     const before = issueRow(
       fixtureValue.port.predecessor,
@@ -1116,14 +1317,17 @@ test("embedded checkpoint proof admits only the sibling carry singleton delta", 
       { [exportDigest]: record },
       "2026-09-03 10:00:01",
     );
-    const delta = {
+    const claimed = (claims: unknown, root = fixtureValue.port.predecessor) =>
+      issueRow(root, claims, "2026-09-03 10:00:01");
+    const issues = (toRow: Record<string, unknown>, fromRow = before) => ({
       tables: [
         {
-          data_diff: [{ from_row: before, to_row: after }],
+          data_diff: [{ from_row: fromRow, to_row: toRow }],
           name: "issues",
         },
       ],
-    };
+    });
+    const delta = issues(after);
     assert.equal(
       persistence.matchesCarryDelta(intent, JSON.stringify(delta)),
       true,
@@ -1131,25 +1335,38 @@ test("embedded checkpoint proof admits only the sibling carry singleton delta", 
     assert.equal(
       persistence.matchesCarryDelta(
         intent,
-        JSON.stringify({
-          tables: [
-            {
-              data_diff: [
-                {
-                  from_row: before,
-                  to_row: {
-                    ...after,
-                    metadata: {
-                      ...(after.metadata as Record<string, unknown>),
-                      unrelated: true,
-                    },
-                  },
-                },
-              ],
-              name: "issues",
+        JSON.stringify(
+          issues(claimed({ [exportDigest]: record }, reprojected)),
+        ),
+      ),
+      false,
+      "the claim may not restate the root projection value",
+    );
+    assert.equal(
+      persistence.matchesCarryDelta(
+        intent,
+        JSON.stringify(
+          issues(
+            claimed({ [exportDigest]: record }, unbound),
+            issueRow(unbound, beforeClaims, "2026-09-03 10:00:00"),
+          ),
+        ),
+      ),
+      false,
+      "both rows must still carry the commitment the intent proved",
+    );
+    assert.equal(
+      persistence.matchesCarryDelta(
+        intent,
+        JSON.stringify(
+          issues({
+            ...after,
+            metadata: {
+              ...(after.metadata as Record<string, unknown>),
+              unrelated: true,
             },
-          ],
-        }),
+          }),
+        ),
       ),
       false,
     );

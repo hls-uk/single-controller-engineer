@@ -138,6 +138,15 @@ type TreeProcessResult = ProcessResult &
     unsafeMatchedPathHash?: string;
   }>;
 
+/**
+ * The streaming tree scan retains at most `LIMITS.materialisationMatches`
+ * entries, so its memory never grows with the listing; this caps the scan
+ * itself. A listing wider than a whole wave's source ceiling cannot belong to
+ * a tree this controller can serve, so the scan fails closed here instead of
+ * being read until the spawn timeout.
+ */
+const TREE_SCAN_BYTE_CAP = LIMITS.materialisationWaveBytes;
+
 function hashBytes(value: Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -159,7 +168,10 @@ export interface MaterialisationProcessPort {
     options: Readonly<{
       cwd: string;
       env: Readonly<Record<string, string>>;
+      /** Caps the retained stderr tail. */
       maxOutputBytes: number;
+      /** Caps the scanned stdout total; defaults to `TREE_SCAN_BYTE_CAP`. */
+      maxScanBytes?: number;
     }>,
     sourcePattern: string,
   ): Promise<TreeProcessResult>;
@@ -232,6 +244,9 @@ export const nodeMaterialisationProcess: MaterialisationProcessPort = {
       const retained: Buffer[] = [];
       const stderr: Buffer[] = [];
       let stderrBytes = 0;
+      let scanBytes = 0;
+      let scanExceeded = false;
+      const maxScanBytes = options.maxScanBytes ?? TREE_SCAN_BYTE_CAP;
       const finish = (result: TreeProcessResult) => {
         if (settled) return;
         settled = true;
@@ -247,6 +262,13 @@ export const nodeMaterialisationProcess: MaterialisationProcessPort = {
       const timer = setTimeout(() => child.kill("SIGKILL"), 30_000);
       child.stdout.on("data", (chunk: Buffer) => {
         if (!parsingValid) return;
+        scanBytes += chunk.byteLength;
+        if (scanBytes > maxScanBytes) {
+          scanExceeded = true;
+          parsingValid = false;
+          child.kill("SIGKILL");
+          return;
+        }
         for (const byte of chunk) {
           if (!inPath) {
             if (byte === 0 || header.length > 255) {
@@ -323,10 +345,10 @@ export const nodeMaterialisationProcess: MaterialisationProcessPort = {
           code,
           parsingValid:
             parsingValid && !inPath && header.length === 0 && pathLength === 0,
-          retainedMatches,
+          retainedMatches: scanExceeded ? 0 : retainedMatches,
           signal,
           stderr: Buffer.concat(stderr),
-          stdout: Buffer.concat(retained),
+          stdout: scanExceeded ? Buffer.alloc(0) : Buffer.concat(retained),
           ...(unsafeMatchedPathHash === undefined
             ? {}
             : { unsafeMatchedPathHash }),
@@ -645,6 +667,7 @@ async function resolveSources(
               TMPDIR: "/tmp",
             },
             maxOutputBytes: 8_192,
+            maxScanBytes: TREE_SCAN_BYTE_CAP,
           },
           effect.params.sourcePattern,
         );
