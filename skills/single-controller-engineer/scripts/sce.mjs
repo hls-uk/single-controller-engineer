@@ -15771,12 +15771,27 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
             "illegal_transition",
             "request_changes requires a blocking finding"
           );
+        const {
+          approvalResponseHash: _approval,
+          reviewBaseOid: _reviewBase,
+          reviewHeadOid: _reviewHead,
+          reviewPromptHash: _reviewPrompt,
+          reviewTree: _reviewTree,
+          reviewerPacket: _reviewerPacket,
+          reviewerRequestedModel: _reviewerRequested,
+          reviewerReturnedModel: _reviewerReturned,
+          reviewerSessionId: _reviewerSession,
+          ...retained
+        } = unit;
         result2 = observe(
           state,
           unit,
           "repair_required",
           event,
+          {},
+          clearUnitOwners(state, unit.id),
           {
+            ...retained,
             repairContext: {
               baseOid: event.judgment.baseOid,
               headOid: event.judgment.headOid,
@@ -15785,8 +15800,7 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
               rationale: event.judgment.rationale,
               findings: event.judgment.findings
             }
-          },
-          clearUnitOwners(state, unit.id)
+          }
         );
       } else {
         result2 = observe(

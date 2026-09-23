@@ -5647,12 +5647,30 @@ function reduceInternal(
             "illegal_transition",
             "request_changes requires a blocking finding",
           );
+        // A rejected review is consumed: its packet and session bindings are
+        // discarded with it (sce-296.23), exactly as a base refresh discards
+        // them, so the repaired candidate can bind a fresh review.
+        const {
+          approvalResponseHash: _approval,
+          reviewBaseOid: _reviewBase,
+          reviewHeadOid: _reviewHead,
+          reviewPromptHash: _reviewPrompt,
+          reviewTree: _reviewTree,
+          reviewerPacket: _reviewerPacket,
+          reviewerRequestedModel: _reviewerRequested,
+          reviewerReturnedModel: _reviewerReturned,
+          reviewerSessionId: _reviewerSession,
+          ...retained
+        } = unit;
         result = observe(
           state,
           unit,
           "repair_required",
           event,
+          {},
+          clearUnitOwners(state, unit.id),
           {
+            ...retained,
             repairContext: {
               baseOid: event.judgment.baseOid,
               headOid: event.judgment.headOid,
@@ -5662,7 +5680,6 @@ function reduceInternal(
               findings: event.judgment.findings,
             },
           },
-          clearUnitOwners(state, unit.id),
         );
       } else {
         result = observe(

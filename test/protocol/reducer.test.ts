@@ -6096,3 +6096,68 @@ test("an ambiguous integrate act is recordable and settles on its exact observat
   assert.equal(marked.nextState.integrationOwnerUnitId, unitId);
   assert.equal(marked.nextState.qualificationOwnerUnitId, unitId);
 });
+
+// sce-296.23: a review that requests changes is consumed; the reviewer
+// packet and session bound to the rejected diff are discarded so the
+// repaired candidate can bind a fresh review.
+test("a review that requests changes discards the reviewer packet and session", () => {
+  const approved = approvedCandidate("integrate", "local-ff");
+  const unitId = "unit-1";
+  // Rebuild the same run up to the collect intent and reject instead.
+  let state = completeCandidate(run(), unitId);
+  state = {
+    ...state,
+    authorityProfile: "integrate",
+    completionBoundary: "local-integration",
+    integrationProfile: "local-ff",
+  };
+  state = stepUnit(state, unitId, "verification_intent", {});
+  state = observeUnit(state, unitId, "verification_observed", "verify", {
+    baseOid: OID_A,
+    headOid: OID_B,
+    treeOid: OID_C,
+  });
+  state = stepUnit(state, unitId, "reviewer_dispatch_intent", {});
+  state = observeUnit(state, unitId, "reviewer_observed", "review_dispatch", {
+    sessionId: "reviewer-approved",
+    requestedModel: "frontier",
+    returnedModel: "frontier-1",
+    promptHash: HASH,
+  });
+  state = stepUnit(state, unitId, "review_collect_intent", {});
+  assert.ok(state.units[unitId]?.reviewerPacket !== undefined);
+  const rejected = observeUnit(
+    state,
+    unitId,
+    "review_collected",
+    "review_collect",
+    {
+      judgment: {
+        schemaVersion: 1,
+        role: "reviewer",
+        kind: "review_verdict",
+        unitId,
+        sessionId: "reviewer-approved",
+        requestedModel: "frontier",
+        returnedModel: "frontier-1",
+        aggregateRevision: state.revision,
+        promptHash: HASH,
+        responseHash: HASH,
+        rationale: "one blocking finding",
+        baseOid: OID_A,
+        headOid: OID_B,
+        treeOid: OID_C,
+        decision: "request_changes",
+        findings: [{ id: "F1", severity: "blocking", detail: "wrong" }],
+      },
+    },
+  );
+  const unit = rejected.units[unitId]!;
+  assert.equal(unit.state, "repair_required");
+  assert.equal(unit.reviewerPacket, undefined);
+  assert.equal(unit.reviewerSessionId, undefined);
+  assert.equal(unit.reviewPromptHash, undefined);
+  assert.equal(unit.repairContext?.headOid, OID_B);
+  assert.deepEqual(runInvariantErrors(rejected), []);
+  assert.ok(approved.units[unitId]?.reviewerPacket !== undefined);
+});
