@@ -8,6 +8,13 @@ import { Ajv, type ErrorObject, type ValidateFunction } from "ajv";
 
 export const SCHEMA_VERSION = 1 as const;
 export const LIMITS = {
+  // The whole aggregate envelope. Under maximum repair pressure it is spent
+  // almost entirely on incompressible durable evidence: the session lineage
+  // costs `sessionFingerprintBytes` per occupied slot, and the two bounded
+  // `eventHistory` replay windows and the deflated closure ledger sit beside
+  // it. That buys 61 retained units at 16 bounded repairs each, not all
+  // `units` of them; the reducer stress scenario in
+  // `test/protocol/reducer.test.ts` pins that capacity and its exact peak.
   envelopeBytes: 131_072,
   effectJournal: 256,
   eventHistory: 256,

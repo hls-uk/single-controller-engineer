@@ -4996,9 +4996,45 @@ test("intent idempotency digest rejects domain, revision, unit, and kind substit
   }
 });
 
-test("64 retained units complete 16 repairs in waves of at most three within the envelope", () => {
+// `LIMITS.units` caps the unit map; it is not a promise that every one of
+// those 64 units can exhaust its 16 bounded repairs inside
+// `LIMITS.envelopeBytes`. Under full repair pressure the durable evidence is
+// incompressible: the session lineage spends `LIMITS.sessionFingerprintBytes`
+// on every `(ordinal, role, generation)` slot, and the two bounded
+// 256-entry replay windows and the deflated closure ledger sit beside it.
+// Measured on this scenario's drain order: 61 units peak at 129,614 envelope
+// bytes, 62 at 131,273 and 64 at 134,614, against the 131,072-byte limit. The
+// fully drained 64-unit end state already costs 130,569 of those bytes, less
+// than one retained unit record short of the limit, and the cheapest drain
+// order still peaks at 132,352, so no ordering of 64 units fits and 61 is the
+// exact guaranteed configuration. Raising `LIMITS.envelopeBytes` or relaxing
+// the aggregate invariant would hide that boundary rather than state it; see
+// the `LIMITS` block in `src/protocol/schemas.ts` and "Crash-consistent
+// protocol states" in `wiki/designs/2026-08-24-single-controller-engineer.md`.
+const ENVELOPE_REPAIR_UNITS = 61;
+const ENVELOPE_REPAIR_PEAK_BYTES = 129_614;
+const ENVELOPE_REPAIR_LINEAGE_BYTES = 66_596;
+
+// The name keeps the `64 retained units …` prefix that `test/fast.manifest.json`
+// pins as its single fast-tier skip pattern; the capacity this scenario proves
+// is the 61 units the envelope actually guarantees.
+test("64 retained units complete 16 repairs in waves of at most three within the envelope only to its exact 61-unit capacity", () => {
+  let peakEnvelopeBytes = 0;
+  const observeEnvelope = (current: RepositoryRun): void => {
+    peakEnvelopeBytes = Math.max(
+      peakEnvelopeBytes,
+      Buffer.byteLength(
+        JSON.stringify({
+          schema: "sce.repository-run" as const,
+          version: 1 as const,
+          payload: current,
+        }),
+        "utf8",
+      ),
+    );
+  };
   let state = run(
-    Array.from({ length: LIMITS.units }, (_, index) => ({
+    Array.from({ length: ENVELOPE_REPAIR_UNITS }, (_, index) => ({
       ...unit(`unit-${index + 1}`, "repair_required"),
       branchRef: `sce/unit-${index + 1}`,
       worktreePath: `/tmp/unit-${index + 1}`,
@@ -5136,6 +5172,10 @@ test("64 retained units complete 16 repairs in waves of at most three within the
           },
         );
       }
+      // Within one unit's cycle the aggregate only grows — each attempt adds
+      // two lineage slots and the sibling units are untouched — so the
+      // sixteenth repair is that unit's peak and the only one worth measuring.
+      observeEnvelope(state);
       assert.equal(state.units[unitId]?.repairCount, 16);
       assert.equal(
         reduce(
@@ -5191,10 +5231,13 @@ test("64 retained units complete 16 repairs in waves of at most three within the
   assert.ok(state.journalCheckpoint.compactedIdempotencyKeys > 0);
   assert.equal(
     sessionLineageCount(state.sessionLineage),
-    LIMITS.units * 16 * 2,
+    ENVELOPE_REPAIR_UNITS * 16 * 2,
   );
-  assert.equal(state.usedSessionCount, LIMITS.units * 16 * 2);
-  assert.equal(Buffer.from(state.sessionLineage, "base64").length, 69_872);
+  assert.equal(state.usedSessionCount, ENVELOPE_REPAIR_UNITS * 16 * 2);
+  assert.equal(
+    Buffer.from(state.sessionLineage, "base64").length,
+    ENVELOPE_REPAIR_LINEAGE_BYTES,
+  );
   for (const unitId of unitIds)
     for (let attempt = 1; attempt <= 16; attempt += 1) {
       assert.equal(hasUsedSession(state, `worker-${unitId}-${attempt}`), true);
@@ -5209,6 +5252,13 @@ test("64 retained units complete 16 repairs in waves of at most three within the
     envelopeBytes <= LIMITS.envelopeBytes,
     `envelope is ${envelopeBytes} bytes; limit is ${LIMITS.envelopeBytes}`,
   );
+  // The drained aggregate is not the expensive moment: the peak is the last
+  // unit's sixteenth repair, while the lineage is already full and the
+  // remaining units are still retained. Pin it exactly so any growth in the
+  // durable per-unit or per-closure footprint has to restate this capacity
+  // instead of silently consuming the last 1,458 bytes of headroom.
+  assert.equal(peakEnvelopeBytes, ENVELOPE_REPAIR_PEAK_BYTES);
+  assert.ok(peakEnvelopeBytes <= LIMITS.envelopeBytes);
 });
 
 test("hydration rejects fabricated reservation lineage and active parking remains slot-consistent", () => {
