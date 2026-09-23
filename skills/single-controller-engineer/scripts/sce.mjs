@@ -37658,6 +37658,10 @@ var ZERO_HASH = "0".repeat(64);
 var IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,159}$/u;
 var HOLDER_PART = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 var ENVIRONMENT_NAME2 = /^[A-Z_][A-Z0-9_]{0,159}$/u;
+var DRIVE_ALIAS = /^[a-z][a-z0-9-]{0,62}$/u;
+var DRIVE_HOME = /^([a-z][a-z0-9-]{0,62}):([A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*)$/u;
+var CANONICAL_SUBPATH = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/u;
+var CANONICAL_SOURCE_PATTERN = /^(?!.*(?:^|\/)\.\.?(?:\/|$))(?!.*\/\/)(?!.*\\)(?!.*\*\*)[A-Za-z0-9][A-Za-z0-9._*?-]*(?:\/[A-Za-z0-9][A-Za-z0-9._*?-]*)*$/u;
 var MAX_MANIFEST_BYTES = 256 * 1024;
 var defaultModelRoutes = {
   claude: {
@@ -37756,6 +37760,19 @@ function harnessSupportFor(family, models) {
     }
   };
 }
+function bounded2(value, expression) {
+  return typeof value === "string" && value.length <= LIMITS.materialisationPathBytes && expression.test(value) ? value : void 0;
+}
+function driveHome(value, aliases) {
+  const home = bounded2(value, DRIVE_HOME);
+  if (home === void 0) return void 0;
+  const separator = home.indexOf(":");
+  const alias = home.slice(0, separator);
+  return aliases.has(alias) ? { alias, subpath: home.slice(separator + 1) } : void 0;
+}
+function overlapping(left, right) {
+  return left.alias === right.alias && (left.subpath === right.subpath || left.subpath.startsWith(`${right.subpath}/`) || right.subpath.startsWith(`${left.subpath}/`));
+}
 function knowledgeContractFromManifest(manifest) {
   const value = record3(manifest);
   const provenance = record3(value?.provenance);
@@ -37765,10 +37782,12 @@ function knowledgeContractFromManifest(manifest) {
     return void 0;
   const variables = [];
   const aliases = [];
+  const aliasNames = /* @__PURE__ */ new Set();
   for (const candidate of value.driveAliases) {
     const alias = record3(candidate);
-    if (alias === void 0 || typeof alias.mountPathVariable !== "string" || !ENVIRONMENT_NAME2.test(alias.mountPathVariable))
+    if (alias === void 0 || typeof alias.mountPathVariable !== "string" || !ENVIRONMENT_NAME2.test(alias.mountPathVariable) || typeof alias.alias !== "string" || !DRIVE_ALIAS.test(alias.alias) || aliasNames.has(alias.alias))
       return void 0;
+    aliasNames.add(alias.alias);
     variables.push(alias.mountPathVariable);
     aliases.push({
       alias: alias.alias,
@@ -37777,6 +37796,15 @@ function knowledgeContractFromManifest(manifest) {
       mountPolicy: alias.mountPolicy,
       namespaceControl: alias.namespaceControl
     });
+  }
+  const incoming = driveHome(artifactHomes.driveIncoming, aliasNames);
+  const rendered = driveHome(artifactHomes.driveRendered, aliasNames);
+  if (incoming === void 0 || rendered === void 0 || overlapping(incoming, rendered))
+    return void 0;
+  for (const candidate of value.materialisationTargets) {
+    const target = record3(candidate);
+    if (target === void 0 || bounded2(target.sourcePattern, CANONICAL_SOURCE_PATTERN) === void 0 || typeof target.destinationAlias !== "string" || !aliasNames.has(target.destinationAlias) || bounded2(target.destinationSubpath, CANONICAL_SUBPATH) === void 0)
+      return void 0;
   }
   if (typeof provenance.worktreeRootVariable !== "string" || !ENVIRONMENT_NAME2.test(provenance.worktreeRootVariable))
     return void 0;
