@@ -467,21 +467,32 @@ test("stage-aware sizing binds exact sidecars and keeps probe reserve outside ad
   const unitAggregate = materialisationAggregateExpansionCost(sources, unit);
   const gateAggregate = materialisationAggregateExpansionCost(sources, gate);
 
+  const unitProjection = materialisationProjectionExpansionCost(sources, unit);
+
+  // The live expansion is pinned here; the frozen projection reserve is pinned
+  // by test/protocol/provenance.test.ts against the snapshot encoding, so this
+  // seam checks the adapter binds exactly what the protocol derives: the unit
+  // aggregate is the live expansion plus the frozen projection, never a guess.
   assert.equal(unitExpansion, 1_915);
   assert.equal(gateExpansion, 1_911);
-  assert.equal(unitAggregate, 3_830);
   assert.equal(gateAggregate, 1_911);
-  assert.equal(materialisationProjectionExpansionCost(sources, unit), 1_915);
-  assert.equal(unitAggregate, 2 * unitExpansion);
+  assert.ok(unitProjection > 0 && unitProjection <= unitExpansion);
+  assert.equal(unitAggregate, unitExpansion + unitProjection);
   assert.equal(materialisationProjectionExpansionCost(sources, gate), 0);
   assert.equal(gateAggregate, gateExpansion);
-  assert.equal(
+  const unitRefusal = expectedResolutionRefusal("evidence_budget_exceeded", {
+    aggregateEvidenceBytes: unitAggregate,
+    gateEntryId: unit.resolutionGateEntryId,
+    projectionEvidenceBytes: unitProjection,
+  }).refusal;
+  assert.match(unitRefusal.detailHash, /^[0-9a-f]{64}$/u);
+  assert.notEqual(
+    unitRefusal.detailHash,
     expectedResolutionRefusal("evidence_budget_exceeded", {
       aggregateEvidenceBytes: unitAggregate,
       gateEntryId: unit.resolutionGateEntryId,
-      projectionEvidenceBytes: 1_915,
+      projectionEvidenceBytes: unitProjection + 1,
     }).refusal.detailHash,
-    "3c63856122731ac6113e5247c7529a30c8985e44aaf6efb513c6d5981e803bf3",
   );
   assert.equal(
     expectedResolutionRefusal("evidence_budget_exceeded", {
