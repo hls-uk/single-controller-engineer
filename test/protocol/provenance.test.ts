@@ -9,9 +9,19 @@ import { canonicalJson, type JsonValue } from "../../src/protocol/canonical.js";
 import {
   decodeClosedUnitEvidence,
   deriveIdempotencyKey,
+  materialisationAggregateExpansionCost,
+  materialisationExpansionCost,
+  materialisationProjectionExpansionCost,
+  projectionInputIsValid,
+  provenanceCarrySnapshotCommitment,
   reduce,
   rehydrateEffect,
 } from "../../src/protocol/reducer.js";
+import {
+  compactProvenanceInput,
+  hydrateProvenanceInput,
+  projectionStorageByteLength,
+} from "../../src/protocol/projection.js";
 import {
   deriveProvenanceRecordId,
   projectProvenanceRecords,
@@ -20,10 +30,19 @@ import {
   provenanceCommitTrailer,
   type ProvenanceCommitParams,
 } from "../../src/protocol/provenance.js";
+import type { MaterialisationExpansionBinding } from "../../src/protocol/reducer.js";
 import type {
+  CompactGateTargetState,
+  GateTargetState,
+  HydratedProvenanceInput,
   KnowledgeContract,
   ProtocolEvent,
   RepositoryRun,
+} from "../../src/protocol/schemas.js";
+import {
+  LIMITS,
+  ProvenanceInputSchema,
+  validate,
 } from "../../src/protocol/schemas.js";
 import {
   HASH,
@@ -668,4 +687,341 @@ test("provenance commit facts derive only from journaled values", () => {
     "sce: provenance for wave knowledge-1",
   );
   assert.equal(provenanceCommitTrailer("key-1"), "SCE-Provenance-Key: key-1");
+});
+
+const utf8 = new TextEncoder();
+const canonicalBytes = (value: unknown): number =>
+  utf8.encode(canonicalJson(value as JsonValue)).byteLength;
+
+/**
+ * One schema-legal output at its minimum legal size. Derived ids keep their
+ * exact derived width (`sce:tgt:`/`sce:gate:` plus a 64-hex digest) because
+ * that width is fixed by the protocol, not by a test choice.
+ */
+const LEGAL = {
+  digest: "a".repeat(64),
+  oid: "b".repeat(40),
+  targetId: `sce:tgt:${"c".repeat(64)}`,
+  probeId: `sce:gate:${"d".repeat(64)}`,
+  resolutionId: `sce:gate:${"e".repeat(64)}`,
+  target: {
+    destinationAlias: "d",
+    destinationSubpath: "s",
+    namingPolicy: "source-basename" as const,
+    sidecarRequired: true as const,
+    sourcePattern: "p",
+  },
+} as const;
+
+function minimalLegalTarget(ordinal: number, outputs: number): GateTargetState {
+  const sources = Array.from({ length: outputs }, (_, index) => ({
+    blobOid: LEGAL.oid,
+    byteCount: 0,
+    path: `p${index}`,
+    sha256: LEGAL.digest,
+  }));
+  const definition = {
+    originUnitId: "u",
+    scope: "unit" as const,
+    target: LEGAL.target,
+    targetId: LEGAL.targetId,
+    targetOrdinal: ordinal,
+  };
+  return {
+    definition,
+    materialisations: sources.map((source, index) => ({
+      artifactName: "a",
+      destinationProbeGateEntryId: LEGAL.probeId,
+      gateEntryId: `sce:gate:${index.toString().padStart(64, "0")}`,
+      observation: {
+        artifactByteCount: source.byteCount,
+        artifactSha256: source.sha256,
+        artifactStatus: "already_present" as const,
+        sidecarByteCount: 1,
+        sidecarSha256: LEGAL.digest,
+        sidecarStatus: "already_present" as const,
+      },
+      originUnitId: definition.originUnitId,
+      sidecarByteCount: 1,
+      sidecarName: "a",
+      sidecarSha256: LEGAL.digest,
+      source,
+      sourceOid: LEGAL.oid,
+      status: "observed" as const,
+      target: definition.target,
+      targetId: definition.targetId,
+      timestamp: "2026-09-03T12:00:00Z",
+    })),
+    resolution: {
+      capacities: {
+        remainingAggregateEnvelopeByteCapacity: LIMITS.envelopeBytes,
+        remainingItemCapacity: LIMITS.materialisationOutputs,
+        remainingProjectionSnapshotByteCapacity: LIMITS.projectionSnapshotBytes,
+        remainingSourceByteCapacity: LIMITS.materialisationWaveBytes,
+      },
+      gateEntryId: LEGAL.resolutionId,
+      sourceOid: LEGAL.oid,
+      sources,
+      status: "observed" as const,
+      targetId: definition.targetId,
+    },
+    status: "observed" as const,
+  };
+}
+
+/** A schema-legal projection holding exactly `outputs` minimal outputs. */
+function minimalLegalProjection(outputs: number): HydratedProvenanceInput {
+  const targets: GateTargetState[] = [];
+  for (let left = outputs, ordinal = 0; left > 0; ordinal += 1) {
+    const take = Math.min(LIMITS.materialisationMatches, left);
+    targets.push(minimalLegalTarget(ordinal, take));
+    left -= take;
+  }
+  return {
+    closedUnitEvidence: "",
+    closureEvidenceCommitment: LEGAL.digest,
+    destinationProbeEvidence: [
+      {
+        destinationAlias: LEGAL.target.destinationAlias,
+        destinationSubpath: LEGAL.target.destinationSubpath,
+        gateEntryId: LEGAL.probeId,
+        identity: {
+          canonicalPath: `/${"a".repeat(4_095)}`,
+          device: "9".repeat(20),
+          inode: "9".repeat(20),
+        },
+        stage: "unit",
+        status: "observed",
+      },
+    ],
+    targetEvidence: targets,
+    unitIds: ["u"],
+  };
+}
+
+function largestFittingOutputCount(
+  encode: (outputs: number) => number,
+): number {
+  let best = 0;
+  for (
+    let outputs = 1;
+    outputs <= LIMITS.materialisationOutputs;
+    outputs += 1
+  ) {
+    if (encode(outputs) > LIMITS.projectionSnapshotBytes) break;
+    best = outputs;
+  }
+  return best;
+}
+
+test("the frozen projection is stored compactly and hydrates byte-identically", () => {
+  const contract = knowledgeContract();
+  const knowledge = provenanceIntent(contract);
+  const stored = knowledge.state.gate!.provenance!.projectionInputSnapshot;
+  assert.ok(stored.targetEvidence.length > 0);
+  for (const target of stored.targetEvidence)
+    assert.equal((target as CompactGateTargetState).version, 2);
+  const hydrated = hydrateProvenanceInput(stored);
+  assert.ok(hydrated !== undefined);
+
+  // Round trip: the hydrated view re-compacts to exactly the stored bytes,
+  // and the compact bytes hydrate back to exactly the hydrated view.
+  const recompacted = compactProvenanceInput(hydrated);
+  assert.ok(recompacted !== undefined);
+  assert.equal(
+    canonicalJson(recompacted as unknown as JsonValue),
+    canonicalJson(stored as unknown as JsonValue),
+  );
+  assert.equal(
+    canonicalJson(hydrateProvenanceInput(recompacted) as unknown as JsonValue),
+    canonicalJson(hydrated as unknown as JsonValue),
+  );
+
+  // Both encodings are legal, valid, and agree on every commitment.
+  assert.ok(validate(ProvenanceInputSchema, stored).ok);
+  assert.ok(validate(ProvenanceInputSchema, hydrated).ok);
+  assert.ok(projectionInputIsValid(stored));
+  assert.ok(projectionInputIsValid(hydrated));
+  assert.equal(
+    provenanceCarrySnapshotCommitment(stored),
+    provenanceCarrySnapshotCommitment(hydrated),
+  );
+
+  // The consumer boundary is byte-identical for either encoding.
+  assert.deepEqual(
+    projectProvenanceRecords(knowledge.params, "codex"),
+    projectProvenanceRecords(
+      { ...knowledge.params, projectionInputSnapshot: hydrated },
+      "codex",
+    ),
+  );
+  assert.ok(
+    projectionStorageByteLength(stored) < canonicalBytes(hydrated),
+    "the compact encoding must be strictly smaller",
+  );
+});
+
+test("the projection upcaster is total and refuses evidence it cannot reconstruct", () => {
+  const legacy = minimalLegalProjection(2);
+  assert.ok(validate(ProvenanceInputSchema, legacy).ok);
+  const compact = compactProvenanceInput(legacy);
+  assert.ok(compact !== undefined);
+  assert.ok(validate(ProvenanceInputSchema, compact).ok);
+  // Compaction is idempotent, so the stored bytes are canonical.
+  assert.equal(
+    canonicalJson(compactProvenanceInput(compact) as unknown as JsonValue),
+    canonicalJson(compact as unknown as JsonValue),
+  );
+  assert.equal(
+    canonicalJson(hydrateProvenanceInput(compact) as unknown as JsonValue),
+    canonicalJson(legacy as unknown as JsonValue),
+  );
+
+  const target = legacy.targetEvidence[0]!;
+  const contradiction = (next: GateTargetState) => ({
+    ...legacy,
+    targetEvidence: [next, ...legacy.targetEvidence.slice(1)],
+  });
+  // An observation that does not restate its own source is not derivable.
+  assert.equal(
+    compactProvenanceInput(
+      contradiction({
+        ...target,
+        materialisations: target.materialisations.map((item, index) =>
+          index === 0
+            ? {
+                ...item,
+                observation: { ...item.observation!, artifactByteCount: 7 },
+              }
+            : item,
+        ),
+      }),
+    ),
+    undefined,
+  );
+  // A resolution whose source list disagrees with its outputs is not derivable.
+  assert.equal(
+    compactProvenanceInput(
+      contradiction({
+        ...target,
+        resolution: {
+          ...target.resolution!,
+          sources: [target.resolution!.sources![0]!],
+        },
+      }),
+    ),
+    undefined,
+  );
+  // A per-output target that contradicts the definition is not derivable.
+  assert.equal(
+    compactProvenanceInput(
+      contradiction({
+        ...target,
+        materialisations: target.materialisations.map((item) => ({
+          ...item,
+          targetId: `sce:tgt:${"f".repeat(64)}`,
+        })),
+      }),
+    ),
+    undefined,
+  );
+
+  // A half-compacted projection is ambiguous machine state, not evidence.
+  const mixed = {
+    ...compact,
+    targetEvidence: [
+      ...compact.targetEvidence.slice(0, 1),
+      ...legacy.targetEvidence.slice(1),
+    ],
+  };
+  assert.ok(validate(ProvenanceInputSchema, mixed).ok);
+  assert.equal(projectionInputIsValid(mixed), false);
+});
+
+test("the compact projection buys real output capacity inside unchanged bounds", () => {
+  // The bounds themselves do not move, and neither does the per-target ceiling.
+  assert.equal(LIMITS.projectionSnapshotBytes, 65_536);
+  assert.equal(LIMITS.envelopeBytes, 131_072);
+  assert.equal(LIMITS.materialisationMatches, 64);
+
+  const legacyBytes = (outputs: number) =>
+    canonicalBytes(minimalLegalProjection(outputs));
+  const compactBytes = (outputs: number) =>
+    projectionStorageByteLength(minimalLegalProjection(outputs));
+  for (const outputs of [1, 64]) {
+    assert.ok(
+      validate(ProvenanceInputSchema, minimalLegalProjection(outputs)).ok,
+    );
+    assert.ok(
+      validate(
+        ProvenanceInputSchema,
+        compactProvenanceInput(minimalLegalProjection(outputs)),
+      ).ok,
+    );
+  }
+
+  // Exact marginal cost of one more minimal legal output.
+  assert.equal(legacyBytes(2) - legacyBytes(1), 1_307);
+  assert.equal(compactBytes(2) - compactBytes(1), 645);
+
+  // 64 minimal outputs did not fit and now do, with headroom to spare.
+  assert.equal(legacyBytes(64), 89_093);
+  assert.equal(compactBytes(64), 46_585);
+  assert.ok(legacyBytes(64) > LIMITS.projectionSnapshotBytes);
+  assert.ok(compactBytes(64) <= LIMITS.projectionSnapshotBytes);
+  assert.equal(largestFittingOutputCount(legacyBytes), 46);
+  assert.equal(largestFittingOutputCount(compactBytes), 92);
+});
+
+test("the exact legal reserve is measured on the encoding each copy is stored in", () => {
+  const sources = [
+    {
+      blobOid: LEGAL.oid,
+      byteCount: 1,
+      path: "docs/a.txt",
+      sha256: LEGAL.digest,
+    },
+  ];
+  const binding: MaterialisationExpansionBinding = {
+    capacities: {
+      remainingAggregateEnvelopeByteCapacity: LIMITS.envelopeBytes,
+      remainingItemCapacity: LIMITS.materialisationOutputs,
+      remainingProjectionSnapshotByteCapacity: LIMITS.projectionSnapshotBytes,
+      remainingSourceByteCapacity: LIMITS.materialisationWaveBytes,
+    },
+    destinationProbeGateEntryId: LEGAL.probeId,
+    domainScope: "knowledge",
+    driver: "SCE",
+    executorTool: "codex",
+    originUnitId: "unit-1",
+    resolutionGateEntryId: LEGAL.resolutionId,
+    runId: "run-1",
+    sourceOid: LEGAL.oid,
+    stage: "unit",
+    target: { ...LEGAL.target, sourcePattern: "docs/*.txt" },
+    targetId: LEGAL.targetId,
+    targetOrdinal: 0,
+    waveId: "wave-1",
+  };
+  const live = materialisationExpansionCost(sources, binding);
+  const frozen = materialisationProjectionExpansionCost(sources, binding);
+  // The live gate keeps the whole record; the frozen projection keeps the
+  // compact one, so the envelope reserve is their sum, not twice the larger.
+  assert.equal(
+    materialisationAggregateExpansionCost(sources, binding),
+    live + frozen,
+  );
+  assert.ok(frozen < live);
+  assert.ok(live + frozen < 2 * live);
+  // A gate-stage tuple never enters the frozen projection at all.
+  const gateBinding = {
+    ...binding,
+    originUnitId: null,
+    stage: "gate" as const,
+  };
+  assert.equal(materialisationProjectionExpansionCost(sources, gateBinding), 0);
+  assert.equal(
+    materialisationAggregateExpansionCost(sources, gateBinding),
+    materialisationExpansionCost(sources, gateBinding),
+  );
 });

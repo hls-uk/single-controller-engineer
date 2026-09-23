@@ -72,6 +72,30 @@ The attempt is then ambiguous rather than absent, which blocks and asks
 instead of committing a second time; the bound is deliberate and keeps
 discovery one constant-cost read.
 
+## The frozen projection snapshot
+
+The snapshot the reducer freezes is bounded at 65,536 canonical bytes, and
+that bound is measured on the bytes actually stored. It is stored in a strict
+versioned compact encoding: the target definition and resolution are held
+once and every per-output entry references them, so the destination target,
+the target and origin identifiers, the resolved source OID, the resolved
+source tuple, and the observation digests a record must restate are no longer
+repeated once per output. Hydration is total and exact, and every commitment
+and derived identifier binds the hydrated view rather than the stored bytes:
+the snapshot commitment, the provenance entry id, and the carry export id are
+all taken over that view. A run that still holds the older version-free encoding therefore keeps
+exactly the identifiers it was issued, and a carry crossing between the two
+encodings commits to the same snapshot.
+
+The capacity this buys is exact, not estimated. One more minimal legal output
+costs 645 stored bytes instead of 1,307, so sixty-four minimal outputs occupy
+46,585 bytes where they previously needed 89,093 and did not fit at all; at
+most forty-six fitted before and ninety-two fit now. The reducer's reserve
+arithmetic follows the same rule: a resolved unit tuple reserves the full
+live gate record plus the compact frozen copy rather than twice the live one.
+None of the ceilings move: 65,536 snapshot bytes, 131,072 aggregate envelope
+bytes, and sixty-four outputs per target all remain exactly as they were.
+
 ## Aggregate verification
 
 The same preserved worktree, at the provenance-commit OID, is the working

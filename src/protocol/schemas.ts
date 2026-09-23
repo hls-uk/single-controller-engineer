@@ -30,6 +30,10 @@ export const LIMITS = {
   materialisationPathBytes: 192,
   materialisationSidecarBytes: 8_192,
   materialisationWaveBytes: 64 * 1024 * 1024,
+  // Canonical bytes of one frozen provenance projection snapshot, measured on
+  // the encoding actually stored. The compact projection therefore buys real
+  // output capacity instead of restating the same ceiling.
+  projectionSnapshotBytes: 65_536,
 } as const;
 /** Four concurrent bounded packets stay well within the run envelope. */
 export const HARNESS_PACKET_BYTES = 8_192;
@@ -653,27 +657,26 @@ const GateTargetDefinitionSchema = strictObject({
   targetOrdinal: Type.Integer({ minimum: 0, maximum: 63 }),
 });
 export type GateTargetDefinition = Static<typeof GateTargetDefinitionSchema>;
+const ResolutionCapacitiesSchema = strictObject({
+  remainingAggregateEnvelopeByteCapacity: Type.Integer({
+    minimum: 0,
+    maximum: LIMITS.envelopeBytes,
+  }),
+  remainingItemCapacity: Type.Integer({
+    minimum: 0,
+    maximum: LIMITS.materialisationOutputs,
+  }),
+  remainingProjectionSnapshotByteCapacity: Type.Integer({
+    minimum: 0,
+    maximum: LIMITS.projectionSnapshotBytes,
+  }),
+  remainingSourceByteCapacity: Type.Integer({
+    minimum: 0,
+    maximum: LIMITS.materialisationWaveBytes,
+  }),
+});
 const GateResolutionSchema = strictObject({
-  capacities: Type.Optional(
-    strictObject({
-      remainingAggregateEnvelopeByteCapacity: Type.Integer({
-        minimum: 0,
-        maximum: LIMITS.envelopeBytes,
-      }),
-      remainingItemCapacity: Type.Integer({
-        minimum: 0,
-        maximum: LIMITS.materialisationOutputs,
-      }),
-      remainingProjectionSnapshotByteCapacity: Type.Integer({
-        minimum: 0,
-        maximum: 65_536,
-      }),
-      remainingSourceByteCapacity: Type.Integer({
-        minimum: 0,
-        maximum: LIMITS.materialisationWaveBytes,
-      }),
-    }),
-  ),
+  capacities: Type.Optional(ResolutionCapacitiesSchema),
   currentEffectId: Type.Optional(effectIdentifier()),
   disposition: Type.Optional(gateDisposition()),
   followUpBeadId: Type.Optional(identifier()),
@@ -690,25 +693,20 @@ const GateResolutionSchema = strictObject({
   targetId: identifier(),
 });
 export type GateResolution = Static<typeof GateResolutionSchema>;
+const publicationStatus = () =>
+  Type.Union([Type.Literal("published"), Type.Literal("already_present")]);
+const sidecarByteCount = () =>
+  Type.Integer({ minimum: 1, maximum: LIMITS.materialisationSidecarBytes });
 const MaterialisationObservationSchema = strictObject({
   artifactByteCount: Type.Integer({
     minimum: 0,
     maximum: LIMITS.materialisationBlobBytes,
   }),
   artifactSha256: hash(),
-  artifactStatus: Type.Union([
-    Type.Literal("published"),
-    Type.Literal("already_present"),
-  ]),
-  sidecarByteCount: Type.Integer({
-    minimum: 1,
-    maximum: LIMITS.materialisationSidecarBytes,
-  }),
+  artifactStatus: publicationStatus(),
+  sidecarByteCount: sidecarByteCount(),
   sidecarSha256: hash(),
-  sidecarStatus: Type.Union([
-    Type.Literal("published"),
-    Type.Literal("already_present"),
-  ]),
+  sidecarStatus: publicationStatus(),
 });
 export const GateMaterialisationSchema = strictObject({
   artifactName: Type.Optional(plainBasename()),
@@ -720,12 +718,7 @@ export const GateMaterialisationSchema = strictObject({
   lastRefusal: Type.Optional(GateMaterialisationEntryRefusalSchema),
   observation: Type.Optional(MaterialisationObservationSchema),
   originUnitId: nullableIdentifier(),
-  sidecarByteCount: Type.Optional(
-    Type.Integer({
-      minimum: 1,
-      maximum: LIMITS.materialisationSidecarBytes,
-    }),
-  ),
+  sidecarByteCount: Type.Optional(sidecarByteCount()),
   sidecarName: Type.Optional(plainBasename()),
   sidecarSha256: Type.Optional(hash()),
   source: MaterialisationSourceSchema,
@@ -747,6 +740,79 @@ const GateTargetStateSchema = strictObject({
   status: gateStatus(),
 });
 export type GateTargetState = Static<typeof GateTargetStateSchema>;
+
+/**
+ * Compact projection evidence, version 2.
+ *
+ * The live gate record above repeats, once per output, everything the target
+ * definition and the resolution already fix: the destination target, the
+ * target and origin identifiers, the resolved source OID, the resolved source
+ * tuple, and the digests the observation must equal. The frozen projection
+ * stores each of those exactly once and lets every per-output entry reference
+ * them positionally. Hydration is total and exact, so every commitment and
+ * derived identifier is taken over the hydrated view and is unchanged by the
+ * encoding; only the stored bytes and the capacity reserves shrink.
+ */
+export const CompactMaterialisationObservationSchema = strictObject({
+  artifactStatus: publicationStatus(),
+  sidecarStatus: publicationStatus(),
+});
+export const CompactGateMaterialisationSchema = strictObject({
+  artifactName: Type.Optional(plainBasename()),
+  currentEffectId: Type.Optional(effectIdentifier()),
+  destinationProbeGateEntryId: identifier(),
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  gateEntryId: identifier(),
+  lastRefusal: Type.Optional(GateMaterialisationEntryRefusalSchema),
+  observation: Type.Optional(CompactMaterialisationObservationSchema),
+  sidecarByteCount: Type.Optional(sidecarByteCount()),
+  sidecarName: Type.Optional(plainBasename()),
+  sidecarSha256: Type.Optional(hash()),
+  source: MaterialisationSourceSchema,
+  status: gateStatus(),
+  timestamp: Type.Optional(utcSecond()),
+});
+export type CompactGateMaterialisation = Static<
+  typeof CompactGateMaterialisationSchema
+>;
+/** The resolution without its target id or its duplicated source list. */
+export const CompactGateResolutionSchema = strictObject({
+  capacities: Type.Optional(ResolutionCapacitiesSchema),
+  currentEffectId: Type.Optional(effectIdentifier()),
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  gateEntryId: identifier(),
+  lastRefusal: Type.Optional(MaterialisationResolveRefusalSchema),
+  sourceOid: oid(),
+  status: gateStatus(),
+});
+export type CompactGateResolution = Static<typeof CompactGateResolutionSchema>;
+export const CompactGateTargetStateSchema = strictObject({
+  definition: GateTargetDefinitionSchema,
+  disposition: Type.Optional(gateDisposition()),
+  followUpBeadId: Type.Optional(identifier()),
+  materialisations: Type.Array(CompactGateMaterialisationSchema, {
+    maxItems: LIMITS.materialisationMatches,
+  }),
+  resolution: Type.Optional(CompactGateResolutionSchema),
+  status: gateStatus(),
+  version: Type.Literal(2),
+});
+export type CompactGateTargetState = Static<
+  typeof CompactGateTargetStateSchema
+>;
+/**
+ * A stored projection carries one encoding per entry: the version-free live
+ * record that persisted runs already hold, or the compact record above.
+ */
+export const ProvenanceTargetEvidenceSchema = Type.Union([
+  GateTargetStateSchema,
+  CompactGateTargetStateSchema,
+]);
+export type ProvenanceTargetEvidence = Static<
+  typeof ProvenanceTargetEvidenceSchema
+>;
 const GateTargetPromiseSchema = strictObject({
   definition: GateTargetDefinitionSchema,
   disposition: Type.Optional(gateDisposition()),
@@ -781,7 +847,7 @@ const GateDestinationProbeSchema = strictObject({
 });
 export type GateDestinationProbe = Static<typeof GateDestinationProbeSchema>;
 
-export const ProvenanceInputSchema = strictObject({
+const provenanceInputShape = <T extends TSchema>(targetEvidence: T) => ({
   closedUnitEvidence: Type.String({
     maxLength: LIMITS.envelopeBytes,
     pattern: "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
@@ -790,10 +856,24 @@ export const ProvenanceInputSchema = strictObject({
   destinationProbeEvidence: Type.Array(GateDestinationProbeSchema, {
     maxItems: 128,
   }),
-  targetEvidence: Type.Array(GateTargetStateSchema, { maxItems: 192 }),
+  targetEvidence: Type.Array(targetEvidence, { maxItems: 192 }),
   unitIds: Type.Array(identifier(), { maxItems: LIMITS.units }),
 });
+/** The stored projection: every entry in either canonical encoding. */
+export const ProvenanceInputSchema = strictObject(
+  provenanceInputShape(ProvenanceTargetEvidenceSchema),
+);
 export type ProvenanceInput = Static<typeof ProvenanceInputSchema>;
+/**
+ * The semantic view every consumer, commitment, and derived identifier reads.
+ * Hydrating a stored projection always produces exactly this shape.
+ */
+export const HydratedProvenanceInputSchema = strictObject(
+  provenanceInputShape(GateTargetStateSchema),
+);
+export type HydratedProvenanceInput = Static<
+  typeof HydratedProvenanceInputSchema
+>;
 export const ProvenanceCarryClaimRecordSchema = strictObject({
   schema: Type.Literal("sce.provenance-carry-claim"),
   version: Type.Literal(1),

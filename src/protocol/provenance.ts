@@ -9,12 +9,13 @@
  */
 import { canonicalJson, type JsonValue } from "./canonical.js";
 import { sha256 } from "./evidence.js";
+import { hydrateProvenanceInput } from "./projection.js";
 import { decodeClosedUnitEvidence } from "./reducer.js";
 import type {
   ClosureEvidence,
   GateMaterialisation,
   GateTargetState,
-  ProvenanceInput,
+  HydratedProvenanceInput,
   RuntimeEffect,
 } from "./schemas.js";
 
@@ -107,7 +108,9 @@ export function projectProvenanceRecords(
   params: ProvenanceCommitParams,
   executorTool: string,
 ): ProvenanceProjection {
-  const snapshot = params.projectionInputSnapshot;
+  const snapshot = hydrateProvenanceInput(params.projectionInputSnapshot);
+  if (snapshot === undefined)
+    return { ok: false, reason: "projection snapshot does not hydrate" };
   const evidence = decodeClosedUnitEvidence(snapshot.closedUnitEvidence);
   if (evidence === undefined)
     return { ok: false, reason: "closure evidence is undecodable" };
@@ -146,7 +149,7 @@ export function projectProvenanceRecords(
 
 function projectUnitRecord(
   params: ProvenanceCommitParams,
-  snapshot: ProvenanceInput,
+  snapshot: HydratedProvenanceInput,
   closure: Extract<ClosureEvidence, { outcome: "landed" }>,
   executorTool: string,
 ):

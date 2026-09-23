@@ -27,6 +27,7 @@ import {
   type GateMaterialisation,
   type WaveGate,
   type ProvenanceInput,
+  type HydratedProvenanceInput,
   type GateProvenance,
   type GateAggregateVerify,
   type GateDestinationProbe,
@@ -40,6 +41,19 @@ import { posix } from "node:path";
 import { canonicalJson, type JsonValue } from "./canonical.js";
 import { sha256 } from "./evidence.js";
 import { canEnterTerminalIntent } from "./guards.js";
+import {
+  compactProvenanceInput,
+  compactTargetEvidenceShape,
+  hydrateProvenanceInput,
+  projectionEncodingIsCanonical,
+  projectionStorageByteLength,
+} from "./projection.js";
+
+export {
+  compactProvenanceInput,
+  hydrateProvenanceInput,
+  projectionStorageByteLength,
+} from "./projection.js";
 
 const utf8 = new TextEncoder();
 
@@ -767,13 +781,29 @@ function provenanceBaseAdvancedDetailHash(
   );
 }
 
+/**
+ * A stored projection read back as the one semantic view. A snapshot that no
+ * longer hydrates is ambiguous machine state: callers that must decide block
+ * on the empty evidence it yields, and the aggregate invariants name it.
+ */
+function hydratedTargetEvidence(
+  input: ProvenanceInput | undefined,
+): readonly GateTargetState[] {
+  if (input === undefined) return [];
+  return hydrateProvenanceInput(input)?.targetEvidence ?? [];
+}
+
 function provenanceInput(
   state: RepositoryRun,
   gate: WaveGate,
-): ProvenanceInput {
+): HydratedProvenanceInput {
   const details = decodeClosedUnitEvidenceDetails(state.closedUnitEvidence);
   const evidence = details?.evidence ?? {};
-  const carried = gate.carriedProjectionInputSnapshot;
+  const stored = gate.carriedProjectionInputSnapshot;
+  const carried =
+    stored === undefined ? undefined : hydrateProvenanceInput(stored);
+  if (stored !== undefined && carried === undefined)
+    throw new Error("carried provenance projection does not hydrate");
   const carriedEvidence =
     carried === undefined
       ? {}
@@ -857,7 +887,7 @@ function provenanceInput(
 }
 
 function projectionCollisionWitnesses(
-  input: ProvenanceInput,
+  input: HydratedProvenanceInput,
 ): ReadonlyMap<string, string> {
   const probes = new Map(
     input.destinationProbeEvidence
@@ -906,7 +936,22 @@ function projectionCollisionWitnesses(
   return witnesses;
 }
 
+/**
+ * A stored projection is valid when it hydrates, is stored in exactly one of
+ * the two canonical encodings of that hydrated view, and the hydrated view
+ * itself is coherent. Encoding is therefore never a way to smuggle evidence
+ * past the projection rules.
+ */
 export function projectionInputIsValid(input: ProvenanceInput): boolean {
+  const hydrated = hydrateProvenanceInput(input);
+  return (
+    hydrated !== undefined &&
+    projectionEncodingIsCanonical(input, hydrated) &&
+    hydratedProjectionIsValid(hydrated)
+  );
+}
+
+function hydratedProjectionIsValid(input: HydratedProvenanceInput): boolean {
   const details = decodeClosedUnitEvidenceDetails(input.closedUnitEvidence);
   if (
     details === undefined ||
@@ -1043,9 +1088,9 @@ export function projectionInputIsValid(input: ProvenanceInput): boolean {
 }
 
 function projectionInputSlice(
-  input: ProvenanceInput,
+  input: HydratedProvenanceInput,
   unitIds: readonly string[],
-): ProvenanceInput | undefined {
+): HydratedProvenanceInput | undefined {
   const details = decodeClosedUnitEvidenceDetails(input.closedUnitEvidence);
   if (details === undefined) return undefined;
   const selected = new Set(unitIds);
@@ -1078,7 +1123,7 @@ function currentProjectionInput(
   state: RepositoryRun,
   gate: WaveGate,
   unitIds: readonly string[],
-): ProvenanceInput | undefined {
+): HydratedProvenanceInput | undefined {
   const details = decodeClosedUnitEvidenceDetails(state.closedUnitEvidence);
   if (details === undefined) return undefined;
   const selected = new Set(unitIds);
@@ -1123,16 +1168,16 @@ function currentProjectionInput(
   };
 }
 
+/** Bounds are measured on the encoding the projection is actually stored in. */
 function projectionInputWithinBounds(input: ProvenanceInput): boolean {
   try {
     return (
-      input.unitIds.length <= 64 &&
+      input.unitIds.length <= LIMITS.units &&
       input.targetEvidence.reduce(
         (count, target) => count + target.materialisations.length,
         0,
-      ) <= 128 &&
-      utf8.encode(canonicalJson(input as unknown as JsonValue)).byteLength <=
-        65_536
+      ) <= LIMITS.materialisationOutputs &&
+      projectionStorageByteLength(input) <= LIMITS.projectionSnapshotBytes
     );
   } catch {
     return false;
@@ -1167,7 +1212,9 @@ function closureEvidenceOids(evidence: ClosureEvidence): readonly string[] {
   ].filter((value): value is string => value !== undefined);
 }
 
-function projectionInputOids(input: ProvenanceInput): readonly string[] {
+function projectionInputOids(
+  input: HydratedProvenanceInput,
+): readonly string[] {
   const evidence = decodeClosedUnitEvidence(input.closedUnitEvidence);
   return [
     ...Object.values(evidence ?? {}).flatMap(closureEvidenceOids),
@@ -1187,6 +1234,8 @@ function createProvenanceEntry(state: RepositoryRun, gate: WaveGate): WaveGate {
   const input = provenanceInput(state, gate);
   if (!projectionInputFits(input))
     throw new Error("provenance projection input exceeds its durable bound");
+  // The entry id binds the semantic view, never the encoding, so a run that
+  // was issued one before the compact projection existed keeps it.
   const provenanceGateEntryId = deriveGateEntryId(
     state.controller.runId,
     gate.waveId,
@@ -1200,7 +1249,7 @@ function createProvenanceEntry(state: RepositoryRun, gate: WaveGate): WaveGate {
       "provenance_commit",
     ),
     gateEntryId: provenanceGateEntryId,
-    projectionInputSnapshot: input,
+    projectionInputSnapshot: compactProvenanceInput(input) ?? input,
     status: "pending",
   };
   const {
@@ -1366,9 +1415,7 @@ function reduceWavePlan(
   const carriedSnapshotCommitment =
     state.gate?.provenance?.status === "voided" &&
     state.gate.provenance.disposition === "deferred_by_controller"
-      ? provenanceCarrySnapshotCommitment(
-          state.gate.provenance.projectionInputSnapshot,
-        )
+      ? carrySnapshotCommitment(state.gate.provenance.projectionInputSnapshot)
       : state.pendingProvenanceCarry?.snapshotCommitment;
   const lineageAncestorDigests =
     state.gate?.provenance?.status === "voided" &&
@@ -1393,7 +1440,7 @@ function reduceWavePlan(
       (carriedSnapshotCommitment === undefined) ||
     (carriedProjectionInputSnapshot !== undefined &&
       (carriedSnapshotCommitment !==
-        provenanceCarrySnapshotCommitment(carriedProjectionInputSnapshot) ||
+        carrySnapshotCommitment(carriedProjectionInputSnapshot) ||
         carriedProjectionInputSnapshot.unitIds.length === 0 ||
         carriedProjectionInputSnapshot.unitIds.some((unitId) =>
           selected.value.includes(unitId),
@@ -1917,9 +1964,9 @@ function observedUnitMaterialisations(
 ): readonly GateMaterialisation[] {
   const entries = new Map<string, GateMaterialisation>();
   for (const item of [
-    ...(projectionSnapshot(gate)?.targetEvidence.flatMap(
+    ...hydratedTargetEvidence(projectionSnapshot(gate)).flatMap(
       (target) => target.materialisations,
-    ) ?? []),
+    ),
     ...gateMaterialisations(gate, "unit"),
   ])
     if (item.status === "observed") entries.set(item.gateEntryId, item);
@@ -2026,11 +2073,15 @@ function sidecarFor(
 }
 
 function sourceTotals(gate: WaveGate): { bytes: number; items: number } {
-  const settledUnitTargets = gate.provenance?.projectionInputSnapshot
-    .targetEvidence ?? [
-    ...(gate.carriedProjectionInputSnapshot?.targetEvidence ?? []),
-    ...gate.targets.filter((target) => target.definition.scope === "unit"),
-  ];
+  const settledUnitTargets =
+    gate.provenance === undefined
+      ? [
+          ...hydratedTargetEvidence(gate.carriedProjectionInputSnapshot),
+          ...gate.targets.filter(
+            (target) => target.definition.scope === "unit",
+          ),
+        ]
+      : hydratedTargetEvidence(gate.provenance.projectionInputSnapshot);
   const sources = [
     ...settledUnitTargets,
     ...gate.targets.filter((target) => target.definition.scope === "gate"),
@@ -2412,6 +2463,16 @@ function reachableTargetVariants(
   return { baseline: baseline as unknown as JsonValue, variants };
 }
 
+/**
+ * The frozen projection stores the compact encoding, so its exact legal
+ * reserve is measured on that encoding of the very same reachable shapes.
+ */
+function compactReachableShape(value: JsonValue): JsonValue {
+  return compactTargetEvidenceShape(
+    value as unknown as GateTargetState,
+  ) as unknown as JsonValue;
+}
+
 function maximumReachableTargetBytes(
   sources: readonly MaterialisationSource[],
   binding: MaterialisationExpansionBinding,
@@ -2508,27 +2569,38 @@ function maximumReachableTargetFromCurrent(
   );
 }
 
+function largestReachableDelta(
+  baseline: JsonValue,
+  variants: readonly JsonValue[],
+): number {
+  const baselineBytes = canonicalByteLength(baseline);
+  return Math.max(
+    ...variants.map((target) => canonicalByteLength(target) - baselineBytes),
+  );
+}
+
 export function materialisationExpansionCost(
   sources: readonly MaterialisationSource[],
   binding: MaterialisationExpansionBinding,
 ): number {
   const { baseline, variants } = reachableTargetVariants(sources, binding);
-  const baselineBytes = canonicalByteLength(baseline as unknown as JsonValue);
-  return Math.max(
-    ...variants.map(
-      (target) =>
-        canonicalByteLength(target as unknown as JsonValue) - baselineBytes,
-    ),
-  );
+  return largestReachableDelta(baseline, variants);
 }
 
-/** Unit evidence is retained live and again in the frozen provenance input. */
+/**
+ * Unit evidence is retained live in the gate and again in the frozen
+ * provenance input. The live copy keeps the whole record; the frozen copy is
+ * stored compactly, so the envelope reserve is the sum of the two exact
+ * deltas rather than twice the larger one.
+ */
 export function materialisationAggregateExpansionCost(
   sources: readonly MaterialisationSource[],
   binding: MaterialisationExpansionBinding,
 ): number {
-  const expansion = materialisationExpansionCost(sources, binding);
-  return binding.stage === "unit" ? 2 * expansion : expansion;
+  return (
+    materialisationExpansionCost(sources, binding) +
+    materialisationProjectionExpansionCost(sources, binding)
+  );
 }
 
 /** Gate targets form only after provenance and never enter its frozen input. */
@@ -2536,9 +2608,12 @@ export function materialisationProjectionExpansionCost(
   sources: readonly MaterialisationSource[],
   binding: MaterialisationExpansionBinding,
 ): number {
-  return binding.stage === "unit"
-    ? materialisationExpansionCost(sources, binding)
-    : 0;
+  if (binding.stage !== "unit") return 0;
+  const { baseline, variants } = reachableTargetVariants(sources, binding);
+  return largestReachableDelta(
+    compactReachableShape(baseline),
+    variants.map(compactReachableShape),
+  );
 }
 
 function maximumReachableDestinationProbeValue(
@@ -2665,8 +2740,7 @@ function maximumUnitProbeProjectionGrowth(
   });
   return Math.max(
     0,
-    canonicalByteLength(future as unknown as JsonValue) -
-      canonicalByteLength(current as unknown as JsonValue),
+    projectionStorageByteLength(future) - projectionStorageByteLength(current),
   );
 }
 
@@ -2726,7 +2800,9 @@ function maximumFixedGateVariants(
   const provenanceBase = {
     baseOid,
     gateEntryId: provenanceGateEntryId,
-    projectionInputSnapshot,
+    projectionInputSnapshot:
+      compactProvenanceInput(projectionInputSnapshot) ??
+      projectionInputSnapshot,
   };
   const provenanceAttempt = {
     ...provenanceBase,
@@ -2996,8 +3072,8 @@ function resolutionCapacities(
 ): NonNullable<NonNullable<GateTargetState["resolution"]>["capacities"]> {
   const compacted = compactJournal(state);
   const totals = sourceTotals(gate);
-  const projectionBytes = canonicalByteLength(
-    provenanceInput(state, gate) as unknown as JsonValue,
+  const projectionBytes = projectionStorageByteLength(
+    provenanceInput(state, gate),
   );
   const futureUnitProbeBytes =
     stage === "unit" ? maximumUnitProbeProjectionGrowth(state, gate) : 0;
@@ -3022,7 +3098,11 @@ function resolutionCapacities(
     ),
     remainingProjectionSnapshotByteCapacity: Math.max(
       0,
-      stage === "unit" ? 65_536 - projectionBytes - futureUnitProbeBytes : 0,
+      stage === "unit"
+        ? LIMITS.projectionSnapshotBytes -
+            projectionBytes -
+            futureUnitProbeBytes
+        : 0,
     ),
     remainingSourceByteCapacity: Math.max(
       0,
@@ -3132,7 +3212,7 @@ function resolutionIntentCompletionFits(
       materialisationFixedCompletionReserve(deferredState, deferredGate, stage);
     const projectionMaximum =
       stage === "unit"
-        ? canonicalByteLength(
+        ? projectionStorageByteLength(
             provenanceInput(compacted, {
               ...deferredGate,
               destinationProbes: [
@@ -3142,12 +3222,12 @@ function resolutionIntentCompletionFits(
                   "unit",
                 ),
               ],
-            }) as unknown as JsonValue,
+            }),
           )
         : 0;
     return (
       Math.max(immediateMaximum, completedMaximum) <= LIMITS.envelopeBytes &&
-      projectionMaximum <= 65_536
+      projectionMaximum <= LIMITS.projectionSnapshotBytes
     );
   } catch {
     return false;
@@ -3243,11 +3323,9 @@ function nameCollisionWitnesses(
     })),
     ...(stage === "gate"
       ? observedUnitMaterialisations(gate)
-      : (
-          gate.carriedProjectionInputSnapshot?.targetEvidence.flatMap(
-            (target) => target.materialisations,
-          ) ?? []
-        ).filter((item) => item.status === "observed")
+      : hydratedTargetEvidence(gate.carriedProjectionInputSnapshot)
+          .flatMap((target) => target.materialisations)
+          .filter((item) => item.status === "observed")
     ).map((item) => ({ item, pending: false })),
   ];
   for (const { item, pending } of candidates) {
@@ -3302,7 +3380,7 @@ function observedFinalNamesAreUnique(gate: WaveGate): boolean {
   const destinations = new Map<string, Set<string>>();
   const targets = new Map<string, GateTargetState>();
   for (const target of [
-    ...(projectionSnapshot(gate)?.targetEvidence ?? []),
+    ...hydratedTargetEvidence(projectionSnapshot(gate)),
     ...gate.targets,
   ])
     targets.set(target.definition.targetId, target);
@@ -4657,15 +4735,50 @@ function reduceGate(state: RepositoryRun, event: GateEvent): Reduction {
   return reject("illegal_transition", "unsupported aggregate gate event");
 }
 
+/**
+ * The commitment binds the hydrated semantic view, not the stored encoding.
+ * A predecessor that exported a version-free snapshot and a successor that
+ * stores the compact one therefore agree, and no in-flight claim is stranded
+ * by the change of encoding.
+ */
 export function provenanceCarrySnapshotCommitment(
   input: ProvenanceInput,
 ): string {
+  const hydrated = hydrateProvenanceInput(input);
+  if (hydrated === undefined)
+    throw new Error("provenance projection does not hydrate");
   return sha256(
     canonicalJson({
       domain: "sce.provenance-carry-snapshot.v1",
-      projectionInputSnapshot: input,
+      projectionInputSnapshot: hydrated,
     }),
   );
+}
+
+/**
+ * The commitment when the projection hydrates, and nothing when it does not.
+ * A projection that no longer hydrates is ambiguous machine state, so the
+ * comparison it feeds fails closed rather than throwing past its caller.
+ */
+function carrySnapshotCommitment(input: ProvenanceInput): string | undefined {
+  const hydrated = hydrateProvenanceInput(input);
+  return hydrated === undefined
+    ? undefined
+    : provenanceCarrySnapshotCommitment(hydrated);
+}
+
+/**
+ * An imported carry arrives in whichever encoding the predecessor stored. It
+ * is re-encoded compactly on the way in, which changes no commitment and
+ * keeps the successor's envelope bounded by the smaller form.
+ */
+function compactedCarry(
+  carry: NonNullable<RepositoryRun["pendingProvenanceCarry"]>,
+): NonNullable<RepositoryRun["pendingProvenanceCarry"]> {
+  const compact = compactProvenanceInput(carry.projectionInputSnapshot);
+  return compact === undefined
+    ? carry
+    : { ...carry, projectionInputSnapshot: compact };
 }
 
 export function provenanceCarryLineageCommitment(
@@ -4886,7 +4999,7 @@ function reduceProvenanceCarry(
         claim.predecessorRootAggregateCommitment ||
       carry.snapshotCommitment !== claim.snapshotCommitment ||
       carry.snapshotCommitment !==
-        provenanceCarrySnapshotCommitment(carry.projectionInputSnapshot) ||
+        carrySnapshotCommitment(carry.projectionInputSnapshot) ||
       carry.claimRecordDigest !==
         expectedCarryClaimRecordDigest(state, claim) ||
       carry.predecessorRunId === state.controller.runId ||
@@ -4913,7 +5026,7 @@ function reduceProvenanceCarry(
     event.effectId,
     event.observationHash,
     event.result.status === "imported"
-      ? { pendingProvenanceCarry: event.result.carry }
+      ? { pendingProvenanceCarry: compactedCarry(event.result.carry) }
       : { lastProvenanceCarryRefusal: event.result },
   );
   const { provenanceCarryClaim: _claim, ...withoutClaim } = observed;
@@ -9333,6 +9446,11 @@ function runInvariantErrorsWithClosedEvidence(
       errors.push("queue contains a unit outside the current wave");
   }
   const oidLength = state.gitObjectFormat === "sha1" ? 40 : 64;
+  const storedProjections = [
+    state.pendingProvenanceCarry?.projectionInputSnapshot,
+    state.gate?.carriedProjectionInputSnapshot,
+    state.gate?.provenance?.projectionInputSnapshot,
+  ].filter((snapshot): snapshot is ProvenanceInput => snapshot !== undefined);
   const knowledgeOids = [
     state.pendingProvenanceCarry?.integrationOid,
     state.gate?.currentIntegrationOid,
@@ -9358,18 +9476,17 @@ function runInvariantErrorsWithClosedEvidence(
     ...(state.gate?.provenanceUnitAccounting.flatMap((item) =>
       item.status === "committed" ? [item.provenanceCommitOid] : [],
     ) ?? []),
-    ...(state.pendingProvenanceCarry === undefined
-      ? []
-      : projectionInputOids(
-          state.pendingProvenanceCarry.projectionInputSnapshot,
-        )),
-    ...(state.gate?.carriedProjectionInputSnapshot === undefined
-      ? []
-      : projectionInputOids(state.gate.carriedProjectionInputSnapshot)),
-    ...(state.gate?.provenance === undefined
-      ? []
-      : projectionInputOids(state.gate.provenance.projectionInputSnapshot)),
+    ...storedProjections.flatMap((snapshot) => {
+      const hydrated = hydrateProvenanceInput(snapshot);
+      return hydrated === undefined ? [] : projectionInputOids(hydrated);
+    }),
   ];
+  if (
+    storedProjections.some(
+      (snapshot) => hydrateProvenanceInput(snapshot) === undefined,
+    )
+  )
+    errors.push("knowledge gate has an unhydratable provenance projection");
   if (
     knowledgeOids.some(
       (value) => value !== undefined && value.length !== oidLength,
@@ -9396,9 +9513,7 @@ function runInvariantErrorsWithClosedEvidence(
       !projectionInputFits(pendingCarry.projectionInputSnapshot) ||
       pendingCarry.projectionInputSnapshot.unitIds.length === 0 ||
       pendingCarry.snapshotCommitment !==
-        provenanceCarrySnapshotCommitment(
-          pendingCarry.projectionInputSnapshot,
-        ) ||
+        carrySnapshotCommitment(pendingCarry.projectionInputSnapshot) ||
       pendingCarry.exportId !==
         deriveProvenanceCarryExportId({
           finalRevision: pendingCarry.predecessorFinalRevision,
@@ -10444,16 +10559,16 @@ function gateInvariantErrors(state: RepositoryRun): string[] {
       gate.carriedProjectionInputSnapshot !== undefined) ||
     (gate.carriedProjectionInputSnapshot !== undefined &&
       (gate.carriedSnapshotCommitment !==
-        provenanceCarrySnapshotCommitment(
-          gate.carriedProjectionInputSnapshot,
-        ) ||
+        carrySnapshotCommitment(gate.carriedProjectionInputSnapshot) ||
         gate.carriedProjectionInputSnapshot.unitIds.some((unitId) =>
           gate.originalUnitIds.includes(unitId),
         )))
   )
     errors.push("knowledge gate has an invalid carried snapshot commitment");
   if (gate.provenance !== undefined) {
-    const snapshot = gate.provenance.projectionInputSnapshot;
+    const snapshot = hydrateProvenanceInput(
+      gate.provenance.projectionInputSnapshot,
+    );
     const durableClosureEvidence = decodeClosedUnitEvidence(
       state.closedUnitEvidence,
     );
@@ -10462,15 +10577,21 @@ function gateInvariantErrors(state: RepositoryRun): string[] {
         (unitId) => durableClosureEvidence?.[unitId]?.outcome === "landed",
       )
       .sort(compareProtocolText);
-    const currentIds = snapshot.unitIds.filter((unitId) =>
+    const currentIds = (snapshot?.unitIds ?? []).filter((unitId) =>
       gate.originalUnitIds.includes(unitId),
     );
-    const carriedIds = snapshot.unitIds.filter(
+    const carriedIds = (snapshot?.unitIds ?? []).filter(
       (unitId) => !gate.originalUnitIds.includes(unitId),
     );
-    const currentSlice = projectionInputSlice(snapshot, currentIds);
+    const currentSlice =
+      snapshot === undefined
+        ? undefined
+        : projectionInputSlice(snapshot, currentIds);
     const expectedCurrent = currentProjectionInput(state, gate, currentIds);
-    const carriedSlice = projectionInputSlice(snapshot, carriedIds);
+    const carriedSlice =
+      snapshot === undefined
+        ? undefined
+        : projectionInputSlice(snapshot, carriedIds);
     if (
       !sameStringArray(currentIds, expectedCurrentIds) ||
       currentSlice === undefined ||
@@ -11106,12 +11227,20 @@ function gateInvariantErrors(state: RepositoryRun): string[] {
   )
     errors.push("provenance preceded settled unit materialisations");
   if (gate.provenance !== undefined) {
-    const expected = deriveGateEntryId(
-      state.controller.runId,
-      gate.waveId,
-      "provenance",
-      gate.provenance.projectionInputSnapshot as unknown as JsonValue,
+    // The entry id binds the hydrated semantic view, so it survives a change
+    // of stored encoding.
+    const hydrated = hydrateProvenanceInput(
+      gate.provenance.projectionInputSnapshot,
     );
+    const expected =
+      hydrated === undefined
+        ? undefined
+        : deriveGateEntryId(
+            state.controller.runId,
+            gate.waveId,
+            "provenance",
+            hydrated as unknown as JsonValue,
+          );
     if (gate.provenance.gateEntryId !== expected)
       errors.push("provenance entry has invalid identity");
     const attemptKey = gate.provenance.attemptIdempotencyKey;

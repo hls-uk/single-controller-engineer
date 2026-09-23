@@ -32,8 +32,10 @@ import {
   runInvariantErrors,
   sessionLineageCount,
 } from "../../src/protocol/reducer.js";
+import { hydrateProvenanceInput } from "../../src/protocol/projection.js";
 import { canEnterTerminalIntent } from "../../src/protocol/guards.js";
 import type {
+  CompactGateTargetState,
   EffectJournalEntry,
   ProtocolEvent,
   RepositoryRun,
@@ -1076,9 +1078,12 @@ test("optional probe refusal voids only expanded dependents and retains evidence
       },
     }).some((error) => error.includes("contradicts mount policy")),
   );
-  const provenanceTarget =
-    state.gate?.provenance?.projectionInputSnapshot.targetEvidence[0];
+  // The reducer freezes the compact encoding, so the stored entry is the
+  // compact arm of the projection union; the assertion below proves it.
+  const provenanceTarget = state.gate?.provenance?.projectionInputSnapshot
+    .targetEvidence[0] as CompactGateTargetState | undefined;
   assert.ok(provenanceTarget);
+  assert.equal(provenanceTarget.version, 2);
   assert.ok(
     runInvariantErrors({
       ...state,
@@ -1606,12 +1611,50 @@ test("a later unit wave refuses an exact final-name collision with carried outpu
   const snapshot = prior.gate!.provenance!.projectionInputSnapshot;
   const carriedMaterialisation =
     snapshot.targetEvidence[0]!.materialisations[0]!;
+  // The predecessor froze the compact encoding, so this whole carry, and the
+  // collision evidence it supplies below, arrives compact.
+  assert.equal(
+    (snapshot.targetEvidence[0] as CompactGateTargetState).version,
+    2,
+  );
+  // A predecessor that still stores the version-free encoding commits to the
+  // very same snapshot, so no in-flight carry is stranded by the change.
+  const legacySnapshot = hydrateProvenanceInput(snapshot)!;
+  assert.equal(
+    (legacySnapshot.targetEvidence[0] as { version?: number }).version,
+    undefined,
+  );
+  assert.equal(
+    provenanceCarrySnapshotCommitment(legacySnapshot),
+    provenanceCarrySnapshotCommitment(snapshot),
+  );
 
   const fresh = run([unit("unit-2")]);
   const initial = { ...fresh, wave: { id: "wave-0", unitIds: [] } };
   const claim = carryClaimEvents(initial, snapshot, [], "cross-wave-name");
   let state = transition(initial, claim.intent, reduce);
   state = transition(state, claim.observation, reduce);
+  // A legacy-encoded carry is admitted on exactly the same claim identity and
+  // is re-encoded compactly on the way in.
+  const legacyClaim = carryClaimEvents(
+    initial,
+    legacySnapshot,
+    [],
+    "cross-wave-name",
+  );
+  assert.equal(legacyClaim.intent.exportId, claim.intent.exportId);
+  let legacyCarried = transition(initial, legacyClaim.intent, reduce);
+  legacyCarried = transition(legacyCarried, legacyClaim.observation, reduce);
+  assert.equal(
+    canonicalJson(
+      legacyCarried.pendingProvenanceCarry!
+        .projectionInputSnapshot as unknown as JsonValue,
+    ),
+    canonicalJson(
+      state.pendingProvenanceCarry!
+        .projectionInputSnapshot as unknown as JsonValue,
+    ),
+  );
   const task = {
     ...state.units["unit-2"]!.taskMetadata!,
     materialisationTargets: [target],

@@ -4,6 +4,7 @@ import {
   JudgmentSchema,
   MaterialisationDestinationIdentitySchema,
   ProtocolEventSchema,
+  ProvenanceInputSchema,
   RepositoryRunEnvelopeSchema,
   RuntimeEffectSchema,
   parseEnvelope,
@@ -476,5 +477,123 @@ test("hydrated aggregates cannot exceed the durable envelope budget", () => {
     runInvariantErrors(oversized).includes(
       "repository run envelope exceeds byte limit",
     ),
+  );
+});
+
+test("the compact projection encoding stays strict and disjoint", () => {
+  const source = {
+    blobOid: OID_A,
+    byteCount: 0,
+    path: "p",
+    sha256: HASH,
+  };
+  const definition = {
+    originUnitId: "u",
+    scope: "unit" as const,
+    target: {
+      destinationAlias: "d",
+      destinationSubpath: "s",
+      namingPolicy: "source-basename" as const,
+      sidecarRequired: true as const,
+      sourcePattern: "p",
+    },
+    targetId: `sce:tgt:${"c".repeat(64)}`,
+    targetOrdinal: 0,
+  };
+  const compactTarget = {
+    definition,
+    materialisations: [
+      {
+        artifactName: "a",
+        destinationProbeGateEntryId: "probe-1",
+        gateEntryId: "entry-1",
+        observation: {
+          artifactStatus: "already_present",
+          sidecarStatus: "already_present",
+        },
+        sidecarByteCount: 1,
+        sidecarName: "a",
+        sidecarSha256: HASH,
+        source,
+        status: "observed",
+        timestamp: "2026-09-03T12:00:00Z",
+      },
+    ],
+    resolution: {
+      gateEntryId: "resolution-1",
+      sourceOid: OID_A,
+      status: "observed",
+    },
+    status: "observed",
+    version: 2,
+  };
+  const projection = (targetEvidence: readonly unknown[]) => ({
+    closedUnitEvidence: "",
+    closureEvidenceCommitment: HASH,
+    destinationProbeEvidence: [],
+    targetEvidence,
+    unitIds: ["u"],
+  });
+  assert.equal(
+    validate(ProvenanceInputSchema, projection([compactTarget])).ok,
+    true,
+  );
+  // No unknown property, no coercion, no partially compacted entry.
+  for (const broken of [
+    { ...compactTarget, unexpected: true },
+    { ...compactTarget, version: 1 },
+    { ...compactTarget, version: "2" },
+    // A field hydration re-derives may not also be stored.
+    {
+      ...compactTarget,
+      materialisations: compactTarget.materialisations.map((item) => ({
+        ...item,
+        targetId: definition.targetId,
+      })),
+    },
+    {
+      ...compactTarget,
+      resolution: {
+        ...compactTarget.resolution,
+        targetId: definition.targetId,
+      },
+    },
+    {
+      ...compactTarget,
+      resolution: { ...compactTarget.resolution, sources: [source] },
+    },
+    // The observation keeps only the two statuses.
+    {
+      ...compactTarget,
+      materialisations: compactTarget.materialisations.map((item) => ({
+        ...item,
+        observation: { ...item.observation, artifactSha256: HASH },
+      })),
+    },
+  ])
+    assert.equal(
+      validate(ProvenanceInputSchema, projection([broken])).ok,
+      false,
+      JSON.stringify(Object.keys(broken)),
+    );
+  // The version-free encoding persisted runs already hold stays legal.
+  assert.equal(
+    validate(
+      ProvenanceInputSchema,
+      projection([
+        {
+          definition,
+          materialisations: [],
+          resolution: {
+            gateEntryId: "resolution-1",
+            sourceOid: OID_A,
+            status: "observed",
+            targetId: definition.targetId,
+          },
+          status: "observed",
+        },
+      ]),
+    ).ok,
+    true,
   );
 });
