@@ -22,6 +22,12 @@ and observation for crash recovery.
   and cross-machine resumption.
 - Do not rewrite an accepted decision to change its meaning. Add a new record
   that supersedes it; corrections to spelling and links are allowed.
+- Identifier numbers are never reused or renumbered, so the sequence may have
+  gaps: `DEC-20260922-017` was reserved in the 2026-09-22 round and never
+  written, and the index runs from 016 straight to 018.
+- A record's `Date` is the date its identifier and filename carry. Note a
+  later writing or amendment date in the same header instead of restamping
+  the record.
 - Never record secrets, credentials, raw model transcripts, or unnecessary
   private data.
 

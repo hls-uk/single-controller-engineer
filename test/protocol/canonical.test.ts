@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import test from "node:test";
 import fc from "fast-check";
 import {
@@ -174,17 +174,27 @@ test("materialise stage, gate entry, and observation tuples keep their canonical
 });
 
 /**
- * The reducer and adapter surfaces whose comparisons become protocol bytes:
- * effect scheduling and invariants, the Git, Beads, and materialisation
- * adapters, the installed skill manifest, the feedback outbox, and the fencing
- * projections. The harness packet builder keeps its own code-point pin in
+ * Every runtime file under `src` is an ordered protocol surface: effect
+ * scheduling and invariants, the Git, Beads, and materialisation adapters, the
+ * commands and CLI that drive them, the harness launch packet, the installed
+ * skill manifest, the feedback outbox, and the fencing projections. The scan
+ * below enumerates that tree instead of a hand-kept list, so a new top-level
+ * entry is covered the day it lands, and `EXPECTED_SURFACES` only pins that the
+ * enumeration still reaches everything `src` holds today. Behavioural order
+ * pins stay with their surfaces, such as the launch packet's in
  * test/harness/harness.test.ts.
  */
-const ORDERED_SURFACES = [
+const EXPECTED_SURFACES = [
   "src/adapters",
+  "src/cli.ts",
+  "src/commands",
+  "src/compose",
+  "src/controller-config.ts",
   "src/feedback",
   "src/fencing",
+  "src/harness",
   "src/install",
+  "src/preflight",
   "src/protocol",
 ] as const;
 
@@ -192,7 +202,12 @@ const LOCALE_SENSITIVE = /localeCompare|Intl\.Collator|toLocale[A-Z]/u;
 
 function typeScriptFiles(root: string): readonly string[] {
   const found: string[] = [];
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
+  // Ordered by the comparator this file pins, so the enumeration and anything
+  // it reports read the same on every host.
+  const entries = readdirSync(root, { withFileTypes: true }).sort(
+    (left, right) => compareProtocolText(left.name, right.name),
+  );
+  for (const entry of entries) {
     if (entry.isSymbolicLink())
       throw new Error(`refusing symlinked source path: ${entry.name}`);
     const path = join(root, entry.name);
@@ -204,14 +219,23 @@ function typeScriptFiles(root: string): readonly string[] {
 
 test("no ordered protocol surface compares text by locale", () => {
   const repository = resolve(import.meta.dirname, "../..");
+  const scanned = typeScriptFiles(join(repository, "src"));
+  // An enumerated scan that quietly stopped reaching a surface would make the
+  // refusal below vacuous there, so pin every top-level entry of `src`.
+  for (const surface of EXPECTED_SURFACES) {
+    const root = join(repository, surface);
+    assert.ok(
+      scanned.some((file) => file === root || file.startsWith(`${root}${sep}`)),
+      `scanned no TypeScript file under ${surface}`,
+    );
+  }
   const offending: string[] = [];
-  for (const surface of ORDERED_SURFACES)
-    for (const file of typeScriptFiles(join(repository, surface)))
-      for (const [index, line] of readFileSync(file, "utf8")
-        .split("\n")
-        .entries())
-        if (LOCALE_SENSITIVE.test(line))
-          offending.push(`${relative(repository, file)}:${index + 1}`);
+  for (const file of scanned)
+    for (const [index, line] of readFileSync(file, "utf8")
+      .split("\n")
+      .entries())
+      if (LOCALE_SENSITIVE.test(line))
+        offending.push(`${relative(repository, file)}:${index + 1}`);
   assert.deepEqual(offending, []);
 });
 

@@ -89,9 +89,10 @@ function fail(message: string): never {
 
 /**
  * Deliberately locale-independent UTF-16 code-unit ordering: the protocol
- * order of DEC-20260922-019. Installed paths are ASCII by `canonicalRelative`,
- * so this is their byte order too, and the manifest a host verifies against
- * never depends on the collation of the machine that wrote it.
+ * order of DEC-20260922-019. Installed paths are printable ASCII by
+ * `canonicalRelative`, so this is their byte order too, and the manifest a
+ * host verifies against never depends on the collation of the machine that
+ * wrote it.
  */
 function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -119,8 +120,16 @@ function skillPath(path: string): boolean {
   );
 }
 
+/** Printable ASCII only, so one character of a path is exactly one byte. */
+const ASCII_PATH = /^[\u0020-\u007e]+$/u;
+
 function canonicalRelative(path: string): string {
-  if (path.startsWith("/") || path.includes("\\") || !skillPath(path))
+  if (
+    path.startsWith("/") ||
+    path.includes("\\") ||
+    !ASCII_PATH.test(path) ||
+    !skillPath(path)
+  )
     fail(`unsafe manifest path: ${path}`);
   return path;
 }
