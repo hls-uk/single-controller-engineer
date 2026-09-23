@@ -10158,14 +10158,31 @@ function runInvariantErrorsWithClosedEvidence(
     "published",
     "integrate_intent",
   ]);
-  const hasBlockedVerification = (unit: Unit | undefined): boolean =>
+  // A unit blocked on an ambiguous queue-owning act keeps its place in the
+  // queues and its ownership until the exact observation settles it
+  // (sce-296.21); verification was the only such act tolerated before.
+  const blockedOn = (
+    unit: Unit | undefined,
+    kinds: readonly EffectKind[],
+  ): boolean =>
     unit?.state === "blocked" &&
     state.effectJournal.some(
       (effect) =>
         effect.unitId === unit.id &&
-        effect.kind === "verify" &&
+        kinds.includes(effect.kind) &&
         effect.status === "ambiguous",
     );
+  const qualificationOwningKinds: readonly EffectKind[] = [
+    "verify",
+    "review_dispatch",
+    "review_collect",
+    "publish",
+    "integrate",
+  ];
+  const hasBlockedVerification = (unit: Unit | undefined): boolean =>
+    blockedOn(unit, qualificationOwningKinds);
+  const hasBlockedIntegration = (unit: Unit | undefined): boolean =>
+    blockedOn(unit, ["publish", "integrate"]);
   const integrationQueueStates = new Set<UnitState>([
     "approved",
     "publish_intent",
@@ -10188,7 +10205,10 @@ function runInvariantErrorsWithClosedEvidence(
     .map((unit) => unit.id);
   const expectedIntegrationQueue = ownerFirst(
     Object.values(state.units)
-      .filter((unit) => integrationQueueStates.has(unit.state))
+      .filter(
+        (unit) =>
+          integrationQueueStates.has(unit.state) || hasBlockedIntegration(unit),
+      )
       .map((unit) => unit.id),
     state.integrationOwnerUnitId,
   );
@@ -10246,12 +10266,13 @@ function runInvariantErrorsWithClosedEvidence(
     errors.push("qualification owner is not queue head");
   if (
     state.integrationOwnerUnitId !== undefined &&
-    state.units[state.integrationOwnerUnitId]?.state !== "integrate_intent"
+    state.units[state.integrationOwnerUnitId]?.state !== "integrate_intent" &&
+    !blockedOn(state.units[state.integrationOwnerUnitId], ["integrate"])
   )
     errors.push("integration owner is not integrating");
   for (const unit of Object.values(state.units))
     if (
-      unit.state === "integrate_intent" &&
+      (unit.state === "integrate_intent" || blockedOn(unit, ["integrate"])) &&
       state.integrationOwnerUnitId !== unit.id
     )
       errors.push(

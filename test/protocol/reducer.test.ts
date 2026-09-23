@@ -6070,3 +6070,29 @@ test("a candidate observed while another unit owns qualification queues behind t
   const early = reduce(state, event(state, "verification_intent", {}, second));
   assert.equal(early.ok, false);
 });
+
+// sce-296.21: an ambiguous integrate keeps the blocked unit in both queues
+// and in ownership until the exact observation settles it.
+test("an ambiguous integrate act is recordable and settles on its exact observation", () => {
+  const approved = approvedCandidate("integrate", "local-ff");
+  const unitId = "unit-1";
+  const intended = stepUnit(approved, unitId, "integrate_intent", {});
+  const entry = intended.effectJournal.find(
+    (item) => item.kind === "integrate" && item.status === "intended",
+  );
+  assert.ok(entry !== undefined);
+  const marked = reduce(intended, {
+    effectId: entry.effectId,
+    effectKind: "integrate",
+    eventId: "recover-ambiguous-integrate",
+    expectedRevision: intended.revision,
+    type: "effect_ambiguous",
+    unitId,
+  });
+  assert.equal(marked.ok, true, marked.ok ? "" : JSON.stringify(marked));
+  if (!marked.ok) return;
+  assert.equal(marked.nextState.units[unitId]?.state, "blocked");
+  assert.deepEqual(runInvariantErrors(marked.nextState), []);
+  assert.equal(marked.nextState.integrationOwnerUnitId, unitId);
+  assert.equal(marked.nextState.qualificationOwnerUnitId, unitId);
+});
