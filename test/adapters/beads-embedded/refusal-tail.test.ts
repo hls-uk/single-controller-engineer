@@ -10,9 +10,11 @@ import {
   type EmbeddedResponse,
   type EmbeddedState,
 } from "../../../src/adapters/beads-embedded/index.js";
+import { isSchema } from "../../../src/adapters/git/schemas.js";
 import {
   MERGE_SLOT_LABEL,
   MERGE_SLOT_TITLE,
+  StoreFailureTailSchema,
   deriveScopeCommitment,
   deriveSlotReadbackHash,
   makeRootProjection,
@@ -30,8 +32,8 @@ import { run as fixtureRun } from "../../protocol/fixtures.js";
  * This file scripts the other remote child: the pull that `prepareSharedState`
  * runs before every git-sync write. A refused pull carries the same bounded,
  * redacted tail, and these fixtures pin what the adapter does with it: the
- * code is decided from the pull's own value, and the tail never escapes into
- * a store result, whose shape has no field to carry it.
+ * code is decided from the pull's own value, and the tail rides along on the
+ * store refusal, so the operator who reads the refusal reads its cause too.
  */
 
 const scope: FencingScope = {
@@ -187,7 +189,7 @@ function journalBatch(): MutationBatch {
   };
 }
 
-test("a refused git-sync pull is classified by its own value, not by its tail", async () => {
+test("a refused git-sync pull is classified by its own value, and carries its tail", async () => {
   const stderrTail = redactedStderrTail(
     [
       `pulling from ssh://sce:${FAKE_PASSWORD}@dolt.example.invalid/sce/beads`,
@@ -197,10 +199,15 @@ test("a refused git-sync pull is classified by its own value, not by its tail", 
     false,
   );
   assert.ok(stderrTail !== undefined);
-  // The scripted fixture is already redacted, exactly as a real port's is.
+  // The scripted fixture is already redacted, exactly as a real port's is:
+  // the credential is gone, and the cause the operator needs is not.
   assert.equal(stderrTail.text.includes(FAKE_PASSWORD), false);
+  assert.ok(
+    stderrTail.text.includes("ssh://[redacted]@dolt.example.invalid/sce/beads"),
+  );
   assert.ok(stderrTail.text.includes("Permission denied (publickey)."));
-  // One tail, three refusals: the status comes from the pull's value alone.
+  // One tail, three refusals: the status comes from the pull's value alone,
+  // and the tail that rides along with it is the same one every time.
   for (const [value, status] of [
     ["conflict", "ambiguous"],
     ["unavailable", "unavailable"],
@@ -217,12 +224,17 @@ test("a refused git-sync pull is classified by its own value, not by its tail", 
       ["state", "state", "pull"],
       JSON.stringify(port.requests),
     );
-    assert.deepEqual(outcome, { status }, value);
-    // A store result has no field for diagnostic text, so nothing the child
-    // wrote - redacted or not - reaches the caller through this path.
+    // The strict comparison narrows the result here, which is itself the
+    // proof that no applied arm can reach this line.
+    assert.deepEqual(outcome, { status, stderrTail }, value);
+    // The adapter's own tail is admitted unchanged by the store contract's
+    // strict schema, so no seam above this one has to reshape it.
+    assert.equal(isSchema(StoreFailureTailSchema, outcome.stderrTail), true);
+    // Diagnostic text, never a credential: what reaches the caller names the
+    // cause and carries nothing the child should not have published.
     const published = JSON.stringify(outcome);
-    assert.equal(published.includes("stderrTail"), false);
-    assert.equal(published.includes("dolt.example.invalid"), false);
+    assert.ok(published.includes("Permission denied (publickey)."));
+    assert.equal(published.includes(FAKE_PASSWORD), false);
   }
 });
 
@@ -243,5 +255,7 @@ test("an applied pull carries no tail and preparation continues past it", async 
     ["state", "state", "pull", "state", "slot", "mutation"],
     JSON.stringify(port.requests),
   );
+  // A refusal with no failed remote child behind it omits the key entirely,
+  // and this strict comparison is what pins that.
   assert.deepEqual(outcome, { status: "holder_mismatch" });
 });
