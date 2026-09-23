@@ -85,6 +85,10 @@ type KnowledgeChecks = Readonly<{
     at?: string,
     rootSchema?: unknown,
   ): void;
+  assertDriveHomes(
+    artifactHomes: Readonly<Record<string, unknown>>,
+    aliases: readonly string[],
+  ): void;
   assertSchemaSubset(schema: unknown, at?: string): void;
   readSchema(path: string): unknown;
   validateManifest(
@@ -498,6 +502,47 @@ test("the knowledge schema validator enforces its versioned keyword subset", asy
       /unsupported schema reference/u,
     ],
     [
+      "reference to a definition map",
+      { $ref: "#/$defs", $defs: { page: { type: "string" } } },
+      /#\/\$defs does not name a schema node/u,
+    ],
+    [
+      "reference to an absent definition",
+      { $ref: "#/$defs/typo", $defs: { page: { type: "string" } } },
+      /#\/\$defs\/typo cannot be resolved/u,
+    ],
+    [
+      "reference to annotation text",
+      { $ref: "#/title", title: "page" },
+      /leaves the schema at title/u,
+    ],
+    [
+      "reference to a keyword value",
+      { $ref: "#/$defs/page/type", $defs: { page: { type: "string" } } },
+      /leaves the schema at type/u,
+    ],
+    [
+      "reference past the end of a branch",
+      { $ref: "#/$defs/page/anyOf/2", $defs: { page: { anyOf: [{}] } } },
+      /cannot be resolved/u,
+    ],
+    [
+      "self-referential definition",
+      { $ref: "#/$defs/loop", $defs: { loop: { $ref: "#/$defs/loop" } } },
+      /schema reference cycle at #\/\$defs\/loop/u,
+    ],
+    [
+      "mutually referential definitions",
+      {
+        $ref: "#/$defs/left",
+        $defs: {
+          left: { $ref: "#/$defs/right" },
+          right: { $ref: "#/$defs/left" },
+        },
+      },
+      /schema reference cycle/u,
+    ],
+    [
       "reference with siblings",
       { $ref: "#/$defs/hash", minLength: 1 },
       /\$ref is evaluated alone/u,
@@ -532,6 +577,70 @@ test("the knowledge schema validator enforces its versioned keyword subset", asy
     () => checks.assertSchema({ type: "string", format: "uri" }, "page"),
     /unsupported schema keyword format/u,
   );
+  // A resolved pointer constrains: the referenced node decides the value, and
+  // every pointer form the subset admits reaches its schema node.
+  const referencing = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      alias: { $ref: "#/$defs/alias" },
+      branch: { $ref: "#/$defs/either/anyOf/0" },
+      pages: { type: "array", items: { $ref: "#/$defs/pages/items" } },
+    },
+    $defs: {
+      alias: { type: "string", minLength: 2 },
+      either: { anyOf: [{ type: "number" }, { type: "null" }] },
+      pages: { type: "array", items: { type: "string", maxLength: 3 } },
+    },
+  };
+  checks.assertSchemaSubset(referencing);
+  checks.assertSchema(referencing, { alias: "ok", branch: 1, pages: ["a"] });
+  const violations: readonly [string, unknown, RegExp][] = [
+    ["through $defs", { alias: "x" }, /alias: string is shorter than 2/u],
+    ["through anyOf", { branch: "1" }, /branch: expected number/u],
+    ["through items", { pages: ["long"] }, /pages\[0\]: string is longer/u],
+  ];
+  for (const [label, value, expected] of violations)
+    assert.throws(
+      () => checks.assertSchema(referencing, value),
+      expected,
+      label,
+    );
+});
+
+test("a schema refusal names the schema file it was loaded from", async () => {
+  const checks = await knowledgeChecks();
+  const directory = await mkdtemp(join(tmpdir(), "sce-knowledge-schema-"));
+  try {
+    const path = join(directory, "candidate.schema.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        type: "object",
+        additionalProperties: false,
+        properties: { page: { $ref: "#/$defs/typo" } },
+        $defs: { page: { type: "string" } },
+      }),
+      "utf8",
+    );
+    assert.throws(
+      () => checks.readSchema(path),
+      /^Error: candidate\.schema\.json:\$\.page: schema reference/u,
+      "the location names the schema file and the json path, not a value",
+    );
+    // The subset verdict is settled at load, so a later value refusal carries
+    // the value's own location and never the schema's.
+    const loaded = checks.readSchema(
+      join(CHECKS, "knowledge-manifest.schema.json"),
+    ) as Record<string, unknown>;
+    assert.throws(
+      () =>
+        checks.assertSchema(loaded, { schema: "wrong" }, "events/a.md", loaded),
+      /^Error: events\/a\.md: /u,
+    );
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
 });
 
 test("knowledge manifest semantics contain every declared target and drive home", async () => {
@@ -540,6 +649,11 @@ test("knowledge manifest semantics contain every declared target and drive home"
   assert.deepEqual(
     checks.assertDriveHome("partner-drive:incoming", aliases, "driveIncoming"),
     { alias: "partner-drive", subpath: "incoming" },
+  );
+  assert.deepEqual(
+    checks.assertDriveHome("d:incoming", ["d"], "driveIncoming"),
+    { alias: "d", subpath: "incoming" },
+    "the checker's alias grammar admits the engine's single character",
   );
   const refusedHomes: readonly [string, unknown, RegExp][] = [
     ["unqualified", "incoming", /must be <alias>:<subpath>/u],
@@ -650,6 +764,16 @@ test("knowledge manifest semantics contain every declared target and drive home"
         /must not overlap/u,
       ],
       [
+        "case-folded drive homes",
+        homes({ driveRendered: "partner-drive:Incoming" }),
+        /must not overlap/u,
+      ],
+      [
+        "case-folded nested drive homes",
+        homes({ driveIncoming: "partner-drive:RENDERED/queue" }),
+        /must not overlap/u,
+      ],
+      [
         "escaping source pattern",
         target({ sourcePattern: "../outside/*.md" }),
         /sourcePattern: string does not match/u,
@@ -668,6 +792,30 @@ test("knowledge manifest semantics contain every declared target and drive home"
         label,
       );
     }
+    // Folding refuses a collision on a case-insensitive mount, never a pair
+    // that stays distinct under the fold.
+    assert.equal(
+      typeof checks.validateManifest({
+        manifest: await write(
+          "distinct mixed case",
+          homes({ driveIncoming: "partner-drive:Incoming" }),
+        ),
+        root: directory,
+      }),
+      "object",
+    );
+    checks.assertDriveHomes(
+      { driveIncoming: "d:Incoming", driveRendered: "d:rendered" },
+      ["d"],
+    );
+    assert.throws(
+      () =>
+        checks.assertDriveHomes(
+          { driveIncoming: "d:Incoming", driveRendered: "d:incoming/queue" },
+          ["d"],
+        ),
+      /must not overlap/u,
+    );
   } finally {
     await rm(directory, { force: true, recursive: true });
   }

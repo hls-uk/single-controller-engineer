@@ -566,6 +566,14 @@ test("manifest projection refuses uncontained targets and undeclared drive homes
       withHomes({ driveRendered: "example-drive:incoming/rendered" }),
     ],
     [
+      "case-folded drive homes",
+      withHomes({ driveRendered: "example-drive:Incoming" }),
+    ],
+    [
+      "case-folded nested drive homes",
+      withHomes({ driveIncoming: "example-drive:RENDERED/queue" }),
+    ],
+    [
       "duplicate drive alias",
       {
         ...manifest,
@@ -579,6 +587,15 @@ test("manifest projection refuses uncontained targets and undeclared drive homes
     withHomes({ driveIncoming: "example-drive:incoming/queue" }),
   );
   assert.notEqual(accepted, undefined, "a distinct contained home is accepted");
+  // A Drive mount is case-insensitive, so the overlap comparison folds case:
+  // it refuses a collision the mount would create, never a distinct pair.
+  assert.notEqual(
+    knowledgeContractFromManifest(
+      withHomes({ driveIncoming: "example-drive:Incoming" }),
+    ),
+    undefined,
+    "mixed case that stays distinct under the fold is accepted",
+  );
 });
 
 test("the shipped manifest schema carries the engine's contract bounds", () => {

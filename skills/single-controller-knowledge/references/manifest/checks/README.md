@@ -23,6 +23,16 @@ sibling keywords the evaluator would skip, and a `properties` node without
 `additionalProperties: false`. Raise `SCHEMA_SUBSET_VERSION` when that set
 changes.
 
+Every local `$ref` is resolved during that same walk, so a pointer that
+constrains nothing is refused rather than ignored. A pointer descends only
+through `properties`, `items`, `anyOf` and `$defs`, and must land on a schema
+node: `#/$defs` names a map, `#/$defs/typo` names nothing, and `#/title` names
+annotation text, so all three are refused with the location that carries them.
+A pointer reached while its own target is still being walked closes a reference
+cycle the evaluator could never terminate on, and is refused too. The walk runs
+once per schema document and reports `<schema file>:<json path>`, so a refusal
+names the schema, never the value being checked.
+
 ## Custom keywords and generic validators
 
 Three of those keywords are not in draft 2020-12, so a generic validator treats
@@ -54,7 +64,8 @@ Manifest semantics go beyond the schema. Every `materialisationTargets` source
 pattern must be a canonical bounded glob contained in the repository, and
 `driveIncoming` and `driveRendered` must each name a declared drive alias as
 `<alias>:<subpath>` with a contained subpath; the two never overlap on one
-alias. Drive aliases and their `mountPathVariable` names are each unique, and
+alias, compared with case folded, because a Drive mount is case-insensitive
+while the subpath grammar admits both cases. Drive aliases and their `mountPathVariable` names are each unique, and
 the provenance `worktreeRootVariable` never names a variable that also mounts
 an alias, because the controller resolves one host path per environment name.
 

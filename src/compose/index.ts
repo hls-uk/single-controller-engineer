@@ -379,17 +379,34 @@ function driveHome(
     : undefined;
 }
 
-/** Two homes on one alias may not nest: the namespace is exclusive. */
+/**
+ * Two homes on one alias may not nest: the namespace is exclusive.  The
+ * comparison folds case because a Drive mount is case-insensitive while the
+ * subpath grammar admits both cases, so `drive:Incoming` and `drive:incoming`
+ * are the same directory there.  The shipped manifest checker folds the same
+ * way, so both refuse the same pair.
+ */
 function overlapping(
   left: Readonly<{ alias: string; subpath: string }>,
   right: Readonly<{ alias: string; subpath: string }>,
 ): boolean {
+  const incoming = foldedHome(left);
+  const rendered = foldedHome(right);
   return (
-    left.alias === right.alias &&
-    (left.subpath === right.subpath ||
-      left.subpath.startsWith(`${right.subpath}/`) ||
-      right.subpath.startsWith(`${left.subpath}/`))
+    incoming === rendered ||
+    incoming.startsWith(`${rendered}/`) ||
+    rendered.startsWith(`${incoming}/`)
   );
+}
+
+/**
+ * One case-folded `<alias>:<subpath>`; `:` never occurs inside a subpath, and
+ * both grammars are ASCII, so the fold is total and locale-independent.
+ */
+function foldedHome(
+  home: Readonly<{ alias: string; subpath: string }>,
+): string {
+  return `${home.alias}:${home.subpath}`.toLowerCase();
 }
 
 type ManifestContract = Readonly<{

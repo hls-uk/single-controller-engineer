@@ -68,11 +68,13 @@ export function readJson(path) {
  * Reads a schema document and refuses it unless every node, including the
  * ones no value ever reaches, stays inside the supported subset below.  A
  * keyword this validator does not implement therefore fails at load time
- * instead of silently constraining nothing.
+ * instead of silently constraining nothing.  The walk runs once per load,
+ * under a `<schema file>:<json path>` location, and every later validation
+ * reuses that verdict instead of rewalking the document for every value.
  */
 export function readSchema(path) {
   const schema = readJson(path);
-  assertSchemaSubset(schema, basename(path));
+  assertSchemaSubset(schema, `${basename(path)}:$`);
   return schema;
 }
 
@@ -149,12 +151,116 @@ const BOUND_KEYWORDS = new Set([
 
 const FLAG_KEYWORDS = new Set(["canonicalUnicodeScalar", "uniqueItems"]);
 
+/** A schema node is a plain object: never an array, a scalar, or null. */
+function isSchemaNode(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Pointer segments naming a map of schema nodes, keyed by one more segment. */
+const REF_MAP_KEYWORDS = new Set(["$defs", "properties"]);
+
+/** An `anyOf` branch index: canonical decimal, no sign, no leading zero. */
+const REF_BRANCH_INDEX = /^(?:0|[1-9][0-9]*)$/u;
+
+/**
+ * Resolves a local JSON Pointer against the schema document that carries it.
+ * A pointer may descend only through `properties`, `items`, `anyOf` and
+ * `$defs`, and must land on a schema node: `#/$defs` names a map and would
+ * constrain nothing, `#/$defs/typo` names nothing at all, and `#/title` names
+ * annotation text.  The result is a value, never an exception, so an
+ * unresolvable pointer becomes a named refusal at the node that carries it
+ * instead of an undeclared TypeError at top level.
+ */
+export function resolveLocalRef(root, pointer, at = "$") {
+  if (typeof pointer !== "string" || !pointer.startsWith("#/"))
+    return { refusal: `${at}: unsupported schema reference ${pointer}` };
+  const unresolved = {
+    refusal: `${at}: schema reference ${pointer} cannot be resolved`,
+  };
+  const unqualified = {
+    refusal: `${at}: schema reference ${pointer} does not name a schema node`,
+  };
+  const segments = pointer
+    .slice(2)
+    .split("/")
+    .map((segment) => segment.replaceAll("~1", "/").replaceAll("~0", "~"));
+  let node = root;
+  let index = 0;
+  while (index < segments.length) {
+    if (!isSchemaNode(node)) return unresolved;
+    const keyword = segments[index];
+    const key = segments[index + 1];
+    if (keyword === "items") {
+      if (!Object.hasOwn(node, "items")) return unresolved;
+      node = node.items;
+      index += 1;
+    } else if (keyword === "anyOf") {
+      if (key === undefined) return unqualified;
+      if (
+        !Array.isArray(node.anyOf) ||
+        !REF_BRANCH_INDEX.test(key) ||
+        Number(key) >= node.anyOf.length
+      )
+        return unresolved;
+      node = node.anyOf[Number(key)];
+      index += 2;
+    } else if (REF_MAP_KEYWORDS.has(keyword)) {
+      const map = node[keyword];
+      if (key === undefined) return unqualified;
+      if (!isSchemaNode(map) || !Object.hasOwn(map, key)) return unresolved;
+      node = map[key];
+      index += 2;
+    } else {
+      return {
+        refusal: `${at}: schema reference ${pointer} leaves the schema at ${keyword}`,
+      };
+    }
+  }
+  if (!isSchemaNode(node)) return unqualified;
+  return { key: JSON.stringify(segments), node };
+}
+
+/** Schema documents whose subset walk already succeeded; the walk runs once. */
+const WALKED_SCHEMAS = new WeakSet();
+
 /**
  * Refuses a schema node, and everything below it, unless it stays inside the
  * supported subset.  Unknown keywords, unevaluated forms of a supported
- * keyword, and siblings the evaluator would skip past are all rejected.
+ * keyword, and siblings the evaluator would skip past are all rejected.  The
+ * walk resolves every local `$ref` and walks its target, so a pointer naming
+ * no schema node is refused at load time instead of constraining nothing.  It
+ * runs once per schema document; the location it reports is the one the load
+ * gave it, so a failure names the schema file, not the value being checked.
  */
 export function assertSchemaSubset(schema, at = "$") {
+  if (WALKED_SCHEMAS.has(schema)) return;
+  walkSchemaSubset(schema, at, {
+    following: new Set(),
+    root: schema,
+    walked: new Set(),
+  });
+  WALKED_SCHEMAS.add(schema);
+}
+
+/**
+ * Resolves one pointer and walks its target once.  A pointer reached while its
+ * own target is still being walked is a reference cycle: the evaluator would
+ * never terminate on it, so the schema is refused rather than accepted
+ * untested.  Targets already walked are skipped, which keeps the walk linear.
+ */
+function followLocalRef(pointer, at, context) {
+  const resolved = resolveLocalRef(context.root, pointer, at);
+  if (resolved.refusal !== undefined) throw new Error(resolved.refusal);
+  if (context.following.has(resolved.key))
+    throw new Error(`${at}: schema reference cycle at ${pointer}`);
+  if (context.walked.has(resolved.key)) return;
+  context.following.add(resolved.key);
+  walkSchemaSubset(resolved.node, `${at}->${pointer}`, context);
+  context.following.delete(resolved.key);
+  context.walked.add(resolved.key);
+}
+
+function walkSchemaSubset(schema, at, context) {
   if (schema === null || typeof schema !== "object" || Array.isArray(schema))
     throw new Error(`${at}: schema node must be an object`);
   const keywords = Object.keys(schema).filter(
@@ -179,8 +285,7 @@ export function assertSchemaSubset(schema, at = "$") {
     throw new Error(
       `${at}: ${branch} is evaluated alone and cannot carry sibling keywords`,
     );
-  if (Object.hasOwn(schema, "$ref") && !String(schema.$ref).startsWith("#/"))
-    throw new Error(`${at}: unsupported schema reference ${schema.$ref}`);
+  if (Object.hasOwn(schema, "$ref")) followLocalRef(schema.$ref, at, context);
   if (Object.hasOwn(schema, "type") && !SUPPORTED_TYPES.has(schema.type))
     throw new Error(`${at}: unsupported schema type ${schema.type}`);
   if (Object.hasOwn(schema, "maximum") && !Number.isFinite(schema.maximum))
@@ -217,15 +322,15 @@ export function assertSchemaSubset(schema, at = "$") {
     if (schema.additionalProperties !== false)
       throw new Error(`${at}: properties require additionalProperties: false`);
     for (const [key, child] of Object.entries(properties))
-      assertSchemaSubset(child, `${at}.${key}`);
+      walkSchemaSubset(child, `${at}.${key}`, context);
   }
   if (Object.hasOwn(schema, "items"))
-    assertSchemaSubset(schema.items, `${at}[]`);
+    walkSchemaSubset(schema.items, `${at}[]`, context);
   if (Object.hasOwn(schema, "anyOf")) {
     if (!Array.isArray(schema.anyOf) || schema.anyOf.length === 0)
       throw new Error(`${at}: anyOf must be a non-empty array`);
     schema.anyOf.forEach((candidate, index) =>
-      assertSchemaSubset(candidate, `${at}|${index}`),
+      walkSchemaSubset(candidate, `${at}|${index}`, context),
     );
   }
   if (Object.hasOwn(schema, "$defs")) {
@@ -233,7 +338,7 @@ export function assertSchemaSubset(schema, at = "$") {
     if (defs === null || typeof defs !== "object" || Array.isArray(defs))
       throw new Error(`${at}: $defs must be an object`);
     for (const [key, child] of Object.entries(defs))
-      assertSchemaSubset(child, `${at}.$defs.${key}`);
+      walkSchemaSubset(child, `${at}.$defs.${key}`, context);
   }
 }
 
@@ -253,18 +358,12 @@ export function assertSchema(schema, value, at = "$", rootSchema = schema) {
     return;
   }
   if (schema.$ref) {
-    if (!schema.$ref.startsWith("#/")) {
-      throw new Error(`${at}: unsupported schema reference ${schema.$ref}`);
-    }
-    const target = schema.$ref
-      .slice(2)
-      .split("/")
-      .reduce(
-        (current, part) =>
-          current[part.replaceAll("~1", "/").replaceAll("~0", "~")],
-        rootSchema,
-      );
-    return assertSchema(target, value, at, rootSchema);
+    // The subset walk has already resolved every pointer in this document and
+    // refused both the unresolvable ones and the cycles, so this resolution
+    // lands on a schema node and the recursion below terminates.
+    const resolved = resolveLocalRef(rootSchema, schema.$ref, at);
+    if (resolved.refusal !== undefined) throw new Error(resolved.refusal);
+    return assertSchema(resolved.node, value, at, rootSchema);
   }
   if (Object.hasOwn(schema, "const") && !deepEqual(value, schema.const)) {
     throw new Error(`${at}: expected constant ${JSON.stringify(schema.const)}`);
@@ -528,7 +627,14 @@ export function assertDriveHome(value, aliases, label = "drive home") {
   return { alias, subpath };
 }
 
-function assertDriveHomes(artifactHomes, aliases) {
+/**
+ * The two drive homes may not name one directory or nest inside each other:
+ * the alias namespace is exclusive.  The comparison folds case because a Drive
+ * mount is case-insensitive while the subpath grammar admits both cases, so
+ * `drive:Incoming` and `drive:incoming` are the same directory there.  The
+ * grammar is ASCII, so the fold is total and locale-independent.
+ */
+export function assertDriveHomes(artifactHomes, aliases) {
   const incoming = assertDriveHome(
     artifactHomes.driveIncoming,
     aliases,
@@ -539,16 +645,22 @@ function assertDriveHomes(artifactHomes, aliases) {
     aliases,
     "driveRendered",
   );
+  const left = foldedDriveHome(incoming);
+  const right = foldedDriveHome(rendered);
   if (
-    incoming.alias === rendered.alias &&
-    (incoming.subpath === rendered.subpath ||
-      incoming.subpath.startsWith(`${rendered.subpath}/`) ||
-      rendered.subpath.startsWith(`${incoming.subpath}/`))
+    left === right ||
+    left.startsWith(`${right}/`) ||
+    right.startsWith(`${left}/`)
   ) {
     throw new Error(
       "driveIncoming and driveRendered must not overlap on one alias",
     );
   }
+}
+
+/** One case-folded `<alias>:<subpath>`; `:` never occurs inside a subpath. */
+function foldedDriveHome({ alias, subpath }) {
+  return `${alias}:${subpath}`.toLowerCase();
 }
 
 export function containedPath(root, path) {
