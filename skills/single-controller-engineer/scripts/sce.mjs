@@ -25120,6 +25120,25 @@ async function admittedDestination(destination, destinationSubpath) {
 function sameDestinationIdentity2(left, right) {
   return left.canonicalPath === right.canonicalPath && left.device === right.device && left.inode === right.inode;
 }
+async function destinationRootAbsent(root) {
+  try {
+    await lstat(root);
+    return false;
+  } catch (error) {
+    return error.code === "ENOENT";
+  }
+}
+async function relocationAfterAct(effect2, admitted) {
+  const settled = await admittedDestination(
+    effect2.params.destination,
+    effect2.params.destinationSubpath
+  );
+  if (settled.status === "observed")
+    return sameDestinationIdentity2(settled.identity, admitted) ? null : { observed: settled.identity, reason: "substituted" };
+  if (settled.status === "refused")
+    return settled.reason === "alias_unmounted" && await destinationRootAbsent(effect2.params.destination.canonicalRoot) ? null : { observed: null, reason: "invalid_destination" };
+  return { observed: null, reason: "unresolved" };
+}
 async function probeDestination(effect2) {
   const result2 = await admittedDestination(
     effect2.params.destination,
@@ -25256,6 +25275,14 @@ async function materialiseBytes(cwd, effect2, processPort, objectFormat, platfor
     return ambiguous({
       operation: "helper-result",
       outputHash: hashBytes(result2.stdout)
+    });
+  const relocation = await relocationAfterAct(effect2, destination.identity);
+  if (relocation !== null)
+    return ambiguous({
+      alias: effect2.params.destination.alias,
+      observed: relocation.observed,
+      operation: "post-act-relocation",
+      reason: relocation.reason
     });
   return {
     observation: {
