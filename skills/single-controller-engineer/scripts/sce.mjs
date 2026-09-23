@@ -38459,7 +38459,12 @@ function driveHome(value, aliases) {
   return aliases.has(alias) ? { alias, subpath: home.slice(separator + 1) } : void 0;
 }
 function overlapping(left, right) {
-  return left.alias === right.alias && (left.subpath === right.subpath || left.subpath.startsWith(`${right.subpath}/`) || right.subpath.startsWith(`${left.subpath}/`));
+  const incoming = foldedHome(left);
+  const rendered = foldedHome(right);
+  return incoming === rendered || incoming.startsWith(`${rendered}/`) || rendered.startsWith(`${incoming}/`);
+}
+function foldedHome(home) {
+  return `${home.alias}:${home.subpath}`.toLowerCase();
 }
 function knowledgeContractFromManifest(manifest) {
   const value = record3(manifest);
