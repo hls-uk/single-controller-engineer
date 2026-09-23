@@ -842,6 +842,27 @@ async function objectFormatMatches(
   );
 }
 
+/**
+ * Publication is bound to the admitted directory *object*, never to its name.
+ * The helper runs with that directory as its working directory and addresses
+ * every final and temporary by basename, so each act resolves through the
+ * kernel's open reference to that directory rather than through a path its
+ * parent can rename. The helper additionally holds the directory open for the
+ * life of the call and proves the binding by `fstat` on that descriptor, which
+ * no namespace change can invalidate.
+ *
+ * That guarantee is a property of POSIX working-directory semantics, so it
+ * holds only where this repository has release evidence for it. Anywhere else
+ * — notably `win32`, whose working directory is a re-resolved path string —
+ * the adapter blocks before any act rather than publishing through a name a
+ * concurrent writer could redirect. Widening this set requires new evidence,
+ * not a new assumption. DEC-20260922-018.
+ */
+const NAMESPACE_BOUND_PLATFORMS: ReadonlySet<string> = new Set([
+  "darwin",
+  "linux",
+]);
+
 const HELPER_SOURCE = String.raw`
 const fs = require("node:fs");
 const crypto = require("node:crypto");
@@ -863,9 +884,11 @@ process.stdin.on("end", () => {
     const basename = value => typeof value === "string" && path.basename(value) === value && value !== "." && value !== "..";
     for (const value of [metadata.artifactName, metadata.sidecarName, metadata.artifactTemp, metadata.sidecarTemp])
       if (!basename(value)) return fail("refused", "bad-name");
+    const held = fs.openSync(".", fs.constants.O_RDONLY);
     const identity = () => {
-      const value = fs.statSync(".", { bigint: true });
-      return String(value.dev) === metadata.dev && String(value.ino) === metadata.ino && fs.realpathSync(".") === metadata.realpath;
+      const bound = fs.fstatSync(held, { bigint: true });
+      const here = fs.statSync(".", { bigint: true });
+      return String(bound.dev) === metadata.dev && String(bound.ino) === metadata.ino && here.dev === bound.dev && here.ino === bound.ino;
     };
     if (!identity()) return fail("refused", "identity");
     const digest = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
@@ -906,10 +929,7 @@ process.stdin.on("end", () => {
     const artifactPreflight = inspectPair(metadata.artifactName, metadata.artifactTemp, artifact);
     for (const checked of [sidecarPreflight, artifactPreflight])
       if (checked.status === "ambiguous") return fail("ambiguous", checked.code);
-    const fsyncDirectory = () => {
-      const directory = fs.openSync(".", fs.constants.O_RDONLY);
-      try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
-    };
+    const fsyncDirectory = () => { fs.fsyncSync(held); };
     const publish = (finalName, tempName, bytes, preflight) => {
       if (preflight.status === "already_present") return { status: "already_present" };
       if (preflight.status === "linked_crash") {
@@ -1138,7 +1158,10 @@ async function materialiseBytes(
   effect: MaterialiseEffect,
   processPort: MaterialisationProcessPort,
   objectFormat: "sha1" | "sha256",
+  platform: string,
 ): Promise<MaterialiseResult> {
+  if (!NAMESPACE_BOUND_PLATFORMS.has(platform))
+    return ambiguous({ operation: "namespace-binding-unsupported", platform });
   if (!(await objectFormatMatches(cwd, processPort, objectFormat)))
     return ambiguous({ operation: "object-format" });
   const blobInfo = await readGitObjectInfo(
@@ -1228,7 +1251,6 @@ async function materialiseBytes(
     artifactTemp: `.${effect.params.artifactName}.sce-tmp`,
     dev: destination.identity.device,
     ino: destination.identity.inode,
-    realpath: destination.identity.canonicalPath,
     sidecarName: effect.params.sidecarName,
     sidecarTemp: `.${effect.params.sidecarName}.sce-tmp`,
   };
@@ -1422,6 +1444,7 @@ export function createMaterialisationAdapter(
   repositoryCwd: string,
   objectFormat: "sha1" | "sha256",
   processPort: MaterialisationProcessPort = nodeMaterialisationProcess,
+  platform: string = process.platform,
 ): MaterialisationAdapter {
   return {
     discoverMaterialise: async (effect) =>
@@ -1432,7 +1455,13 @@ export function createMaterialisationAdapter(
         objectFormat,
       ),
     materialise: async (effect) =>
-      await materialiseBytes(repositoryCwd, effect, processPort, objectFormat),
+      await materialiseBytes(
+        repositoryCwd,
+        effect,
+        processPort,
+        objectFormat,
+        platform,
+      ),
     probe: async (effect) => await probeDestination(effect),
     resolve: async (effect) =>
       await resolveSources(repositoryCwd, effect, processPort, objectFormat),

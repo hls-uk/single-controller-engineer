@@ -906,25 +906,28 @@ then starts the current Node executable with
 `shell: false`, a fixed bundled helper program, a bounded sanitized environment,
 and the validated destination directory as the child process's `cwd`. The
 parent passes
-the directory's expected device, inode, and canonical path plus plain final and
+the directory's expected device and inode plus plain final and
 temporary basenames; artifact and sidecar bytes use a fixed length-prefixed
-stdin frame bounded by the limits above. The child first requires `stat(".")`
-and `realpath(".")` to equal those expected facts, then performs every final and
+stdin frame bounded by the limits above. The child holds that directory open
+for the life of the call and first requires `fstat` on that descriptor and
+`stat(".")` to agree with those expected facts, then performs every final and
 temporary lookup relative to that inode-bound `cwd`; it never resolves the
 original destination path again. It returns only a strict bounded observation.
 The parent validates that observation. This uses the shipped Node runtime, not
 a shell, library, or system helper, and introduces no runtime dependency.
 
-The helper also rechecks the `cwd` device, inode, and canonical path after final
+The helper also rechecks that bound identity after final
 readback. Failure to start the helper or prove its initial identity fails closed
 before mutation. A later identity change is ambiguous and preserves the exact
 evidence. The engine's merge slot serializes compliant controller writers.
-Version 1 additionally requires exclusive namespace control for the admitted
-destination directory during the helper call: any concurrent process that can
-rename that directory through its parent, including a same-user process or a
-Drive sync client, is outside the supported authority model. Post-act identity
-checking detects such interference as ambiguous but cannot prove that the
-inode was not moved during the publication syscall, just as for Git worktrees.
+Basename-only operation through the held working directory binds every act to
+the admitted directory object rather than to its name, so an ancestor rename
+concurrent with the publication syscall cannot redirect it; that binding, the
+platforms whose release evidence admits it, and the fail-closed gate everywhere
+else are decided in
+[DEC-20260922-018](../decisions/2026-09-22-018-materialisation-namespace-relocation.md),
+which amends the exclusive-namespace-control scope recorded here. Exclusive
+namespace control still governs pre-act admission, containment, and the marker.
 
 The complete probe and repeated materialise-admission algorithm is:
 
