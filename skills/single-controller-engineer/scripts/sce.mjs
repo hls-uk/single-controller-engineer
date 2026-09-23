@@ -23320,6 +23320,7 @@ async function readNoFollow(root, name, maximumBytes) {
     return error.code === "ENOENT" ? { status: "absent" } : { status: "ambiguous" };
   }
 }
+var TREE_SCAN_BYTE_CAP = LIMITS.materialisationWaveBytes;
 function hashBytes(value) {
   return createHash2("sha256").update(value).digest("hex");
 }
@@ -23390,6 +23391,9 @@ var nodeMaterialisationProcess = {
     const retained = [];
     const stderr = [];
     let stderrBytes = 0;
+    let scanBytes = 0;
+    let scanExceeded = false;
+    const maxScanBytes = options.maxScanBytes ?? TREE_SCAN_BYTE_CAP;
     const finish = (result2) => {
       if (settled) return;
       settled = true;
@@ -23405,6 +23409,13 @@ var nodeMaterialisationProcess = {
     const timer = setTimeout(() => child.kill("SIGKILL"), 3e4);
     child.stdout.on("data", (chunk) => {
       if (!parsingValid) return;
+      scanBytes += chunk.byteLength;
+      if (scanBytes > maxScanBytes) {
+        scanExceeded = true;
+        parsingValid = false;
+        child.kill("SIGKILL");
+        return;
+      }
       for (const byte of chunk) {
         if (!inPath) {
           if (byte === 0 || header.length > 255) {
@@ -23482,10 +23493,10 @@ var nodeMaterialisationProcess = {
       (code, signal) => finish({
         code,
         parsingValid: parsingValid && !inPath && header.length === 0 && pathLength === 0,
-        retainedMatches,
+        retainedMatches: scanExceeded ? 0 : retainedMatches,
         signal,
         stderr: Buffer.concat(stderr),
-        stdout: Buffer.concat(retained),
+        stdout: scanExceeded ? Buffer.alloc(0) : Buffer.concat(retained),
         ...unsafeMatchedPathHash === void 0 ? {} : { unsafeMatchedPathHash }
       })
     );
@@ -23714,7 +23725,8 @@ async function resolveSources(cwd, effect2, processPort, objectFormat) {
         SSH_ASKPASS: "/usr/bin/false",
         TMPDIR: "/tmp"
       },
-      maxOutputBytes: 8192
+      maxOutputBytes: 8192,
+      maxScanBytes: TREE_SCAN_BYTE_CAP
     },
     effect2.params.sourcePattern
   );
