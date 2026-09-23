@@ -113,6 +113,18 @@ discovered, but they must not hide inside the default fast command. Optional
 scheduled runs may expose drift earlier; their absence must not stop ordinary
 beta iteration.
 
+In this repository each tier is an explicit manifest rather than a directory
+glob, so no suite stays unobserved by accident. `test/fast.manifest.json` names
+the fast roots and the exact files they may discover, the fencing seam among
+them, inside a sixty-second budget. `integrationRoots` in
+`scripts/test-tier.mjs` names `test/integration` together with the
+deterministic adapter and command seam suites inside a ninety-second budget; a
+suite that spawns a real `bd`, `dolt`, or provider process, or that pins an
+absolute tool path, is named release-only instead. The release tier discovers
+every suite under `test/`. `test/eval/release-manifest.test.ts` refuses a suite
+that belongs to no tier or to two, so a new test file forces a tier decision
+instead of escaping both mandatory gates.
+
 A slow failure blocks only the capability or release whose evidence it
 invalidates. Record the exact failure, make an explicit severity decision, and
 avoid repeatedly rerunning unaffected suites.

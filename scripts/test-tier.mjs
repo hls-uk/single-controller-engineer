@@ -32,6 +32,32 @@ function exactKeys(value, keys) {
   );
 }
 
+// The integration tier is a manifest, not a directory glob: every deterministic
+// seam suite it discovers is named here, so a change to a fenced adapter
+// boundary cannot pass both mandatory gates unobserved. A suite that spawns a
+// real bd, dolt, or provider process, or that pins an absolute tool path, stays
+// in the release tier instead.
+const integrationRoots = [
+  "test/adapters/beads-embedded/adapter.test.ts",
+  "test/adapters/beads-embedded/carry.test.ts",
+  "test/adapters/beads-embedded/closure.test.ts",
+  "test/adapters/beads-embedded/dolt-diff-json.test.ts",
+  "test/adapters/beads-embedded/pinned-issue-row.test.ts",
+  "test/adapters/beads-embedded/pinned-output-budget.test.ts",
+  "test/adapters/beads-server/carry.test.ts",
+  "test/adapters/git/git.test.ts",
+  "test/adapters/materialise/namespace-binding.test.ts",
+  "test/adapters/materialise/tree-scan-valve.test.ts",
+  "test/commands/production-recovery.test.ts",
+  "test/commands/recovery-embedded.test.ts",
+  "test/commands/recovery-server.test.ts",
+  "test/integration",
+];
+// The tier measures under 10s on a development machine because the runner
+// executes the files in parallel. The bound refuses a real-tool suite that
+// drifted in (those run for minutes); it does not police ordinary growth.
+const integrationBudgetSeconds = 90;
+
 if (!new Set(["fast", "integration", "release"]).has(tier))
   throw new Error("expected fast, integration, or release tier");
 let files;
@@ -96,13 +122,32 @@ if (tier === "fast") {
     );
   budget = manifest.budgetSeconds;
   skipPatterns = manifest.skipPatterns;
-} else {
-  const directory = resolve(
-    root,
-    tier === "integration" ? "test/integration" : "test",
-  );
+} else if (tier === "integration") {
+  if (
+    !integrationRoots.every(
+      (path) =>
+        typeof path === "string" &&
+        path.startsWith("test/") &&
+        !path.includes(".."),
+    )
+  )
+    throw new Error("unsafe integration test roots");
   files = (
-    await discover(directory).catch((error) =>
+    await Promise.all(
+      integrationRoots.map((path) => discover(resolve(root, path))),
+    )
+  )
+    .flat()
+    .sort();
+  const discovered = files.map((path) => relative(root, path));
+  if (new Set(discovered).size !== discovered.length)
+    throw new Error(
+      `integration test discovery repeats a file: ${JSON.stringify(discovered)}`,
+    );
+  budget = integrationBudgetSeconds;
+} else {
+  files = (
+    await discover(resolve(root, "test")).catch((error) =>
       error.code === "ENOENT" ? [] : Promise.reject(error),
     )
   ).sort();
@@ -134,6 +179,6 @@ if (code !== 0) process.exitCode = code;
 const elapsed = (performance.now() - started) / 1_000;
 if (budget !== undefined && elapsed > budget)
   throw new Error(
-    `fast test budget exceeded: ${elapsed.toFixed(2)}s > ${budget}s`,
+    `${tier} test budget exceeded: ${elapsed.toFixed(2)}s > ${budget}s`,
   );
 console.log(`${tier} test tier completed in ${elapsed.toFixed(2)}s`);
