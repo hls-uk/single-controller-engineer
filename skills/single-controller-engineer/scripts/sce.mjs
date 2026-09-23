@@ -25154,6 +25154,20 @@ var MutationBatchSchema = strictObject({
     root: RootProjectionSchema
   }),
   release: Type.Optional(ReleaseEvidenceSchema),
+  /**
+   * Predicate-only rows for units this batch retires from the root's
+   * authority set. They are never written: a retired unit's child projection
+   * stays in Beads as inert history. The CAS still reads each one inside the
+   * same transaction and refuses the batch when a retired row moved out of
+   * band. A batch that retires nothing omits the key entirely, so bytes
+   * persisted before this contract existed remain exactly valid.
+   */
+  retiredChildren: Type.Optional(
+    Type.Array(ExpectedChildRowSchema, {
+      maxItems: FENCING_LIMITS.changedRows,
+      minItems: 1
+    })
+  ),
   schema: Type.Literal("sce.fencing.batch"),
   scope: FencingScopeSchema,
   version: Type.Literal(FENCING_SCHEMA_VERSION)
@@ -25367,6 +25381,13 @@ function validateMutationBatch(input) {
     if (expected.expectedRevision !== row.expectedRevision || expected.expectedCommitment !== row.expectedCommitment || row.nextRevision !== row.expectedRevision + 1 || child.revision !== row.nextRevision || child.commitment !== row.nextCommitment || rootRow.revision !== row.nextRevision || rootRow.commitment !== row.nextCommitment || !equal(child.scope, batch.scope) || child.holder !== batch.holder || !equal(child.unit, root.value.run.units[row.unitId]))
       return { ok: false, reason: "affected child row disagrees with batch" };
   }
+  const retiredIds = (batch.retiredChildren ?? []).map((row) => row.unitId);
+  if (new Set(retiredIds).size !== retiredIds.length || [...retiredIds].sort().some((id, index) => id !== retiredIds[index]))
+    return { ok: false, reason: "retired children are not sorted and unique" };
+  if (retiredIds.some(
+    (unitId) => changedIds.includes(unitId) || root.value.childRows.some((row) => row.unitId === unitId)
+  ))
+    return { ok: false, reason: "retired child is still an authority row" };
   if (batch.checkpoint.aggregateRevision !== root.value.aggregateRevision || batch.checkpoint.rootCommitment !== root.value.aggregateCommitment || batch.checkpoint.changedRowsCommitment !== deriveChangedRowsCommitment(batch.changedRows))
     return { ok: false, reason: "batch checkpoint is invalid" };
   const scopeCommitment = deriveScopeCommitment(batch.scope);
@@ -25869,6 +25890,11 @@ function batchFor(before, nextRun) {
   });
   if (changedRows.some((row) => row === void 0)) return void 0;
   const rows = changedRows;
+  const retiredChildren = before.childRows.filter((row) => nextRun.units[row.unitId] === void 0).map((row) => ({
+    expectedCommitment: row.commitment,
+    expectedRevision: row.revision,
+    unitId: row.unitId
+  }));
   const next = withBatchCheckpoint(nextBase, rows);
   const candidate = {
     changedRows: rows,
@@ -25890,6 +25916,7 @@ function batchFor(before, nextRun) {
       children: rows.map((row) => makeChildProjection(next, row.unitId)),
       root: next
     },
+    ...retiredChildren.length === 0 ? {} : { retiredChildren },
     schema: "sce.fencing.batch",
     scope: next.scope,
     version: 1
@@ -30122,7 +30149,8 @@ var DoltProjectionPersistence = class {
   /**
    * The selected root/child readback above establishes the requested state.
    * This companion proof establishes that a Dolt checkpoint contains no other
-   * pending or committed data movement.
+   * pending or committed data movement. A predicated retired row is read, not
+   * written, so it contributes no delta and a closure stays a root-only diff.
    */
   matchesBatchDelta(batchInput, source) {
     const batch = validateMutationBatch(batchInput);
@@ -30188,14 +30216,39 @@ var DoltProjectionPersistence = class {
   writeStatement(batch, slot) {
     const rows = this.rows(batch);
     if (rows === void 0) return void 0;
-    const expected = rows.map(
-      (row) => `(id=${stringLiteral(row.issueId)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.sce.commitment'))=${stringLiteral(row.expectedCommitment)})`
-    ).join(" OR ");
+    const retired = this.retiredPredicates(batch, rows);
+    if (retired === void 0) return void 0;
+    const expected = [
+      ...rows.map(
+        (row) => `(id=${stringLiteral(row.issueId)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.sce.commitment'))=${stringLiteral(row.expectedCommitment)})`
+      ),
+      ...retired
+    ].join(" OR ");
     const cases = rows.map(
       (row) => `WHEN ${stringLiteral(row.issueId)} THEN JSON_SET(metadata,'$.sce',${jsonLiteral(row.next)})`
     ).join(" ");
     const ids = rows.map((row) => stringLiteral(row.issueId)).join(",");
-    return `UPDATE issues SET metadata=CASE id ${cases} ELSE metadata END WHERE id IN (${ids}) AND (SELECT COUNT(*) FROM issues WHERE ${expected})=${rows.length}${slot === void 0 ? "" : this.availableSlotPredicate(slot)}`;
+    return `UPDATE issues SET metadata=CASE id ${cases} ELSE metadata END WHERE id IN (${ids}) AND (SELECT COUNT(*) FROM issues WHERE ${expected})=${rows.length + retired.length}${slot === void 0 ? "" : this.availableSlotPredicate(slot)}`;
+  }
+  /**
+   * A retired unit leaves the root's authority set but its bead stays as inert
+   * history, so it is never a changed row and is never written here. The one
+   * CAS statement still reads it: its count term zeroes the affected rows when
+   * that row's commitment or revision moved between load and root CAS. Child
+   * rows are stored as `{commitment, projection}` (see `rows`), so the revision
+   * is read under `$.sce.projection`; a path that does not exist extracts NULL
+   * and would fail every retiring closure closed.
+   */
+  retiredPredicates(batch, rows) {
+    const retired = batch.retiredChildren ?? [];
+    if (retired.length === 0) return [];
+    const ids = retired.map((row) => this.childIssueId(row.unitId));
+    const every = [...rows.map((row) => row.issueId), ...ids];
+    if (ids.some((id) => id === void 0) || new Set(every).size !== every.length)
+      return void 0;
+    return retired.map(
+      (row, index) => `(id=${stringLiteral(ids[index])} AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.sce.commitment'))=${stringLiteral(row.expectedCommitment)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata,'$.sce.projection.revision'))=${stringLiteral(String(row.expectedRevision))})`
+    );
   }
   availableSlotPredicate(slot) {
     return ` AND (SELECT COUNT(*) FROM issues WHERE id=${stringLiteral(slot.slotId)} AND title=${stringLiteral(slot.title)} AND status='open' AND external_ref=${stringLiteral(`sce-scope:v1:${slot.scopeCommitment}`)} AND design=${stringLiteral(canonicalJson(slot.scope))} AND JSON_TYPE(metadata)='OBJECT' AND JSON_LENGTH(metadata)=0)=1 AND (SELECT COUNT(*) FROM labels WHERE issue_id=${stringLiteral(slot.slotId)} AND label=${stringLiteral(slot.label)})=1`;
@@ -34054,6 +34107,20 @@ var BeadsServerAdapter = class {
 function quotedIdentifier(value) {
   return validIdentifier(value) ? `\`${value}\`` : void 0;
 }
+function retiredPredicateRows(batch, rows) {
+  const retired = batch.retiredChildren ?? [];
+  if (retired.length === 0) return [];
+  const resolved = retired.map((row) => {
+    const beadId = rows.childBeadIds[row.unitId];
+    return beadId === void 0 || !validIdentifier(beadId) ? void 0 : { beadId, row };
+  });
+  const owned = [
+    rows.rootBeadId,
+    ...batch.changedRows.map((row) => rows.childBeadIds[row.unitId]),
+    ...resolved.map((item) => item?.beadId)
+  ];
+  return resolved.some((item) => item === void 0) || new Set(owned).size !== owned.length ? void 0 : resolved;
+}
 function sqlLiteral(value) {
   if (typeof value === "number") return String(value);
   return `CONVERT(0x${Buffer.from(value, "utf8").toString("hex")} USING utf8mb4)`;
@@ -35017,6 +35084,7 @@ var DoltBeadsServerDriver = class {
     };
   }
   #preOwnershipExistingStatement(batch) {
+    if (batch.retiredChildren !== void 0) return void 0;
     const children = batch.next.children.map((child) => {
       const expected = batch.expectedChildren.find(
         (value) => value.unitId === child.unitId
@@ -35068,6 +35136,8 @@ var DoltBeadsServerDriver = class {
     return `UPDATE ${this.#issues()} AS target JOIN (SELECT COUNT(*) AS eligible FROM ${this.#issues()} WHERE ${eligibility.map((item) => `(${item})`).join(" OR ")}) AS gate SET target.metadata = CASE target.id ${cases.join(" ")} ELSE target.metadata END WHERE target.id IN (${ids.map(sqlLiteral).join(",")}) AND gate.eligible = ${ids.length + 1}`;
   }
   #casStatement(batch) {
+    const retired = retiredPredicateRows(batch, this.#rows);
+    if (retired === void 0) return void 0;
     const children = batch.next.children.map((child) => {
       const expected = batch.expectedChildren.find(
         (value) => value.unitId === child.unitId
@@ -35085,6 +35155,12 @@ var DoltBeadsServerDriver = class {
       `id = ${sqlLiteral(this.#rows.rootBeadId)} AND JSON_EXTRACT(metadata, '$.sce') IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.aggregateRevision')) = ${sqlLiteral(batch.expectedAggregateRevision)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.aggregateCommitment')) = ${sqlLiteral(batch.expectedAggregateCommitment)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.holder')) = ${sqlLiteral(batch.expectedHolder)} AND JSON_EXTRACT(metadata, '$.sce.scope') = ${scope}`,
       ...mapped.map(
         ({ expected, id }) => `id = ${sqlLiteral(id)} AND JSON_EXTRACT(metadata, '$.sce') IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.revision')) = ${sqlLiteral(expected.expectedRevision)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.commitment')) = ${sqlLiteral(expected.expectedCommitment)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.holder')) = ${sqlLiteral(batch.expectedHolder)} AND JSON_EXTRACT(metadata, '$.sce.scope') = ${scope}`
+      ),
+      // Read-only rows: a retired bead keeps its historical envelope and is
+      // absent from the update's id list, so the one transaction still refuses
+      // when its commitment or revision moved between load and root CAS.
+      ...retired.map(
+        ({ beadId, row }) => `id = ${sqlLiteral(beadId)} AND JSON_EXTRACT(metadata, '$.sce') IS NOT NULL AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.revision')) = ${sqlLiteral(row.expectedRevision)} AND JSON_UNQUOTE(JSON_EXTRACT(metadata, '$.sce.commitment')) = ${sqlLiteral(row.expectedCommitment)}`
       )
     ];
     const cases = [
@@ -35093,7 +35169,7 @@ var DoltBeadsServerDriver = class {
         ({ child, id }) => `WHEN ${sqlLiteral(id)} THEN JSON_SET(target.metadata, '$.sce', ${sqlJson(child)})`
       )
     ];
-    return `UPDATE ${this.#issues()} AS target JOIN (SELECT COUNT(*) AS eligible FROM ${this.#issues()} WHERE ${eligibility.map((item) => `(${item})`).join(" OR ")}) AS gate SET target.metadata = CASE target.id ${cases.join(" ")} ELSE target.metadata END WHERE target.id IN (${ids.map(sqlLiteral).join(",")}) AND gate.eligible = ${ids.length + 1}`;
+    return `UPDATE ${this.#issues()} AS target JOIN (SELECT COUNT(*) AS eligible FROM ${this.#issues()} WHERE ${eligibility.map((item) => `(${item})`).join(" OR ")}) AS gate SET target.metadata = CASE target.id ${cases.join(" ")} ELSE target.metadata END WHERE target.id IN (${ids.map(sqlLiteral).join(",")}) AND gate.eligible = ${ids.length + 1 + retired.length}`;
   }
 };
 
