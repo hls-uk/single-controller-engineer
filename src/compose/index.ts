@@ -80,6 +80,16 @@ const CANONICAL_SUBPATH =
 /** A bounded single-directory glob; `**` and dot segments stay refused. */
 const CANONICAL_SOURCE_PATTERN =
   /^(?!.*(?:^|\/)\.\.?(?:\/|$))(?!.*\/\/)(?!.*\\)(?!.*\*\*)[A-Za-z0-9][A-Za-z0-9._*?-]*(?:\/[A-Za-z0-9][A-Za-z0-9._*?-]*)*$/u;
+/**
+ * A drive marker is an exact safe basename: `DriveAliasSchema.markerFile`
+ * without the dot segments its grammar would otherwise admit, so joining it
+ * to a mount root can never name the mount itself or its parent.
+ */
+const SAFE_BASENAME = /^(?!\.\.?$)[A-Za-z0-9.][A-Za-z0-9._-]*$/u;
+/** `DriveAliasSchema.markerFile` bound; the grammar is ASCII, so bytes match. */
+const MARKER_FILE_BYTES = 255;
+/** `KnowledgeContractSchema.aliases` bound. */
+const DRIVE_ALIASES = 64;
 const MAX_MANIFEST_BYTES = 256 * 1024;
 
 /**
@@ -332,6 +342,20 @@ export function harnessSupportFor(
   };
 }
 
+/**
+ * `KnowledgeContractSchema.humanDriver` is free text bounded in code units
+ * and again in UTF-8 bytes, and the two differ outside ASCII, so the
+ * projection measures both rather than trusting the shorter count.
+ */
+function boundedText(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= LIMITS.text &&
+    new TextEncoder().encode(value).length <= LIMITS.text
+  );
+}
+
 /** These expressions are ASCII, so a code unit is exactly one UTF-8 byte. */
 function bounded(value: unknown, expression: RegExp): string | undefined {
   return typeof value === "string" &&
@@ -380,7 +404,11 @@ type ManifestContract = Readonly<{
  * a containment gate as well as a shape gate: every materialisation source
  * pattern is a canonical bounded glob inside the repository, every
  * destination names a declared alias with a contained subpath, and the two
- * drive homes name declared aliases whose subpaths never overlap.
+ * drive homes name declared aliases whose subpaths never overlap.  It is a
+ * bounds gate too: the human driver, the alias count, every marker basename,
+ * and every environment name carry exactly the bounds the contract schema
+ * enforces, so the shipped manifest schema, this projection, and the
+ * configuration parser accept and refuse the same manifests.
  */
 export function knowledgeContractFromManifest(
   manifest: unknown,
@@ -397,11 +425,14 @@ export function knowledgeContractFromManifest(
     verification === undefined ||
     artifactHomes === undefined ||
     typeof artifactHomes.generated !== "string" ||
+    !boundedText(value.humanDriver) ||
     !Array.isArray(value.driveAliases) ||
+    value.driveAliases.length > DRIVE_ALIASES ||
     !Array.isArray(value.materialisationTargets)
   )
     return undefined;
   const variables: string[] = [];
+  const variableNames = new Set<string>();
   const aliases: Record<string, unknown>[] = [];
   const aliasNames = new Set<string>();
   for (const candidate of value.driveAliases) {
@@ -410,12 +441,17 @@ export function knowledgeContractFromManifest(
       alias === undefined ||
       typeof alias.mountPathVariable !== "string" ||
       !ENVIRONMENT_NAME.test(alias.mountPathVariable) ||
+      variableNames.has(alias.mountPathVariable) ||
       typeof alias.alias !== "string" ||
       !DRIVE_ALIAS.test(alias.alias) ||
-      aliasNames.has(alias.alias)
+      aliasNames.has(alias.alias) ||
+      typeof alias.markerFile !== "string" ||
+      alias.markerFile.length > MARKER_FILE_BYTES ||
+      !SAFE_BASENAME.test(alias.markerFile)
     )
       return undefined;
     aliasNames.add(alias.alias);
+    variableNames.add(alias.mountPathVariable);
     variables.push(alias.mountPathVariable);
     aliases.push({
       alias: alias.alias,
@@ -446,7 +482,8 @@ export function knowledgeContractFromManifest(
   }
   if (
     typeof provenance.worktreeRootVariable !== "string" ||
-    !ENVIRONMENT_NAME.test(provenance.worktreeRootVariable)
+    !ENVIRONMENT_NAME.test(provenance.worktreeRootVariable) ||
+    variableNames.has(provenance.worktreeRootVariable)
   )
     return undefined;
   variables.push(provenance.worktreeRootVariable);

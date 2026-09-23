@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://hls.uk/schemas/sce/knowledge-manifest.schema.json",
+  "$comment": "Every bound here mirrors the engine's KnowledgeContract, so a manifest this schema accepts is one controller composition accepts. maxUtf8Bytes and maxCanonicalBytes are non-standard keywords with no draft-2020-12 equivalent: checks/lib.mjs evaluates them and refuses any keyword outside its declared subset, while a generic validator silently ignores them and therefore accepts strictly more. canonicalUnicodeScalar carries a portable pattern sibling that states the same rule. See checks/README.md.",
   "title": "Single-controller knowledge repository manifest",
   "type": "object",
   "additionalProperties": false,
@@ -31,9 +32,16 @@
     },
     "audience": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$" },
     "mode": { "enum": ["legacy", "pilot", "git-first"] },
-    "humanDriver": { "type": "string", "minLength": 1 },
+    "humanDriver": {
+      "$comment": "KnowledgeContract.humanDriver is bounded in code units and in UTF-8 bytes; free text makes the two differ.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 8192,
+      "maxUtf8Bytes": 8192
+    },
     "driveAliases": {
       "type": "array",
+      "maxItems": 64,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -45,13 +53,22 @@
           "namespaceControl"
         ],
         "properties": {
-          "alias": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,62}$" },
-          "markerFile": { "type": "string", "pattern": "^[^/]+$" },
-          "mountPolicy": { "enum": ["required", "optional"] },
-          "mountPathVariable": {
+          "alias": {
             "type": "string",
-            "pattern": "^[A-Z][A-Z0-9_]+$"
+            "minLength": 1,
+            "maxLength": 63,
+            "pattern": "^[a-z][a-z0-9-]{0,62}$"
           },
+          "markerFile": {
+            "$comment": "An exact safe basename: no separator, no dot segment, and the leading character the engine's basename grammar allows.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "maxUtf8Bytes": 255,
+            "pattern": "^(?!\\.\\.?$)[A-Za-z0-9.][A-Za-z0-9._-]*$"
+          },
+          "mountPolicy": { "enum": ["required", "optional"] },
+          "mountPathVariable": { "$ref": "#/$defs/environmentName" },
           "namespaceControl": { "const": "exclusive" }
         }
       }
@@ -134,12 +151,7 @@
         "recordFormatVersion": { "const": 1 },
         "rollupGeneratorCommand": { "$ref": "#/$defs/command" },
         "reproducibilityCommand": { "$ref": "#/$defs/command" },
-        "worktreeRootVariable": {
-          "type": "string",
-          "maxLength": 160,
-          "maxUtf8Bytes": 160,
-          "pattern": "^[A-Z][A-Z0-9_]+$"
-        }
+        "worktreeRootVariable": { "$ref": "#/$defs/environmentName" }
       }
     },
     "materialisationTargets": {
@@ -164,6 +176,8 @@
           },
           "destinationAlias": {
             "type": "string",
+            "minLength": 1,
+            "maxLength": 63,
             "pattern": "^[a-z][a-z0-9-]{0,62}$"
           },
           "destinationSubpath": {
@@ -198,6 +212,14 @@
     }
   },
   "$defs": {
+    "environmentName": {
+      "$comment": "The controller resolves these names at composition; the grammar is the engine's environment-name grammar, which admits a leading underscore and a single character.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "maxUtf8Bytes": 160,
+      "pattern": "^[A-Z_][A-Z0-9_]{0,159}$"
+    },
     "driveHome": {
       "type": "string",
       "minLength": 3,
@@ -211,11 +233,13 @@
       "maxItems": 32,
       "maxCanonicalBytes": 8192,
       "items": {
+        "$comment": "The pattern is the portable statement of canonicalUnicodeScalar: no NUL and no unpaired surrogate, under both Unicode-mode and code-unit-mode ECMA-262 semantics.",
         "type": "string",
         "minLength": 1,
         "maxLength": 1024,
         "maxUtf8Bytes": 1024,
-        "canonicalUnicodeScalar": true
+        "canonicalUnicodeScalar": true,
+        "pattern": "^(?:[^\\u0000\\uD800-\\uDFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])+$"
       }
     },
     "commands": {

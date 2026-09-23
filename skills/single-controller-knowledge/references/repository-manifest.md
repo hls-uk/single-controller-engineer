@@ -35,6 +35,33 @@ The manifest is a repository document: root `init` and `doctor` procedures
 read it, and the controller reads it to compose the knowledge contract. The
 engine validates the contract and the effect parameters, never the manifest.
 
+## Bounds and validator authority
+
+The schema's bounds are the engine's bounds, so a manifest the shipped checker
+accepts is one controller composition accepts. Changing one side alone is the
+defect this parity prevents: a manifest that passes the gate and then refuses
+composition strands the repository between two valid states.
+
+| Fact                                                   | Bound                                                                                                  |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `humanDriver`                                          | 1 to 8192 code units and at most 8192 UTF-8 bytes                                                      |
+| `driveAliases`                                         | at most 64 declared aliases, each alias name unique                                                    |
+| `driveAliases[].alias`                                 | 1 to 63 characters matching `^[a-z][a-z0-9-]{0,62}$`                                                   |
+| `driveAliases[].markerFile`                            | an exact safe basename, at most 255 bytes; `.`, `..`, and any separator refused                        |
+| `mountPathVariable`, `provenance.worktreeRootVariable` | 1 to 160 characters matching `^[A-Z_][A-Z0-9_]{0,159}$`, each naming one distinct environment variable |
+| `materialisationTargets`                               | at most 64 targets, each destination naming a declared alias                                           |
+
+The schema states three bounds with keywords draft 2020-12 does not define:
+`maxUtf8Bytes`, `maxCanonicalBytes`, and `canonicalUnicodeScalar`. A generic
+validator ignores an unknown keyword rather than failing on it, so it enforces
+only the standard sibling each one carries and accepts strictly more than the
+engine. The shipped checker, `manifest/checks/validate-manifest.mjs`, is the
+authority: it evaluates all three, and it refuses at load time any schema
+keyword outside the subset it declares, so a bound can never appear to be
+enforced when it is not. `canonicalUnicodeScalar` additionally carries a
+portable `pattern` that states the same no-NUL, no-unpaired-surrogate rule for
+any draft 2020-12 validator. The checks README tabulates all three.
+
 ## Task cards
 
 A task card is a child Bead beneath the domain's current root objective. It

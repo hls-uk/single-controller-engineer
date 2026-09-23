@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { realpathSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import {
   classifySlotDocument,
@@ -20,7 +21,11 @@ import {
   reduce,
 } from "../../src/protocol/reducer.js";
 import { run } from "../protocol/fixtures.js";
-import type { RepositoryRun } from "../../src/protocol/schemas.js";
+import {
+  DriveAliasSchema,
+  KnowledgeContractSchema,
+  type RepositoryRun,
+} from "../../src/protocol/schemas.js";
 import { deriveScopeCommitment } from "../../src/fencing/index.js";
 import type { PreflightEnvelope } from "../../src/preflight/index.js";
 import { parseCliArguments, runCli } from "../../src/cli.js";
@@ -152,6 +157,84 @@ function withTarget(target: Readonly<Record<string, unknown>>): unknown {
       { ...manifest.materialisationTargets[0], ...target },
     ],
   };
+}
+
+/** Replaces the single declared drive alias with one candidate definition. */
+function withAlias(alias: Readonly<Record<string, unknown>>): unknown {
+  return {
+    ...manifest,
+    driveAliases: [{ ...manifest.driveAliases[0], ...alias }],
+  };
+}
+
+/** Declares a second alias beside the one the artifact homes already name. */
+function withSecondAlias(alias: Readonly<Record<string, unknown>>): unknown {
+  return {
+    ...manifest,
+    driveAliases: [
+      manifest.driveAliases[0],
+      {
+        ...manifest.driveAliases[0],
+        alias: "second-drive",
+        mountPathVariable: "EX_SECOND_ROOT",
+        ...alias,
+      },
+    ],
+  };
+}
+
+/** Declares `count` distinct aliases; the first is the declared home. */
+function withAliasCount(count: number): unknown {
+  return {
+    ...manifest,
+    driveAliases: Array.from({ length: count }, (_alias, index) =>
+      index === 0
+        ? manifest.driveAliases[0]
+        : {
+            ...manifest.driveAliases[0],
+            alias: `extra-${index}`,
+            mountPathVariable: `EX_EXTRA_${index}`,
+          },
+    ),
+  };
+}
+
+/** The shipped checker, loaded the way a domain repository runs it. */
+const checks = (await import(
+  pathToFileURL(
+    resolve(
+      "skills/single-controller-knowledge/references/manifest/checks/lib.mjs",
+    ),
+  ).href
+)) as {
+  assertDriveVariables(manifest: unknown): void;
+  assertSchema(
+    schema: unknown,
+    value: unknown,
+    at: string,
+    rootSchema: unknown,
+  ): void;
+  manifestSchemaPath: string;
+  readSchema(path: string): Record<string, any>;
+};
+
+/** Loading the schema also proves it stays inside the checker's subset. */
+const manifestSchema = checks.readSchema(checks.manifestSchemaPath);
+
+/**
+ * The shipped checker's verdict on a candidate manifest: the strict schema
+ * plus the one drive-variable rule no schema keyword can state.  The
+ * repository-wide semantics need a checkout and belong to the knowledge
+ * example's own gate.
+ */
+function checkerAccepts(candidate: unknown): boolean {
+  try {
+    checks.assertSchema(manifestSchema, candidate, "$", manifestSchema);
+    checks.assertDriveVariables(candidate);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function observation(
@@ -496,6 +579,167 @@ test("manifest projection refuses uncontained targets and undeclared drive homes
     withHomes({ driveIncoming: "example-drive:incoming/queue" }),
   );
   assert.notEqual(accepted, undefined, "a distinct contained home is accepted");
+});
+
+test("the shipped manifest schema carries the engine's contract bounds", () => {
+  const properties = manifestSchema.properties as Record<string, any>;
+  const declared = properties.driveAliases.items.properties as Record<
+    string,
+    any
+  >;
+  const contract = KnowledgeContractSchema.properties as Record<string, any>;
+  const drive = DriveAliasSchema.properties as Record<string, any>;
+  assert.deepEqual(
+    {
+      aliasMaxLength: declared.alias.maxLength,
+      aliasMinLength: declared.alias.minLength,
+      aliasPattern: declared.alias.pattern,
+      aliasesMaxItems: properties.driveAliases.maxItems,
+      gateTargetsMaxItems: properties.materialisationTargets.maxItems,
+      humanDriverMaxLength: properties.humanDriver.maxLength,
+      humanDriverMaxUtf8Bytes: properties.humanDriver.maxUtf8Bytes,
+      humanDriverMinLength: properties.humanDriver.minLength,
+      markerMaxLength: declared.markerFile.maxLength,
+      markerMaxUtf8Bytes: declared.markerFile.maxUtf8Bytes,
+      markerMinLength: declared.markerFile.minLength,
+    },
+    {
+      aliasMaxLength: drive.alias.maxLength,
+      aliasMinLength: drive.alias.minLength,
+      aliasPattern: drive.alias.pattern,
+      aliasesMaxItems: contract.aliases.maxItems,
+      gateTargetsMaxItems: contract.gateTargets.maxItems,
+      humanDriverMaxLength: contract.humanDriver.maxLength,
+      humanDriverMaxUtf8Bytes: contract.humanDriver.maxUtf8Bytes,
+      humanDriverMinLength: contract.humanDriver.minLength,
+      markerMaxLength: drive.markerFile.maxLength,
+      markerMaxUtf8Bytes: drive.markerFile.maxUtf8Bytes,
+      markerMinLength: drive.markerFile.minLength,
+    },
+  );
+  /** The manifest's marker grammar is the engine's without its dot segments. */
+  const engineMarker = new RegExp(drive.markerFile.pattern as string, "u");
+  const manifestMarker = new RegExp(declared.markerFile.pattern as string, "u");
+  for (const candidate of [".sce-drive-root", "MARKER", ".", "..", "-x", "a/b"])
+    assert.equal(
+      !manifestMarker.test(candidate) || engineMarker.test(candidate),
+      true,
+      candidate,
+    );
+  assert.deepEqual(
+    [manifestMarker.test(".."), engineMarker.test("..")],
+    [false, true],
+  );
+});
+
+test("the manifest schema and the projection accept and refuse the same bounds", () => {
+  const cases: readonly (readonly [string, unknown, boolean])[] = [
+    ["the shipped fixture", manifest, true],
+    ["an empty human driver", { ...manifest, humanDriver: "" }, false],
+    ["a non-string human driver", { ...manifest, humanDriver: 5 }, false],
+    [
+      "a human driver at the bound",
+      { ...manifest, humanDriver: "a".repeat(8_192) },
+      true,
+    ],
+    [
+      "a human driver one unit over",
+      { ...manifest, humanDriver: "a".repeat(8_193) },
+      false,
+    ],
+    [
+      "a multibyte human driver at the byte bound",
+      { ...manifest, humanDriver: "\u00e9".repeat(4_096) },
+      true,
+    ],
+    [
+      "a multibyte human driver over the byte bound",
+      { ...manifest, humanDriver: "\u00e9".repeat(4_097) },
+      false,
+    ],
+    ["sixty-four drive aliases", withAliasCount(64), true],
+    ["sixty-five drive aliases", withAliasCount(65), false],
+    ["a single-character alias", withSecondAlias({ alias: "d" }), true],
+    ["a dash-leading alias", withSecondAlias({ alias: "-drive" }), false],
+    ["a plain marker basename", withAlias({ markerFile: "MARKER" }), true],
+    [
+      "a marker at the basename bound",
+      withAlias({ markerFile: "a".repeat(255) }),
+      true,
+    ],
+    [
+      "a marker one byte over",
+      withAlias({ markerFile: "a".repeat(256) }),
+      false,
+    ],
+    ["an empty marker", withAlias({ markerFile: "" }), false],
+    ["an absent marker", withAlias({ markerFile: undefined }), false],
+    ["a current-directory marker", withAlias({ markerFile: "." }), false],
+    ["a parent-directory marker", withAlias({ markerFile: ".." }), false],
+    ["a separated marker", withAlias({ markerFile: "nested/marker" }), false],
+    ["a dash-leading marker", withAlias({ markerFile: "-marker" }), false],
+    ["a spaced marker", withAlias({ markerFile: "drive marker" }), false],
+    [
+      "an underscore-leading mount variable",
+      withAlias({ mountPathVariable: "_EX_DRIVE_ROOT" }),
+      true,
+    ],
+    [
+      "a single-character mount variable",
+      withAlias({ mountPathVariable: "X" }),
+      true,
+    ],
+    [
+      "a mount variable at the bound",
+      withAlias({ mountPathVariable: `A${"B".repeat(159)}` }),
+      true,
+    ],
+    [
+      "a mount variable one character over",
+      withAlias({ mountPathVariable: `A${"B".repeat(160)}` }),
+      false,
+    ],
+    [
+      "a lower-case mount variable",
+      withAlias({ mountPathVariable: "ex_drive_root" }),
+      false,
+    ],
+    [
+      "a shared mount variable",
+      withSecondAlias({ mountPathVariable: "EX_DRIVE_ROOT" }),
+      false,
+    ],
+    [
+      "a worktree variable that also mounts an alias",
+      {
+        ...manifest,
+        provenance: {
+          ...manifest.provenance,
+          worktreeRootVariable: "EX_DRIVE_ROOT",
+        },
+      },
+      false,
+    ],
+    [
+      "an underscore-leading worktree variable",
+      {
+        ...manifest,
+        provenance: {
+          ...manifest.provenance,
+          worktreeRootVariable: "_EX_PROVENANCE_ROOT",
+        },
+      },
+      true,
+    ],
+  ];
+  for (const [label, candidate, accepted] of cases) {
+    assert.equal(checkerAccepts(candidate), accepted, `checker: ${label}`);
+    assert.equal(
+      knowledgeContractFromManifest(candidate) !== undefined,
+      accepted,
+      `projection: ${label}`,
+    );
+  }
 });
 
 test("slot documents classify as unbound, bound, foreign or unreadable", () => {

@@ -382,6 +382,7 @@ function isCanonicalUnicodeScalar(value) {
 function assertManifestSemantics(manifest, root) {
   const aliases = manifest.driveAliases.map(({ alias }) => alias);
   assertUnique(aliases, "drive alias");
+  assertDriveVariables(manifest);
   assertDriveHomes(manifest.artifactHomes, aliases);
   const combinedVerificationCommands = [
     ...manifest.verification.fast,
@@ -436,6 +437,25 @@ function deepEqual(left, right) {
 export function assertUnique(values, label) {
   if (new Set(values).size !== values.length) {
     throw new Error(`${label} values must be unique`);
+  }
+}
+
+/**
+ * The controller resolves one host path per declared environment name, so two
+ * aliases may not share a mount variable and the provenance worktree may not
+ * borrow an alias mount.  The engine refuses both at composition; refusing
+ * them here keeps the shipped checker and the controller in agreement.
+ */
+export function assertDriveVariables(manifest) {
+  const mountVariables = manifest.driveAliases.map(
+    ({ mountPathVariable }) => mountPathVariable,
+  );
+  assertUnique(mountVariables, "drive mount variable");
+  const worktreeVariable = manifest.provenance.worktreeRootVariable;
+  if (mountVariables.includes(worktreeVariable)) {
+    throw new Error(
+      `provenance worktreeRootVariable also mounts a drive alias: ${worktreeVariable}`,
+    );
   }
 }
 
