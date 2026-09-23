@@ -37974,8 +37974,9 @@ function skillPath(path2) {
   const segments = path2.split("/");
   return segments.length >= 2 && SKILL_NAMES.includes(segments[0] ?? "") && segments.every((part) => part.length > 0 && part !== "." && part !== "..");
 }
+var ASCII_PATH = /^[\u0020-\u007e]+$/u;
 function canonicalRelative(path2) {
-  if (path2.startsWith("/") || path2.includes("\\") || !skillPath(path2))
+  if (path2.startsWith("/") || path2.includes("\\") || !ASCII_PATH.test(path2) || !skillPath(path2))
     fail2(`unsafe manifest path: ${path2}`);
   return path2;
 }
