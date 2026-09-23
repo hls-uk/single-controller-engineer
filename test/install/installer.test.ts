@@ -24,13 +24,41 @@ import {
 } from "../../src/install/index.js";
 import type { SkillInstallManifest } from "../../src/install/index.js";
 
-/** Host descriptors the shipped set carries beside every other skill file. */
+/**
+ * Host descriptors the shipped set carries beside every other skill file. The
+ * shipped set keeps the two hosts byte-identical and
+ * test/eval/skill-layout.test.ts pins that; this fixture deliberately gives
+ * each host distinct bytes, so a per-path sha256 assertion fails when the
+ * wrong host's descriptor lands at a path instead of quietly matching.
+ */
 const hostAgents = ["claude.yaml", "openai.yaml"] as const;
 const claudeDescriptors = [
   "single-controller-engineer/agents/claude.yaml",
   "single-controller-knowledge/agents/claude.yaml",
   "single-controller-feedback/agents/claude.yaml",
 ] as const;
+
+/**
+ * The exact bytes `fixture` writes for the engineer's claude descriptor at the
+ * default version: an absolute pin, spelled out rather than rebuilt from the
+ * fixture's own template, so drift on either side fails loudly.
+ */
+const engineerClaudeDescriptor =
+  "interface:\n  display_name: single-controller-engineer\n  short_description: 0.1.0\n  host: claude\n";
+
+function descriptor(
+  name: string,
+  version: string,
+  host: (typeof hostAgents)[number],
+): string {
+  const label = host.slice(0, -".yaml".length);
+  return `interface:\n  display_name: ${name}\n  short_description: ${version}\n  host: ${label}\n`;
+}
+
+/** The openai descriptor installed beside a claude one. */
+function openaiSibling(claudeDescriptor: string): string {
+  return claudeDescriptor.replace(/claude\.yaml$/u, "openai.yaml");
+}
 
 async function fixture(root: string, version = "0.1.0") {
   for (const name of [
@@ -52,7 +80,7 @@ async function fixture(root: string, version = "0.1.0") {
     for (const host of hostAgents)
       await writeFile(
         join(skill, "agents", host),
-        `interface:\n  display_name: ${name}\n  short_description: ${version}\n`,
+        descriptor(name, version, host),
       );
   }
 }
@@ -89,6 +117,9 @@ test("installs a version-matched, manifest-verified skill set and supports dry-r
     });
     const result = await installSkills({ destination, source });
     assert.equal(result.status, "installed");
+    // The preview is only worth trusting if it predicts the install exactly:
+    // same entries, same order, same digests.
+    assert.deepEqual(dryRun.manifest, result.manifest);
     const recorded = JSON.parse(
       await readFile(join(destination, INSTALL_MANIFEST), "utf8"),
     ) as SkillInstallManifest;
@@ -99,7 +130,17 @@ test("installs a version-matched, manifest-verified skill set and supports dry-r
       assert.ok(entry, `installed manifest omits ${path}`);
       assert.equal(entry.sha256, await digest(join(destination, path)));
       assert.equal(entry.sha256, await digest(join(source, path)));
+      // Each host's bytes differ, so the two pins above discriminate: the
+      // sibling openai descriptor can never satisfy them.
+      assert.notEqual(
+        entry.sha256,
+        await digest(join(source, openaiSibling(path))),
+      );
     }
+    assert.equal(
+      await readFile(join(destination, claudeDescriptors[0]), "utf8"),
+      engineerClaudeDescriptor,
+    );
   });
 });
 
