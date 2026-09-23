@@ -1,7 +1,8 @@
 # DEC-20260903-012: Resolve Sources Before No-Clobber Materialisation
 
 **Date:** 2026-09-03
-**Status:** Accepted; amended 2026-09-23 (see "Amendment 2026-09-23")
+**Status:** Accepted; amended 2026-09-22 (see "Amendment 2026-09-22") and
+2026-09-23 (see "Amendment 2026-09-23")
 **Scope:** Version 1 source expansion, destination naming, sidecar policy,
 filesystem publication, bounded recovery identity, alias admission, and the
 K2/K3 implementation boundary
@@ -291,6 +292,18 @@ precheck followed by ordinary rename.
     deferred required-probe cascades void dependent materialisation entries and
     retain evidence on the source-bound target group without recreating or
     mutating a promise.
+
+## Amendment 2026-09-22
+
+[DEC-20260922-018](2026-09-22-018-materialisation-namespace-relocation.md)
+amends the publication clauses of decision 5. The helper's identity proof is
+the directory descriptor it holds, not `realpath`; the mutating port admits
+only `darwin` and `linux`; and an ancestor rename concurrent with a
+publication is positive evidence, as narrowed by that record's own amendment,
+rather than the "later topology drift is ambiguous" recorded here. Exclusive
+namespace control is still required for everything that binding does not
+cover. That record is authoritative for the publication boundary; nothing else
+here moves.
 
 ## Amendment 2026-09-23
 

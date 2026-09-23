@@ -37,15 +37,18 @@ fresh sibling of the same name, the file landed in the admitted inode and the
 substitute stayed empty. **The publication syscall was already identity-bound.
 What version 1 lacked was a sound proof of that binding.**
 
-The proof it used was unsound in both directions. `realpath(".")` is a path
-string: under a benign ancestor rename on darwin it *throws* `ENOENT`, and
-under a directory swap it *succeeds* while naming a different inode. The first
-is a live defect. Under an ancestor rename the helper published the sidecar
-correctly, then threw inside its post-act check, abandoned the artifact, and
-reported the whole act ambiguous — leaving the destination in the half-
-published state that discovery reports as `absent`. A correct, no-clobber,
-identity-bound publication was reported as drift, and every publication
-concurrent with any ancestor rename behaved this way.
+The proof it used was unsound in both directions, and which direction a given
+run takes is name-cache dependent rather than fixed. `realpath(".")` is a path
+string: the run above saw it *throw* `ENOENT` under a benign ancestor rename
+and *succeed* while naming a different inode under a directory swap, and a
+second darwin 24.6 run saw the reverse pairing. However the cache falls, one
+direction abandons a correct publication and the other blesses a substitute,
+so the string is never publication evidence. The throwing direction is a live
+defect. Under it the helper published the sidecar correctly, then threw inside
+its post-act check, abandoned the artifact, and reported the whole act
+ambiguous — leaving the destination in the half-published state that discovery
+reports as `absent`. A correct, no-clobber, identity-bound publication was
+reported as drift.
 
 ## Decision
 
@@ -141,13 +144,14 @@ the helper is untouched, and no runtime dependency is added.
   unavailable on darwin (above). A primitive that silently degrades to the
   weaker path on the only platform with release evidence is worse than the
   binding already in hand.
-- **A dedicated refusal code for an unsupported platform.** `MaterialiseRefusal`
-  admits exactly `source_absent` and `hard_links_unsupported`, and both are
-  consumed by the reducer. Minting a third code is a protocol-vocabulary change
-  outside this unit, so the gate uses the blocking ambiguous observation the
-  adjacent `namespaceControl` precondition already uses. Ambiguous blocks and is
-  never guessed through, so this is fail-closed today; a distinct code is
-  follow-up, not a correctness gap.
+- **A dedicated refusal code for an unsupported platform.** *Superseded by bead
+  `sce-dcx.12`; see "Follow-up".* When this record was accepted
+  `MaterialiseRefusal` admitted exactly `source_absent` and
+  `hard_links_unsupported`, both consumed by the reducer. Minting a third code
+  was a protocol-vocabulary change outside this unit, so the gate used the
+  blocking ambiguous observation the adjacent `namespaceControl` precondition
+  already uses; ambiguous blocks and is never guessed through, so that was
+  fail-closed rather than a correctness gap.
 - **Dropping the post-act identity checks.** Once the binding is a proved
   precondition the checks cannot fail, but readback after every act is the
   house discipline and the checks are now sound and free. They stay.
@@ -169,9 +173,12 @@ the helper is untouched, and no runtime dependency is added.
   with it record `post-act-relocation` rather than positive evidence, all three
   still keep the complete pair in the bound object, and the next act blocks on
   the broken namespace instead of republishing.
-- Those tests are discovered by the release tier; `scripts/test-tier.mjs` scopes
-  the integration tier to `test/integration`. The existing integration
-  publication suite covers the seam they extend and passes unchanged.
+- Those tests run in the integration tier. Bead `sce-dcx.18` named
+  `test/adapters/materialise/namespace-binding.test.ts` in the integration
+  manifest of `scripts/test-tier.mjs`, and `test/eval/release-manifest.test.ts`
+  pins that seam inside a mandatory tier, so it cannot drift back out and an
+  untriaged new suite fails the fast gate. The existing integration publication
+  suite covers the seam they extend and passes unchanged.
 - Real mounted-Drive provider evidence remains a separate release gate under
   its own authority (bead `sce-40r`, `SCE_RELEASE_DRIVE_ROOT`); this decision
   does not discharge it.
@@ -187,6 +194,15 @@ the helper is untouched, and no runtime dependency is added.
   `publication_platform_unsupported` at both boundaries and the gate emits it
   before any read or write, so an unsupported platform is a decided refusal the
   controller disposes of rather than a blocking ambiguity.
-- Re-run the descriptor-path experiment on linux when linux release evidence is
-  first recorded, and note in this record whether `/proc/self/fd` would add
-  anything over the working-directory binding there.
+- **Pending: the linux descriptor-path experiment.** Run it when linux release
+  evidence is first recorded and note here whether `/proc/self/fd` adds
+  anything over the working-directory binding. Procedure, the twin of the
+  darwin run above: from a process whose working directory is the admitted
+  directory, hold an `open` descriptor on `.`, then (a) `readdir`
+  `/proc/self/fd/<fd>`, (b) create a `<basename>` under `/proc/self/fd/<fd>/`
+  with an `O_EXCL` open and a no-clobber `link`, (c) rename an ancestor and
+  repeat (a) and (b), (d) swap the directory for a fresh sibling of the same
+  name and repeat (a) and (b). Record per step the errno or the landed device
+  and inode. It changes decision 1 only if the descriptor path both survives
+  (c) and (d) and proves identity more cheaply than `fstat` on the held
+  descriptor.
