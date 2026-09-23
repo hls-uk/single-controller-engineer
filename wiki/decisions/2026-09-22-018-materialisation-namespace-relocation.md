@@ -115,8 +115,10 @@ destination that stays relocated still refuses admission on the next act.
 
 ## Follow-up
 
-- A distinct `MaterialiseRefusal` code for an unsupported publication platform,
-  so the outcome is a decided refusal rather than a blocking ambiguity.
+- Discharged by bead `sce-dcx.12`: the copy vocabulary now admits
+  `publication_platform_unsupported` at both boundaries and the gate emits it
+  before any read or write, so an unsupported platform is a decided refusal the
+  controller disposes of rather than a blocking ambiguity.
 - Re-run the descriptor-path experiment on linux when linux release evidence is
   first recorded, and note in this record whether `/proc/self/fd` would add
   anything over the working-directory binding there.

@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  GateMaterialisationRefusalSchema,
   JudgmentSchema,
+  MATERIALISE_REFUSAL_CODES,
   MaterialisationDestinationIdentitySchema,
+  MaterialiseRefusalSchema,
   ProtocolEventSchema,
   ProvenanceInputSchema,
   RepositoryRunEnvelopeSchema,
@@ -228,6 +231,68 @@ test("knowledge refusal codes are scoped to their exact effect boundary", () => 
     assert.equal(validate(ProtocolEventSchema, value(item.valid)).ok, true);
     assert.equal(validate(ProtocolEventSchema, value(item.invalid)).ok, false);
   }
+});
+
+test("the copy vocabulary admits an unsupported publication platform and nothing beside it", () => {
+  // The observation boundary and the gate entry share one vocabulary; a code
+  // that reaches only one of them would be a silent drift between them.
+  assert.deepEqual(
+    [...MATERIALISE_REFUSAL_CODES],
+    [
+      "source_absent",
+      "hard_links_unsupported",
+      "publication_platform_unsupported",
+    ],
+  );
+  for (const schema of [
+    MaterialiseRefusalSchema,
+    GateMaterialisationRefusalSchema,
+  ]) {
+    for (const code of MATERIALISE_REFUSAL_CODES)
+      assert.equal(validate(schema, { code, detailHash: HASH }).ok, true);
+    for (const code of [
+      "publication-platform-unsupported",
+      "namespace_binding_unsupported",
+      "platform_unsupported",
+      "optional_alias_unmounted",
+      "",
+    ])
+      assert.equal(validate(schema, { code, detailHash: HASH }).ok, false);
+    // The platform itself travels inside the detail hash, never as a fact
+    // beside it: the refusal shape stays exactly a code and one digest.
+    assert.equal(
+      validate(schema, {
+        code: "publication_platform_unsupported",
+        detailHash: HASH,
+        platform: "win32",
+      }).ok,
+      false,
+    );
+    assert.equal(
+      validate(schema, { code: "publication_platform_unsupported" }).ok,
+      false,
+    );
+  }
+  const observed = (code: string) => ({
+    effectId: "effect-materialise",
+    effectKind: "materialise",
+    eventId: "event-materialise",
+    expectedRevision: 1,
+    gateEntryId: "gate-materialise",
+    observationHash: HASH,
+    result: { refusal: { code, detailHash: HASH }, status: "refused" },
+    type: "materialise_observed",
+    unitId: null,
+  });
+  assert.equal(
+    validate(ProtocolEventSchema, observed("publication_platform_unsupported"))
+      .ok,
+    true,
+  );
+  assert.equal(
+    validate(ProtocolEventSchema, observed("namespace_binding_unsupported")).ok,
+    false,
+  );
 });
 
 test("text fields enforce both character and UTF-8 byte limits", () => {

@@ -7,6 +7,8 @@ import {
   createMaterialisationAdapter,
   type MaterialisationProcessPort,
 } from "../../../src/adapters/materialise/index.js";
+import { canonicalJson } from "../../../src/protocol/canonical.js";
+import { sha256 } from "../../../src/protocol/evidence.js";
 import {
   adapterFor,
   materialisationFixture,
@@ -162,7 +164,7 @@ test("binding the act does not weaken pre-act containment on the next act", asyn
   }
 });
 
-test("a platform without recorded binding evidence blocks before any act", async () => {
+test("a platform without recorded binding evidence refuses before any act", async () => {
   const fixture = await materialisationFixture();
   try {
     const calls: string[] = [];
@@ -180,7 +182,24 @@ test("a platform without recorded binding evidence blocks before any act", async
       "win32",
     ).materialise(fixture.effect);
 
-    assert.equal(result.status, "ambiguous");
+    assert.equal(
+      result.status,
+      "refused",
+      "an absent platform guarantee is a durable fact, not an unresolved one",
+    );
+    if (result.status === "refused") {
+      assert.equal(result.refusal.code, "publication_platform_unsupported");
+      assert.equal(
+        result.refusal.detailHash,
+        sha256(
+          canonicalJson({
+            domain: "sce.materialisation-refusal.v1",
+            facts: { platform: "win32" },
+          }),
+        ),
+        "the detail binds the exact platform that was refused",
+      );
+    }
     assert.deepEqual(
       calls,
       [],
@@ -204,17 +223,24 @@ test("read-only discovery stays available on an unsupported platform", async () 
       "observed",
     );
 
-    const discovered = await createMaterialisationAdapter(
+    const unsupported = createMaterialisationAdapter(
       fixture.repository,
       "sha1",
       undefined,
       "win32",
-    ).discoverMaterialise(fixture.effect);
+    );
+    const discovered = await unsupported.discoverMaterialise(fixture.effect);
 
     assert.equal(
       discovered.status,
       "observed",
       "recovery must still read a published pair anywhere",
+    );
+    const republished = await unsupported.materialise(fixture.effect);
+    assert.equal(
+      republished.status,
+      "refused",
+      "the refusal governs publication only, never the read-only recovery",
     );
   } finally {
     await fixture.cleanup();

@@ -1,5 +1,6 @@
 import {
   LIMITS,
+  MATERIALISE_REFUSAL_CODES,
   SCHEMA_VERSION,
   ClosureEvidenceSchema,
   type EffectJournalEntry,
@@ -2228,6 +2229,16 @@ function maximumSidecarByteCountForSource(
     .byteLength;
 }
 
+/**
+ * A reachable materialisation may carry any code the copy vocabulary admits,
+ * so the reserve quotes its widest member. Deriving it keeps the bound honest
+ * when the vocabulary gains a literal; a pinned one silently under-counts.
+ */
+const WIDEST_MATERIALISE_REFUSAL_CODE = MATERIALISE_REFUSAL_CODES.reduce(
+  (widest, code) =>
+    canonicalByteLength(code) > canonicalByteLength(widest) ? code : widest,
+);
+
 function reachableMaterialisationVariants(
   source: MaterialisationSource,
   binding: MaterialisationExpansionBinding,
@@ -2286,7 +2297,7 @@ function reachableMaterialisationVariants(
     materialRefusal: {
       ...named,
       lastRefusal: {
-        code: "hard_links_unsupported",
+        code: WIDEST_MATERIALISE_REFUSAL_CODE,
         detailHash: "a".repeat(64),
       },
       status: "pending",
@@ -2318,7 +2329,7 @@ function reachableMaterialisationVariants(
       disposition: "deferred_by_controller",
       followUpBeadId: "a".repeat(160),
       lastRefusal: {
-        code: "hard_links_unsupported",
+        code: WIDEST_MATERIALISE_REFUSAL_CODE,
         detailHash: "a".repeat(64),
       },
       status: "voided",

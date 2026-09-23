@@ -580,16 +580,26 @@ export type DestinationProbeRefusal = Static<
 >;
 /**
  * One copy vocabulary at two boundaries. A unit materialisation observation
- * and a gate publication entry refuse for exactly the same two reasons, so
- * both code unions are emitted from this one definition. They stay distinct
- * schema objects because they validate distinct effect boundaries: letting
- * them diverge is an explicit edit here, never an accidental drift.
+ * and a gate publication entry refuse for exactly the same reasons, so both
+ * code unions are emitted from this one definition. They stay distinct schema
+ * objects because they validate distinct effect boundaries: letting them
+ * diverge is an explicit edit here, never an accidental drift. Every member is
+ * a durable condition of the environment: the act is decided refused and the
+ * controller disposes of the entry, never a blind retry. DEC-20260922-018.
  */
 const materialiseRefusalCode = () =>
   Type.Union([
     Type.Literal("source_absent"),
     Type.Literal("hard_links_unsupported"),
+    Type.Literal("publication_platform_unsupported"),
   ]);
+/**
+ * The same vocabulary as data, so a reachable-state reserve can measure its
+ * widest member instead of pinning one literal a later code outgrows.
+ */
+export const MATERIALISE_REFUSAL_CODES = materialiseRefusalCode().anyOf.map(
+  (literal) => literal.const,
+);
 export const MaterialiseRefusalSchema = refusalSchema(materialiseRefusalCode());
 export type MaterialiseRefusal = Static<typeof MaterialiseRefusalSchema>;
 export const GateMaterialisationRefusalSchema = refusalSchema(

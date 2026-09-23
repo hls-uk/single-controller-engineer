@@ -37,6 +37,7 @@ import { canEnterTerminalIntent } from "../../src/protocol/guards.js";
 import type {
   CompactGateTargetState,
   EffectJournalEntry,
+  MaterialiseRefusal,
   ProtocolEvent,
   RepositoryRun,
   UnitState,
@@ -2644,6 +2645,87 @@ function completeCandidate(
   );
   return state;
 }
+
+test("an unsupported publication platform refuses the act and settles like any durable copy refusal", () => {
+  const target = {
+    destinationAlias: "drive",
+    destinationSubpath: "unit-published",
+    namingPolicy: "source-basename" as const,
+    sidecarRequired: true as const,
+    sourcePattern: "docs/file.md",
+  };
+  const refused = (code: MaterialiseRefusal["code"]): RepositoryRun => {
+    let state = clockKnowledgeTarget(
+      landedKnowledgeRun(knowledgeContract(), target),
+      "docs/file.md",
+      "2026-09-03T12:34:56Z",
+    );
+    const named = state.gate!.targets[0]!.materialisations[0]!;
+    state = gateIntent(
+      state,
+      "materialise_intent",
+      "materialise",
+      named.gateEntryId,
+    );
+    return gateObservation(state, "materialise_observed", named.gateEntryId, {
+      result: { refusal: { code, detailHash: HASH }, status: "refused" },
+    });
+  };
+  const entryOf = (state: RepositoryRun) =>
+    state.gate!.targets[0]!.materialisations[0]!;
+  const platform = refused("publication_platform_unsupported");
+  const item = entryOf(platform);
+  assert.equal(item.lastRefusal?.code, "publication_platform_unsupported");
+  // The act is decided, not outstanding: no effect is held open, nothing was
+  // observed, and the entry waits on a controller decision.
+  assert.equal(item.status, "pending");
+  assert.equal(item.currentEffectId, undefined);
+  assert.equal(item.observation, undefined);
+  assert.equal(platform.gate!.provenance, undefined);
+  assert.deepEqual(runInvariantErrors(platform), []);
+  // A refusal is never retried blindly: only a name collision re-clocks.
+  assert.equal(
+    reduce(platform, {
+      eventId: `platform-reclock-${platform.revision}`,
+      expectedRevision: platform.revision,
+      gateEntryId: item.gateEntryId,
+      timestamp: "2026-09-03T12:34:57Z",
+      type: "gate_clock_observed",
+      unitId: null,
+    }).ok,
+    false,
+  );
+  const defer = (state: RepositoryRun): RepositoryRun =>
+    transition(
+      state,
+      {
+        eventId: `platform-deferred-${state.revision}`,
+        expectedRevision: state.revision,
+        followUpBeadId: "sce-platform-follow-up",
+        gateEntryId: entryOf(state).gateEntryId,
+        type: "gate_entry_deferred",
+        unitId: null,
+      } as ProtocolEvent,
+      reduce,
+    );
+  const deferredPlatform = defer(platform);
+  const voided = entryOf(deferredPlatform);
+  assert.equal(voided.status, "voided");
+  assert.equal(voided.disposition, "deferred_by_controller");
+  assert.equal(voided.lastRefusal?.code, "publication_platform_unsupported");
+  assert.equal(deferredPlatform.gate!.provenance?.status, "pending");
+  assert.deepEqual(runInvariantErrors(deferredPlatform), []);
+  // The new code is handled exactly as the environment refusal it joins: the
+  // settled entries differ in the code they carry and in nothing else.
+  const deferredHardLinks = defer(refused("hard_links_unsupported"));
+  assert.deepEqual(
+    {
+      ...voided,
+      lastRefusal: { ...voided.lastRefusal!, code: "hard_links_unsupported" },
+    },
+    entryOf(deferredHardLinks),
+  );
+});
 
 test("a refused and deferred unit target admits the provenance intent after journal compaction", () => {
   const contract = knowledgeContract();

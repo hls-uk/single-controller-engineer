@@ -854,9 +854,11 @@ async function objectFormatMatches(
  * That guarantee is a property of POSIX working-directory semantics, so it
  * holds only where this repository has release evidence for it. Anywhere else
  * — notably `win32`, whose working directory is a re-resolved path string —
- * the adapter blocks before any act rather than publishing through a name a
- * concurrent writer could redirect. Widening this set requires new evidence,
- * not a new assumption. DEC-20260922-018.
+ * the adapter refuses `publication_platform_unsupported` before any act rather
+ * than publishing through a name a concurrent writer could redirect. The
+ * platform is a durable fact, not an unresolved reading, so the outcome is a
+ * decided refusal the controller disposes of rather than a block. Widening
+ * this set requires new evidence, not a new assumption. DEC-20260922-018.
  */
 const NAMESPACE_BOUND_PLATFORMS: ReadonlySet<string> = new Set([
   "darwin",
@@ -1161,7 +1163,7 @@ async function materialiseBytes(
   platform: string,
 ): Promise<MaterialiseResult> {
   if (!NAMESPACE_BOUND_PLATFORMS.has(platform))
-    return ambiguous({ operation: "namespace-binding-unsupported", platform });
+    return refusal("publication_platform_unsupported", { platform });
   if (!(await objectFormatMatches(cwd, processPort, objectFormat)))
     return ambiguous({ operation: "object-format" });
   const blobInfo = await readGitObjectInfo(
