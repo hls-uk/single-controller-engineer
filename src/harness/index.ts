@@ -1195,8 +1195,13 @@ function canonicalAbsolutePath(value: string | undefined): string | undefined {
   const canonical = normalize(resolve(value));
   return canonical === "/" || canonical !== value ? undefined : canonical;
 }
+/**
+ * Protocol order is code-point order, exactly as the reducer canonicalizes
+ * wave task metadata; a locale comparison put "references" before
+ * "SKILL.md" and the launch packet could never bind (sce-7g9.2.3).
+ */
 function sortedStrings(values: readonly string[]): string[] {
-  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+  return [...new Set(values)].sort();
 }
 function intersects(
   left: readonly string[],

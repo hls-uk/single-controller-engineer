@@ -20233,7 +20233,7 @@ function canonicalAbsolutePath(value) {
   return canonical2 === "/" || canonical2 !== value ? void 0 : canonical2;
 }
 function sortedStrings2(values) {
-  return [...new Set(values)].sort((left, right) => left.localeCompare(right));
+  return [...new Set(values)].sort();
 }
 function intersects(left, right) {
   return left.some((value) => right.includes(value));

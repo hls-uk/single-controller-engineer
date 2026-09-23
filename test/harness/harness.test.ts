@@ -25,6 +25,7 @@ import { canonicalJson } from "../../src/protocol/canonical.js";
 import { sha256 } from "../../src/protocol/evidence.js";
 import { createProductionRecoveryEffectAdapter } from "../../src/commands/production-recovery.js";
 import {
+  canonicalTaskMetadata,
   deriveCandidateDiffHash,
   reduce,
   runInvariantErrors,
@@ -1279,4 +1280,44 @@ test("wave planning is a reducer transition with graph, conflict, and singleton 
   });
   assert.equal(premature.ok, false);
   assert.match(premature.ok ? "" : premature.reason, /prior wave/);
+});
+
+// sce-7g9.2.3: packet paths are ordered by code point like the reducer's
+// canonical task metadata, never by locale, or a mixed-case owned-path set
+// can never bind to its committed wave task.
+test("packet owned paths keep code-point order so they bind to canonical task metadata", () => {
+  const ownedPaths = [
+    "skills/single-controller-engineer/references",
+    "skills/single-controller-engineer/SKILL.md",
+    "docs/getting-started.md",
+  ];
+  const packet = createPacket({
+    acceptance: ["unit-1:A1"],
+    baseOid: "a".repeat(40),
+    mandatoryVerification: ["npm run test:fast"],
+    ownedPaths,
+    role: "worker",
+    unitId: "unit-1",
+  });
+  assert.equal(packet.ok, true);
+  if (!packet.ok) return;
+  assert.deepEqual(
+    (JSON.parse(packet.payload) as { ownedPaths: string[] }).ownedPaths,
+    [...ownedPaths].sort(),
+  );
+  assert.deepEqual(
+    (JSON.parse(packet.payload) as { ownedPaths: string[] }).ownedPaths,
+    canonicalTaskMetadata({
+      acceptanceIds: ["unit-1:A1"],
+      conflictDomains: [],
+      dependencies: [],
+      independence: "proven",
+      mandatoryVerification: ["npm run test:fast"],
+      ownedPaths,
+      priority: 2,
+      reservations: [],
+      risk: "low",
+      unitId: "unit-1",
+    }).ownedPaths,
+  );
 });
