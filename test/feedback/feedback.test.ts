@@ -1106,3 +1106,37 @@ test("the same authority cannot create twice through the durable outbox", async 
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+/**
+ * sce-7g9.2.3 / DEC-20260922-019: the outbox listing is ordered by UTF-16 code
+ * units. Fingerprints are lowercase hex, so today every collation agrees with
+ * that order on real listings; the guarantee therefore has to live in the
+ * comparator rather than in the sample, and this pins the comparator against a
+ * readdir order that the filesystem, not the outbox, decides.
+ */
+test("the outbox lists packets in code-unit fingerprint order", () => {
+  const fixture = commonDirectory();
+  try {
+    const opened = FeedbackOutbox.open(fixture.common);
+    assert.equal(opened.status, "ok");
+    if (opened.status !== "ok") return;
+    for (const name of ["ALPHA", "BRAVO", "CHARLIE", "DELTA", "ECHO"])
+      assert.equal(opened.value.enqueue(packet(name)).status, "ok");
+    const listed = opened.value.list();
+    assert.equal(listed.status, "ok");
+    if (listed.status !== "ok") return;
+    const fingerprints = listed.value.map(
+      (entry) => entry.packet.telemetry.fingerprint,
+    );
+    assert.equal(new Set(fingerprints).size, 5);
+    assert.deepEqual(fingerprints, [...fingerprints].sort());
+    assert.deepEqual(
+      fingerprints,
+      [...fingerprints].sort((left, right) =>
+        Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")),
+      ),
+    );
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});

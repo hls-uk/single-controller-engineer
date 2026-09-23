@@ -463,3 +463,59 @@ test("two stale-lock contenders never overlap or remove the acquired replacement
     });
   });
 });
+
+/**
+ * sce-7g9.2.3 / DEC-20260922-019: the manifest a host verifies against is
+ * ordered by UTF-16 code units, so it is byte-identical wherever it was
+ * written. The fixture's own names discriminate: `SKILL.md` sorts before
+ * `agents/` by code unit and after it under every collation, so a locale
+ * comparison anywhere in `filesAt`, `parseManifest`, or `validateTree` would
+ * reorder this manifest.
+ */
+test("the installed manifest is ordered by code unit, not by host collation", async () => {
+  await inTemporaryDirectory(async (root) => {
+    const source = join(root, "source");
+    const destination = join(root, "host");
+    await fixture(source);
+    const result = await installSkills({ destination, source });
+    const paths = result.manifest.files.map((file) => file.path);
+    assert.deepEqual(paths, [...paths].sort());
+    assert.deepEqual(
+      paths,
+      [...paths].sort((left, right) =>
+        Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")),
+      ),
+    );
+    for (const locale of ["en-US", "de-DE"] as const)
+      assert.notDeepEqual(
+        paths,
+        [...paths].sort(new Intl.Collator(locale).compare),
+      );
+    assert.notDeepEqual(
+      paths,
+      [...paths].sort((left, right) => left.localeCompare(right)),
+    );
+    // The manifest read back from disk is re-ordered on parse, so a manifest
+    // an earlier release wrote under a collation still verifies here.
+    const recorded = JSON.parse(
+      await readFile(join(destination, INSTALL_MANIFEST), "utf8"),
+    ) as SkillInstallManifest;
+    assert.deepEqual(
+      recorded.files.map((file) => file.path),
+      paths,
+    );
+    await writeFile(
+      join(destination, INSTALL_MANIFEST),
+      JSON.stringify({
+        ...recorded,
+        files: [...recorded.files].sort((left, right) =>
+          left.path.localeCompare(right.path),
+        ),
+      }),
+    );
+    await uninstallSkills(destination);
+    await assert.rejects(readFile(join(destination, INSTALL_MANIFEST)), {
+      code: "ENOENT",
+    });
+  });
+});

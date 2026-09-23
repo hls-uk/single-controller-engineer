@@ -184,7 +184,8 @@ export class FeedbackOutbox {
     return {
       status: "ok",
       value: envelopes.sort((a, b) =>
-        a.packet.telemetry.fingerprint.localeCompare(
+        compareCodeUnits(
+          a.packet.telemetry.fingerprint,
           b.packet.telemetry.fingerprint,
         ),
       ),
@@ -589,6 +590,16 @@ export class FeedbackOutbox {
   private packetPath(fingerprint: string): string {
     return join(this.directory, `${fingerprint}.json`);
   }
+}
+
+/**
+ * Deliberately locale-independent UTF-16 code-unit ordering: the protocol
+ * order of DEC-20260922-019. Fingerprints are lowercase hex, so this is also
+ * their byte order, and a listing never reorders under a different host
+ * collation.
+ */
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function outboxDirectory(commonDir: string): string | undefined {

@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync, readdirSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 import test from "node:test";
 import fc from "fast-check";
 import {
@@ -12,6 +14,7 @@ import {
   evidence,
   evidenceMatches,
 } from "../../src/protocol/evidence.js";
+import { compareProtocolText } from "../../src/protocol/reducer.js";
 
 const exactEvidence = {
   schemaVersion: EVIDENCE_SCHEMA_VERSION,
@@ -40,6 +43,176 @@ test("RFC 8785 Unicode key ordering follows UTF-16 code units", () => {
     }),
     '{"\\r":"Carriage Return","1":"One","":"Control","ö":"Latin Small Letter O With Diaeresis","€":"Euro Sign","😀":"Emoji: Grinning Face","דּ":"Hebrew Letter Dalet With Dagesh"}',
   );
+});
+
+/**
+ * sce-7g9.2.3 / DEC-20260922-019: protocol order is UTF-16 code-unit order.
+ *
+ * Collations are not a property of the bytes; they are a property of the host
+ * that happened to write them. These helpers give every ordering assertion
+ * below three collations to disagree with: two named ones, and whichever one
+ * `LANG` or `LC_ALL` selected for this process. A sample that survives all
+ * three cannot have been ordered by `localeCompare` on any machine.
+ */
+const COLLATIONS = ["en-US", "de-DE"] as const;
+
+function collatedOrders(
+  values: readonly string[],
+): readonly (readonly string[])[] {
+  return [
+    ...COLLATIONS.map((locale) =>
+      [...values].sort(new Intl.Collator(locale).compare),
+    ),
+    [...values].sort((left, right) => left.localeCompare(right)),
+  ];
+}
+
+function byteOrder(values: readonly string[]): readonly string[] {
+  return [...values].sort((left, right) =>
+    Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")),
+  );
+}
+
+/** Identifiers, as `identifier()` in the schemas admits them. */
+const IDENTIFIERS = [
+  "unit-b",
+  "unit-A",
+  "unit-10",
+  "unit-2",
+  "sce:gate:a1",
+  "sce:gate:A1",
+  "target_1",
+  "target-1",
+  "unit-1/review",
+] as const;
+
+/** Repository paths, as owned paths and materialisation sources spell them. */
+const PATHS = [
+  "single-controller-engineer/SKILL.md",
+  "single-controller-engineer/agents/claude.yaml",
+  "single-controller-engineer/references/contract.md",
+  "single-controller-knowledge/SKILL.md",
+  "docs/_index.md",
+  "docs/README.md",
+] as const;
+
+test("protocol text ordering is code-unit order, never a collation", () => {
+  for (const sample of [IDENTIFIERS, PATHS]) {
+    // Schemas restrict identifiers and paths to ASCII, so code-unit order is
+    // byte order and the two pins below are the same claim twice.
+    assert.ok(sample.every((value) => /^[\u0020-\u007e]+$/u.test(value)));
+    const ordered = [...sample].sort(compareProtocolText);
+    assert.deepEqual(ordered, [...sample].sort());
+    assert.deepEqual(ordered, byteOrder(sample));
+    // Every collation reorders this sample, so the pins above are evidence and
+    // not a coincidence of the fixture.
+    for (const collated of collatedOrders(sample))
+      assert.notDeepEqual(ordered, collated);
+  }
+});
+
+test("materialise stage, gate entry, and observation tuples keep their canonical order", () => {
+  // The tuple `compareProtocolText(stage) || compareProtocolText(gateEntryId)`
+  // that `actionsForGate` and the reducer's materialise scheduling use: stage
+  // is the major key, so every unit-stage entry runs before any gate-stage one
+  // can be scheduled behind it.
+  const entries = [
+    { gateEntryId: "sce:gate:b1", stage: "unit" },
+    { gateEntryId: "sce:gate:A1", stage: "unit" },
+    { gateEntryId: "sce:gate:a1", stage: "gate" },
+    { gateEntryId: "sce:gate:B1", stage: "gate" },
+  ] as const;
+  const scheduled = [...entries].sort(
+    (left, right) =>
+      compareProtocolText(left.stage, right.stage) ||
+      compareProtocolText(left.gateEntryId, right.gateEntryId),
+  );
+  assert.deepEqual(
+    scheduled.map((entry) => `${entry.stage}/${entry.gateEntryId}`),
+    [
+      "gate/sce:gate:B1",
+      "gate/sce:gate:a1",
+      "unit/sce:gate:A1",
+      "unit/sce:gate:b1",
+    ],
+  );
+  for (const collated of collatedOrders(
+    entries.map((entry) => `${entry.stage}/${entry.gateEntryId}`),
+  ))
+    assert.notDeepEqual(
+      scheduled.map((entry) => `${entry.stage}/${entry.gateEntryId}`),
+      collated,
+    );
+
+  // The observation tuple the closure snapshot carries: origin unit, then the
+  // numeric target ordinal, then the target id.
+  const observations = [
+    { originUnitId: "unit-a", targetId: "sce:tgt:b", targetOrdinal: 0 },
+    { originUnitId: "unit-A", targetId: "sce:tgt:a", targetOrdinal: 1 },
+    { originUnitId: "unit-A", targetId: "sce:tgt:B", targetOrdinal: 0 },
+    { originUnitId: "unit-A", targetId: "sce:tgt:A", targetOrdinal: 0 },
+  ] as const;
+  assert.deepEqual(
+    [...observations]
+      .sort(
+        (left, right) =>
+          compareProtocolText(left.originUnitId, right.originUnitId) ||
+          left.targetOrdinal - right.targetOrdinal ||
+          compareProtocolText(left.targetId, right.targetId),
+      )
+      .map(
+        (entry) =>
+          `${entry.originUnitId}:${entry.targetOrdinal}:${entry.targetId}`,
+      ),
+    [
+      "unit-A:0:sce:tgt:A",
+      "unit-A:0:sce:tgt:B",
+      "unit-A:1:sce:tgt:a",
+      "unit-a:0:sce:tgt:b",
+    ],
+  );
+});
+
+/**
+ * The reducer and adapter surfaces whose comparisons become protocol bytes:
+ * effect scheduling and invariants, the Git, Beads, and materialisation
+ * adapters, the installed skill manifest, the feedback outbox, and the fencing
+ * projections. The harness packet builder keeps its own code-point pin in
+ * test/harness/harness.test.ts.
+ */
+const ORDERED_SURFACES = [
+  "src/adapters",
+  "src/feedback",
+  "src/fencing",
+  "src/install",
+  "src/protocol",
+] as const;
+
+const LOCALE_SENSITIVE = /localeCompare|Intl\.Collator|toLocale[A-Z]/u;
+
+function typeScriptFiles(root: string): readonly string[] {
+  const found: string[] = [];
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (entry.isSymbolicLink())
+      throw new Error(`refusing symlinked source path: ${entry.name}`);
+    const path = join(root, entry.name);
+    if (entry.isDirectory()) found.push(...typeScriptFiles(path));
+    else if (entry.isFile() && path.endsWith(".ts")) found.push(path);
+  }
+  return found;
+}
+
+test("no ordered protocol surface compares text by locale", () => {
+  const repository = resolve(import.meta.dirname, "../..");
+  const offending: string[] = [];
+  for (const surface of ORDERED_SURFACES)
+    for (const file of typeScriptFiles(join(repository, surface)))
+      for (const [index, line] of readFileSync(file, "utf8")
+        .split("\n")
+        .entries())
+        if (LOCALE_SENSITIVE.test(line))
+          offending.push(`${relative(repository, file)}:${index + 1}`);
+  assert.deepEqual(offending, []);
 });
 
 test("declared field and key normalization happens before JCS serialization", () => {

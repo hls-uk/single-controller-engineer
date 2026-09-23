@@ -87,6 +87,16 @@ function fail(message: string): never {
   throw new SkillInstallError(message);
 }
 
+/**
+ * Deliberately locale-independent UTF-16 code-unit ordering: the protocol
+ * order of DEC-20260922-019. Installed paths are ASCII by `canonicalRelative`,
+ * so this is their byte order too, and the manifest a host verifies against
+ * never depends on the collation of the machine that wrote it.
+ */
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -165,7 +175,7 @@ function parseManifest(value: unknown): SkillInstallManifest {
   )
     fail("skill-install manifest lacks a complete set");
   return {
-    files: files.sort((left, right) => left.path.localeCompare(right.path)),
+    files: files.sort((left, right) => compareCodeUnits(left.path, right.path)),
     package: PACKAGE_NAME,
     schema: "sce.skill-install",
     skills: parsedSkills,
@@ -267,7 +277,7 @@ async function filesAt(root: string, prefix = ""): Promise<InstalledFile[]> {
   const entries = await readdir(root, { withFileTypes: true });
   const result: InstalledFile[] = [];
   for (const entry of entries.sort((left, right) =>
-    left.name.localeCompare(right.name),
+    compareCodeUnits(left.name, right.name),
   )) {
     const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
     const fullPath = join(root, entry.name);
@@ -385,7 +395,7 @@ async function validateTree(
     )
   )
     .flat()
-    .sort((left, right) => left.path.localeCompare(right.path));
+    .sort((left, right) => compareCodeUnits(left.path, right.path));
   const expected = manifest.files;
   if (actual.length !== expected.length)
     fail("installed tree differs from manifest");
