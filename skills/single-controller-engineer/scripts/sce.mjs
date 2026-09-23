@@ -13606,7 +13606,7 @@ function maximumReachableDestinationProbeValue(destinationAlias, destinationSubp
     gateEntryId,
     stage
   };
-  const refusal2 = {
+  const refusal3 = {
     code: "invalid_destination",
     detailHash: "a".repeat(64)
   };
@@ -13617,7 +13617,7 @@ function maximumReachableDestinationProbeValue(destinationAlias, destinationSubp
       currentEffectId: `${"a".repeat(160)}:destination_probe`,
       status: "pending"
     },
-    { ...base, lastRefusal: refusal2, status: "pending" },
+    { ...base, lastRefusal: refusal3, status: "pending" },
     {
       ...base,
       identity: {
@@ -13631,7 +13631,7 @@ function maximumReachableDestinationProbeValue(destinationAlias, destinationSubp
       ...base,
       disposition: "deferred_by_controller",
       followUpBeadId: "a".repeat(160),
-      lastRefusal: refusal2,
+      lastRefusal: refusal3,
       status: "voided"
     },
     {
@@ -14037,7 +14037,7 @@ function resolutionIntentCompletionFits(state, gate, target, capacities) {
       effectId,
       capacities
     );
-    const refusal2 = {
+    const refusal3 = {
       code: "evidence_budget_exceeded",
       detailHash: "a".repeat(64)
     };
@@ -14053,7 +14053,7 @@ function resolutionIntentCompletionFits(state, gate, target, capacities) {
           ...current,
           resolution: {
             ...resolutionWithoutEffect,
-            lastRefusal: refusal2
+            lastRefusal: refusal3
           }
         };
       }
@@ -20472,6 +20472,806 @@ function fail(reason) {
   return { ok: false, reason };
 }
 
+// src/fencing/schemas.ts
+var FENCING_SCHEMA_VERSION = 1;
+var MERGE_SLOT_LABEL = "gt:slot";
+var MERGE_SLOT_TITLE = "Merge Slot";
+var FENCING_LIMITS = {
+  batchBytes: 262144,
+  childProjectionBytes: 65536,
+  changedRows: 64,
+  projectionBytes: 196608
+};
+var identifier3 = () => Type.String({
+  minLength: 1,
+  maxLength: 160,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+});
+var holder = () => Type.String({
+  minLength: 3,
+  maxLength: 321,
+  pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
+});
+var hash3 = () => Type.String({ minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" });
+var revision2 = () => Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
+var FencingScopeSchema = strictObject({
+  beadsStoreIdentity: identifier3(),
+  gitRepositoryIdentity: identifier3(),
+  integrationBranch: identifier3()
+});
+var ChildRowReferenceSchema = strictObject({
+  commitment: hash3(),
+  revision: revision2(),
+  unitId: identifier3()
+});
+var CheckpointObservationSchema = strictObject({
+  aggregateRevision: revision2(),
+  changedRowsCommitment: hash3(),
+  rootCommitment: hash3()
+});
+var RootProjectionSchema = strictObject({
+  aggregateCommitment: hash3(),
+  aggregateRevision: revision2(),
+  checkpoint: CheckpointObservationSchema,
+  childRows: Type.Array(ChildRowReferenceSchema, {
+    maxItems: FENCING_LIMITS.changedRows
+  }),
+  holder: holder(),
+  run: RepositoryRunSchema,
+  schema: Type.Literal("sce.fencing.root"),
+  scope: FencingScopeSchema,
+  version: Type.Literal(FENCING_SCHEMA_VERSION)
+});
+var ChildProjectionSchema = strictObject({
+  commitment: hash3(),
+  holder: holder(),
+  revision: revision2(),
+  schema: Type.Literal("sce.fencing.child"),
+  scope: FencingScopeSchema,
+  unit: UnitSchema,
+  unitId: identifier3(),
+  version: Type.Literal(FENCING_SCHEMA_VERSION)
+});
+var ExpectedChildRowSchema = strictObject({
+  expectedCommitment: hash3(),
+  expectedRevision: revision2(),
+  unitId: identifier3()
+});
+var ChangedRowSchema = strictObject({
+  expectedCommitment: hash3(),
+  expectedRevision: revision2(),
+  nextCommitment: hash3(),
+  nextRevision: revision2(),
+  unitId: identifier3()
+});
+var ContinuationEvidenceSchema = strictObject({
+  nextHolder: holder(),
+  observationHash: hash3(),
+  previousHolder: holder(),
+  scopeCommitment: hash3()
+});
+var ReleaseEvidenceSchema = strictObject({
+  available: Type.Literal(true),
+  holder: holder(),
+  observationHash: hash3(),
+  scopeCommitment: hash3()
+});
+var MergeSlotObservationSchema = strictObject({
+  actor: holder(),
+  holder: Type.Optional(holder()),
+  label: Type.Literal(MERGE_SLOT_LABEL),
+  readbackHash: hash3(),
+  scope: FencingScopeSchema,
+  scopeCommitment: hash3(),
+  slotId: identifier3(),
+  status: Type.Union([Type.Literal("available"), Type.Literal("acquired")]),
+  title: Type.Literal(MERGE_SLOT_TITLE),
+  version: Type.Literal(FENCING_SCHEMA_VERSION)
+});
+var SlotContinuationEvidenceSchema = strictObject({
+  after: MergeSlotObservationSchema,
+  before: MergeSlotObservationSchema,
+  nextHolder: holder(),
+  previousHolder: holder()
+});
+var SlotReleaseEvidenceSchema = strictObject({
+  holder: holder(),
+  readback: MergeSlotObservationSchema
+});
+var MutationBatchSchema = strictObject({
+  changedRows: Type.Array(ChangedRowSchema, {
+    maxItems: FENCING_LIMITS.changedRows
+  }),
+  checkpoint: CheckpointObservationSchema,
+  continuation: Type.Optional(ContinuationEvidenceSchema),
+  expectedAggregateCommitment: hash3(),
+  expectedAggregateRevision: revision2(),
+  /** Exact holder predicate checked inside the topology transaction. */
+  expectedHolder: holder(),
+  expectedChildren: Type.Array(ExpectedChildRowSchema, {
+    maxItems: FENCING_LIMITS.changedRows
+  }),
+  holder: holder(),
+  next: strictObject({
+    children: Type.Array(ChildProjectionSchema, {
+      maxItems: FENCING_LIMITS.changedRows
+    }),
+    root: RootProjectionSchema
+  }),
+  release: Type.Optional(ReleaseEvidenceSchema),
+  /**
+   * Predicate-only rows for units this batch retires from the root's
+   * authority set. They are never written: a retired unit's child projection
+   * stays in Beads as inert history. The CAS still reads each one inside the
+   * same transaction and refuses the batch when a retired row moved out of
+   * band. A batch that retires nothing omits the key entirely, so bytes
+   * persisted before this contract existed remain exactly valid.
+   */
+  retiredChildren: Type.Optional(
+    Type.Array(ExpectedChildRowSchema, {
+      maxItems: FENCING_LIMITS.changedRows,
+      minItems: 1
+    })
+  ),
+  schema: Type.Literal("sce.fencing.batch"),
+  scope: FencingScopeSchema,
+  version: Type.Literal(FENCING_SCHEMA_VERSION)
+});
+var STORE_FAILURE_TAIL_BYTES = 2048;
+var StoreFailureTailSchema = strictObject({
+  schema: Type.Literal("sce.beads-embedded.remote-failure-tail"),
+  /** Printable ASCII and newline only, so one character is exactly one byte. */
+  text: Type.String({
+    maxLength: STORE_FAILURE_TAIL_BYTES,
+    maxUtf8Bytes: STORE_FAILURE_TAIL_BYTES,
+    minLength: 1,
+    pattern: "^[\\n\\x20-\\x7E]+$"
+  }),
+  /** Earlier stderr was dropped to hold the bound; this is a tail. */
+  truncated: Type.Boolean(),
+  version: Type.Literal(1)
+});
+function refusal(status) {
+  return strictObject({
+    status: Type.Literal(status),
+    stderrTail: Type.Optional(StoreFailureTailSchema)
+  });
+}
+var RunStoreNonAppliedResultSchema = Type.Union([
+  refusal("stale"),
+  refusal("holder_mismatch"),
+  refusal("ambiguous"),
+  refusal("unavailable"),
+  refusal("quarantined")
+]);
+var RunStoreAppliedResultSchema = strictObject({
+  /** Root is always an affected row, followed by every affected child. */
+  affectedRowCount: Type.Integer({
+    minimum: 1,
+    maximum: FENCING_LIMITS.changedRows + 1
+  }),
+  checkpoint: CheckpointObservationSchema,
+  children: Type.Array(ChildProjectionSchema, {
+    maxItems: FENCING_LIMITS.changedRows
+  }),
+  root: RootProjectionSchema,
+  status: Type.Literal("applied")
+});
+var RunStoreResultSchema = Type.Union([
+  RunStoreAppliedResultSchema,
+  RunStoreNonAppliedResultSchema
+]);
+var OperationLockStateSchema = strictObject({
+  holder: holder(),
+  nonce: identifier3(),
+  scopeCommitment: hash3(),
+  version: Type.Literal(FENCING_SCHEMA_VERSION)
+});
+
+// src/fencing/projections.ts
+var utf84 = new TextEncoder();
+function json(value) {
+  return value;
+}
+function equal(left, right) {
+  return canonicalJson(json(left)) === canonicalJson(json(right));
+}
+function compareCodeUnits(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+function holderRunId(holder4) {
+  return holder4.split("/", 1)[0] ?? "";
+}
+function scopeFor(run2) {
+  return {
+    beadsStoreIdentity: run2.storeIdentity,
+    gitRepositoryIdentity: run2.repositoryIdentity,
+    integrationBranch: run2.integrationBranch
+  };
+}
+function deriveScopeCommitment(scope) {
+  return sha256(
+    canonicalJson({ domain: "sce.fencing.scope.v1", scope: json(scope) })
+  );
+}
+function deriveAggregateCommitment(run2) {
+  return sha256(
+    canonicalJson({ domain: "sce.fencing.aggregate.v1", run: json(run2) })
+  );
+}
+function deriveChildCommitment(unit) {
+  return sha256(
+    canonicalJson({ domain: "sce.fencing.child.v1", unit: json(unit) })
+  );
+}
+function deriveChangedRowsCommitment(rows) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.fencing.changed-rows.v1",
+      rows: json(
+        [...rows].sort(
+          (left, right) => compareCodeUnits(left.unitId, right.unitId)
+        )
+      )
+    })
+  );
+}
+function childRows(run2) {
+  return Object.values(run2.units).map((unit) => ({
+    commitment: deriveChildCommitment(unit),
+    revision: unit.revision,
+    unitId: unit.id
+  })).sort((left, right) => compareCodeUnits(left.unitId, right.unitId));
+}
+function checkpoint(aggregateRevision, aggregateCommitment) {
+  return {
+    aggregateRevision,
+    changedRowsCommitment: deriveChangedRowsCommitment([]),
+    rootCommitment: aggregateCommitment
+  };
+}
+function checkpointForBatch(root, changedRows) {
+  return {
+    aggregateRevision: root.aggregateRevision,
+    changedRowsCommitment: deriveChangedRowsCommitment(changedRows),
+    rootCommitment: root.aggregateCommitment
+  };
+}
+function withBatchCheckpoint(root, changedRows) {
+  return { ...root, checkpoint: checkpointForBatch(root, changedRows) };
+}
+function makeRootProjection(run2) {
+  const aggregateCommitment = deriveAggregateCommitment(run2);
+  return {
+    aggregateCommitment,
+    aggregateRevision: run2.revision,
+    checkpoint: checkpoint(run2.revision, aggregateCommitment),
+    childRows: [...childRows(run2)],
+    holder: run2.controller.holder,
+    run: run2,
+    schema: "sce.fencing.root",
+    scope: scopeFor(run2),
+    version: FENCING_SCHEMA_VERSION
+  };
+}
+function makeChildProjection(root, unitId) {
+  const unit = root.run.units[unitId];
+  if (unit === void 0) return void 0;
+  return {
+    commitment: deriveChildCommitment(unit),
+    holder: root.holder,
+    revision: unit.revision,
+    schema: "sce.fencing.child",
+    scope: root.scope,
+    unit,
+    unitId,
+    version: FENCING_SCHEMA_VERSION
+  };
+}
+function parseSchema(schema, input) {
+  const parsed = validate(schema, input);
+  return parsed.ok && parsed.value !== void 0 ? { ok: true, value: parsed.value } : { ok: false, reason: parsed.errors.join("; ") };
+}
+function validateRootProjection(input) {
+  const parsed = parseSchema(RootProjectionSchema, input);
+  if (!parsed.ok) return parsed;
+  const root = parsed.value;
+  if (runInvariantErrors(root.run).length > 0)
+    return { ok: false, reason: "root run invariants fail" };
+  if (!equal(root.scope, scopeFor(root.run)))
+    return { ok: false, reason: "root scope disagrees with run" };
+  if (root.holder !== root.run.controller.holder)
+    return { ok: false, reason: "root holder disagrees with run" };
+  if (root.aggregateRevision !== root.run.revision)
+    return { ok: false, reason: "root revision disagrees with run" };
+  if (root.aggregateCommitment !== deriveAggregateCommitment(root.run))
+    return { ok: false, reason: "root aggregate commitment is invalid" };
+  if (!equal(root.childRows, childRows(root.run)))
+    return { ok: false, reason: "root child rows disagree with run" };
+  if (root.checkpoint.aggregateRevision !== root.aggregateRevision || root.checkpoint.rootCommitment !== root.aggregateCommitment)
+    return { ok: false, reason: "root checkpoint is invalid" };
+  return parsed;
+}
+function validateChildProjection(input) {
+  const parsed = parseSchema(ChildProjectionSchema, input);
+  if (!parsed.ok) return parsed;
+  const child = parsed.value;
+  if (child.unit.id !== child.unitId || child.unit.revision !== child.revision || child.commitment !== deriveChildCommitment(child.unit))
+    return { ok: false, reason: "child facts disagree with projection" };
+  return parsed;
+}
+function validateMutationBatch(input) {
+  const parsed = parseSchema(MutationBatchSchema, input);
+  if (!parsed.ok) return parsed;
+  const batch = parsed.value;
+  const root = validateRootProjection(batch.next.root);
+  if (!root.ok) return { ok: false, reason: root.reason };
+  if (!equal(batch.scope, root.value.scope) || batch.holder !== root.value.holder)
+    return { ok: false, reason: "batch scope or holder disagrees with root" };
+  if (!equal(batch.checkpoint, root.value.checkpoint))
+    return { ok: false, reason: "batch checkpoint disagrees with root" };
+  if (batch.continuation === void 0 && batch.expectedHolder !== batch.holder)
+    return { ok: false, reason: "expected holder disagrees with next holder" };
+  if (root.value.aggregateRevision !== batch.expectedAggregateRevision + 1)
+    return { ok: false, reason: "next aggregate revision is not exact" };
+  if (batch.expectedAggregateCommitment === root.value.aggregateCommitment)
+    return { ok: false, reason: "aggregate commitment did not change" };
+  const changedIds = batch.changedRows.map((row) => row.unitId);
+  if (new Set(changedIds).size !== changedIds.length || [...changedIds].sort().some((id, index) => id !== changedIds[index]))
+    return { ok: false, reason: "changed rows are not sorted and unique" };
+  if (batch.expectedChildren.length !== batch.changedRows.length || batch.next.children.length !== batch.changedRows.length)
+    return { ok: false, reason: "affected child row count is not exact" };
+  if (!equal(
+    batch.expectedChildren.map((child) => child.unitId),
+    changedIds
+  ) || !equal(
+    batch.next.children.map((child) => child.unitId),
+    changedIds
+  ))
+    return { ok: false, reason: "affected child rows are not ordered exactly" };
+  for (const row of batch.changedRows) {
+    const expected = batch.expectedChildren.find(
+      (item) => item.unitId === row.unitId
+    );
+    const child = batch.next.children.find(
+      (item) => item.unitId === row.unitId
+    );
+    const rootRow = root.value.childRows.find(
+      (item) => item.unitId === row.unitId
+    );
+    if (expected === void 0 || child === void 0 || rootRow === void 0)
+      return { ok: false, reason: "affected child row is missing" };
+    const validatedChild = validateChildProjection(child);
+    if (!validatedChild.ok) return { ok: false, reason: validatedChild.reason };
+    if (expected.expectedRevision !== row.expectedRevision || expected.expectedCommitment !== row.expectedCommitment || row.nextRevision !== row.expectedRevision + 1 || child.revision !== row.nextRevision || child.commitment !== row.nextCommitment || rootRow.revision !== row.nextRevision || rootRow.commitment !== row.nextCommitment || !equal(child.scope, batch.scope) || child.holder !== batch.holder || !equal(child.unit, root.value.run.units[row.unitId]))
+      return { ok: false, reason: "affected child row disagrees with batch" };
+  }
+  const retiredIds = (batch.retiredChildren ?? []).map((row) => row.unitId);
+  if (new Set(retiredIds).size !== retiredIds.length || [...retiredIds].sort().some((id, index) => id !== retiredIds[index]))
+    return { ok: false, reason: "retired children are not sorted and unique" };
+  if (retiredIds.some(
+    (unitId) => changedIds.includes(unitId) || root.value.childRows.some((row) => row.unitId === unitId)
+  ))
+    return { ok: false, reason: "retired child is still an authority row" };
+  if (batch.checkpoint.aggregateRevision !== root.value.aggregateRevision || batch.checkpoint.rootCommitment !== root.value.aggregateCommitment || batch.checkpoint.changedRowsCommitment !== deriveChangedRowsCommitment(batch.changedRows))
+    return { ok: false, reason: "batch checkpoint is invalid" };
+  const scopeCommitment = deriveScopeCommitment(batch.scope);
+  if (batch.continuation !== void 0 && (batch.continuation.scopeCommitment !== scopeCommitment || batch.continuation.nextHolder !== batch.holder || batch.continuation.previousHolder !== batch.expectedHolder || batch.continuation.previousHolder === batch.holder || holderRunId(batch.continuation.previousHolder) !== holderRunId(batch.holder)))
+    return { ok: false, reason: "continuation evidence is invalid" };
+  if (batch.release !== void 0 && (batch.release.scopeCommitment !== scopeCommitment || batch.release.holder !== batch.holder))
+    return { ok: false, reason: "release evidence is invalid" };
+  return parsed;
+}
+
+// src/fencing/operation-lock.ts
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  unlinkSync,
+  writeFileSync
+} from "node:fs";
+import { join } from "node:path";
+import { createConnection, createServer } from "node:net";
+var LOCK_DIRECTORY = ".sce-op";
+var SOCKET_NAME = "l";
+var STATE_NAME = "s";
+var STATE_MAX_BYTES = 4096;
+var MAX_ACQUIRE_ATTEMPTS = 4;
+var utf85 = new TextEncoder();
+function ownerMatches(uid) {
+  return typeof process.getuid !== "function" || uid === process.getuid();
+}
+function identity(stat4) {
+  return {
+    dev: stat4.dev,
+    ino: stat4.ino,
+    mode: stat4.mode & 511,
+    uid: stat4.uid
+  };
+}
+function sameIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode && left.uid === right.uid;
+}
+function absentError(error) {
+  return error.code === "ENOENT";
+}
+function strictDirectory(path2, expectedMode) {
+  try {
+    const stat4 = lstatSync(path2);
+    return stat4.isDirectory() && !stat4.isSymbolicLink() && ownerMatches(stat4.uid) && (expectedMode === void 0 || (stat4.mode & 511) === expectedMode);
+  } catch {
+    return false;
+  }
+}
+function captureSocket(path2) {
+  try {
+    const stat4 = lstatSync(path2);
+    if (!stat4.isSocket() || stat4.isSymbolicLink() || !ownerMatches(stat4.uid) || (stat4.mode & 511) !== 384)
+      return { kind: "invalid" };
+    return { kind: "valid", value: { identity: identity(stat4) } };
+  } catch (error) {
+    return absentError(error) ? { kind: "absent" } : { kind: "invalid" };
+  }
+}
+function stateSource(state) {
+  return canonicalJson(state);
+}
+function captureState(path2) {
+  let descriptor;
+  try {
+    const before = lstatSync(path2);
+    if (!before.isFile() || before.isSymbolicLink() || !ownerMatches(before.uid) || (before.mode & 511) !== 384 || constants.O_NOFOLLOW === void 0)
+      return { kind: "invalid" };
+    descriptor = openSync(path2, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const opened = fstatSync(descriptor);
+    if (!opened.isFile() || !ownerMatches(opened.uid) || (opened.mode & 511) !== 384 || opened.dev !== before.dev || opened.ino !== before.ino || opened.size > STATE_MAX_BYTES)
+      return { kind: "invalid" };
+    const source = readFileSync(descriptor, "utf8");
+    if (utf85.encode(source).byteLength > STATE_MAX_BYTES)
+      return { kind: "invalid" };
+    const input = JSON.parse(source);
+    const parsed = validate(
+      OperationLockStateSchema,
+      input
+    );
+    if (!parsed.ok || parsed.value === void 0 || stateSource(parsed.value) !== source)
+      return { kind: "invalid" };
+    return {
+      kind: "valid",
+      value: { identity: identity(opened), source, state: parsed.value }
+    };
+  } catch (error) {
+    return absentError(error) ? { kind: "absent" } : { kind: "invalid" };
+  } finally {
+    if (descriptor !== void 0) closeSync(descriptor);
+  }
+}
+function writeState(path2, state) {
+  let descriptor;
+  try {
+    if (constants.O_NOFOLLOW === void 0) return { kind: "invalid" };
+    descriptor = openSync(
+      path2,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      384
+    );
+    writeFileSync(descriptor, stateSource(state), "utf8");
+  } catch (error) {
+    return absentError(error) ? { kind: "absent" } : { kind: "invalid" };
+  } finally {
+    if (descriptor !== void 0) closeSync(descriptor);
+  }
+  return captureState(path2);
+}
+function paths(commonDir) {
+  try {
+    if (realpathSync(commonDir) !== commonDir || !strictDirectory(commonDir))
+      return void 0;
+    const directory = join(commonDir, LOCK_DIRECTORY);
+    try {
+      mkdirSync(directory, { mode: 448 });
+    } catch (error) {
+      if (error.code !== "EEXIST") return void 0;
+    }
+    if (!strictDirectory(directory, 448)) return void 0;
+    if (statSync(commonDir).dev !== statSync(directory).dev) return void 0;
+    return {
+      directory,
+      socket: join(directory, SOCKET_NAME),
+      state: join(directory, STATE_NAME)
+    };
+  } catch {
+    return void 0;
+  }
+}
+function listen(socket) {
+  return new Promise((resolve11) => {
+    const server = createServer((connection) => connection.destroy());
+    const fail4 = (error) => {
+      resolve11({ code: error.code ?? "UNKNOWN" });
+    };
+    server.once("error", fail4);
+    server.listen(socket, () => {
+      server.removeListener("error", fail4);
+      resolve11({ server });
+    });
+  });
+}
+function socketIsLive(socketPath) {
+  return new Promise((resolve11) => {
+    const socket = createConnection(socketPath);
+    socket.once("connect", () => {
+      socket.destroy();
+      resolve11(true);
+    });
+    socket.once("error", (error) => {
+      socket.destroy();
+      if (error.code === "ECONNREFUSED" || error.code === "ENOENT")
+        resolve11(false);
+      else resolve11(void 0);
+    });
+  });
+}
+async function closeServer(server) {
+  return new Promise((resolve11) => {
+    server.close((error) => resolve11(error === void 0));
+  });
+}
+function removeSocket(path2, expected) {
+  const current = captureSocket(path2);
+  if (current.kind === "absent") return "absent";
+  if (current.kind === "invalid") return "invalid";
+  if (!sameIdentity(current.value.identity, expected.identity))
+    return "changed";
+  try {
+    unlinkSync(path2);
+  } catch (error) {
+    return absentError(error) ? "absent" : "changed";
+  }
+  return captureSocket(path2).kind === "absent" ? "removed" : "changed";
+}
+function removeState(path2, expected) {
+  const current = captureState(path2);
+  if (current.kind === "absent") return "absent";
+  if (current.kind === "invalid") return "invalid";
+  if (!sameIdentity(current.value.identity, expected.identity) || current.value.source !== expected.source)
+    return "changed";
+  try {
+    unlinkSync(path2);
+  } catch (error) {
+    return absentError(error) ? "absent" : "changed";
+  }
+  return captureState(path2).kind === "absent" ? "removed" : "changed";
+}
+function cleanupStatus(result2) {
+  if (result2 === "removed" || result2 === "absent") return "retry";
+  return result2 === "invalid" ? "quarantined" : "unavailable";
+}
+var OperationLock = class _OperationLock {
+  #paths;
+  #server;
+  #socket;
+  #state;
+  constructor(pathsInput, server, socket, state) {
+    this.#paths = pathsInput;
+    this.#server = server;
+    this.#socket = socket;
+    this.#state = state;
+  }
+  static async acquire(input) {
+    const lockPaths = paths(input.commonDir);
+    if (lockPaths === void 0) return { status: "quarantined" };
+    const desired = {
+      holder: input.holder,
+      nonce: input.nonce,
+      scopeCommitment: deriveScopeCommitment(input.scope),
+      version: FENCING_SCHEMA_VERSION
+    };
+    if (!validate(OperationLockStateSchema, desired).ok)
+      return { status: "quarantined" };
+    for (let attemptNumber = 0; attemptNumber < MAX_ACQUIRE_ATTEMPTS; attemptNumber += 1) {
+      const socket = captureSocket(lockPaths.socket);
+      const state = captureState(lockPaths.state);
+      if (socket.kind === "invalid" || state.kind === "invalid")
+        return { status: "quarantined" };
+      if (socket.kind === "absent" && state.kind === "valid") {
+        const cleaned = cleanupStatus(
+          removeState(lockPaths.state, state.value)
+        );
+        if (cleaned === "retry") continue;
+        return { status: cleaned };
+      }
+      if (socket.kind === "valid" && state.kind === "absent") {
+        const live = await socketIsLive(lockPaths.socket);
+        if (live === true) return { status: "held" };
+        if (live === void 0) return { status: "unavailable" };
+        const cleaned = cleanupStatus(
+          removeSocket(lockPaths.socket, socket.value)
+        );
+        if (cleaned === "retry") continue;
+        return { status: cleaned };
+      }
+      if (socket.kind === "valid" && state.kind === "valid") {
+        const live = await socketIsLive(lockPaths.socket);
+        if (live === true) return { status: "held" };
+        if (live === void 0) return { status: "unavailable" };
+        const removedSocket = cleanupStatus(
+          removeSocket(lockPaths.socket, socket.value)
+        );
+        if (removedSocket !== "retry") return { status: removedSocket };
+        const removedState = cleanupStatus(
+          removeState(lockPaths.state, state.value)
+        );
+        if (removedState !== "retry") return { status: removedState };
+        continue;
+      }
+      const listened = await listen(lockPaths.socket);
+      if (listened.server === void 0) {
+        if (listened.code === "EADDRINUSE") continue;
+        return { status: "unavailable" };
+      }
+      try {
+        chmodSync(lockPaths.socket, 384);
+      } catch {
+        await closeServer(listened.server);
+        return { status: "quarantined" };
+      }
+      const ownedSocket = captureSocket(lockPaths.socket);
+      if (ownedSocket.kind !== "valid") {
+        await closeServer(listened.server);
+        return { status: "quarantined" };
+      }
+      const written = writeState(lockPaths.state, desired);
+      if (written.kind !== "valid") {
+        await closeServer(listened.server);
+        const cleanup = cleanupStatus(
+          removeSocket(lockPaths.socket, ownedSocket.value)
+        );
+        return {
+          status: cleanup === "quarantined" ? "quarantined" : "unavailable"
+        };
+      }
+      return {
+        status: "acquired",
+        lock: new _OperationLock(
+          lockPaths,
+          listened.server,
+          ownedSocket.value,
+          written.value
+        )
+      };
+    }
+    return { status: "unavailable" };
+  }
+  async release() {
+    const currentSocket = captureSocket(this.#paths.socket);
+    const currentState = captureState(this.#paths.state);
+    if (currentSocket.kind === "invalid" || currentState.kind === "invalid")
+      return { status: "quarantined" };
+    if (currentSocket.kind !== "valid" || currentState.kind !== "valid")
+      return { status: "holder_mismatch" };
+    if (!sameIdentity(currentSocket.value.identity, this.#socket.identity) || !sameIdentity(currentState.value.identity, this.#state.identity) || currentState.value.source !== this.#state.source)
+      return { status: "holder_mismatch" };
+    if (!await closeServer(this.#server)) return { status: "unavailable" };
+    const socketResult = removeSocket(this.#paths.socket, this.#socket);
+    if (socketResult === "invalid") return { status: "quarantined" };
+    if (socketResult === "changed") return { status: "holder_mismatch" };
+    const stateResult2 = removeState(this.#paths.state, this.#state);
+    if (stateResult2 === "invalid") return { status: "quarantined" };
+    if (stateResult2 === "changed") return { status: "holder_mismatch" };
+    return { status: "released" };
+  }
+};
+
+// src/fencing/merge-slot.ts
+function same2(left, right) {
+  return canonicalJson(left) === canonicalJson(right);
+}
+function slotReadbackPayload(observation) {
+  return {
+    actor: observation.actor,
+    ...observation.holder === void 0 ? {} : { holder: observation.holder },
+    label: observation.label,
+    scope: observation.scope,
+    scopeCommitment: observation.scopeCommitment,
+    slotId: observation.slotId,
+    status: observation.status,
+    title: observation.title,
+    version: observation.version
+  };
+}
+function deriveSlotReadbackHash(observation) {
+  return sha256(
+    canonicalJson({
+      domain: "sce.fencing.merge-slot.v1",
+      observation: slotReadbackPayload(observation)
+    })
+  );
+}
+function slotId(prefix) {
+  return `${prefix}-merge-slot`;
+}
+function runId(holder4) {
+  return holder4.split("/", 1)[0] ?? "";
+}
+function validateMergeSlotObservation(input, prefix, scope) {
+  const parsed = validate(
+    MergeSlotObservationSchema,
+    input
+  );
+  if (!parsed.ok || parsed.value === void 0)
+    return { ok: false, reason: parsed.errors.join("; ") };
+  const observation = parsed.value;
+  if (observation.slotId !== slotId(prefix) || !same2(observation.scope, scope) || observation.scopeCommitment !== deriveScopeCommitment(scope) || observation.readbackHash !== deriveSlotReadbackHash(observation))
+    return { ok: false, reason: "slot identity or readback is invalid" };
+  if (observation.status === "available" && observation.holder !== void 0 || observation.status === "acquired" && (observation.holder === void 0 || observation.actor !== observation.holder))
+    return { ok: false, reason: "slot status and holder disagree" };
+  return { ok: true, value: observation };
+}
+function continuationMatches(input, prefix, scope, holder4, knownHolder, observation) {
+  const parsed = validate(
+    SlotContinuationEvidenceSchema,
+    input
+  );
+  if (!parsed.ok || parsed.value === void 0) return false;
+  const evidence = parsed.value;
+  if (evidence.nextHolder !== holder4 || evidence.previousHolder === holder4 || knownHolder !== evidence.previousHolder || runId(evidence.previousHolder) !== runId(holder4) || !same2(evidence.after, observation))
+    return false;
+  const before = validateMergeSlotObservation(evidence.before, prefix, scope);
+  const after = validateMergeSlotObservation(evidence.after, prefix, scope);
+  return before.ok && after.ok && before.value.status === "acquired" && before.value.holder === evidence.previousHolder && before.value.actor === evidence.previousHolder && after.value.status === "acquired" && after.value.holder === holder4 && after.value.actor === holder4;
+}
+function decideControllerSlot(prefix, scope, holder4, knownHolder, observationInput, continuationInput, releaseInput) {
+  const observation = validateMergeSlotObservation(
+    observationInput,
+    prefix,
+    scope
+  );
+  if (!observation.ok) return { kind: "quarantined" };
+  if (observation.value.status === "available") {
+    if (knownHolder === void 0) return { kind: "acquire" };
+    return validateSlotRelease(prefix, scope, knownHolder, releaseInput).ok ? { kind: "acquire" } : { kind: "blocked" };
+  }
+  if (observation.value.holder !== void 0 && runId(observation.value.holder) === runId(holder4) && continuationMatches(
+    continuationInput,
+    prefix,
+    scope,
+    holder4,
+    knownHolder,
+    observation.value
+  ))
+    return { kind: "continue" };
+  if (observation.value.holder === holder4 && knownHolder === holder4)
+    return { kind: "resume" };
+  return { kind: "blocked" };
+}
+function validateSlotRelease(prefix, scope, holder4, evidenceInput) {
+  const parsed = validate(
+    SlotReleaseEvidenceSchema,
+    evidenceInput
+  );
+  if (!parsed.ok || parsed.value === void 0)
+    return { ok: false, reason: parsed.errors.join("; ") };
+  if (parsed.value.holder !== holder4)
+    return { ok: false, reason: "release holder differs" };
+  const readback = validateMergeSlotObservation(
+    parsed.value.readback,
+    prefix,
+    scope
+  );
+  if (!readback.ok || readback.value.status !== "available" || readback.value.holder !== void 0 || readback.value.actor !== holder4)
+    return { ok: false, reason: "release lacks positive available readback" };
+  return { ok: true, value: parsed.value };
+}
+
 // src/protocol/actions.ts
 function legalActions(stateInput) {
   const parsed = validate(RepositoryRunSchema, stateInput);
@@ -20983,14 +21783,14 @@ var CandidateDigestCommandSchema = Type.Object(
 
 // src/adapters/git/index.ts
 import { spawn as spawn2 } from "node:child_process";
-import { existsSync, realpathSync as realpathSync2 } from "node:fs";
+import { existsSync, realpathSync as realpathSync3 } from "node:fs";
 import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import {
   basename as basename2,
   dirname as dirname2,
   isAbsolute as isAbsolute4,
-  join as join2,
+  join as join3,
   normalize as normalize3,
   relative as relative2,
   resolve as resolve4
@@ -21007,7 +21807,7 @@ var BD_VERSION = "1.1.0";
 var BD_CONTEXT_SCHEMA_VERSION = 1;
 var MAX_PATH_BYTES = 4096;
 var MAX_TEXT_BYTES = 8192;
-var utf84 = new TextEncoder();
+var utf86 = new TextEncoder();
 function strictObject3(properties) {
   return Type.Object(properties, { additionalProperties: false });
 }
@@ -21018,7 +21818,7 @@ var absolutePath3 = () => Type.String({
   maxLength: MAX_PATH_BYTES,
   maxUtf8Bytes: MAX_PATH_BYTES
 });
-var identifier3 = () => Type.String({
+var identifier4 = () => Type.String({
   minLength: 1,
   maxLength: 160,
   pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
@@ -21034,7 +21834,7 @@ ajv2.addKeyword({
   keyword: "maxUtf8Bytes",
   type: "string",
   schemaType: "number",
-  validate: (limit, value) => utf84.encode(value).byteLength <= limit,
+  validate: (limit, value) => utf86.encode(value).byteLength <= limit,
   errors: false
 });
 function isSchema(schema, value) {
@@ -21149,7 +21949,7 @@ var BdContextObservationSchema = strictObject3({
   bd_version: text2(32),
   beads_dir: Type.Optional(absolutePath3()),
   cwd_repo_root: absolutePath3(),
-  database: Type.Optional(identifier3()),
+  database: Type.Optional(identifier4()),
   dolt_mode: Type.Optional(
     Type.Union([
       Type.Literal("embedded"),
@@ -21163,7 +21963,7 @@ var BdContextObservationSchema = strictObject3({
   ),
   is_redirected: Type.Optional(Type.Boolean()),
   is_worktree: Type.Optional(Type.Boolean()),
-  project_id: Type.Optional(identifier3()),
+  project_id: Type.Optional(identifier4()),
   repo_root: Type.Optional(absolutePath3()),
   role: optionalText(80),
   schema_version: Type.Integer({
@@ -21180,9 +21980,9 @@ var BdContextObservationSchema = strictObject3({
       Type.Literal("proxy")
     ])
   ),
-  prefix: Type.Optional(identifier3()),
-  rig: Type.Optional(identifier3()),
-  sync_ref: Type.Optional(identifier3()),
+  prefix: Type.Optional(identifier4()),
+  rig: Type.Optional(identifier4()),
+  sync_ref: Type.Optional(identifier4()),
   sync_remote: optionalText(1024),
   global: Type.Optional(Type.Boolean()),
   proxied: Type.Optional(Type.Boolean())
@@ -21190,7 +21990,7 @@ var BdContextObservationSchema = strictObject3({
 var BdDoltShowObservationSchema = strictObject3({
   backend: Type.Literal("dolt"),
   data_dir: absolutePath3(),
-  database: identifier3(),
+  database: identifier4(),
   embedded: Type.Boolean(),
   schema_version: Type.Integer({
     minimum: 1,
@@ -21229,7 +22029,7 @@ var BootstrapActionSchema = Type.Union([
 var BdBootstrapRawSchema = strictObject3({
   action: BootstrapActionSchema,
   beads_dir: Type.Optional(absolutePath3()),
-  database: Type.Optional(identifier3()),
+  database: Type.Optional(identifier4()),
   has_existing: Type.Boolean(),
   reason: text2(1024),
   schema_version: Type.Integer({
@@ -21241,7 +22041,7 @@ var BdBootstrapRawSchema = strictObject3({
 var BootstrapPlanSchema = strictObject3({
   action: BootstrapActionSchema,
   beadsDir: Type.Optional(absolutePath3()),
-  database: Type.Optional(identifier3())
+  database: Type.Optional(identifier4())
 });
 var DoltObservationSchema = strictObject3({
   autoCommit: Type.Union([
@@ -21249,7 +22049,7 @@ var DoltObservationSchema = strictObject3({
     Type.Literal("on"),
     Type.Literal("batch")
   ]),
-  database: identifier3(),
+  database: identifier4(),
   head: Type.Optional(
     Type.String({
       minLength: 40,
@@ -21267,30 +22067,30 @@ var DoltObservationSchema = strictObject3({
 var GitInspectionSchema = strictObject3({
   commonDir: absolutePath3(),
   objectFormat: Type.Union([Type.Literal("sha1"), Type.Literal("sha256")]),
-  providerId: Type.Optional(identifier3()),
+  providerId: Type.Optional(identifier4()),
   remoteUrls: Type.Array(text2(1024), { minItems: 0, maxItems: 16 }),
   topLevel: absolutePath3()
 });
 var BeadsIdentitySchema = strictObject3({
   beadsDir: Type.Optional(absolutePath3()),
   contextSchemaVersion: Type.Literal(BD_CONTEXT_SCHEMA_VERSION),
-  database: Type.Optional(identifier3()),
+  database: Type.Optional(identifier4()),
   mode: Type.Union([
     Type.Literal("embedded"),
     Type.Literal("managed_local_shared_server"),
     Type.Literal("external_server")
   ]),
-  prefix: Type.Optional(identifier3()),
-  projectId: Type.Optional(identifier3()),
+  prefix: Type.Optional(identifier4()),
+  projectId: Type.Optional(identifier4()),
   provenance: Type.Union([
     Type.Literal("embedded_config"),
     Type.Literal("shared_server_flag"),
     Type.Literal("external_server_flag")
   ]),
-  rig: Type.Optional(identifier3()),
+  rig: Type.Optional(identifier4()),
   server: Type.Optional(text2(320)),
   storePath: Type.Optional(absolutePath3()),
-  syncRef: Type.Optional(identifier3()),
+  syncRef: Type.Optional(identifier4()),
   syncRemote: optionalText(1024),
   toolVersion: Type.Literal(BD_VERSION)
 });
@@ -21657,12 +22457,12 @@ function preflightEnvelope(topology, git) {
 }
 
 // src/preflight/subprocess.ts
-import { realpathSync, statSync } from "node:fs";
+import { realpathSync as realpathSync2, statSync as statSync2 } from "node:fs";
 import {
   basename,
   dirname,
   isAbsolute as isAbsolute3,
-  join,
+  join as join2,
   relative,
   resolve as resolve3
 } from "node:path";
@@ -21715,8 +22515,8 @@ function canonicalCwd(cwd) {
   const lexical = canonicalAbsolutePath2(cwd);
   if (lexical === void 0) return void 0;
   try {
-    const real = realpathSync(lexical);
-    return statSync(real).isDirectory() ? real : void 0;
+    const real = realpathSync2(lexical);
+    return statSync2(real).isDirectory() ? real : void 0;
   } catch {
     return void 0;
   }
@@ -21725,8 +22525,8 @@ function canonicalObservedDirectory(path2) {
   const lexical = canonicalAbsolutePath2(path2);
   if (lexical === void 0) return void 0;
   try {
-    const real = realpathSync(lexical);
-    return statSync(real).isDirectory() ? real : void 0;
+    const real = realpathSync2(lexical);
+    return statSync2(real).isDirectory() ? real : void 0;
   } catch {
     return void 0;
   }
@@ -21748,11 +22548,11 @@ function canonicalLocalBareRepository(path2) {
   const lexical = canonicalAbsolutePath2(path2);
   if (lexical === void 0) return void 0;
   try {
-    const real = realpathSync(lexical);
-    if (!statSync(real).isDirectory()) return void 0;
-    if (!statSync(join(real, "HEAD")).isFile()) return void 0;
-    if (!statSync(join(real, "objects")).isDirectory()) return void 0;
-    if (!statSync(join(real, "refs")).isDirectory()) return void 0;
+    const real = realpathSync2(lexical);
+    if (!statSync2(real).isDirectory()) return void 0;
+    if (!statSync2(join2(real, "HEAD")).isFile()) return void 0;
+    if (!statSync2(join2(real, "objects")).isDirectory()) return void 0;
+    if (!statSync2(join2(real, "refs")).isDirectory()) return void 0;
     return real;
   } catch {
     return void 0;
@@ -21855,7 +22655,7 @@ function matchesCanonicalGitContext(context, git) {
   if (context.repo_root === void 0 || context.beads_dir === void 0 || context.is_worktree === void 0 || context.cwd_repo_root !== git.topLevel || basename(git.commonDir) !== ".git")
     return false;
   const primaryRoot = dirname(git.commonDir);
-  if (context.repo_root !== primaryRoot || context.beads_dir !== join(primaryRoot, ".beads"))
+  if (context.repo_root !== primaryRoot || context.beads_dir !== join2(primaryRoot, ".beads"))
     return false;
   return context.is_worktree ? git.topLevel !== primaryRoot : git.topLevel === primaryRoot;
 }
@@ -22124,7 +22924,7 @@ async function inspectPreflight(cwd, options = {}) {
 
 // src/adapters/git/schemas.ts
 var import_ajv3 = __toESM(require_ajv(), 1);
-var utf85 = new TextEncoder();
+var utf87 = new TextEncoder();
 var ajv3 = new import_ajv3.Ajv({
   allErrors: true,
   coerceTypes: false,
@@ -22136,7 +22936,7 @@ ajv3.addKeyword({
   keyword: "maxUtf8Bytes",
   type: "string",
   schemaType: "number",
-  validate: (limit, value) => utf85.encode(value).byteLength <= limit,
+  validate: (limit, value) => utf87.encode(value).byteLength <= limit,
   errors: false
 });
 function strictObject4(properties) {
@@ -22357,10 +23157,10 @@ function allowedGitArgv(argv) {
 function canonicalWorktreePath(value) {
   if (!safeAbsolutePath(value)) return void 0;
   try {
-    return normalize3(realpathSync2(value));
+    return normalize3(realpathSync3(value));
   } catch {
     try {
-      return join2(normalize3(realpathSync2(dirname2(value))), basename2(value));
+      return join3(normalize3(realpathSync3(dirname2(value))), basename2(value));
     } catch {
       return void 0;
     }
@@ -22368,7 +23168,7 @@ function canonicalWorktreePath(value) {
 }
 function canonicalExistingOrLexical(value) {
   try {
-    return normalize3(realpathSync2(value));
+    return normalize3(realpathSync3(value));
   } catch {
     return normalize3(resolve4(value));
   }
@@ -22530,7 +23330,7 @@ async function verifyOrdinaryTrackedIndex(runner, path2) {
 }
 async function candidateDiffEnvironment(runner, repository, worktreePath) {
   if (existsSync(
-    join2(
+    join3(
       canonicalExistingOrLexical(repository.commonDir),
       "info",
       "attributes"
@@ -22573,8 +23373,8 @@ async function verifySinglePushRemote(runner, repository, remote2) {
 async function guardedPush(runner, repository, input) {
   let directory;
   try {
-    directory = await mkdtemp(join2(tmpdir(), "sce-git-pre-push-"));
-    const hook = join2(directory, "pre-push");
+    directory = await mkdtemp(join3(tmpdir(), "sce-git-pre-push-"));
+    const hook = join3(directory, "pre-push");
     await writeFile(
       hook,
       `#!/bin/sh
@@ -23515,7 +24315,7 @@ var nodeGitRunner = async ({ argv, cwd, env }) => {
 function canonicalGitCommonDir(path2) {
   if (!safeAbsolutePath(path2)) return void 0;
   try {
-    const canonical2 = realpathSync2(path2);
+    const canonical2 = realpathSync3(path2);
     return safeAbsolutePath(canonical2) ? canonical2 : void 0;
   } catch {
     return void 0;
@@ -23525,17 +24325,17 @@ function canonicalGitCommonDir(path2) {
 // src/adapters/materialise/index.ts
 import { spawn as spawn3 } from "node:child_process";
 import { createHash as createHash2 } from "node:crypto";
-import { constants } from "node:fs";
+import { constants as constants2 } from "node:fs";
 import { lstat, open, realpath, stat } from "node:fs/promises";
-import { isAbsolute as isAbsolute5, join as join3, normalize as normalize4, relative as relative3, resolve as resolve5 } from "node:path";
+import { isAbsolute as isAbsolute5, join as join4, normalize as normalize4, relative as relative3, resolve as resolve5 } from "node:path";
 async function readNoFollow(root, name, maximumBytes) {
   try {
-    const first = await lstat(join3(root, name), { bigint: true });
+    const first = await lstat(join4(root, name), { bigint: true });
     if (!first.isFile() || first.isSymbolicLink() || first.size > BigInt(maximumBytes))
       return { status: "ambiguous" };
     const handle = await open(
-      join3(root, name),
-      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)
+      join4(root, name),
+      constants2.O_RDONLY | (constants2.O_NOFOLLOW ?? 0)
     );
     try {
       const second = await handle.stat({ bigint: true });
@@ -23767,7 +24567,7 @@ function globAdvanceState(pattern, positions, byte) {
 function globStateAccepts(pattern, positions) {
   return globClosure(pattern, positions).has(pattern.byteLength);
 }
-function refusal(code, facts) {
+function refusal2(code, facts) {
   return {
     refusal: {
       code,
@@ -23922,14 +24722,14 @@ async function resolveSources(cwd, effect2, processPort, objectFormat) {
     effect2.params.sourceOid
   );
   if (sourceInfo.status === "missing")
-    return refusal("source_absent", { sourceOid: effect2.params.sourceOid });
+    return refusal2("source_absent", { sourceOid: effect2.params.sourceOid });
   if (sourceInfo.status === "ambiguous")
     return ambiguous({
       operation: "source-object",
       sourceOid: effect2.params.sourceOid
     });
   if (sourceInfo.objectType !== "commit")
-    return refusal("non_blob", {
+    return refusal2("non_blob", {
       objectType: sourceInfo.objectType,
       sourceOid: effect2.params.sourceOid
     });
@@ -23972,7 +24772,7 @@ async function resolveSources(cwd, effect2, processPort, objectFormat) {
     });
   const unsafeMatchedPathHash = tree.unsafeMatchedPathHash;
   if (unsafeMatchedPathHash !== void 0)
-    return refusal("unsafe_path", { pathHash: unsafeMatchedPathHash });
+    return refusal2("unsafe_path", { pathHash: unsafeMatchedPathHash });
   const parsed = parseTree(tree.stdout);
   if (!parsed.valid) return ambiguous({ operation: "parse-tree" });
   const retainedMatches = tree.retainedMatches;
@@ -23981,16 +24781,16 @@ async function resolveSources(cwd, effect2, processPort, objectFormat) {
   );
   const matchCount = retainedMatches ?? matched.length;
   if (matchCount === 0)
-    return refusal("zero_matches", { pattern: effect2.params.sourcePattern });
+    return refusal2("zero_matches", { pattern: effect2.params.sourcePattern });
   if (matchCount > LIMITS.materialisationMatches || matchCount > effect2.params.remainingItemCapacity)
-    return refusal(
+    return refusal2(
       matchCount > LIMITS.materialisationMatches ? "too_many_matches" : "wave_item_limit",
       { matchCount }
     );
   if (matched.some(
     (entry) => entry.type !== "blob" || entry.mode !== "100644" && entry.mode !== "100755"
   ))
-    return refusal("non_blob", {
+    return refusal2("non_blob", {
       pathHashes: matched.filter(
         (entry) => entry.type !== "blob" || entry.mode !== "100644" && entry.mode !== "100755"
       ).map((entry) => hashBytes(entry.path))
@@ -24005,24 +24805,24 @@ async function resolveSources(cwd, effect2, processPort, objectFormat) {
     try {
       sourcePath = new TextDecoder("utf-8", { fatal: true }).decode(entry.path);
     } catch {
-      return refusal("unsafe_path", { pathHash: hashBytes(entry.path) });
+      return refusal2("unsafe_path", { pathHash: hashBytes(entry.path) });
     }
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*(?:\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/u.test(
       sourcePath
     ) || Buffer.byteLength(sourcePath) > LIMITS.materialisationPathBytes || !exactOid2(entry.blobOid))
-      return refusal("unsafe_path", { pathHash: hashBytes(entry.path) });
+      return refusal2("unsafe_path", { pathHash: hashBytes(entry.path) });
     const blobInfo = await readGitObjectInfo(processPort, cwd, entry.blobOid);
     if (blobInfo.status === "missing")
-      return refusal("source_absent", { blobOid: entry.blobOid });
+      return refusal2("source_absent", { blobOid: entry.blobOid });
     if (blobInfo.status === "ambiguous")
       return ambiguous({ blobOid: entry.blobOid, operation: "blob-object" });
     if (blobInfo.objectType !== "blob")
-      return refusal("non_blob", {
+      return refusal2("non_blob", {
         blobOid: entry.blobOid,
         objectType: blobInfo.objectType
       });
     if (blobInfo.byteCount > LIMITS.materialisationBlobBytes)
-      return refusal("blob_too_large", { blobOid: entry.blobOid });
+      return refusal2("blob_too_large", { blobOid: entry.blobOid });
     const blob = await readGit(
       processPort,
       cwd,
@@ -24033,7 +24833,7 @@ async function resolveSources(cwd, effect2, processPort, objectFormat) {
       return ambiguous({ blobOid: entry.blobOid, operation: "cat-file" });
     total += blob.stdout.byteLength;
     if (total > effect2.params.remainingSourceByteCapacity)
-      return refusal("wave_byte_limit", { byteCount: total });
+      return refusal2("wave_byte_limit", { byteCount: total });
     sources.push({
       blobOid: entry.blobOid,
       byteCount: blob.stdout.byteLength,
@@ -24071,7 +24871,7 @@ async function resolveSources(cwd, effect2, processPort, objectFormat) {
     expansionBinding
   );
   if (projectionEvidenceBytes > effect2.params.remainingProjectionSnapshotByteCapacity || aggregateEvidenceBytes > effect2.params.remainingAggregateEnvelopeByteCapacity)
-    return refusal("evidence_budget_exceeded", {
+    return refusal2("evidence_budget_exceeded", {
       aggregateEvidenceBytes,
       gateEntryId: effect2.gateEntryId,
       projectionEvidenceBytes
@@ -24271,7 +25071,7 @@ async function admittedDestination(destination, destinationSubpath) {
       return { reason: "invalid_destination", status: "refused" };
     let marker;
     try {
-      marker = await lstat(join3(root, destination.markerFile), {
+      marker = await lstat(join4(root, destination.markerFile), {
         bigint: true
       });
     } catch (error) {
@@ -24281,7 +25081,7 @@ async function admittedDestination(destination, destinationSubpath) {
       return { reason: "invalid_destination", status: "refused" };
     let current = root;
     for (const segment of destinationSubpath.split("/")) {
-      current = join3(current, segment);
+      current = join4(current, segment);
       let component;
       try {
         component = await lstat(current, { bigint: true });
@@ -24319,7 +25119,7 @@ async function probeDestination(effect2) {
     effect2.params.destinationSubpath
   );
   if (result2.status === "refused")
-    return refusal(
+    return refusal2(
       result2.reason === "alias_unmounted" ? effect2.params.destination.mountPolicy === "optional" ? "optional_alias_unmounted" : "required_alias_unmounted" : "invalid_destination",
       {
         alias: effect2.params.destination.alias,
@@ -24353,7 +25153,7 @@ async function materialiseBytes(cwd, effect2, processPort, objectFormat, platfor
     effect2.params.source.blobOid
   );
   if (blobInfo.status === "missing")
-    return refusal("source_absent", { blobOid: effect2.params.source.blobOid });
+    return refusal2("source_absent", { blobOid: effect2.params.source.blobOid });
   if (blobInfo.status !== "observed" || blobInfo.objectType !== "blob" || blobInfo.byteCount !== effect2.params.source.byteCount)
     return ambiguous({
       blobOid: effect2.params.source.blobOid,
@@ -24442,7 +25242,7 @@ async function materialiseBytes(cwd, effect2, processPort, objectFormat, platfor
     return ambiguous({ operation: "helper-shape" });
   const value = parsed;
   if (value.status === "refused" && value.code === "hard-links-unsupported" && Object.keys(value).sort().join(",") === "code,status")
-    return refusal("hard_links_unsupported", {
+    return refusal2("hard_links_unsupported", {
       alias: effect2.params.destination.alias
     });
   if (value.status !== "observed" || !["already_present", "published"].includes(String(value.artifactStatus)) || !["already_present", "published"].includes(String(value.sidecarStatus)) || Object.keys(value).sort().join(",") !== "artifactStatus,sidecarStatus,status")
@@ -24471,7 +25271,7 @@ async function discoverMaterialisation(cwd, effect2, processPort, objectFormat) 
     effect2.params.source.blobOid
   );
   if (blobInfo.status === "missing")
-    return refusal("source_absent", { blobOid: effect2.params.source.blobOid });
+    return refusal2("source_absent", { blobOid: effect2.params.source.blobOid });
   if (blobInfo.status !== "observed" || blobInfo.objectType !== "blob" || blobInfo.byteCount !== effect2.params.source.byteCount)
     return ambiguous({ operation: "source-readback" });
   const blob = await readGit(
@@ -24578,7 +25378,7 @@ function createMaterialisationAdapter(repositoryCwd, objectFormat, processPort =
 // src/adapters/git/provenance.ts
 import { spawn as spawn4 } from "node:child_process";
 import { lstat as lstat2, mkdir, readFile, writeFile as writeFile2 } from "node:fs/promises";
-import { dirname as dirname3, join as join4 } from "node:path";
+import { dirname as dirname3, join as join5 } from "node:path";
 
 // src/protocol/provenance.ts
 var PROVENANCE_KEY_TRAILER = "SCE-Provenance-Key";
@@ -24801,8 +25601,8 @@ function targetRow(target) {
 }
 function outputCell(item) {
   const name = item.artifactName ?? item.source.path;
-  const refusal2 = item.lastRefusal === void 0 ? "" : ` refused:${item.lastRefusal.code}`;
-  return `${name} ${item.status}${refusal2}${dispositionSuffix(
+  const refusal3 = item.lastRefusal === void 0 ? "" : ` refused:${item.lastRefusal.code}`;
+  return `${name} ${item.status}${refusal3}${dispositionSuffix(
     item.disposition,
     item.followUpBeadId
   )}`;
@@ -24927,7 +25727,7 @@ async function realDirectory(path2) {
 async function recordsOnDisk(worktreePath, records) {
   for (const record4 of records) {
     try {
-      const bytes2 = await readFile(join4(worktreePath, record4.path), "utf8");
+      const bytes2 = await readFile(join5(worktreePath, record4.path), "utf8");
       if (bytes2 !== record4.bytes) return false;
     } catch {
       return false;
@@ -25075,7 +25875,7 @@ function createProvenanceAdapter(options) {
     if (built === void 0) {
       try {
         for (const record4 of projection.records) {
-          const target = join4(worktreePath, record4.path);
+          const target = join5(worktreePath, record4.path);
           await mkdir(dirname3(target), { recursive: true });
           await writeFile2(target, record4.bytes, "utf8");
         }
@@ -25085,7 +25885,7 @@ function createProvenanceAdapter(options) {
       const generatorArgv = [
         ...contract.provenance.rollupGeneratorCommand,
         "--output",
-        join4(worktreePath, contract.provenance.generatedDirectory)
+        join5(worktreePath, contract.provenance.generatedDirectory)
       ];
       const generated = await processPort.run(generatorArgv, {
         cwd: worktreePath,
@@ -25253,786 +26053,6 @@ function createProvenanceAdapter(options) {
     reconcileAggregateVerify: async () => ({ status: "absent" }),
     reconcileProvenanceCommit
   };
-}
-
-// src/fencing/schemas.ts
-var FENCING_SCHEMA_VERSION = 1;
-var MERGE_SLOT_LABEL = "gt:slot";
-var MERGE_SLOT_TITLE = "Merge Slot";
-var FENCING_LIMITS = {
-  batchBytes: 262144,
-  childProjectionBytes: 65536,
-  changedRows: 64,
-  projectionBytes: 196608
-};
-var identifier4 = () => Type.String({
-  minLength: 1,
-  maxLength: 160,
-  pattern: "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
-});
-var holder = () => Type.String({
-  minLength: 3,
-  maxLength: 321,
-  pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$"
-});
-var hash3 = () => Type.String({ minLength: 64, maxLength: 64, pattern: "^[0-9a-f]{64}$" });
-var revision2 = () => Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER });
-var FencingScopeSchema = strictObject({
-  beadsStoreIdentity: identifier4(),
-  gitRepositoryIdentity: identifier4(),
-  integrationBranch: identifier4()
-});
-var ChildRowReferenceSchema = strictObject({
-  commitment: hash3(),
-  revision: revision2(),
-  unitId: identifier4()
-});
-var CheckpointObservationSchema = strictObject({
-  aggregateRevision: revision2(),
-  changedRowsCommitment: hash3(),
-  rootCommitment: hash3()
-});
-var RootProjectionSchema = strictObject({
-  aggregateCommitment: hash3(),
-  aggregateRevision: revision2(),
-  checkpoint: CheckpointObservationSchema,
-  childRows: Type.Array(ChildRowReferenceSchema, {
-    maxItems: FENCING_LIMITS.changedRows
-  }),
-  holder: holder(),
-  run: RepositoryRunSchema,
-  schema: Type.Literal("sce.fencing.root"),
-  scope: FencingScopeSchema,
-  version: Type.Literal(FENCING_SCHEMA_VERSION)
-});
-var ChildProjectionSchema = strictObject({
-  commitment: hash3(),
-  holder: holder(),
-  revision: revision2(),
-  schema: Type.Literal("sce.fencing.child"),
-  scope: FencingScopeSchema,
-  unit: UnitSchema,
-  unitId: identifier4(),
-  version: Type.Literal(FENCING_SCHEMA_VERSION)
-});
-var ExpectedChildRowSchema = strictObject({
-  expectedCommitment: hash3(),
-  expectedRevision: revision2(),
-  unitId: identifier4()
-});
-var ChangedRowSchema = strictObject({
-  expectedCommitment: hash3(),
-  expectedRevision: revision2(),
-  nextCommitment: hash3(),
-  nextRevision: revision2(),
-  unitId: identifier4()
-});
-var ContinuationEvidenceSchema = strictObject({
-  nextHolder: holder(),
-  observationHash: hash3(),
-  previousHolder: holder(),
-  scopeCommitment: hash3()
-});
-var ReleaseEvidenceSchema = strictObject({
-  available: Type.Literal(true),
-  holder: holder(),
-  observationHash: hash3(),
-  scopeCommitment: hash3()
-});
-var MergeSlotObservationSchema = strictObject({
-  actor: holder(),
-  holder: Type.Optional(holder()),
-  label: Type.Literal(MERGE_SLOT_LABEL),
-  readbackHash: hash3(),
-  scope: FencingScopeSchema,
-  scopeCommitment: hash3(),
-  slotId: identifier4(),
-  status: Type.Union([Type.Literal("available"), Type.Literal("acquired")]),
-  title: Type.Literal(MERGE_SLOT_TITLE),
-  version: Type.Literal(FENCING_SCHEMA_VERSION)
-});
-var SlotContinuationEvidenceSchema = strictObject({
-  after: MergeSlotObservationSchema,
-  before: MergeSlotObservationSchema,
-  nextHolder: holder(),
-  previousHolder: holder()
-});
-var SlotReleaseEvidenceSchema = strictObject({
-  holder: holder(),
-  readback: MergeSlotObservationSchema
-});
-var MutationBatchSchema = strictObject({
-  changedRows: Type.Array(ChangedRowSchema, {
-    maxItems: FENCING_LIMITS.changedRows
-  }),
-  checkpoint: CheckpointObservationSchema,
-  continuation: Type.Optional(ContinuationEvidenceSchema),
-  expectedAggregateCommitment: hash3(),
-  expectedAggregateRevision: revision2(),
-  /** Exact holder predicate checked inside the topology transaction. */
-  expectedHolder: holder(),
-  expectedChildren: Type.Array(ExpectedChildRowSchema, {
-    maxItems: FENCING_LIMITS.changedRows
-  }),
-  holder: holder(),
-  next: strictObject({
-    children: Type.Array(ChildProjectionSchema, {
-      maxItems: FENCING_LIMITS.changedRows
-    }),
-    root: RootProjectionSchema
-  }),
-  release: Type.Optional(ReleaseEvidenceSchema),
-  /**
-   * Predicate-only rows for units this batch retires from the root's
-   * authority set. They are never written: a retired unit's child projection
-   * stays in Beads as inert history. The CAS still reads each one inside the
-   * same transaction and refuses the batch when a retired row moved out of
-   * band. A batch that retires nothing omits the key entirely, so bytes
-   * persisted before this contract existed remain exactly valid.
-   */
-  retiredChildren: Type.Optional(
-    Type.Array(ExpectedChildRowSchema, {
-      maxItems: FENCING_LIMITS.changedRows,
-      minItems: 1
-    })
-  ),
-  schema: Type.Literal("sce.fencing.batch"),
-  scope: FencingScopeSchema,
-  version: Type.Literal(FENCING_SCHEMA_VERSION)
-});
-var RunStoreNonAppliedResultSchema = Type.Union([
-  strictObject({ status: Type.Literal("stale") }),
-  strictObject({ status: Type.Literal("holder_mismatch") }),
-  strictObject({ status: Type.Literal("ambiguous") }),
-  strictObject({ status: Type.Literal("unavailable") }),
-  strictObject({ status: Type.Literal("quarantined") })
-]);
-var RunStoreAppliedResultSchema = strictObject({
-  /** Root is always an affected row, followed by every affected child. */
-  affectedRowCount: Type.Integer({
-    minimum: 1,
-    maximum: FENCING_LIMITS.changedRows + 1
-  }),
-  checkpoint: CheckpointObservationSchema,
-  children: Type.Array(ChildProjectionSchema, {
-    maxItems: FENCING_LIMITS.changedRows
-  }),
-  root: RootProjectionSchema,
-  status: Type.Literal("applied")
-});
-var RunStoreResultSchema = Type.Union([
-  RunStoreAppliedResultSchema,
-  RunStoreNonAppliedResultSchema
-]);
-var OperationLockStateSchema = strictObject({
-  holder: holder(),
-  nonce: identifier4(),
-  scopeCommitment: hash3(),
-  version: Type.Literal(FENCING_SCHEMA_VERSION)
-});
-
-// src/fencing/projections.ts
-var utf86 = new TextEncoder();
-function json(value) {
-  return value;
-}
-function equal(left, right) {
-  return canonicalJson(json(left)) === canonicalJson(json(right));
-}
-function compareCodeUnits(left, right) {
-  return left < right ? -1 : left > right ? 1 : 0;
-}
-function holderRunId(holder4) {
-  return holder4.split("/", 1)[0] ?? "";
-}
-function scopeFor(run2) {
-  return {
-    beadsStoreIdentity: run2.storeIdentity,
-    gitRepositoryIdentity: run2.repositoryIdentity,
-    integrationBranch: run2.integrationBranch
-  };
-}
-function deriveScopeCommitment(scope) {
-  return sha256(
-    canonicalJson({ domain: "sce.fencing.scope.v1", scope: json(scope) })
-  );
-}
-function deriveAggregateCommitment(run2) {
-  return sha256(
-    canonicalJson({ domain: "sce.fencing.aggregate.v1", run: json(run2) })
-  );
-}
-function deriveChildCommitment(unit) {
-  return sha256(
-    canonicalJson({ domain: "sce.fencing.child.v1", unit: json(unit) })
-  );
-}
-function deriveChangedRowsCommitment(rows) {
-  return sha256(
-    canonicalJson({
-      domain: "sce.fencing.changed-rows.v1",
-      rows: json(
-        [...rows].sort(
-          (left, right) => compareCodeUnits(left.unitId, right.unitId)
-        )
-      )
-    })
-  );
-}
-function childRows(run2) {
-  return Object.values(run2.units).map((unit) => ({
-    commitment: deriveChildCommitment(unit),
-    revision: unit.revision,
-    unitId: unit.id
-  })).sort((left, right) => compareCodeUnits(left.unitId, right.unitId));
-}
-function checkpoint(aggregateRevision, aggregateCommitment) {
-  return {
-    aggregateRevision,
-    changedRowsCommitment: deriveChangedRowsCommitment([]),
-    rootCommitment: aggregateCommitment
-  };
-}
-function checkpointForBatch(root, changedRows) {
-  return {
-    aggregateRevision: root.aggregateRevision,
-    changedRowsCommitment: deriveChangedRowsCommitment(changedRows),
-    rootCommitment: root.aggregateCommitment
-  };
-}
-function withBatchCheckpoint(root, changedRows) {
-  return { ...root, checkpoint: checkpointForBatch(root, changedRows) };
-}
-function makeRootProjection(run2) {
-  const aggregateCommitment = deriveAggregateCommitment(run2);
-  return {
-    aggregateCommitment,
-    aggregateRevision: run2.revision,
-    checkpoint: checkpoint(run2.revision, aggregateCommitment),
-    childRows: [...childRows(run2)],
-    holder: run2.controller.holder,
-    run: run2,
-    schema: "sce.fencing.root",
-    scope: scopeFor(run2),
-    version: FENCING_SCHEMA_VERSION
-  };
-}
-function makeChildProjection(root, unitId) {
-  const unit = root.run.units[unitId];
-  if (unit === void 0) return void 0;
-  return {
-    commitment: deriveChildCommitment(unit),
-    holder: root.holder,
-    revision: unit.revision,
-    schema: "sce.fencing.child",
-    scope: root.scope,
-    unit,
-    unitId,
-    version: FENCING_SCHEMA_VERSION
-  };
-}
-function parseSchema(schema, input) {
-  const parsed = validate(schema, input);
-  return parsed.ok && parsed.value !== void 0 ? { ok: true, value: parsed.value } : { ok: false, reason: parsed.errors.join("; ") };
-}
-function validateRootProjection(input) {
-  const parsed = parseSchema(RootProjectionSchema, input);
-  if (!parsed.ok) return parsed;
-  const root = parsed.value;
-  if (runInvariantErrors(root.run).length > 0)
-    return { ok: false, reason: "root run invariants fail" };
-  if (!equal(root.scope, scopeFor(root.run)))
-    return { ok: false, reason: "root scope disagrees with run" };
-  if (root.holder !== root.run.controller.holder)
-    return { ok: false, reason: "root holder disagrees with run" };
-  if (root.aggregateRevision !== root.run.revision)
-    return { ok: false, reason: "root revision disagrees with run" };
-  if (root.aggregateCommitment !== deriveAggregateCommitment(root.run))
-    return { ok: false, reason: "root aggregate commitment is invalid" };
-  if (!equal(root.childRows, childRows(root.run)))
-    return { ok: false, reason: "root child rows disagree with run" };
-  if (root.checkpoint.aggregateRevision !== root.aggregateRevision || root.checkpoint.rootCommitment !== root.aggregateCommitment)
-    return { ok: false, reason: "root checkpoint is invalid" };
-  return parsed;
-}
-function validateChildProjection(input) {
-  const parsed = parseSchema(ChildProjectionSchema, input);
-  if (!parsed.ok) return parsed;
-  const child = parsed.value;
-  if (child.unit.id !== child.unitId || child.unit.revision !== child.revision || child.commitment !== deriveChildCommitment(child.unit))
-    return { ok: false, reason: "child facts disagree with projection" };
-  return parsed;
-}
-function validateMutationBatch(input) {
-  const parsed = parseSchema(MutationBatchSchema, input);
-  if (!parsed.ok) return parsed;
-  const batch = parsed.value;
-  const root = validateRootProjection(batch.next.root);
-  if (!root.ok) return { ok: false, reason: root.reason };
-  if (!equal(batch.scope, root.value.scope) || batch.holder !== root.value.holder)
-    return { ok: false, reason: "batch scope or holder disagrees with root" };
-  if (!equal(batch.checkpoint, root.value.checkpoint))
-    return { ok: false, reason: "batch checkpoint disagrees with root" };
-  if (batch.continuation === void 0 && batch.expectedHolder !== batch.holder)
-    return { ok: false, reason: "expected holder disagrees with next holder" };
-  if (root.value.aggregateRevision !== batch.expectedAggregateRevision + 1)
-    return { ok: false, reason: "next aggregate revision is not exact" };
-  if (batch.expectedAggregateCommitment === root.value.aggregateCommitment)
-    return { ok: false, reason: "aggregate commitment did not change" };
-  const changedIds = batch.changedRows.map((row) => row.unitId);
-  if (new Set(changedIds).size !== changedIds.length || [...changedIds].sort().some((id, index) => id !== changedIds[index]))
-    return { ok: false, reason: "changed rows are not sorted and unique" };
-  if (batch.expectedChildren.length !== batch.changedRows.length || batch.next.children.length !== batch.changedRows.length)
-    return { ok: false, reason: "affected child row count is not exact" };
-  if (!equal(
-    batch.expectedChildren.map((child) => child.unitId),
-    changedIds
-  ) || !equal(
-    batch.next.children.map((child) => child.unitId),
-    changedIds
-  ))
-    return { ok: false, reason: "affected child rows are not ordered exactly" };
-  for (const row of batch.changedRows) {
-    const expected = batch.expectedChildren.find(
-      (item) => item.unitId === row.unitId
-    );
-    const child = batch.next.children.find(
-      (item) => item.unitId === row.unitId
-    );
-    const rootRow = root.value.childRows.find(
-      (item) => item.unitId === row.unitId
-    );
-    if (expected === void 0 || child === void 0 || rootRow === void 0)
-      return { ok: false, reason: "affected child row is missing" };
-    const validatedChild = validateChildProjection(child);
-    if (!validatedChild.ok) return { ok: false, reason: validatedChild.reason };
-    if (expected.expectedRevision !== row.expectedRevision || expected.expectedCommitment !== row.expectedCommitment || row.nextRevision !== row.expectedRevision + 1 || child.revision !== row.nextRevision || child.commitment !== row.nextCommitment || rootRow.revision !== row.nextRevision || rootRow.commitment !== row.nextCommitment || !equal(child.scope, batch.scope) || child.holder !== batch.holder || !equal(child.unit, root.value.run.units[row.unitId]))
-      return { ok: false, reason: "affected child row disagrees with batch" };
-  }
-  const retiredIds = (batch.retiredChildren ?? []).map((row) => row.unitId);
-  if (new Set(retiredIds).size !== retiredIds.length || [...retiredIds].sort().some((id, index) => id !== retiredIds[index]))
-    return { ok: false, reason: "retired children are not sorted and unique" };
-  if (retiredIds.some(
-    (unitId) => changedIds.includes(unitId) || root.value.childRows.some((row) => row.unitId === unitId)
-  ))
-    return { ok: false, reason: "retired child is still an authority row" };
-  if (batch.checkpoint.aggregateRevision !== root.value.aggregateRevision || batch.checkpoint.rootCommitment !== root.value.aggregateCommitment || batch.checkpoint.changedRowsCommitment !== deriveChangedRowsCommitment(batch.changedRows))
-    return { ok: false, reason: "batch checkpoint is invalid" };
-  const scopeCommitment = deriveScopeCommitment(batch.scope);
-  if (batch.continuation !== void 0 && (batch.continuation.scopeCommitment !== scopeCommitment || batch.continuation.nextHolder !== batch.holder || batch.continuation.previousHolder !== batch.expectedHolder || batch.continuation.previousHolder === batch.holder || holderRunId(batch.continuation.previousHolder) !== holderRunId(batch.holder)))
-    return { ok: false, reason: "continuation evidence is invalid" };
-  if (batch.release !== void 0 && (batch.release.scopeCommitment !== scopeCommitment || batch.release.holder !== batch.holder))
-    return { ok: false, reason: "release evidence is invalid" };
-  return parsed;
-}
-
-// src/fencing/operation-lock.ts
-import {
-  chmodSync,
-  closeSync,
-  constants as constants2,
-  fstatSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  realpathSync as realpathSync3,
-  statSync as statSync2,
-  unlinkSync,
-  writeFileSync
-} from "node:fs";
-import { join as join5 } from "node:path";
-import { createConnection, createServer } from "node:net";
-var LOCK_DIRECTORY = ".sce-op";
-var SOCKET_NAME = "l";
-var STATE_NAME = "s";
-var STATE_MAX_BYTES = 4096;
-var MAX_ACQUIRE_ATTEMPTS = 4;
-var utf87 = new TextEncoder();
-function ownerMatches(uid) {
-  return typeof process.getuid !== "function" || uid === process.getuid();
-}
-function identity(stat4) {
-  return {
-    dev: stat4.dev,
-    ino: stat4.ino,
-    mode: stat4.mode & 511,
-    uid: stat4.uid
-  };
-}
-function sameIdentity(left, right) {
-  return left.dev === right.dev && left.ino === right.ino && left.mode === right.mode && left.uid === right.uid;
-}
-function absentError(error) {
-  return error.code === "ENOENT";
-}
-function strictDirectory(path2, expectedMode) {
-  try {
-    const stat4 = lstatSync(path2);
-    return stat4.isDirectory() && !stat4.isSymbolicLink() && ownerMatches(stat4.uid) && (expectedMode === void 0 || (stat4.mode & 511) === expectedMode);
-  } catch {
-    return false;
-  }
-}
-function captureSocket(path2) {
-  try {
-    const stat4 = lstatSync(path2);
-    if (!stat4.isSocket() || stat4.isSymbolicLink() || !ownerMatches(stat4.uid) || (stat4.mode & 511) !== 384)
-      return { kind: "invalid" };
-    return { kind: "valid", value: { identity: identity(stat4) } };
-  } catch (error) {
-    return absentError(error) ? { kind: "absent" } : { kind: "invalid" };
-  }
-}
-function stateSource(state) {
-  return canonicalJson(state);
-}
-function captureState(path2) {
-  let descriptor;
-  try {
-    const before = lstatSync(path2);
-    if (!before.isFile() || before.isSymbolicLink() || !ownerMatches(before.uid) || (before.mode & 511) !== 384 || constants2.O_NOFOLLOW === void 0)
-      return { kind: "invalid" };
-    descriptor = openSync(path2, constants2.O_RDONLY | constants2.O_NOFOLLOW);
-    const opened = fstatSync(descriptor);
-    if (!opened.isFile() || !ownerMatches(opened.uid) || (opened.mode & 511) !== 384 || opened.dev !== before.dev || opened.ino !== before.ino || opened.size > STATE_MAX_BYTES)
-      return { kind: "invalid" };
-    const source = readFileSync(descriptor, "utf8");
-    if (utf87.encode(source).byteLength > STATE_MAX_BYTES)
-      return { kind: "invalid" };
-    const input = JSON.parse(source);
-    const parsed = validate(
-      OperationLockStateSchema,
-      input
-    );
-    if (!parsed.ok || parsed.value === void 0 || stateSource(parsed.value) !== source)
-      return { kind: "invalid" };
-    return {
-      kind: "valid",
-      value: { identity: identity(opened), source, state: parsed.value }
-    };
-  } catch (error) {
-    return absentError(error) ? { kind: "absent" } : { kind: "invalid" };
-  } finally {
-    if (descriptor !== void 0) closeSync(descriptor);
-  }
-}
-function writeState(path2, state) {
-  let descriptor;
-  try {
-    if (constants2.O_NOFOLLOW === void 0) return { kind: "invalid" };
-    descriptor = openSync(
-      path2,
-      constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | constants2.O_NOFOLLOW,
-      384
-    );
-    writeFileSync(descriptor, stateSource(state), "utf8");
-  } catch (error) {
-    return absentError(error) ? { kind: "absent" } : { kind: "invalid" };
-  } finally {
-    if (descriptor !== void 0) closeSync(descriptor);
-  }
-  return captureState(path2);
-}
-function paths(commonDir) {
-  try {
-    if (realpathSync3(commonDir) !== commonDir || !strictDirectory(commonDir))
-      return void 0;
-    const directory = join5(commonDir, LOCK_DIRECTORY);
-    try {
-      mkdirSync(directory, { mode: 448 });
-    } catch (error) {
-      if (error.code !== "EEXIST") return void 0;
-    }
-    if (!strictDirectory(directory, 448)) return void 0;
-    if (statSync2(commonDir).dev !== statSync2(directory).dev) return void 0;
-    return {
-      directory,
-      socket: join5(directory, SOCKET_NAME),
-      state: join5(directory, STATE_NAME)
-    };
-  } catch {
-    return void 0;
-  }
-}
-function listen(socket) {
-  return new Promise((resolve11) => {
-    const server = createServer((connection) => connection.destroy());
-    const fail4 = (error) => {
-      resolve11({ code: error.code ?? "UNKNOWN" });
-    };
-    server.once("error", fail4);
-    server.listen(socket, () => {
-      server.removeListener("error", fail4);
-      resolve11({ server });
-    });
-  });
-}
-function socketIsLive(socketPath) {
-  return new Promise((resolve11) => {
-    const socket = createConnection(socketPath);
-    socket.once("connect", () => {
-      socket.destroy();
-      resolve11(true);
-    });
-    socket.once("error", (error) => {
-      socket.destroy();
-      if (error.code === "ECONNREFUSED" || error.code === "ENOENT")
-        resolve11(false);
-      else resolve11(void 0);
-    });
-  });
-}
-async function closeServer(server) {
-  return new Promise((resolve11) => {
-    server.close((error) => resolve11(error === void 0));
-  });
-}
-function removeSocket(path2, expected) {
-  const current = captureSocket(path2);
-  if (current.kind === "absent") return "absent";
-  if (current.kind === "invalid") return "invalid";
-  if (!sameIdentity(current.value.identity, expected.identity))
-    return "changed";
-  try {
-    unlinkSync(path2);
-  } catch (error) {
-    return absentError(error) ? "absent" : "changed";
-  }
-  return captureSocket(path2).kind === "absent" ? "removed" : "changed";
-}
-function removeState(path2, expected) {
-  const current = captureState(path2);
-  if (current.kind === "absent") return "absent";
-  if (current.kind === "invalid") return "invalid";
-  if (!sameIdentity(current.value.identity, expected.identity) || current.value.source !== expected.source)
-    return "changed";
-  try {
-    unlinkSync(path2);
-  } catch (error) {
-    return absentError(error) ? "absent" : "changed";
-  }
-  return captureState(path2).kind === "absent" ? "removed" : "changed";
-}
-function cleanupStatus(result2) {
-  if (result2 === "removed" || result2 === "absent") return "retry";
-  return result2 === "invalid" ? "quarantined" : "unavailable";
-}
-var OperationLock = class _OperationLock {
-  #paths;
-  #server;
-  #socket;
-  #state;
-  constructor(pathsInput, server, socket, state) {
-    this.#paths = pathsInput;
-    this.#server = server;
-    this.#socket = socket;
-    this.#state = state;
-  }
-  static async acquire(input) {
-    const lockPaths = paths(input.commonDir);
-    if (lockPaths === void 0) return { status: "quarantined" };
-    const desired = {
-      holder: input.holder,
-      nonce: input.nonce,
-      scopeCommitment: deriveScopeCommitment(input.scope),
-      version: FENCING_SCHEMA_VERSION
-    };
-    if (!validate(OperationLockStateSchema, desired).ok)
-      return { status: "quarantined" };
-    for (let attemptNumber = 0; attemptNumber < MAX_ACQUIRE_ATTEMPTS; attemptNumber += 1) {
-      const socket = captureSocket(lockPaths.socket);
-      const state = captureState(lockPaths.state);
-      if (socket.kind === "invalid" || state.kind === "invalid")
-        return { status: "quarantined" };
-      if (socket.kind === "absent" && state.kind === "valid") {
-        const cleaned = cleanupStatus(
-          removeState(lockPaths.state, state.value)
-        );
-        if (cleaned === "retry") continue;
-        return { status: cleaned };
-      }
-      if (socket.kind === "valid" && state.kind === "absent") {
-        const live = await socketIsLive(lockPaths.socket);
-        if (live === true) return { status: "held" };
-        if (live === void 0) return { status: "unavailable" };
-        const cleaned = cleanupStatus(
-          removeSocket(lockPaths.socket, socket.value)
-        );
-        if (cleaned === "retry") continue;
-        return { status: cleaned };
-      }
-      if (socket.kind === "valid" && state.kind === "valid") {
-        const live = await socketIsLive(lockPaths.socket);
-        if (live === true) return { status: "held" };
-        if (live === void 0) return { status: "unavailable" };
-        const removedSocket = cleanupStatus(
-          removeSocket(lockPaths.socket, socket.value)
-        );
-        if (removedSocket !== "retry") return { status: removedSocket };
-        const removedState = cleanupStatus(
-          removeState(lockPaths.state, state.value)
-        );
-        if (removedState !== "retry") return { status: removedState };
-        continue;
-      }
-      const listened = await listen(lockPaths.socket);
-      if (listened.server === void 0) {
-        if (listened.code === "EADDRINUSE") continue;
-        return { status: "unavailable" };
-      }
-      try {
-        chmodSync(lockPaths.socket, 384);
-      } catch {
-        await closeServer(listened.server);
-        return { status: "quarantined" };
-      }
-      const ownedSocket = captureSocket(lockPaths.socket);
-      if (ownedSocket.kind !== "valid") {
-        await closeServer(listened.server);
-        return { status: "quarantined" };
-      }
-      const written = writeState(lockPaths.state, desired);
-      if (written.kind !== "valid") {
-        await closeServer(listened.server);
-        const cleanup = cleanupStatus(
-          removeSocket(lockPaths.socket, ownedSocket.value)
-        );
-        return {
-          status: cleanup === "quarantined" ? "quarantined" : "unavailable"
-        };
-      }
-      return {
-        status: "acquired",
-        lock: new _OperationLock(
-          lockPaths,
-          listened.server,
-          ownedSocket.value,
-          written.value
-        )
-      };
-    }
-    return { status: "unavailable" };
-  }
-  async release() {
-    const currentSocket = captureSocket(this.#paths.socket);
-    const currentState = captureState(this.#paths.state);
-    if (currentSocket.kind === "invalid" || currentState.kind === "invalid")
-      return { status: "quarantined" };
-    if (currentSocket.kind !== "valid" || currentState.kind !== "valid")
-      return { status: "holder_mismatch" };
-    if (!sameIdentity(currentSocket.value.identity, this.#socket.identity) || !sameIdentity(currentState.value.identity, this.#state.identity) || currentState.value.source !== this.#state.source)
-      return { status: "holder_mismatch" };
-    if (!await closeServer(this.#server)) return { status: "unavailable" };
-    const socketResult = removeSocket(this.#paths.socket, this.#socket);
-    if (socketResult === "invalid") return { status: "quarantined" };
-    if (socketResult === "changed") return { status: "holder_mismatch" };
-    const stateResult2 = removeState(this.#paths.state, this.#state);
-    if (stateResult2 === "invalid") return { status: "quarantined" };
-    if (stateResult2 === "changed") return { status: "holder_mismatch" };
-    return { status: "released" };
-  }
-};
-
-// src/fencing/merge-slot.ts
-function same2(left, right) {
-  return canonicalJson(left) === canonicalJson(right);
-}
-function slotReadbackPayload(observation) {
-  return {
-    actor: observation.actor,
-    ...observation.holder === void 0 ? {} : { holder: observation.holder },
-    label: observation.label,
-    scope: observation.scope,
-    scopeCommitment: observation.scopeCommitment,
-    slotId: observation.slotId,
-    status: observation.status,
-    title: observation.title,
-    version: observation.version
-  };
-}
-function deriveSlotReadbackHash(observation) {
-  return sha256(
-    canonicalJson({
-      domain: "sce.fencing.merge-slot.v1",
-      observation: slotReadbackPayload(observation)
-    })
-  );
-}
-function slotId(prefix) {
-  return `${prefix}-merge-slot`;
-}
-function runId(holder4) {
-  return holder4.split("/", 1)[0] ?? "";
-}
-function validateMergeSlotObservation(input, prefix, scope) {
-  const parsed = validate(
-    MergeSlotObservationSchema,
-    input
-  );
-  if (!parsed.ok || parsed.value === void 0)
-    return { ok: false, reason: parsed.errors.join("; ") };
-  const observation = parsed.value;
-  if (observation.slotId !== slotId(prefix) || !same2(observation.scope, scope) || observation.scopeCommitment !== deriveScopeCommitment(scope) || observation.readbackHash !== deriveSlotReadbackHash(observation))
-    return { ok: false, reason: "slot identity or readback is invalid" };
-  if (observation.status === "available" && observation.holder !== void 0 || observation.status === "acquired" && (observation.holder === void 0 || observation.actor !== observation.holder))
-    return { ok: false, reason: "slot status and holder disagree" };
-  return { ok: true, value: observation };
-}
-function continuationMatches(input, prefix, scope, holder4, knownHolder, observation) {
-  const parsed = validate(
-    SlotContinuationEvidenceSchema,
-    input
-  );
-  if (!parsed.ok || parsed.value === void 0) return false;
-  const evidence = parsed.value;
-  if (evidence.nextHolder !== holder4 || evidence.previousHolder === holder4 || knownHolder !== evidence.previousHolder || runId(evidence.previousHolder) !== runId(holder4) || !same2(evidence.after, observation))
-    return false;
-  const before = validateMergeSlotObservation(evidence.before, prefix, scope);
-  const after = validateMergeSlotObservation(evidence.after, prefix, scope);
-  return before.ok && after.ok && before.value.status === "acquired" && before.value.holder === evidence.previousHolder && before.value.actor === evidence.previousHolder && after.value.status === "acquired" && after.value.holder === holder4 && after.value.actor === holder4;
-}
-function decideControllerSlot(prefix, scope, holder4, knownHolder, observationInput, continuationInput, releaseInput) {
-  const observation = validateMergeSlotObservation(
-    observationInput,
-    prefix,
-    scope
-  );
-  if (!observation.ok) return { kind: "quarantined" };
-  if (observation.value.status === "available") {
-    if (knownHolder === void 0) return { kind: "acquire" };
-    return validateSlotRelease(prefix, scope, knownHolder, releaseInput).ok ? { kind: "acquire" } : { kind: "blocked" };
-  }
-  if (observation.value.holder !== void 0 && runId(observation.value.holder) === runId(holder4) && continuationMatches(
-    continuationInput,
-    prefix,
-    scope,
-    holder4,
-    knownHolder,
-    observation.value
-  ))
-    return { kind: "continue" };
-  if (observation.value.holder === holder4 && knownHolder === holder4)
-    return { kind: "resume" };
-  return { kind: "blocked" };
-}
-function validateSlotRelease(prefix, scope, holder4, evidenceInput) {
-  const parsed = validate(
-    SlotReleaseEvidenceSchema,
-    evidenceInput
-  );
-  if (!parsed.ok || parsed.value === void 0)
-    return { ok: false, reason: parsed.errors.join("; ") };
-  if (parsed.value.holder !== holder4)
-    return { ok: false, reason: "release holder differs" };
-  const readback = validateMergeSlotObservation(
-    parsed.value.readback,
-    prefix,
-    scope
-  );
-  if (!readback.ok || readback.value.status !== "available" || readback.value.holder !== void 0 || readback.value.actor !== holder4)
-    return { ok: false, reason: "release lacks positive available readback" };
-  return { ok: true, value: parsed.value };
 }
 
 // src/commands/recovery.ts
@@ -26238,7 +26258,9 @@ function createRecoveryRunner(options) {
       return { status: "quarantined" };
     if (parsed.value.status !== "applied")
       return {
-        status: parsed.value.status === "holder_mismatch" ? "blocked" : parsed.value.status
+        status: parsed.value.status === "holder_mismatch" ? "blocked" : parsed.value.status,
+        // The store already decided this status; the tail only explains it.
+        ...parsed.value.stderrTail === void 0 ? {} : { stderrTail: parsed.value.stderrTail }
       };
     if (parsed.value.affectedRowCount !== batch.changedRows.length + 1 || !same3(parsed.value.root, batch.next.root) || !same3(parsed.value.children, batch.next.children) || !same3(parsed.value.checkpoint, batch.checkpoint))
       return { status: "quarantined" };
@@ -26879,7 +26901,7 @@ function candidateInput(effect2, run2) {
     worktreePath: effect2.params.worktreePath
   };
 }
-function refreshResult(effect2, run2, result2, refusal2) {
+function refreshResult(effect2, run2, result2, refusal3) {
   if (result2.state === "observed" && result2.head !== void 0 && result2.tree !== void 0)
     return {
       observation: {
@@ -26892,7 +26914,7 @@ function refreshResult(effect2, run2, result2, refusal2) {
       status: "observed"
     };
   if (result2.state === "refused" && result2.head !== void 0 && result2.tree !== void 0) {
-    if (refusal2 === "absent") return { status: "absent" };
+    if (refusal3 === "absent") return { status: "absent" };
     return {
       observation: {
         ...eventBase2(effect2, run2),
@@ -27807,12 +27829,19 @@ var CommandRunnerResultSchema = Type.Union([
   }),
   strictObject5({
     schema: Type.Literal("sce.command.result"),
+    /**
+     * The redacted tail of the remote child whose failure made the command
+     * unavailable, when the recovery coordinator attributed one. Diagnostic
+     * text for the operator; nothing branches on it.
+     */
+    stderrTail: Type.Optional(StoreFailureTailSchema),
     status: Type.Literal("unavailable"),
     version: Type.Literal(1)
   }),
   strictObject5({
     code: Type.Literal("SCE_RECOVERY_BLOCKED"),
     schema: Type.Literal("sce.command.result"),
+    stderrTail: Type.Optional(StoreFailureTailSchema),
     status: Type.Literal("blocked"),
     version: Type.Literal(1)
   })
@@ -27978,8 +28007,10 @@ function createRecoveryCommandRunner(runner) {
       return stateOnlyCommandRunner(request2);
     if (isStateCommandRequest(request2)) {
       const outcome2 = await runner();
-      if (!("run" in outcome2))
-        return outcome2.status === "unavailable" ? unavailable3() : recoveryBlocked();
+      if (!("run" in outcome2)) {
+        const tail = storeFailureTail(outcome2);
+        return outcome2.status === "unavailable" ? unavailable3(tail) : recoveryBlocked(tail);
+      }
       return await stateResult(request2.command, outcome2.run);
     }
     if (request2.command === "feedback") return unavailable3();
@@ -27989,8 +28020,10 @@ function createRecoveryCommandRunner(runner) {
           predecessorRootBeadId: request2.options.request.predecessorRootBeadId
         }
       });
-      if (!("revision" in outcome2) || outcome2.revision < 0)
-        return outcome2.status === "unavailable" ? unavailable3() : recoveryBlocked();
+      if (!("revision" in outcome2) || outcome2.revision < 0) {
+        const tail = storeFailureTail(outcome2);
+        return outcome2.status === "unavailable" ? unavailable3(tail) : recoveryBlocked(tail);
+      }
       return {
         result: { revision: outcome2.revision, state: outcome2.run.state },
         schema: "sce.command.result",
@@ -28013,8 +28046,10 @@ function createRecoveryCommandRunner(runner) {
     const outcome = await runner(
       acknowledgement === void 0 ? event : { harnessAcknowledgement: acknowledgement }
     );
-    if (!("revision" in outcome) || outcome.revision < 0)
-      return outcome.status === "unavailable" ? unavailable3() : recoveryBlocked();
+    if (!("revision" in outcome) || outcome.revision < 0) {
+      const tail = storeFailureTail(outcome);
+      return outcome.status === "unavailable" ? unavailable3(tail) : recoveryBlocked(tail);
+    }
     return {
       result: {
         revision: outcome.revision,
@@ -28045,13 +28080,22 @@ function allowsAcknowledgement(command, value) {
 function createProductionRecoveryCommandRunner(options) {
   return createRecoveryCommandRunner(createProductionRecoveryRunner(options));
 }
-function recoveryBlocked() {
+function recoveryBlocked(tail = {}) {
   return {
     code: "SCE_RECOVERY_BLOCKED",
     schema: "sce.command.result",
+    ...tail,
     status: "blocked",
     version: 1
   };
+}
+function storeFailureTail(outcome) {
+  if (outcome.stderrTail === void 0) return {};
+  const parsed = validate(
+    StoreFailureTailSchema,
+    outcome.stderrTail
+  );
+  return parsed.ok && parsed.value !== void 0 ? { stderrTail: parsed.value } : {};
 }
 async function stateResult(command, run2) {
   const request2 = {
@@ -28079,8 +28123,13 @@ function invalidStateRequest() {
     version: 1
   };
 }
-function unavailable3() {
-  return { schema: "sce.command.result", status: "unavailable", version: 1 };
+function unavailable3(tail = {}) {
+  return {
+    schema: "sce.command.result",
+    ...tail,
+    status: "unavailable",
+    version: 1
+  };
 }
 function isCommandName(value) {
   return commandNames.includes(value);
@@ -29156,7 +29205,15 @@ var PinnedBdEmbeddedProcess = class {
           return { kind: "pull", value: "conflict" };
         const capture2 = await this.run(["dolt", request2.kind, "--json"]);
         if (capture2 === void 0 || capture2.exceeded || capture2.timedOut)
-          return { kind: "pull", value: "unavailable" };
+          return {
+            kind: "pull",
+            // A child killed at its time or output budget exits with no code,
+            // so `failureTail` publishes what it managed to say. Whatever it
+            // wrote before the kill is the only account of the stall an
+            // operator will ever get; the classification is already decided.
+            ...capture2 === void 0 ? {} : failureTail(capture2),
+            value: "unavailable"
+          };
         const after = await this.doltHead(this.databaseDirectory);
         const afterRemote = await this.remoteHead(
           this.databaseDirectory,
@@ -29176,7 +29233,11 @@ var PinnedBdEmbeddedProcess = class {
       case "push": {
         const capture2 = await this.run(["dolt", request2.kind, "--json"]);
         if (capture2 === void 0 || capture2.exceeded || capture2.timedOut)
-          return { kind: "push", value: "unavailable" };
+          return {
+            kind: "push",
+            ...capture2 === void 0 ? {} : failureTail(capture2),
+            value: "unavailable"
+          };
         return {
           kind: "push",
           ...failureTail(capture2),
@@ -31101,7 +31162,7 @@ var EmbeddedBeadsAdapter = class {
       if (!this.slotAdmitsBatch(slot2, batch))
         return { status: "holder_mismatch" };
       const durable2 = await this.durableCheckpoint(batch, baseline2);
-      if (durable2.code !== "applied") return this.storeFailure(durable2.code);
+      if (durable2.code !== "applied") return this.storeFailure(durable2);
       const readback2 = await this.readback(batch);
       return readback2 === void 0 || !same6(readback2.root, batch.next.root) || !same6(readback2.children, batch.next.children) ? { status: "quarantined" } : {
         affectedRowCount: 1 + batch.changedRows.length,
@@ -31122,7 +31183,7 @@ var EmbeddedBeadsAdapter = class {
           head: discovered2.baseHead,
           remoteHead: discovered2.remoteHead
         });
-        if (durable2.code !== "applied") return this.storeFailure(durable2.code);
+        if (durable2.code !== "applied") return this.storeFailure(durable2);
         const readback2 = await this.readback(batch);
         return readback2 === void 0 || !same6(readback2.root, batch.next.root) || !same6(readback2.children, batch.next.children) ? { status: "quarantined" } : {
           affectedRowCount: 1 + batch.changedRows.length,
@@ -31135,7 +31196,7 @@ var EmbeddedBeadsAdapter = class {
     }
     const prepared = await this.prepareSharedState();
     if (prepared.result.code !== "applied")
-      return this.storeFailure(prepared.result.code);
+      return this.storeFailure(prepared.result);
     const slot = await this.slot("check");
     if (!this.slotAdmitsBatch(slot, batch))
       return { status: "holder_mismatch" };
@@ -31163,7 +31224,7 @@ var EmbeddedBeadsAdapter = class {
       };
     }
     const durable = await this.durableCheckpoint(batch, baseline);
-    if (durable.code !== "applied") return this.storeFailure(durable.code);
+    if (durable.code !== "applied") return this.storeFailure(durable);
     const readback = await this.readback(batch);
     if (readback === void 0 || !same6(readback.root, batch.next.root) || !same6(readback.children, batch.next.children))
       return { status: "quarantined" };
@@ -31468,7 +31529,7 @@ var EmbeddedBeadsAdapter = class {
   }
   async durablePreOwnershipIntent(batch) {
     const durable = await this.durableCheckpoint(batch);
-    if (durable.code !== "applied") return this.storeFailure(durable.code);
+    if (durable.code !== "applied") return this.storeFailure(durable);
     const readback = await this.readback(batch);
     return readback === void 0 || !this.isExactIntentReadback(readback, batch) ? { status: "quarantined" } : {
       affectedRowCount: 1 + batch.changedRows.length,
@@ -31499,6 +31560,7 @@ var EmbeddedBeadsAdapter = class {
         const pushed = await this.call({ kind: "initial_push", input });
         if (pushed?.kind !== "push" || pushed.value !== "applied")
           return {
+            ...pushed?.kind === "push" && pushed.stderrTail !== void 0 ? { stderrTail: pushed.stderrTail } : {},
             status: pushed?.kind === "push" && pushed.value === "unavailable" ? "unavailable" : "ambiguous"
           };
         state = await this.state();
@@ -32185,16 +32247,22 @@ var EmbeddedBeadsAdapter = class {
       return void 0;
     }
   }
-  storeFailure(code) {
-    switch (code) {
+  /**
+   * Collapses an embedded refusal into the store contract. The status mapping
+   * is unchanged; the failed remote child's redacted tail rides along so the
+   * refusal can still name its cause several seams above here.
+   */
+  storeFailure(failure2) {
+    const tail = failure2.stderrTail === void 0 ? {} : { stderrTail: failure2.stderrTail };
+    switch (failure2.code) {
       case "stale":
       case "holder_mismatch":
       case "ambiguous":
       case "unavailable":
       case "quarantined":
-        return { status: code };
+        return { ...tail, status: failure2.code };
       default:
-        return { status: "ambiguous" };
+        return { ...tail, status: "ambiguous" };
     }
   }
 };
@@ -39539,7 +39607,10 @@ async function runCli(argv, dependencies = {}) {
     if (outcome.status === "unavailable") {
       return failure(
         "SCE_COMMAND_UNAVAILABLE",
-        `The ${invocation.request.command} command is unavailable.`,
+        withCause(
+          `The ${invocation.request.command} command is unavailable`,
+          outcome.stderrTail
+        ),
         EXIT_UNAVAILABLE,
         invocation.request.command
       );
@@ -39558,7 +39629,10 @@ async function runCli(argv, dependencies = {}) {
     if (outcome.status === "blocked") {
       return failure(
         outcome.code,
-        `The ${invocation.request.command} command is blocked pending authoritative recovery.`,
+        withCause(
+          `The ${invocation.request.command} command is blocked pending authoritative recovery`,
+          outcome.stderrTail
+        ),
         EXIT_UNAVAILABLE,
         invocation.request.command
       );
@@ -39853,6 +39927,9 @@ function success(result2, command) {
     },
     0
   );
+}
+function withCause(sentence, tail) {
+  return tail === void 0 ? `${sentence}.` : `${sentence}: ${tail.text}`;
 }
 function failure(code, message, exitCode, command) {
   return execution(
