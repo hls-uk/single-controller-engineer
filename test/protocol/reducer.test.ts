@@ -6214,10 +6214,11 @@ test("an oversize candidate diff repairs the unit with the exact measurement", (
   );
   const repairable = refused.units[unitId]!;
   assert.equal(repairable.state, "repair_required");
-  // Nothing reviewable was produced, so no candidate pair is bound; the
-  // repair context alone carries the head the measurement was taken on.
-  assert.equal(repairable.candidateHead, undefined);
-  assert.equal(repairable.candidateTree, undefined);
+  // The pair the measurement was taken on is what the repair binds; nothing
+  // reviewable was produced, so no diff hash goes with it.
+  assert.equal(repairable.candidateHead, OID_B);
+  assert.equal(repairable.candidateTree, OID_C);
+  assert.equal(repairable.candidateDiffHash, undefined);
   assert.equal(repairable.repairContext?.headOid, OID_B);
   assert.equal(repairable.repairContext?.treeOid, OID_C);
   assert.equal(
@@ -6307,6 +6308,128 @@ test("an oversize candidate diff repairs the unit with the exact measurement", (
   assert.equal(state.units[unitId]?.state, "candidate_committed");
   assert.equal(state.units[unitId]?.candidateHead, OID_C);
   assert.deepEqual(runInvariantErrors(state), []);
+});
+
+// sce-dcx.21: the same refusal on a unit that already bound a candidate. The
+// retained binding left every repair judgment bound to a head the measurement
+// was never taken on, `repair_intent` was rejected as unbound, and the only
+// legal acts left were the unit's terminal ones.
+test("an oversize refusal after an earlier candidate binds the repair to the measured head", () => {
+  const unitId = "unit-1";
+  const judgment = (current: RepositoryRun, factOid: string) => ({
+    schemaVersion: 1 as const,
+    role: "controller" as const,
+    kind: "repair_disposition" as const,
+    unitId,
+    sessionId: current.controller.incarnationId,
+    requestedModel: current.controller.requestedModel,
+    returnedModel: current.controller.returnedModel,
+    aggregateRevision: current.revision,
+    rationale: "shed the bytes the measurement names",
+    factOid,
+    decision: "repair" as const,
+    ...repairEvidence(current, unitId),
+  });
+  // Round one: a candidate committed on OID_B that fails verification.
+  let state = completeCandidate(run([unit(unitId)]));
+  state = stepUnit(state, unitId, "verification_intent", {
+    commands: state.units[unitId]!.taskMetadata!.mandatoryVerification,
+  });
+  state = observeUnit(state, unitId, "verification_failed", "verify", {
+    baseOid: OID_A,
+    headOid: OID_B,
+    treeOid: OID_C,
+  });
+  assert.equal(state.units[unitId]?.candidateHead, OID_B);
+  state = stepUnit(state, unitId, "repair_intent", {
+    judgment: judgment(state, OID_B),
+  });
+  state = observeUnit(state, unitId, "repair_observed", "repair", {
+    sessionId: "worker-repair-round-1",
+    requestedModel: "workhorse",
+    returnedModel: "workhorse-1",
+    promptHash: HASH,
+  });
+  state = stepUnit(state, unitId, "collect_intent", {
+    idempotencyKey: "collect-round-1",
+  });
+  state = observeUnit(state, unitId, "worker_collected", "worker_collect", {
+    workerResult: { status: "completed", summary: "larger", residualRisks: [] },
+  });
+  state = stepUnit(state, unitId, "candidate_intent", {
+    idempotencyKey: "candidate-round-1",
+  });
+  // The repair overshot: the recollected diff measures past the bound, on a
+  // head no round of this unit has ever bound.
+  const refused = observeUnit(
+    state,
+    unitId,
+    "candidate_refused",
+    "candidate_collect",
+    {
+      headOid: OID_C,
+      maximumByteCount: CANDIDATE_DIFF_MAX_BYTES,
+      measuredByteCount: CANDIDATE_DIFF_MAX_BYTES * 2,
+      reason: "diff_oversize",
+      treeOid: OID_C,
+    },
+  );
+  const repairable = refused.units[unitId]!;
+  assert.equal(repairable.state, "repair_required");
+  // The superseded pair is replaced, not kept: the round-one head is gone and
+  // the diff hash that described it with it.
+  assert.equal(repairable.candidateHead, OID_C);
+  assert.equal(repairable.candidateTree, OID_C);
+  assert.equal(repairable.candidateDiffHash, undefined);
+  assert.equal(repairable.repairContext?.headOid, OID_C);
+  assert.deepEqual(runInvariantErrors(refused), []);
+  // Repair is offered, and it binds to the head the measurement was taken on.
+  assert.equal(
+    legalActions(refused).some(
+      (action) => action.mode === "emit" && action.type === "repair_intent",
+    ),
+    true,
+  );
+  let repaired = stepUnit(refused, unitId, "repair_intent", {
+    judgment: judgment(refused, OID_C),
+  });
+  assert.equal(repaired.units[unitId]?.state, "repair_intent");
+  // Round two then lands an ordinary, smaller candidate.
+  repaired = observeUnit(repaired, unitId, "repair_observed", "repair", {
+    sessionId: "worker-repair-round-2",
+    requestedModel: "workhorse",
+    returnedModel: "workhorse-1",
+    promptHash: HASH,
+  });
+  repaired = stepUnit(repaired, unitId, "collect_intent", {
+    idempotencyKey: "collect-round-2",
+  });
+  repaired = observeUnit(
+    repaired,
+    unitId,
+    "worker_collected",
+    "worker_collect",
+    {
+      workerResult: {
+        status: "completed",
+        summary: "smaller",
+        residualRisks: [],
+      },
+    },
+  );
+  repaired = stepUnit(repaired, unitId, "candidate_intent", {
+    idempotencyKey: "candidate-round-2",
+  });
+  repaired = observeUnit(
+    repaired,
+    unitId,
+    "candidate_observed",
+    "candidate_collect",
+    { headOid: OID_B, treeOid: OID_C },
+  );
+  assert.equal(repaired.units[unitId]?.state, "candidate_committed");
+  assert.equal(repaired.units[unitId]?.candidateHead, OID_B);
+  assert.deepEqual(runInvariantErrors(repaired), []);
 });
 
 // A run persisted before sce-296.19 holds a refresh-conflict repair context

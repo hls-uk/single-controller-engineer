@@ -235,8 +235,17 @@ test("a candidate diff one byte past the packet bound is refused with its size",
     ok(),
     ok("src/file.ts\u0000"),
   ];
+  // The post-read pair proof the ordinary path takes: head, tree, clean
+  // status, branch ref, then the index.
+  const readback = (): GitResult[] => [
+    ok(`${head}\n`),
+    ok(`${tree}\n`),
+    ok(),
+    ok("refs/heads/sce/task\n"),
+    ok("H src/file.ts\u0000"),
+  ];
   const oversize = await observeCandidate(
-    scripted(...preamble(), ok("d".repeat(65_537))),
+    scripted(...preamble(), ok("d".repeat(65_537)), ...readback()),
     repository(),
     { allowedPaths: ["src"], base, branch: "sce/task", worktreePath: "/task" },
   );
@@ -245,18 +254,49 @@ test("a candidate diff one byte past the packet bound is refused with its size",
   assert.equal(oversize.snapshot, undefined);
   assert.deepEqual(oversize.oversize, { byteCount: 65_537, head, tree });
 
+  // A read the decoder could not turn into a string still measures: the
+  // runner counts the bytes before decoding them, and that count is the whole
+  // observation. Nothing it read leaves the seam.
+  const undecodable = await observeCandidate(
+    scripted(
+      ...preamble(),
+      {
+        exitCode: null,
+        invalidUtf8: true,
+        signal: "SIGKILL",
+        stdout: "",
+        stdoutBytes: 70_000,
+      },
+      ...readback(),
+    ),
+    repository(),
+    { allowedPaths: ["src"], base, branch: "sce/task", worktreePath: "/task" },
+  );
+  assert.equal(undecodable.state, "refused");
+  assert.equal(undecodable.code, "GIT_DIFF_OVERSIZE");
+  assert.deepEqual(undecodable.oversize, { byteCount: 70_000, head, tree });
+
+  // The measurement is an observation about a branch, so it is only reported
+  // once the same pair proof the snapshot needs holds: a head that moved
+  // under the read refuses instead, with no size to act on.
+  const raced = await observeCandidate(
+    scripted(
+      ...preamble(),
+      ok("d".repeat(65_537)),
+      ok(`${sha1("4")}\n`),
+      ...readback().slice(1),
+    ),
+    repository(),
+    { allowedPaths: ["src"], base, branch: "sce/task", worktreePath: "/task" },
+  );
+  assert.equal(raced.state, "refused");
+  assert.equal(raced.code, "GIT_REFUSED");
+  assert.equal(raced.oversize, undefined);
+
   // One byte under, the same read is an ordinary observation: the refusal
   // begins exactly where the bound does.
   const atBound = await observeCandidate(
-    scripted(
-      ...preamble(),
-      ok("d".repeat(65_536)),
-      ok(`${head}\n`),
-      ok(`${tree}\n`),
-      ok(),
-      ok("refs/heads/sce/task\n"),
-      ok("H src/file.ts\u0000"),
-    ),
+    scripted(...preamble(), ok("d".repeat(65_536)), ...readback()),
     repository(),
     { allowedPaths: ["src"], base, branch: "sce/task", worktreePath: "/task" },
   );
@@ -951,6 +991,62 @@ test("real worktree candidate observation binds exact committed diff bytes", asy
     ).code,
     "GIT_FOREIGN_WORKTREE",
   );
+});
+
+// sce-dcx.21: a diff large enough to refuse is also large enough for the
+// runner's own SIGKILL to land inside a multibyte sequence. The fatal decoder
+// hands back nothing then, so the size is counted from the bytes themselves.
+test("an oversize diff the decoder cannot read is still measured exactly", async (t) => {
+  const root = await realpath(
+    await mkdtemp(join(tmpdir(), "sce-git-oversize-")),
+  );
+  const cwd = join(root, "repo");
+  t.after(() => rm(root, { force: true, recursive: true }));
+  await git(root, "init", cwd);
+  await git(cwd, "config", "user.email", "test@example.invalid");
+  await git(cwd, "config", "user.name", "SCE test");
+  await git(cwd, "commit", "--allow-empty", "-m", "base");
+  await git(cwd, "branch", "-M", "main");
+  const base = (await git(cwd, "rev-parse", "HEAD")).trim();
+  const worktree = join(root, "candidate");
+  await git(cwd, "branch", "sce/candidate", base);
+  await git(cwd, "worktree", "add", worktree, "sce/candidate");
+  // The undecodable byte comes first so every prefix the runner keeps holds
+  // it; the rest only has to carry the diff past the bound.
+  await writeFile(
+    join(worktree, "candidate.txt"),
+    Buffer.concat([Buffer.from([0xff]), Buffer.alloc(80_000, 0x61)]),
+  );
+  await git(worktree, "add", "candidate.txt");
+  await git(worktree, "commit", "-m", "oversize");
+  const head = (await git(worktree, "rev-parse", "HEAD")).trim();
+  const tree = (await git(worktree, "rev-parse", "HEAD^{tree}")).trim();
+  let diffRead: GitResult | undefined;
+  const observed = await observeCandidate(
+    async (request) => {
+      const result = await nodeGitRunner(request);
+      if (request.argv.includes("--full-index")) diffRead = result;
+      return result;
+    },
+    await actualRepository(cwd),
+    {
+      allowedPaths: ["candidate.txt"],
+      base,
+      branch: "sce/candidate",
+      worktreePath: worktree,
+    },
+  );
+  // The decode really did fail, and the count is all the read produced.
+  assert.equal(diffRead?.invalidUtf8, true);
+  assert.equal(diffRead?.stdout, "");
+  assert.equal(observed.state, "refused", observed.code);
+  assert.equal(observed.code, "GIT_DIFF_OVERSIZE");
+  assert.equal(observed.snapshot, undefined);
+  assert.equal(observed.oversize?.head, head);
+  assert.equal(observed.oversize?.tree, tree);
+  assert.equal(observed.oversize?.byteCount, diffRead?.stdoutBytes);
+  assert.equal((observed.oversize?.byteCount ?? 0) > 65_536, true);
+  assert.equal((observed.oversize?.byteCount ?? 0) <= 131_072, true);
 });
 
 test("real disposable bare remote proves worktree discovery, local ff, and stale push rejection", async (t) => {

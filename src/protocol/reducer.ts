@@ -5461,30 +5461,55 @@ function reduceInternal(
       // The collect act reached a clean pair and proved the diff too large to
       // review. That is a fact about the work, not an unresolved effect, so
       // the unit repairs with the measurement in hand instead of blocking with
-      // no cause. No candidate binding is taken: there is no reviewable diff.
-      result = observe(
-        state,
-        unit,
-        "repair_required",
-        event,
-        {
-          repairContext: {
-            baseOid: unit.baseOid,
-            headOid: event.headOid,
-            treeOid: event.treeOid,
-            responseHash: event.observationHash,
-            rationale: `candidate diff measured at least ${event.measuredByteCount} bytes against the ${event.maximumByteCount}-byte candidate bound`,
-            findings: [
-              {
-                id: "candidate-diff-oversize",
-                severity: "blocking",
-                detail: `the diff against the unit base must fit ${event.maximumByteCount} bytes and measured at least ${event.measuredByteCount}; shed at least the difference on the same branch and worktree, then collect the candidate again`,
-              },
-            ],
+      // no cause. Like any other observation the refusal supersedes whatever
+      // the previous round bound: the pair moves to the head just measured,
+      // no diff hash exists to bind, and the review the old diff carried is
+      // discarded with it. A retained pair would leave every repair judgment
+      // bound to a head nothing measured, and the unit with no legal act left
+      // but its terminal ones (sce-dcx.21, as sce-296.19 for a refused
+      // refresh).
+      {
+        const {
+          approvalResponseHash: _approval,
+          candidateDiffHash: _diff,
+          reviewBaseOid: _reviewBase,
+          reviewHeadOid: _reviewHead,
+          reviewPromptHash: _reviewPrompt,
+          reviewTree: _reviewTree,
+          reviewerPacket: _reviewerPacket,
+          reviewerRequestedModel: _reviewerRequested,
+          reviewerReturnedModel: _reviewerReturned,
+          reviewerSessionId: _reviewerSession,
+          ...retained
+        } = unit;
+        result = observe(
+          state,
+          unit,
+          "repair_required",
+          event,
+          {},
+          clearUnitOwners(state, unit.id),
+          {
+            ...retained,
+            candidateHead: event.headOid,
+            candidateTree: event.treeOid,
+            repairContext: {
+              baseOid: unit.baseOid,
+              headOid: event.headOid,
+              treeOid: event.treeOid,
+              responseHash: event.observationHash,
+              rationale: `candidate diff measured at least ${event.measuredByteCount} bytes against the ${event.maximumByteCount}-byte candidate bound`,
+              findings: [
+                {
+                  id: "candidate-diff-oversize",
+                  severity: "blocking",
+                  detail: `the diff against the unit base must fit ${event.maximumByteCount} bytes and measured at least ${event.measuredByteCount}; shed at least the difference on the same branch and worktree, then collect the candidate again`,
+                },
+              ],
+            },
           },
-        },
-        clearUnitOwners(state, unit.id),
-      );
+        );
+      }
       break;
     case "refresh_intent":
       // Refresh on the same identity: legal wherever a candidate exists or

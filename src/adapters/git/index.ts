@@ -35,6 +35,13 @@ export type GitResult = Readonly<{
   signal: string | null;
   stdout: string;
   invalidUtf8?: boolean;
+  /**
+   * The stdout bytes counted before decoding, present only when the read
+   * passed `MAX_OUTPUT`. `GitResultSchema` has no such property and bounds
+   * `stdout` at the same limit, so a result carrying it is never an ordinary
+   * validatable read either way it decoded.
+   */
+  stdoutBytes?: number;
   timedOut?: boolean;
   unavailable?: boolean;
 }>;
@@ -636,25 +643,30 @@ async function runAt(
 }
 
 /**
- * The exact fact an unparsable diff read can still prove: a stdout string past
+ * The exact fact an unparsable diff read can still prove: a stdout size past
  * the bound, and no further than the one chunk `nodeGitRunner` keeps as it
  * stops. Only this integer leaves the seam; the bytes themselves never do.
  */
 function oversizeStdoutBytes(raw: unknown): number | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
-  const { invalidUtf8, stdout, timedOut, unavailable } = raw as Readonly<
-    Record<string, unknown>
-  >;
-  if (
-    typeof stdout !== "string" ||
-    invalidUtf8 === true ||
-    timedOut === true ||
-    unavailable === true
-  )
-    return undefined;
-  const byteCount = Buffer.byteLength(stdout, "utf8");
-  return byteCount > MAX_OUTPUT && byteCount <= MAX_OUTPUT * 2
-    ? byteCount
+  const { invalidUtf8, stdout, stdoutBytes, timedOut, unavailable } =
+    raw as Readonly<Record<string, unknown>>;
+  if (timedOut === true || unavailable === true) return undefined;
+  // A runner that counted the bytes before decoding them reports the count
+  // itself, so a kill inside a multibyte sequence still measures. Otherwise
+  // the decoded string is the only measure there is, and a decode that failed
+  // has left nothing to measure.
+  const measured =
+    typeof stdoutBytes === "number"
+      ? stdoutBytes
+      : invalidUtf8 === true || typeof stdout !== "string"
+        ? undefined
+        : Buffer.byteLength(stdout, "utf8");
+  return measured !== undefined &&
+    Number.isSafeInteger(measured) &&
+    measured > MAX_OUTPUT &&
+    measured <= MAX_OUTPUT * 2
+    ? measured
     : undefined;
 }
 
@@ -998,6 +1010,47 @@ export async function verifyRepository(
   return effect("observed", "GIT_OK");
 }
 
+/**
+ * The post-read proof that a candidate read describes the branch and object
+ * pair it opened on: a worker may race these read-only calls without any Git
+ * mutation by the recovery coordinator itself. Both outcomes of the diff read,
+ * the snapshot and the oversize refusal, have to close on it. `undefined`
+ * means the pair still stands.
+ */
+async function confirmCandidatePair(
+  runner: GitRunner,
+  worktreePath: string,
+  branch: string,
+  head: string,
+  tree: string,
+): Promise<GitEffect | undefined> {
+  const finalHead = await runAt(runner, worktreePath, [
+    "rev-parse",
+    "--verify",
+    "HEAD^{commit}",
+  ]);
+  if (!commandOk(finalHead) || oneLine(finalHead.stdout) !== head)
+    return effect("refused", "GIT_REFUSED");
+  const [finalTree, finalStatus, finalRef] = await Promise.all([
+    runAt(runner, worktreePath, ["rev-parse", "--verify", `${head}^{tree}`]),
+    runAt(runner, worktreePath, ["status", "--porcelain=v1", "-z"]),
+    runAt(runner, worktreePath, ["symbolic-ref", "-q", "HEAD"]),
+  ]);
+  if (
+    !commandOk(finalTree) ||
+    !commandOk(finalStatus) ||
+    !commandOk(finalRef) ||
+    oneLine(finalTree.stdout) !== tree ||
+    finalStatus.stdout.length !== 0 ||
+    oneLine(finalRef.stdout) !== `refs/heads/${branch}`
+  )
+    return effect("refused", "GIT_REFUSED");
+  // This must be the final observation: status can hide bytes after a tracked
+  // path is flagged, so validate the index only after clean evidence closes.
+  const finalIndex = await verifyOrdinaryTrackedIndex(runner, worktreePath);
+  return finalIndex.state === "observed" ? undefined : finalIndex;
+}
+
 /** Reads only the exact candidate state and rejects dirty or out-of-scope bytes. */
 export async function observeCandidate(
   runner: GitRunner,
@@ -1132,58 +1185,41 @@ export async function observeCandidate(
   ]);
   if (!commandOk(ancestorResult) || !commandOk(pathsResult))
     return effect("refused", "GIT_REFUSED");
-  // Ancestry and the path listing hold, so size is the only thing left to
-  // blame, and the read measured past the bound on the clean pair above. That
-  // is a fact about the branch, not an unreadable repository: report it so the
-  // collect reconcile can route the unit to repair with a size to shed.
-  if (diffRead.state === "oversize")
-    return {
-      code: "GIT_DIFF_OVERSIZE",
-      oversize: { byteCount: diffRead.byteCount, head, tree },
-      state: "refused",
-    };
+  if (diffRead.state === "oversize") {
+    // Ancestry and the path listing hold, so size is the only thing left to
+    // blame, and the read measured past the bound on the clean pair above.
+    // That is a fact about the branch, not an unreadable repository, and the
+    // same pair proof the snapshot needs is what makes it one: a count bound
+    // to a head that moved under the read would send the lane to shed bytes
+    // from a revision nothing ever measured.
+    const drift = await confirmCandidatePair(
+      runner,
+      wantedPath,
+      input.branch,
+      head,
+      tree,
+    );
+    return (
+      drift ?? {
+        code: "GIT_DIFF_OVERSIZE",
+        oversize: { byteCount: diffRead.byteCount, head, tree },
+        state: "refused",
+      }
+    );
+  }
   const diffResult = diffRead.result;
   if (!commandOk(diffResult)) return effect("refused", "GIT_REFUSED");
   const changedPaths = nulPaths(pathsResult.stdout);
   if (changedPaths === undefined || diffResult.stdout.includes("\u0000"))
     return effect("refused", "GIT_REFUSED");
-  // The diff must describe the same clean branch/object pair committed below.
-  // A worker may otherwise race these read-only calls without any Git mutation
-  // by the recovery coordinator itself.
-  const finalHead = await runAt(runner, wantedPath, [
-    "rev-parse",
-    "--verify",
-    "HEAD^{commit}",
-  ]);
-  const finalHeadOid = oneLine(finalHead.stdout);
-  if (
-    !commandOk(finalHead) ||
-    finalHeadOid === undefined ||
-    finalHeadOid !== head
-  )
-    return effect("refused", "GIT_REFUSED");
-  const [finalTree, finalStatus, finalRef] = await Promise.all([
-    runAt(runner, wantedPath, [
-      "rev-parse",
-      "--verify",
-      `${finalHeadOid}^{tree}`,
-    ]),
-    runAt(runner, wantedPath, ["status", "--porcelain=v1", "-z"]),
-    runAt(runner, wantedPath, ["symbolic-ref", "-q", "HEAD"]),
-  ]);
-  if (
-    !commandOk(finalTree) ||
-    !commandOk(finalStatus) ||
-    !commandOk(finalRef) ||
-    oneLine(finalTree.stdout) !== tree ||
-    finalStatus.stdout.length !== 0 ||
-    oneLine(finalRef.stdout) !== `refs/heads/${input.branch}`
-  )
-    return effect("refused", "GIT_REFUSED");
-  // This must be the final observation: status can hide bytes after a tracked
-  // path is flagged, so validate the index only after clean evidence closes.
-  const finalIndex = await verifyOrdinaryTrackedIndex(runner, wantedPath);
-  if (finalIndex.state !== "observed") return finalIndex;
+  const raced = await confirmCandidatePair(
+    runner,
+    wantedPath,
+    input.branch,
+    head,
+    tree,
+  );
+  if (raced !== undefined) return raced;
   const canonicalChangedPaths = [...new Set(changedPaths)].sort();
   if (
     canonicalChangedPaths.some(
@@ -2342,16 +2378,30 @@ export const nodeGitRunner: GitRunner = async ({ argv, cwd, env }) => {
     });
     child.once("close", (exitCode, signal) => {
       clearTimeout(timer);
+      const collected = Buffer.concat(stdoutChunks);
       let stdout = "";
       let invalidUtf8 = false;
       try {
-        stdout = new TextDecoder("utf-8", { fatal: true }).decode(
-          Buffer.concat(stdoutChunks),
-        );
+        stdout = new TextDecoder("utf-8", { fatal: true }).decode(collected);
       } catch {
         invalidUtf8 = true;
       }
-      done({ exitCode, invalidUtf8, signal, stdout, timedOut, unavailable });
+      // The size of an oversize read is measured from the bytes, not from the
+      // decoding of them: the SIGKILL above can land inside a multibyte
+      // sequence, and the fatal decoder then hands back nothing at all. The
+      // count is the one fact such a read still proves, and it carries no
+      // output with it.
+      done({
+        exitCode,
+        invalidUtf8,
+        signal,
+        stdout,
+        ...(collected.byteLength > MAX_OUTPUT
+          ? { stdoutBytes: collected.byteLength }
+          : {}),
+        timedOut,
+        unavailable,
+      });
     });
   });
 };
