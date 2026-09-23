@@ -23872,6 +23872,10 @@ async function objectFormatMatches(cwd, processPort, expected) {
   return result2.code === 0 && result2.signal === null && result2.stderr.byteLength === 0 && result2.stdout.toString("ascii") === `${expected}
 `;
 }
+var NAMESPACE_BOUND_PLATFORMS = /* @__PURE__ */ new Set([
+  "darwin",
+  "linux"
+]);
 var HELPER_SOURCE = String.raw`
 const fs = require("node:fs");
 const crypto = require("node:crypto");
@@ -23893,9 +23897,11 @@ process.stdin.on("end", () => {
     const basename = value => typeof value === "string" && path.basename(value) === value && value !== "." && value !== "..";
     for (const value of [metadata.artifactName, metadata.sidecarName, metadata.artifactTemp, metadata.sidecarTemp])
       if (!basename(value)) return fail("refused", "bad-name");
+    const held = fs.openSync(".", fs.constants.O_RDONLY);
     const identity = () => {
-      const value = fs.statSync(".", { bigint: true });
-      return String(value.dev) === metadata.dev && String(value.ino) === metadata.ino && fs.realpathSync(".") === metadata.realpath;
+      const bound = fs.fstatSync(held, { bigint: true });
+      const here = fs.statSync(".", { bigint: true });
+      return String(bound.dev) === metadata.dev && String(bound.ino) === metadata.ino && here.dev === bound.dev && here.ino === bound.ino;
     };
     if (!identity()) return fail("refused", "identity");
     const digest = bytes => crypto.createHash("sha256").update(bytes).digest("hex");
@@ -23936,10 +23942,7 @@ process.stdin.on("end", () => {
     const artifactPreflight = inspectPair(metadata.artifactName, metadata.artifactTemp, artifact);
     for (const checked of [sidecarPreflight, artifactPreflight])
       if (checked.status === "ambiguous") return fail("ambiguous", checked.code);
-    const fsyncDirectory = () => {
-      const directory = fs.openSync(".", fs.constants.O_RDONLY);
-      try { fs.fsyncSync(directory); } finally { fs.closeSync(directory); }
-    };
+    const fsyncDirectory = () => { fs.fsyncSync(held); };
     const publish = (finalName, tempName, bytes, preflight) => {
       if (preflight.status === "already_present") return { status: "already_present" };
       if (preflight.status === "linked_crash") {
@@ -24123,7 +24126,9 @@ async function probeDestination(effect2) {
     });
   return { identity: result2.identity, status: "observed" };
 }
-async function materialiseBytes(cwd, effect2, processPort, objectFormat) {
+async function materialiseBytes(cwd, effect2, processPort, objectFormat, platform) {
+  if (!NAMESPACE_BOUND_PLATFORMS.has(platform))
+    return ambiguous({ operation: "namespace-binding-unsupported", platform });
   if (!await objectFormatMatches(cwd, processPort, objectFormat))
     return ambiguous({ operation: "object-format" });
   const blobInfo = await readGitObjectInfo(
@@ -24196,7 +24201,6 @@ async function materialiseBytes(cwd, effect2, processPort, objectFormat) {
     artifactTemp: `.${effect2.params.artifactName}.sce-tmp`,
     dev: destination.identity.device,
     ino: destination.identity.inode,
-    realpath: destination.identity.canonicalPath,
     sidecarName: effect2.params.sidecarName,
     sidecarTemp: `.${effect2.params.sidecarName}.sce-tmp`
   };
@@ -24335,7 +24339,7 @@ async function discoverMaterialisation(cwd, effect2, processPort, objectFormat) 
     status: "observed"
   };
 }
-function createMaterialisationAdapter(repositoryCwd, objectFormat, processPort = nodeMaterialisationProcess) {
+function createMaterialisationAdapter(repositoryCwd, objectFormat, processPort = nodeMaterialisationProcess, platform = process.platform) {
   return {
     discoverMaterialise: async (effect2) => await discoverMaterialisation(
       repositoryCwd,
@@ -24343,7 +24347,13 @@ function createMaterialisationAdapter(repositoryCwd, objectFormat, processPort =
       processPort,
       objectFormat
     ),
-    materialise: async (effect2) => await materialiseBytes(repositoryCwd, effect2, processPort, objectFormat),
+    materialise: async (effect2) => await materialiseBytes(
+      repositoryCwd,
+      effect2,
+      processPort,
+      objectFormat,
+      platform
+    ),
     probe: async (effect2) => await probeDestination(effect2),
     resolve: async (effect2) => await resolveSources(repositoryCwd, effect2, processPort, objectFormat)
   };
