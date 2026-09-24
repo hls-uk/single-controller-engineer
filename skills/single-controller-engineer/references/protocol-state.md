@@ -55,9 +55,16 @@ It reads the bytes from standard input or `--file <absolute path>`, refuses
 anything the collector would not have hashed (empty, invalid UTF-8, a NUL
 byte, or more than 65536 bytes), and prints `candidateDiffHash`,
 `candidateDiffByteCount`, and the `domain` it prefixed; `--raw` adds the
-plain `sha256` of the same bytes so the two are visibly different values.
+plain `sha256` of the same bytes so the two are visibly different values. A
+`--file` is measured before it is read, so a path that is not a regular file
+is refused rather than consumed, and a leading byte-order mark is dropped
+exactly as the collector's decoder drops it. Refusals carry
+`SCE_CANDIDATE_DIFF_INVALID` for bytes no candidate could have had and
+`SCE_CANDIDATE_DIFF_UNREADABLE` for bytes that could not be read at all.
 The same derivation by hand is
-`printf 'sce.protocol.candidate-diff/v1\n' | cat - diff.txt | sha256sum`.
+`printf 'sce.protocol.candidate-diff/v1\n' | cat - diff.txt | sha256sum`,
+using `shasum -a 256` in place of `sha256sum` where only that one is
+installed, as on stock macOS.
 Compare both printed values with the packet's fields of the same name: a
 difference means the reproduced bytes are not the reviewed candidate, which
 blocks the review rather than being explained away.

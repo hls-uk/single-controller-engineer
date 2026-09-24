@@ -5,6 +5,7 @@ import {
   readFile,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -306,8 +307,15 @@ test("candidate-digest derives the packet digest a raw sha256 never matches", as
   const raw = sha256(candidateDiff);
   assert.notEqual(digest, raw);
   // The advertised domain is the one the reducer commits, so an operator can
-  // prefix the bytes by hand and reach the same value.
-  assert.equal(sha256(`${CANDIDATE_DIFF_DOMAIN}\n${candidateDiff}`), digest);
+  // prefix the bytes by hand and reach the same value. The literal is spelled
+  // out here rather than read from the constant: one definition now serves
+  // both layers, and this is what pins that definition to the hash already in
+  // every recorded packet.
+  assert.equal(CANDIDATE_DIFF_DOMAIN, "sce.protocol.candidate-diff/v1");
+  assert.equal(
+    sha256(`sce.protocol.candidate-diff/v1\n${candidateDiff}`),
+    digest,
+  );
 
   const packet = createPacket({
     acceptance: ["unit-1:A1"],
@@ -419,10 +427,129 @@ test("candidate-digest refuses bytes the candidate collector never hashed", asyn
   const help = await runCli(["candidate-digest", "--help"]);
   assert.equal(help.exitCode, 0);
   assert.equal(JSON.parse(help.stdout).result.command, "candidate-digest");
+  const usage: string = JSON.parse(help.stdout).result.usage;
   assert.match(
-    JSON.parse(help.stdout).result.usage,
+    usage,
     /^sce candidate-digest \[--file <absolute path>\] \[--raw\] \[--json\]/u,
   );
+  // Both refusals an operator can actually provoke are named by the help, not
+  // only by prose they would have to go looking for.
+  assert.match(usage, /\nSCE_CANDIDATE_DIFF_INVALID: /u);
+  assert.match(usage, /\nSCE_CANDIDATE_DIFF_UNREADABLE: /u);
+});
+
+test("candidate-digest strips a leading byte-order mark as the collector does", async () => {
+  // The collector decodes `git diff` output with a fatal UTF-8 decoder that
+  // does not ignore the mark, so a BOM never reaches the hash. A reproduction
+  // that hashed the mark would miss a real candidate by three invisible bytes.
+  const digest = deriveCandidateDiffHash(candidateDiff);
+  const marked = new TextEncoder().encode(`\uFEFF${candidateDiff}`);
+  assert.equal(marked.byteLength, candidateDiffBytes.byteLength + 3);
+
+  const piped = await runCli(["candidate-digest"], {
+    standardInput: async () => marked,
+  });
+  assert.equal(piped.exitCode, 0);
+  assert.deepEqual(JSON.parse(piped.stdout).result, {
+    candidateDiffByteCount: candidateDiffBytes.byteLength,
+    candidateDiffHash: digest,
+    domain: CANDIDATE_DIFF_DOMAIN,
+  });
+
+  const directory = await mkdtemp(join(tmpdir(), "sce-candidate-bom-"));
+  try {
+    const file = join(directory, "candidate.diff");
+    await writeFile(file, marked);
+    const fromFile = await runCli(["candidate-digest", "--file", file]);
+    assert.equal(fromFile.exitCode, 0);
+    assert.deepEqual(JSON.parse(fromFile.stdout).result, {
+      candidateDiffByteCount: candidateDiffBytes.byteLength,
+      candidateDiffHash: digest,
+      domain: CANDIDATE_DIFF_DOMAIN,
+    });
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
+
+  // Bytes that are only the mark are bytes the collector would have stripped
+  // to nothing, so they are no candidate at all.
+  const markOnly = await runCli(["candidate-digest"], {
+    standardInput: async () => new TextEncoder().encode("\uFEFF"),
+  });
+  assert.equal(markOnly.exitCode, 64);
+  assert.equal(
+    JSON.parse(markOnly.stdout).error.code,
+    "SCE_CANDIDATE_DIFF_INVALID",
+  );
+});
+
+test("candidate-digest measures --file before it reads a byte of it", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "sce-candidate-stat-"));
+  try {
+    const refuse = async (
+      path: string,
+    ): Promise<Readonly<{ code: string; exitCode: number }>> => {
+      // A read-first implementation blocks forever on a FIFO with no writer,
+      // so a regression must fail this suite rather than hang it.
+      const stall = new Promise<"blocked">((settle) => {
+        setTimeout(() => settle("blocked"), 10_000).unref();
+      });
+      const execution = await Promise.race([
+        runCli(["candidate-digest", "--file", path]),
+        stall,
+      ]);
+      assert.notEqual(execution, "blocked", `${path} blocked the command.`);
+      if (execution === "blocked") throw new Error("unreachable");
+      const response = JSON.parse(execution.stdout);
+      return { code: response.error.code, exitCode: execution.exitCode };
+    };
+
+    assert.deepEqual(await refuse(directory), {
+      code: "SCE_CANDIDATE_DIFF_UNREADABLE",
+      exitCode: 69,
+    });
+
+    const link = join(directory, "link-to-directory");
+    await symlink(directory, link);
+    assert.deepEqual(await refuse(link), {
+      code: "SCE_CANDIDATE_DIFF_UNREADABLE",
+      exitCode: 69,
+    });
+
+    const fifo = join(directory, "candidate.fifo");
+    if (spawnSync("mkfifo", [fifo]).status === 0)
+      assert.deepEqual(await refuse(fifo), {
+        code: "SCE_CANDIDATE_DIFF_UNREADABLE",
+        exitCode: 69,
+      });
+
+    // Oversize is refused from the measurement, naming the size that was
+    // measured, so the bytes are never pulled into memory to be rejected.
+    const oversize = join(directory, "oversize.diff");
+    await writeFile(oversize, "d".repeat(MAX_CANDIDATE_DIFF_BYTES + 1), "utf8");
+    const measured = await runCli(["candidate-digest", "--file", oversize]);
+    assert.equal(measured.exitCode, 64);
+    const response = JSON.parse(measured.stdout);
+    assert.equal(response.error.code, "SCE_CANDIDATE_DIFF_INVALID");
+    assert.match(
+      response.error.message,
+      new RegExp(`measures ${MAX_CANDIDATE_DIFF_BYTES + 1} bytes`, "u"),
+    );
+
+    // The same path at the bound is read and hashed, so the gate refuses only
+    // what the collector itself could never have carried.
+    const atBound = join(directory, "at-bound.diff");
+    const bounded = "d".repeat(MAX_CANDIDATE_DIFF_BYTES);
+    await writeFile(atBound, bounded, "utf8");
+    const accepted = await runCli(["candidate-digest", "--file", atBound]);
+    assert.equal(accepted.exitCode, 0);
+    assert.equal(
+      JSON.parse(accepted.stdout).result.candidateDiffHash,
+      deriveCandidateDiffHash(bounded),
+    );
+  } finally {
+    await rm(directory, { force: true, recursive: true });
+  }
 });
 
 test("reviewer guidance states the digest procedure it must not be rederived from source", async () => {

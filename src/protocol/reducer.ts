@@ -128,12 +128,20 @@ function hasHarnessConfiguration(
 }
 
 /**
+ * The one definition of the domain the candidate digest commits. It lives
+ * beside the derivation that prefixes it and is re-exported by the public
+ * command that advertises it, so the string an operator is told to type and
+ * the string the reducer hashes cannot drift apart.
+ */
+export const CANDIDATE_DIFF_DOMAIN = "sce.protocol.candidate-diff/v1";
+
+/**
  * Commits the exact UTF-8 diff bytes observed for a candidate. This is
  * deliberately distinct from packet and observation hashes: a reviewer must
  * see precisely the candidate diff that the controller collected.
  */
 export function deriveCandidateDiffHash(diff: string): string {
-  return sha256(`sce.protocol.candidate-diff/v1\n${diff}`);
+  return sha256(`${CANDIDATE_DIFF_DOMAIN}\n${diff}`);
 }
 
 /** Exact argv a reviewer runs in the frozen worktree to reproduce the diff. */

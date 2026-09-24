@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { realpathSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { constants, realpathSync } from "node:fs";
+import { open } from "node:fs/promises";
 import {
   basename,
   dirname,
@@ -976,7 +976,9 @@ async function runCandidateDigest(
 /**
  * Accepts only bytes the collector itself would have hashed. Invalid UTF-8 is
  * refused rather than decoded with replacement characters, which would silently
- * produce a digest no packet can ever match.
+ * produce a digest no packet can ever match, and a leading byte-order mark is
+ * dropped exactly as the collector's decoder drops it rather than hashed as
+ * content, which would mismatch by three invisible bytes.
  */
 async function readCandidateDiff(
   invocation: Extract<ParsedInvocation, { readonly kind: "candidate-digest" }>,
@@ -989,7 +991,7 @@ async function readCandidateDiff(
   try {
     bytes =
       invocation.file !== undefined
-        ? await readFile(invocation.file)
+        ? await readCandidateDiffFile(invocation.file)
         : dependencies.standardInput !== undefined
           ? await dependencies.standardInput()
           : await readProcessStandardInput();
@@ -1027,19 +1029,55 @@ async function readCandidateDiff(
     );
   let diff: string;
   try {
-    diff = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
-      bytes,
-    );
+    // The collector decodes its `git diff` bytes with this exact decoder, and
+    // a WHATWG UTF-8 decoder that does not ignore the mark strips a leading
+    // BOM before anything is hashed. Matching it is what makes a BOM-prefixed
+    // reproduction reach the collected digest instead of missing it.
+    diff = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch {
     return invalid(
       "The reproduced diff is not valid UTF-8; the protocol digest is taken over the UTF-8 bytes the collector observed.",
     );
   }
+  if (diff.length === 0)
+    return invalid(
+      "The reproduced diff is nothing but a byte-order mark, which the collector strips before hashing, so no candidate bytes remain.",
+    );
   if (diff.includes("\u0000"))
     return invalid(
       "The reproduced diff contains a NUL byte, which the candidate collector refuses; these bytes were never hashed as a candidate.",
     );
   return { diff, ok: true };
+}
+
+/**
+ * Measures `--file` before reading a byte of it. The handle is opened without
+ * blocking, so a FIFO or device named here cannot hang the command, and the
+ * size and kind are taken from that same open handle, so what is measured is
+ * what would be read. Anything that is not a regular file holds no collected
+ * diff to hash, and a file past the candidate bound was never a candidate, so
+ * both are refused before the bytes reach memory.
+ */
+async function readCandidateDiffFile(path: string): Promise<Uint8Array> {
+  const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile())
+      throw new CliError(
+        "SCE_CANDIDATE_DIFF_UNREADABLE",
+        `${path} is not a regular file, so it holds no diff bytes the candidate collector could have observed.`,
+        EXIT_UNAVAILABLE,
+      );
+    if (stats.size > MAX_CANDIDATE_DIFF_BYTES)
+      throw new CliError(
+        "SCE_CANDIDATE_DIFF_INVALID",
+        `${path} measures ${stats.size} bytes, past the ${MAX_CANDIDATE_DIFF_BYTES} bytes a collected candidate diff may have, so these bytes were never hashed as a candidate.`,
+        EXIT_USAGE,
+      );
+    return await handle.readFile();
+  } finally {
+    await handle.close();
+  }
 }
 
 /** Reads standard input to the candidate bound; a longer stream is refused. */
@@ -1326,7 +1364,11 @@ function helpResult(
           : command === "uninstall-skill"
             ? "sce uninstall-skill [--host <codex|claude>] --destination <absolute path>"
             : command === candidateDigestCommand
-              ? "sce candidate-digest [--file <absolute path>] [--raw] [--json] (the reproduced diff is read from standard input when --file is absent)"
+              ? [
+                  "sce candidate-digest [--file <absolute path>] [--raw] [--json] (the reproduced diff is read from standard input when --file is absent)",
+                  "SCE_CANDIDATE_DIFF_INVALID: the bytes are not bytes the collector could have hashed (empty, oversize, NUL-bearing, or not UTF-8).",
+                  "SCE_CANDIDATE_DIFF_UNREADABLE: the bytes could not be read at all (a missing file, a file that is not a regular file, or a terminal on standard input).",
+                ].join("\n")
               : command === composeCommand
                 ? "sce compose-config --harness <claude|codex> --root-bead <id> --output <absolute path> [--cwd <absolute path>] [--branch <name>] [--authority <local-change-only|push-branch|open-pr|integrate>] [--beads-mode <local-only|git-sync>] [--controller-model <id>] [--frontier-model <id>] [--workhorse-model <id>] [--knowledge|--no-knowledge] [--bd-executable <absolute path>] [--dolt-executable <absolute path>] [--bind-slot] [--overwrite] [--json]"
                 : `sce ${command} [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]`,
