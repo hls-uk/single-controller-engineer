@@ -28012,6 +28012,7 @@ var MAX_CLI_REQUEST_BYTES = 128 * 1024;
 var MAX_CLI_RESPONSE_BYTES = 128 * 1024;
 var MAX_JSON_ITEMS = 256;
 var MAX_TEXT = 16384;
+var MAX_IDENTIFIER_LENGTH = 160;
 function strictObject5(properties) {
   return Type.Object(properties, { additionalProperties: false });
 }
@@ -28228,6 +28229,33 @@ var CommandRunnerResultSchema = Type.Union([
     version: Type.Literal(1)
   })
 ]);
+var RequestSkeletonSchema = strictObject5({
+  event: Type.Record(
+    Type.String({ maxLength: MAX_IDENTIFIER_LENGTH }),
+    // A skeleton field is a scalar either way: a bound protocol value or the
+    // `<field>` marker standing in for one. Nothing nested belongs here.
+    Type.Union([
+      Type.Null(),
+      Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+      Type.String({ maxLength: MAX_TEXT })
+    ]),
+    // Every variant names at least an id, a revision, and a type, so an
+    // event type this build cannot resolve is refused, never half-drawn.
+    { maxProperties: 32, minProperties: 3 }
+  )
+});
+var NextResultSchema = strictObject5({
+  legalActions: Type.Array(
+    Type.Record(
+      Type.String({ maxLength: MAX_IDENTIFIER_LENGTH }),
+      Type.String({ maxLength: MAX_IDENTIFIER_LENGTH }),
+      { maxProperties: 16 }
+    ),
+    { maxItems: MAX_JSON_ITEMS }
+  ),
+  requests: Type.Array(RequestSkeletonSchema, { maxItems: MAX_JSON_ITEMS }),
+  revision: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })
+});
 var ajv4 = new import_ajv4.Ajv({
   allErrors: true,
   coerceTypes: false,
@@ -28249,6 +28277,10 @@ var requestValidator = ajv4.compile(
 var runnerResultValidator = ajv4.compile(
   CommandRunnerResultSchema
 );
+var nextResultValidator = ajv4.compile(NextResultSchema);
+function validateNextResult(input) {
+  return nextResultValidator(input) === true;
+}
 function validateCommandRequest(input) {
   return requestValidator(input);
 }
@@ -28337,18 +28369,64 @@ var stateOnlyCommandRunner = (request2) => {
       }
     };
   }
-  return {
-    schema: "sce.command.result",
-    version: 1,
-    status: "ok",
-    result: {
-      legalActions: legalActions(run2).map((action) => ({
-        ...action
-      })),
-      revision: run2.revision
-    }
+  const actions = legalActions(run2);
+  const result2 = {
+    legalActions: actions.map((action) => ({ ...action })),
+    requests: actions.slice(0, MAX_JSON_ITEMS).map((action) => requestSkeleton(run2, action)),
+    revision: run2.revision
   };
+  return validateNextResult(result2) ? { schema: "sce.command.result", version: 1, status: "ok", result: result2 } : invalidStateRequest();
 };
+var protocolEventVariants = ProtocolEventSchema.anyOf;
+function requiredEventFields(type, gateScoped) {
+  const variants = protocolEventVariants.filter(
+    (variant) => variant.properties?.type?.const === type
+  );
+  const scoped = variants.filter(
+    (variant) => (variant.required ?? []).includes("gateEntryId") === gateScoped
+  );
+  return (scoped.length === 0 ? variants : scoped).map((variant) => variant.required ?? []).sort((left, right) => left.length - right.length)[0] ?? [];
+}
+function outstandingEffectId(run2, action) {
+  if (action.effectId !== void 0) return action.effectId;
+  if (action.effectKind === void 0) return void 0;
+  return run2.effectJournal.find(
+    (entry) => (entry.status === "intended" || entry.status === "ambiguous") && entry.kind === action.effectKind && (entry.unitId ?? void 0) === action.unitId && entry.gateEntryId === action.gateEntryId
+  )?.effectId;
+}
+function skeletonEventId(run2, type) {
+  const eventId2 = `${run2.controller.runId}-${type}-${run2.revision + 1}`;
+  return eventId2.length <= MAX_IDENTIFIER_LENGTH ? eventId2 : "<eventId>";
+}
+function requestSkeleton(run2, action) {
+  const unitId = action.unitId ?? null;
+  const bound = {
+    effectId: outstandingEffectId(run2, action),
+    effectKind: action.effectKind,
+    eventId: skeletonEventId(run2, action.type),
+    expectedRevision: run2.revision,
+    gateEntryId: action.gateEntryId,
+    idempotencyKey: action.mode === "emit" && action.effectKind !== void 0 ? deriveIdempotencyKey(
+      run2,
+      run2.revision,
+      unitId,
+      action.effectKind,
+      action.gateEntryId
+    ) : void 0,
+    type: action.type,
+    unitId
+  };
+  return {
+    event: Object.fromEntries(
+      requiredEventFields(action.type, action.gateEntryId !== void 0).map(
+        (field) => {
+          const value = bound[field];
+          return [field, value === void 0 ? `<${field}>` : value];
+        }
+      )
+    )
+  };
+}
 var commandEvent = {
   "acquire-controller": ["controller_acquire_intent"],
   "plan-wave": ["wave_planned"],
