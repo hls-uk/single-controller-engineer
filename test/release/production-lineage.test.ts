@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,6 +10,11 @@ import {
   isPinnedCloneMergeDelta,
   PinnedBdEmbeddedProcess,
 } from "../../src/adapters/beads-embedded/index.js";
+import {
+  executableVersionProblem,
+  findExecutable,
+  observeRepository,
+} from "../../src/compose/index.js";
 
 const scope = {
   beadsStoreIdentity: "release-lineage-store",
@@ -160,6 +165,141 @@ test("production clone-lineage proof accepts exactly 64 permitted metadata edges
     assert.equal(await proof.provePinnedCloneLineage(oid(1), oid(101)), true);
     assert.equal(await proof.provePinnedCloneLineage(oid(64), remote), true);
   } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+/** The environment the engine's own sanitized Git runner pins. */
+const sanitizedGit = {
+  GIT_ATTR_NOSYSTEM: "1",
+  GIT_CONFIG_GLOBAL: "/dev/null",
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_OPTIONAL_LOCKS: "0",
+  HOME: "/nonexistent",
+  LANG: "C",
+  LC_ALL: "C",
+  PATH: "/usr/bin:/bin",
+  TZ: "UTC",
+  XDG_CONFIG_HOME: "/nonexistent",
+};
+
+/** The untracked and modified paths the engine's own Git status would read. */
+async function sanitizedStatusPaths(cwd: string): Promise<string[]> {
+  const { stdout } = await execute(
+    "/usr/bin/git",
+    ["status", "--porcelain=v1", "-z"],
+    { cwd, encoding: "utf8", env: sanitizedGit, timeout: 15_000 },
+  );
+  return stdout
+    .split("\u0000")
+    .filter((record) => record.length > 0)
+    .map((record) => record.slice(3));
+}
+
+/**
+ * sce-296.22 A2. `bd` resolves `~` itself, so a child spawned without HOME
+ * writes its configuration into a literal `~` directory under the repository;
+ * the engine's sanitized Git status then reports an untracked entry and every
+ * integrate refuses until an operator deletes it. This runs the whole
+ * host-touching half of `sce compose-config` against the real pinned `bd` in a
+ * fresh repository under an isolated home, and reads the result back with the
+ * same sanitized status the Git adapter uses.
+ *
+ * It lives beside the lineage proof because the triage gate claims every suite
+ * for exactly one tier by name and `test/release` is the tier that may spawn
+ * real tools; a file of its own would have to be triaged in
+ * `test/eval/release-manifest.test.ts` as well.
+ */
+test("compose-config against the pinned bd leaves no literal ~ in the checkout", async (t) => {
+  const bd = await findExecutable("bd");
+  const dolt = await findExecutable("dolt");
+  if (bd === undefined || dolt === undefined) {
+    t.skip("the pinned bd and dolt are not on PATH (sce-296.22 A2)");
+    return;
+  }
+  const versions = executableVersionProblem(
+    (await execute(bd, ["--version"], { encoding: "utf8" })).stdout,
+    (await execute(dolt, ["version"], { encoding: "utf8" })).stdout,
+  );
+  if (versions !== undefined) {
+    t.skip(`tool versions are not the pinned pair: ${versions}`);
+    return;
+  }
+
+  const root = await mkdtemp("/private/tmp/sce-release-compose-home-");
+  const home = join(root, "home");
+  const repository = join(root, "repository");
+  const control = join(root, "control");
+  const originalHome = process.env.HOME;
+  const isolated = {
+    cwd: repository,
+    encoding: "utf8" as const,
+    env: { HOME: home, LANG: "C", LC_ALL: "C", PATH: process.env.PATH ?? "" },
+    timeout: 60_000,
+  };
+  try {
+    await mkdir(home, { recursive: true });
+    await mkdir(repository, { recursive: true });
+    await mkdir(control, { recursive: true });
+    // `homedir()` reads HOME verbatim on POSIX, so the engine's children land
+    // in this temporary home rather than the operator's.
+    process.env.HOME = home;
+    await execute("/usr/bin/git", ["init", "-q"], isolated);
+    await execute(
+      bd,
+      [
+        "init",
+        "--non-interactive",
+        "--skip-agents",
+        "--skip-hooks",
+        "-p",
+        "sce",
+        "--remote",
+        "",
+      ],
+      isolated,
+    );
+
+    const observed = await observeRepository(repository);
+    assert.equal(observed.ok, true, JSON.stringify(observed));
+    const paths = await sanitizedStatusPaths(repository);
+    assert.deepEqual(
+      paths.filter((path) => path.startsWith("~")),
+      [],
+      `compose-config dirtied the checkout with a literal ~: ${JSON.stringify(paths)}`,
+    );
+
+    // Control: the same pinned `bd` with no HOME does write that directory, so
+    // the assertion above is reading a real property and not a `bd` that
+    // stopped keeping a config file. A pinned-version bump that changes this
+    // is worth seeing.
+    await execute("/usr/bin/git", ["init", "-q"], {
+      ...isolated,
+      cwd: control,
+    });
+    await execute(bd, ["context", "--json"], {
+      cwd: control,
+      encoding: "utf8",
+      env: { LANG: "C", LC_ALL: "C", PATH: process.env.PATH ?? "" },
+      timeout: 60_000,
+    }).catch(() => undefined);
+    const controlPaths = await sanitizedStatusPaths(control);
+    assert.deepEqual(
+      controlPaths.filter((path) => path.startsWith("~")),
+      ["~/"],
+      `the pinned bd no longer writes a literal ~ without HOME: ${JSON.stringify(controlPaths)}`,
+    );
+
+    console.log(
+      JSON.stringify({
+        controlPaths,
+        evidence: "sce.release.compose-home.v1",
+        paths,
+      }),
+    );
+  } finally {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
     await rm(root, { force: true, recursive: true });
   }
 });

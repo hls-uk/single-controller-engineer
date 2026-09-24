@@ -9,6 +9,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { access, constants, readFile, stat, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 
@@ -1033,7 +1034,11 @@ function capture(
   return new Promise((resolveCapture) => {
     const child = spawn(executable, argv, {
       cwd,
-      env: process.env,
+      // `bd` resolves `~` itself: a child with no HOME writes its
+      // configuration into a literal `~` directory under the repository and
+      // dirties the checkout. `homedir()` is the inherited HOME whenever this
+      // process has one, so this only closes the case where it has none.
+      env: { ...process.env, HOME: homedir() },
       stdio: ["ignore", "pipe", "ignore"],
     });
     const chunks: Buffer[] = [];

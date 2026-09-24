@@ -7,6 +7,7 @@ import {
   relative,
   resolve,
 } from "node:path";
+import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 
 import {
@@ -181,7 +182,33 @@ export function canonicalLocalBareRepository(path: string): string | undefined {
 const localBareRemoteCanonicalizer: LocalBareRemoteCanonicalizer =
   canonicalLocalBareRepository;
 
-function sanitizedEnvironment(): NodeJS.ProcessEnv | undefined {
+/**
+ * `bd` resolves `~` itself, so a child with no HOME writes its configuration
+ * into a literal `~` directory under the working directory; the engine's own
+ * sanitized Git status then reads the checkout as dirty and refuses every
+ * integrate until an operator deletes it. The pinned embedded process passes
+ * the operator's home for exactly that reason, and this layer mirrors it. A
+ * home this layer cannot prove refuses the child rather than letting it write
+ * that directory, which is the same fail-closed reading PATH already gets.
+ */
+function sanitizedHome(): string | undefined {
+  const home = homedir();
+  return home.length === 0 ||
+    home.length > 4_096 ||
+    !isAbsolute(home) ||
+    home.includes("\u0000")
+    ? undefined
+    : home;
+}
+
+/**
+ * Git children deliberately carry no HOME: this layer reads the repository in
+ * front of it, never the operator's Git configuration, and the Git adapter
+ * pins `HOME=/nonexistent` for the same reason.
+ */
+function sanitizedEnvironment(
+  executable: InspectionCommand["executable"],
+): NodeJS.ProcessEnv | undefined {
   const path = process.env.PATH;
   if (
     path === undefined ||
@@ -190,14 +217,22 @@ function sanitizedEnvironment(): NodeJS.ProcessEnv | undefined {
     path.includes("\u0000")
   )
     return undefined;
-  return { LANG: "C", LC_ALL: "C", PATH: path, TZ: "UTC" };
+  const base = { LANG: "C", LC_ALL: "C", PATH: path, TZ: "UTC" };
+  switch (executable) {
+    case "git":
+      return base;
+    case "bd": {
+      const home = sanitizedHome();
+      return home === undefined ? undefined : { HOME: home, ...base };
+    }
+  }
 }
 
 async function executeCaptured(
   request: SanitizedSubprocessRequest,
 ): Promise<CapturedProcess> {
   const cwd = canonicalCwd(request.cwd);
-  const env = sanitizedEnvironment();
+  const env = sanitizedEnvironment(request.command.executable);
   if (cwd === undefined || env === undefined)
     return {
       exitCode: null,

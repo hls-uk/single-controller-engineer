@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 
@@ -980,6 +980,121 @@ test("allowlisted subprocess execution sanitizes the environment", async () => {
       }),
       { command: "git rev-parse --show-toplevel", outcome: "unavailable" },
     );
+  });
+});
+
+/**
+ * `sh` exports PWD and SHLVL (and, in some shells, `_`) into anything it runs,
+ * so those three names are the recorder's own rather than the executor's.
+ * Every other name below is exactly what this layer handed to `spawn`.
+ */
+const shellExported = new Set(["PWD", "SHLVL", "_"]);
+
+const recordedEnvironment = async (
+  path: string,
+): Promise<Record<string, string>> => {
+  const entries: Array<[string, string]> = [];
+  for (const record of (await readFile(path, "utf8"))
+    .split("\n")
+    .slice(0, -1)) {
+    const separator = record.indexOf("=");
+    assert.ok(separator > 0, `unreadable environment record: ${record}`);
+    const name = record.slice(0, separator);
+    if (!shellExported.has(name))
+      entries.push([name, record.slice(separator + 1)]);
+  }
+  return Object.fromEntries(entries);
+};
+
+/**
+ * sce-296.22: `bd` resolves `~` for its own configuration, so a child with no
+ * HOME writes `~/.config/bd` under the working directory and the engine's
+ * sanitized Git status then reads the checkout as dirty. The pinned embedded
+ * process has always passed the operator's home; the process boundary in front
+ * of `bd context` now passes the same one, while a Git child still carries
+ * none.
+ */
+test("a bd child carries the operator home and a git child carries none", async () => {
+  await withFakeBd(async (writeFakeBd, directory) => {
+    const recording = join(directory, "environment");
+    // `exec env` is one small utility and no interpreter start-up, like every
+    // other fake program in this file.
+    const recorder = `#!/bin/sh\nexec env > ${recording}`;
+    const sanitized = {
+      LANG: "C",
+      LC_ALL: "C",
+      PATH: process.env.PATH,
+      TZ: "UTC",
+    };
+
+    await writeFakeBd(recorder);
+    assert.deepEqual(
+      await executeSanitizedInspection(
+        inspectBd(directory, unreachableOutputBytes, unreachableTimeoutMs),
+      ),
+      { command: "bd --version", outcome: "ok", exitCode: 0 },
+    );
+    assert.deepEqual(await recordedEnvironment(recording), {
+      ...sanitized,
+      HOME: homedir(),
+    });
+
+    const fakeGit = join(directory, "git");
+    await writeFile(fakeGit, `${recorder}\n`, "utf8");
+    await chmod(fakeGit, 0o700);
+    assert.deepEqual(
+      await executeSanitizedInspection({
+        ...inspectBd(directory, unreachableOutputBytes, unreachableTimeoutMs),
+        command: { executable: "git", argv: ["rev-parse", "--show-toplevel"] },
+      }),
+      { command: "git rev-parse --show-toplevel", outcome: "ok", exitCode: 0 },
+    );
+    assert.deepEqual(await recordedEnvironment(recording), sanitized);
+  });
+});
+
+test("a home this layer cannot prove refuses the bd child and leaves git alone", async () => {
+  await withFakeBd(async (writeFakeBd, directory) => {
+    await writeFakeBd("#!/bin/sh\nexit 0");
+    const fakeGit = join(directory, "git");
+    await writeFile(fakeGit, "#!/bin/sh\nprintf '%s' /\n", "utf8");
+    await chmod(fakeGit, 0o700);
+    const originalHome = process.env.HOME;
+    try {
+      // `homedir()` reads HOME verbatim on POSIX, so an empty or relative
+      // value is exactly the ambiguous home that must block the child rather
+      // than let it write a literal `~` into the checkout.
+      for (const home of ["", "relative/home"]) {
+        process.env.HOME = home;
+        assert.deepEqual(
+          await executeSanitizedInspection(
+            inspectBd(directory, unreachableOutputBytes, unreachableTimeoutMs),
+          ),
+          { command: "bd --version", outcome: "unavailable" },
+        );
+        assert.deepEqual(
+          await executeSanitizedInspection({
+            ...inspectBd(
+              directory,
+              unreachableOutputBytes,
+              unreachableTimeoutMs,
+            ),
+            command: {
+              executable: "git",
+              argv: ["rev-parse", "--show-toplevel"],
+            },
+          }),
+          {
+            command: "git rev-parse --show-toplevel",
+            outcome: "ok",
+            exitCode: 0,
+          },
+        );
+      }
+    } finally {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+    }
   });
 });
 
