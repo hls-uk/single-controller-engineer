@@ -9582,17 +9582,27 @@ var LIMITS = {
   // costs `sessionFingerprintBytes` per occupied slot, and the two bounded
   // `eventHistory` replay windows and the deflated closure ledger sit beside
   // it. That buys 61 retained units at 16 bounded repairs each, not all
-  // `units` of them, and it is this invariant that says so: a 62-unit run is
-  // refused partway through its fifty-ninth unit and a 64-unit one partway
-  // through its fifty-seventh, so neither ever reaches an end state to
-  // measure. The reducer stress scenario in `test/protocol/reducer.test.ts`
-  // pins that capacity and its exact per-step peak, six bytes under this
-  // limit.
+  // `units` of them, and it is this budget that says so. The reducer stress
+  // scenario in `test/protocol/reducer.test.ts` measures every reduced step
+  // of that run and pins all three facts: 61 units peak six bytes under this
+  // limit, a 62-unit run is refused at `unit-59`'s eleventh
+  // `reviewer_observed`, and a 64-unit one at `unit-57`'s second, so neither
+  // ever reaches an end state to measure. Those are unit names in that
+  // scenario's lexicographic drain order, not the fifty-ninth and
+  // fifty-seventh units of the run. The refusal is `commit`'s typed envelope
+  // admission in `src/protocol/reducer.ts` — `illegal_transition`,
+  // "transition exceeds the repository run envelope budget" — measured on
+  // the candidate next state before anything is persisted, not the aggregate
+  // invariant that re-states the same bound for a hydrated run.
+  // `sessionHistory` and `units` are the wider slot bounds they have always
+  // been; this is the one that binds first, and DEC-20260924-020 records why
+  // it is not raised.
   envelopeBytes: 131072,
   effectJournal: 256,
   eventHistory: 256,
   // 64 units can each retain an initial worker/reviewer pair plus all 16
-  // bounded repair pairs without permitting historical session reuse.
+  // bounded repair pairs without permitting historical session reuse. It is
+  // a slot bound, not a capacity promise: `envelopeBytes` runs out first.
   sessionHistory: 2176,
   sessionFingerprintBytes: 32,
   units: 64,
@@ -18622,11 +18632,26 @@ function commit(state, event, effects) {
   };
   const schema = validate(RepositoryRunSchema, nextState);
   if (!schema.ok) return reject("invariant", schema.errors.join("; "));
+  if (runEnvelopeByteLength(nextState) > LIMITS.envelopeBytes)
+    return reject(
+      "illegal_transition",
+      "transition exceeds the repository run envelope budget"
+    );
   const errors = runInvariantErrorsWithClosedEvidence(
     nextState,
-    closedEvidenceDetails
+    closedEvidenceDetails,
+    true
   );
   return errors.length ? reject("invariant", errors.join("; ")) : { ok: true, nextState, effects };
+}
+function runEnvelopeByteLength(state) {
+  return utf83.encode(
+    JSON.stringify({
+      schema: "sce.repository-run",
+      version: SCHEMA_VERSION,
+      payload: state
+    })
+  ).byteLength;
 }
 function runInvariantErrors(state) {
   return runInvariantErrorsWithClosedEvidence(
@@ -18634,7 +18659,7 @@ function runInvariantErrors(state) {
     decodeClosedUnitEvidenceDetails(state.closedUnitEvidence)
   );
 }
-function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
+function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails, envelopeAdmitted = false) {
   const errors = [];
   const effectIds = /* @__PURE__ */ new Set();
   const idempotency = /* @__PURE__ */ new Set();
@@ -18646,13 +18671,7 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails) {
     entries.push(entry);
     unresolvedByUnit.set(entry.unitId, entries);
   };
-  if (utf83.encode(
-    JSON.stringify({
-      schema: "sce.repository-run",
-      version: SCHEMA_VERSION,
-      payload: state
-    })
-  ).byteLength > LIMITS.envelopeBytes)
+  if (!envelopeAdmitted && runEnvelopeByteLength(state) > LIMITS.envelopeBytes)
     errors.push("repository run envelope exceeds byte limit");
   if (state.controller.holder !== `${state.controller.runId}/${state.controller.incarnationId}`)
     errors.push("controller holder does not bind immutable run incarnation");
