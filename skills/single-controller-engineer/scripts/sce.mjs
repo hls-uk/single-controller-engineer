@@ -28560,7 +28560,6 @@ var PINNED_BD_ISSUE_BASE_KEYS = [
   "design",
   "ephemeral",
   "event_kind",
-  "external_ref",
   "hook_bead",
   "id",
   "is_blocked",
@@ -28613,7 +28612,6 @@ var PINNED_BD_ISSUE_STRING_KEYS = [
   "description",
   "design",
   "event_kind",
-  "external_ref",
   "hook_bead",
   "mol_type",
   "notes",
@@ -28631,6 +28629,14 @@ var PINNED_BD_ISSUE_STRING_KEYS = [
   "wisp_type",
   "work_type"
 ];
+var PINNED_BD_ISSUE_NULLABLE_STRING_KEYS = [
+  "assignee",
+  "external_ref"
+];
+var PINNED_BD_ISSUE_NULLABLE_TIMESTAMP_KEYS = [
+  "closed_at",
+  "started_at"
+];
 function exactKeys(value, expected) {
   return Object.keys(value).length === expected.length && expected.every((key) => Object.prototype.hasOwnProperty.call(value, key));
 }
@@ -28638,26 +28644,18 @@ function sqlTimestamp(value) {
   return typeof value === "string" && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/u.test(value);
 }
 function isPinnedBdIssueRow(value) {
-  const hasStartedAt = Object.prototype.hasOwnProperty.call(
-    value,
-    "started_at"
-  );
-  const hasClosedAt = Object.prototype.hasOwnProperty.call(value, "closed_at");
-  const hasExternalRef = Object.prototype.hasOwnProperty.call(
-    value,
-    "external_ref"
-  );
-  const baseKeys = hasExternalRef ? PINNED_BD_ISSUE_BASE_KEYS : PINNED_BD_ISSUE_BASE_KEYS.filter((key) => key !== "external_ref");
-  const keys = [
-    ...baseKeys,
-    ...hasStartedAt ? ["started_at"] : [],
-    ...hasClosedAt ? ["closed_at"] : []
-  ];
-  return exactKeys(value, keys) && typeof value.id === "string" && typeof value.issue_type === "string" && typeof value.status === "string" && typeof value.title === "string" && value.metadata !== null && typeof value.metadata === "object" && !Array.isArray(value.metadata) && PINNED_BD_ISSUE_STRING_KEYS.filter(
-    (key) => hasExternalRef || key !== "external_ref"
-  ).every((key) => typeof value[key] === "string") && PINNED_BD_ISSUE_NUMERIC_KEYS.every(
+  const present = (key) => Object.prototype.hasOwnProperty.call(value, key);
+  const nullableStrings = PINNED_BD_ISSUE_NULLABLE_STRING_KEYS.filter(present);
+  const nullableTimestamps = PINNED_BD_ISSUE_NULLABLE_TIMESTAMP_KEYS.filter(present);
+  return exactKeys(value, [
+    ...PINNED_BD_ISSUE_BASE_KEYS,
+    ...nullableStrings,
+    ...nullableTimestamps
+  ]) && typeof value.id === "string" && typeof value.issue_type === "string" && typeof value.status === "string" && typeof value.title === "string" && value.metadata !== null && typeof value.metadata === "object" && !Array.isArray(value.metadata) && [...PINNED_BD_ISSUE_STRING_KEYS, ...nullableStrings].every(
+    (key) => typeof value[key] === "string"
+  ) && PINNED_BD_ISSUE_NUMERIC_KEYS.every(
     (key) => typeof value[key] === "number" && Number.isSafeInteger(value[key])
-  ) && sqlTimestamp(value.created_at) && sqlTimestamp(value.updated_at) && (!hasStartedAt || sqlTimestamp(value.started_at)) && (!hasClosedAt || sqlTimestamp(value.closed_at));
+  ) && sqlTimestamp(value.created_at) && sqlTimestamp(value.updated_at) && nullableTimestamps.every((key) => sqlTimestamp(value[key]));
 }
 var EMBEDDED_ADAPTER_VERSION = 1;
 var REMOTE_FAILURE_TAIL_BYTES = 2048;
