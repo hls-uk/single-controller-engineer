@@ -45,7 +45,6 @@ const PINNED_BD_ISSUE_BASE_KEYS = [
   "design",
   "ephemeral",
   "event_kind",
-  "external_ref",
   "hook_bead",
   "id",
   "is_blocked",
@@ -98,7 +97,6 @@ const PINNED_BD_ISSUE_STRING_KEYS = [
   "description",
   "design",
   "event_kind",
-  "external_ref",
   "hook_bead",
   "mol_type",
   "notes",
@@ -115,6 +113,23 @@ const PINNED_BD_ISSUE_STRING_KEYS = [
   "waiters",
   "wisp_type",
   "work_type",
+] as const;
+/**
+ * Nullable columns, which Dolt omits from a JSON row when they are NULL, so a
+ * row's key set records exactly which of them bd has written.  `bd close` sets
+ * `closed_at`; `bd update --claim` sets `assignee` and `started_at` and moves
+ * `status` to `in_progress` (a value this shape does not pin).  A
+ * unit's child projection row is its bead, so every one of those forms stays
+ * pinned: otherwise a bead closed or claimed by hand fails every later
+ * checkpoint read-back (sce-296.15, sce-f63).
+ */
+const PINNED_BD_ISSUE_NULLABLE_STRING_KEYS = [
+  "assignee",
+  "external_ref",
+] as const;
+const PINNED_BD_ISSUE_NULLABLE_TIMESTAMP_KEYS = [
+  "closed_at",
+  "started_at",
 ] as const;
 
 function exactKeys(
@@ -136,30 +151,17 @@ function sqlTimestamp(value: unknown): value is string {
 
 /** Rejects unknown, missing, and incorrectly typed pinned bd issue columns. */
 export function isPinnedBdIssueRow(value: Record<string, unknown>): boolean {
-  const hasStartedAt = Object.prototype.hasOwnProperty.call(
-    value,
-    "started_at",
-  );
-  // `bd close` sets the nullable `closed_at`; a unit's child row is its bead,
-  // and a landed unit's bead is closed before its reservation is released.
-  const hasClosedAt = Object.prototype.hasOwnProperty.call(value, "closed_at");
-  // Dolt omits nullable `external_ref` from JSON rows when it is NULL. These
-  // two base forms (with/without it), plus optional `started_at` and
-  // `closed_at`, are pinned.
-  const hasExternalRef = Object.prototype.hasOwnProperty.call(
-    value,
-    "external_ref",
-  );
-  const baseKeys = hasExternalRef
-    ? PINNED_BD_ISSUE_BASE_KEYS
-    : PINNED_BD_ISSUE_BASE_KEYS.filter((key) => key !== "external_ref");
-  const keys = [
-    ...baseKeys,
-    ...(hasStartedAt ? ["started_at"] : []),
-    ...(hasClosedAt ? ["closed_at"] : []),
-  ];
+  const present = (key: string) =>
+    Object.prototype.hasOwnProperty.call(value, key);
+  const nullableStrings = PINNED_BD_ISSUE_NULLABLE_STRING_KEYS.filter(present);
+  const nullableTimestamps =
+    PINNED_BD_ISSUE_NULLABLE_TIMESTAMP_KEYS.filter(present);
   return (
-    exactKeys(value, keys) &&
+    exactKeys(value, [
+      ...PINNED_BD_ISSUE_BASE_KEYS,
+      ...nullableStrings,
+      ...nullableTimestamps,
+    ]) &&
     typeof value.id === "string" &&
     typeof value.issue_type === "string" &&
     typeof value.status === "string" &&
@@ -167,17 +169,16 @@ export function isPinnedBdIssueRow(value: Record<string, unknown>): boolean {
     value.metadata !== null &&
     typeof value.metadata === "object" &&
     !Array.isArray(value.metadata) &&
-    PINNED_BD_ISSUE_STRING_KEYS.filter(
-      (key) => hasExternalRef || key !== "external_ref",
-    ).every((key) => typeof value[key] === "string") &&
+    [...PINNED_BD_ISSUE_STRING_KEYS, ...nullableStrings].every(
+      (key) => typeof value[key] === "string",
+    ) &&
     PINNED_BD_ISSUE_NUMERIC_KEYS.every(
       (key) =>
         typeof value[key] === "number" && Number.isSafeInteger(value[key]),
     ) &&
     sqlTimestamp(value.created_at) &&
     sqlTimestamp(value.updated_at) &&
-    (!hasStartedAt || sqlTimestamp(value.started_at)) &&
-    (!hasClosedAt || sqlTimestamp(value.closed_at))
+    nullableTimestamps.every((key) => sqlTimestamp(value[key]))
   );
 }
 

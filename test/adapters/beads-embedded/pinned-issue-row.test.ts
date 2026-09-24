@@ -4,7 +4,8 @@ import test from "node:test";
 import { isPinnedBdIssueRow } from "../../../src/adapters/beads-embedded/index.js";
 
 // The exact bd 1.1.0 issue row as Dolt 2.2.1 `-r json` prints it: every NULL
-// column (external_ref, started_at, closed_at) is omitted rather than null.
+// column (assignee, external_ref, started_at, closed_at) is omitted rather
+// than printed as null.
 const numeric = [
   "compaction_level",
   "ephemeral",
@@ -92,6 +93,49 @@ test("a malformed closed_at or an unknown column is still refused", () => {
   assert.equal(isPinnedBdIssueRow(row({ closed_at: null })), false);
   assert.equal(
     isPinnedBdIssueRow(row({ reopened_at: "2026-09-22 19:17:01" })),
+    false,
+  );
+});
+
+// sce-f63: `bd update --claim` on a unit's bead sets the nullable `assignee`
+// beside `started_at` and moves `status` to `in_progress`. Without `assignee`
+// in the pinned shape every later checkpoint read-back failed after its rows
+// were written, leaving the Dolt working set pending and the run ambiguous.
+test("a claimed unit bead row keeps its pinned shape", () => {
+  assert.equal(
+    isPinnedBdIssueRow(
+      row({
+        assignee: "adam",
+        started_at: "2026-09-22 11:00:00",
+        status: "in_progress",
+      }),
+    ),
+    true,
+  );
+  // A claim that bd recorded without a start, and a claimed bead later closed
+  // against a scoped merge slot, are the same pinned row plus their columns.
+  assert.equal(isPinnedBdIssueRow(row({ assignee: "adam" })), true);
+  assert.equal(
+    isPinnedBdIssueRow(
+      row({
+        assignee: "adam",
+        closed_at: "2026-09-22 19:17:01",
+        external_ref: "sce-scope:v1:0",
+        started_at: "2026-09-22 11:00:00",
+        status: "closed",
+      }),
+    ),
+    true,
+  );
+});
+
+test("an assignee that is not a bd actor string is refused", () => {
+  // Dolt omits a NULL column rather than printing it, so a literal null is
+  // output this adapter has never observed: it blocks instead of guessing.
+  assert.equal(isPinnedBdIssueRow(row({ assignee: null })), false);
+  assert.equal(isPinnedBdIssueRow(row({ assignee: 1 })), false);
+  assert.equal(
+    isPinnedBdIssueRow(row({ assignee: "adam", assigned_at: "2026-09-22" })),
     false,
   );
 });
