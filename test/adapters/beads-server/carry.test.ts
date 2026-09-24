@@ -30,6 +30,7 @@ import {
   deriveProvenanceWorktreePath,
   deriveTargetDefinitionCommitment,
   projectionInputIsValid,
+  provenanceCarryAncestorDigest,
   provenanceCarryLineageCommitment,
   unitClosureEvidenceCommitment,
   type ProtocolEffect,
@@ -38,6 +39,7 @@ import { sha256 } from "../../../src/protocol/evidence.js";
 import type {
   ClosureEvidence,
   ProvenanceInput,
+  ProvenanceCarry,
   ProvenanceCarryClaimRecord,
   RepositoryRun,
 } from "../../../src/protocol/schemas.js";
@@ -404,6 +406,59 @@ function effectFromPlan(
   };
 }
 
+function claimRecordFor(effect: CarryEffect): ProvenanceCarryClaimRecord {
+  return {
+    claimRevision: 1,
+    claimantRunId: effect.params.currentRunId,
+    claimToken: effect.params.claimToken,
+    exportId: effect.params.exportId,
+    predecessorRootBeadId,
+    predecessorRunId: effect.params.predecessorRunId,
+    predecessorWaveId: effect.params.predecessorWaveId,
+    schema: "sce.provenance-carry-claim",
+    snapshotCommitment: effect.params.snapshotCommitment,
+    version: 1,
+  };
+}
+
+/**
+ * The carry payload an imported claim must carry, rebuilt here from the
+ * predecessor fixture rather than read back from the adapter, so a dropped or
+ * silently renamed field fails instead of agreeing with itself.
+ */
+function carryPayloadFor(
+  plan: ReturnType<typeof planFor>,
+  record: ProvenanceCarryClaimRecord,
+): ProvenanceCarry {
+  // The importing run extends the predecessor's (empty) ancestry by exactly
+  // one digest, so the chain rule is asserted rather than copied back.
+  const lineage = [
+    provenanceCarryAncestorDigest(predecessorRootBeadId, plan.predecessorRunId),
+  ];
+  return {
+    claimRecordDigest: sha256(
+      canonicalJson({
+        claimRecord: record,
+        domain: "sce.provenance-carry-claim-record.v1",
+      } as unknown as JsonValue),
+    ),
+    claimRevision: 1,
+    exportId: plan.exportId,
+    integrationOid,
+    lineageAncestorDigests: lineage,
+    lineageCommitment: provenanceCarryLineageCommitment(lineage),
+    predecessorFinalRevision: plan.predecessorFinalRevision,
+    predecessorJournalCheckpointCommitment:
+      plan.predecessorJournalCheckpointCommitment,
+    predecessorRootBeadId,
+    predecessorRootAggregateCommitment: plan.predecessorRootAggregateCommitment,
+    predecessorRunId: plan.predecessorRunId,
+    predecessorWaveId: plan.predecessorWaveId,
+    projectionInputSnapshot: nonemptyProvenanceInput().input,
+    snapshotCommitment: plan.snapshotCommitment,
+  };
+}
+
 class CarryServer implements BeadsServerDriver {
   readonly serverIdentity = identity();
   predecessor: RootProjection = makeRootProjection(predecessorRun());
@@ -578,11 +633,34 @@ test("server carry winner preserves projection and siblings and same token is id
       driver.predecessor as unknown as JsonValue,
     );
     const beforeSibling = canonicalJson(driver.sibling);
+    const plan = planFor(driver.predecessor, run);
+    const record = claimRecordFor(effect);
+    const expected = carryPayloadFor(plan, record);
     const winner = await adapter.executeProvenanceCarryClaim(effect, run);
     assert.equal(winner.status, "observed");
-    if (winner.status === "observed")
+    if (winner.status === "observed") {
       assert.equal(winner.result.status, "imported");
+      if (winner.result.status === "imported")
+        assert.deepEqual(winner.result.carry, expected);
+    }
     assert.equal(driver.claimCalls, 1);
+    // The winner's own claim record is what the store now holds: the token,
+    // claimant, revision, ids and snapshot commitment are asserted as the one
+    // canonical singleton the CAS wrote, not merely as a status.
+    assert.equal(record.claimRevision, 1);
+    assert.equal(record.claimantRunId, "run-2");
+    assert.equal(record.claimToken, effect.idempotencyKey);
+    assert.equal(record.exportId, plan.exportId);
+    assert.equal(record.predecessorRootBeadId, predecessorRootBeadId);
+    assert.equal(record.predecessorRunId, "run-1");
+    assert.equal(record.predecessorWaveId, "wave-predecessor");
+    assert.equal(record.snapshotCommitment, plan.snapshotCommitment);
+    assert.equal(
+      driver.claimsText,
+      canonicalJson({
+        [plan.exportId.slice("sce:carry:".length)]: record,
+      } as unknown as JsonValue),
+    );
     assert.equal(
       canonicalJson(driver.predecessor as unknown as JsonValue),
       beforeRoot,
@@ -590,8 +668,11 @@ test("server carry winner preserves projection and siblings and same token is id
     assert.equal(canonicalJson(driver.sibling), beforeSibling);
     const sameToken = await adapter.executeProvenanceCarryClaim(effect, run);
     assert.equal(sameToken.status, "observed");
-    if (sameToken.status === "observed")
+    if (sameToken.status === "observed") {
       assert.equal(sameToken.result.status, "imported");
+      if (sameToken.result.status === "imported")
+        assert.deepEqual(sameToken.result.carry, expected);
+    }
     assert.equal(driver.claimCalls, 1);
   }
 });
@@ -733,9 +814,26 @@ test("concrete direct-root carry boundaries reject malformed input before SQL", 
 
 type ConcreteCarry = Awaited<ReturnType<typeof concreteCarryDriver>>;
 
+/**
+ * One in-transaction `FOR UPDATE` readback that the real server would return
+ * for a row the guarded UPDATE no longer describes. Every drift leaves the
+ * UPDATE's own `affected_rows` at one, so the transaction reaches the
+ * expected-row comparison instead of stopping at the zero-row race.
+ */
+type CarryReadbackDrift =
+  | "claim_export_id"
+  | "claim_revision"
+  | "claim_token"
+  | "labels_absent"
+  | "labels_duplicated"
+  | "root_revision"
+  | "slot_holder"
+  | "slot_scope";
+
 async function concreteCarryDriver(
   transactionRows: 0 | 1,
   testContext: TestContext,
+  drift?: CarryReadbackDrift,
 ) {
   const directory = await mkdtemp("/private/tmp/sce-server-carry-");
   testContext.after(
@@ -789,6 +887,52 @@ async function concreteCarryDriver(
     slot_status: "in_progress",
     slot_title: "Merge Slot",
   };
+  const driftedScope: FencingScope = { ...scope, integrationBranch: "release" };
+  const driftedRoot = makeRootProjection({
+    ...predecessor.run,
+    revision: predecessor.run.revision + 1,
+  });
+  const driftedColumns: Partial<
+    Record<CarryReadbackDrift, Readonly<Record<string, string>>>
+  > = {
+    claim_export_id: {
+      claims_text: canonicalJson({
+        ["f".repeat(64)]: {
+          ...record,
+          exportId: `sce:carry:${"f".repeat(64)}`,
+        },
+      } as unknown as JsonValue),
+    },
+    claim_revision: {
+      claims_text: canonicalJson({
+        [exportDigest]: { ...record, claimRevision: 2 },
+      } as unknown as JsonValue),
+    },
+    claim_token: { claims_text: competitorText },
+    root_revision: {
+      root_text: canonicalJson(driftedRoot as unknown as JsonValue),
+    },
+    slot_holder: {
+      slot_metadata: canonicalJson({ holder: "run-9/incarnation-1" }),
+    },
+    slot_scope: {
+      slot_design: canonicalJson(driftedScope as unknown as JsonValue),
+      slot_external_ref: `sce-scope:v1:${deriveScopeCommitment(driftedScope)}`,
+    },
+  };
+  // A labels-count drift removes or duplicates the `gt:slot` join row, so the
+  // guarded readback returns no row or two rows rather than a changed one.
+  const forUpdateRows =
+    drift === "labels_absent"
+      ? []
+      : drift === "labels_duplicated"
+        ? [readback, readback]
+        : [
+            {
+              ...readback,
+              ...(drift === undefined ? {} : driftedColumns[drift]),
+            },
+          ];
   const issueColumns = [
     ["id", "varchar"],
     ["status", "varchar"],
@@ -803,9 +947,9 @@ async function concreteCarryDriver(
   ].map(([column_name, data_type]) => ({ column_name, data_type }));
   const scriptConfig = {
     competitorText,
+    forUpdateRows,
     issueColumns,
     labelColumns,
-    readback,
     rootText,
     state,
     transcript,
@@ -845,7 +989,7 @@ async function concreteCarryDriver(
       'lines.on("line", (line) => {',
       "  fs.appendFileSync(c.transcript, `TX ${line}\\n`);",
       '  if (line.includes("START TRANSACTION")) { if (c.transactionRows === 0) fs.writeFileSync(c.state, "competitor"); out([{affected_rows:c.transactionRows}]); }',
-      '  else if (line.includes("FOR UPDATE")) out([c.readback]);',
+      '  else if (line.includes("FOR UPDATE")) out(c.forUpdateRows);',
       '  else if (line.includes("DOLT_HASHOF")) { out([{committed_head:"c96vvi04oug557a1fk7tcjm7ok5sqmiu"}]); out([{working_set_rows:0}]); }',
       "});",
     ].join("\n"),
@@ -910,6 +1054,7 @@ async function concreteCarryDriver(
       record,
       scope,
     },
+    state,
     transcript,
   };
 }
@@ -1000,6 +1145,87 @@ test("concrete server zero-row claim rolls back and the existing singleton is re
     assert.match(reread.value.claimsText ?? "", /run-competitor/u);
   }
   assert.ok((await transcript(value)).includes("Q SELECT id"));
+});
+
+/**
+ * The guarded UPDATE reports one affected row, but the same transaction's
+ * `FOR UPDATE` readback describes a row the plan no longer matches. Every case
+ * must roll back: no COMMIT, no commit evidence, no applied claim, and an
+ * out-of-transaction reread that is byte-identical to the pre-CAS singleton.
+ */
+test("concrete server carry readback guard rolls back every drifted row", async (t) => {
+  const drifts: readonly Readonly<{
+    claimed: boolean;
+    drift: CarryReadbackDrift;
+  }>[] = [
+    { claimed: false, drift: "slot_holder" },
+    { claimed: false, drift: "slot_scope" },
+    { claimed: false, drift: "labels_absent" },
+    { claimed: false, drift: "labels_duplicated" },
+    { claimed: true, drift: "claim_token" },
+    { claimed: false, drift: "claim_export_id" },
+    { claimed: false, drift: "claim_revision" },
+    { claimed: false, drift: "root_revision" },
+  ];
+  await Promise.all(
+    drifts.map(async (candidate) => {
+      const value = await concreteCarryDriver(1, t, candidate.drift);
+      if (candidate.claimed) await writeFile(value.state, "competitor");
+      const read = {
+        identity: value.input.identity,
+        predecessorRootBeadId,
+      };
+      const before = await value.driver.readProvenanceCarry(read);
+      assert.equal(before.status, "ok", candidate.drift);
+      const result = await value.driver.claimProvenanceCarry(value.input);
+      assert.deepEqual(
+        result,
+        { phase: "commit_unknown", status: "unavailable" },
+        candidate.drift,
+      );
+      const trace = await transcript(value);
+      // The readback only runs once the UPDATE reported the expected row, so
+      // its presence proves the expected-row comparison, not the row count,
+      // is what zeroed this claim.
+      assert.match(
+        trace,
+        /TX SELECT predecessor\.id AS predecessor_id.*FOR UPDATE;/u,
+        candidate.drift,
+      );
+      assert.match(trace, /TX ROLLBACK;/u, candidate.drift);
+      assert.equal(trace.includes("TX COMMIT;"), false, candidate.drift);
+      assert.equal(trace.includes("committed_head"), false, candidate.drift);
+      assert.ok(
+        trace.indexOf("FOR UPDATE") < trace.indexOf("TX ROLLBACK;"),
+        candidate.drift,
+      );
+      // An unknown commit disarms the driver: nothing is readable again until
+      // a fresh probe re-establishes the binding.
+      assert.deepEqual(
+        await value.driver.readProvenanceCarry(read),
+        { status: "refused" },
+        candidate.drift,
+      );
+      assert.equal(
+        (await value.driver.probe(value.input.identity)).status,
+        "ok",
+        candidate.drift,
+      );
+      const after = await value.driver.readProvenanceCarry(read);
+      assert.equal(
+        canonicalJson(after as unknown as JsonValue),
+        canonicalJson(before as unknown as JsonValue),
+        candidate.drift,
+      );
+      assert.equal(after.status, "ok", candidate.drift);
+      if (after.status === "ok" && after.value.status === "observed") {
+        assert.equal(after.value.claimsPresent, candidate.claimed);
+        if (candidate.claimed)
+          assert.match(after.value.claimsText ?? "", /run-competitor/u);
+        else assert.equal(after.value.claimsText, undefined, candidate.drift);
+      }
+    }),
+  );
 });
 
 test("concrete server transaction faults never become applied", async (t) => {
