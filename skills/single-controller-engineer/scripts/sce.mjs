@@ -26369,6 +26369,24 @@ function createProvenanceAdapter(options) {
 }
 
 // src/commands/recovery.ts
+var PendingWorkingSetSchema = strictObject({
+  /** The exact committed store head whose projection this load served. */
+  head: Type.String({ maxLength: 64, minLength: 20, pattern: "^[0-9a-z]+$" }),
+  /** Aggregate revision of the projection served from `head`. */
+  headRevision: Type.Integer({
+    maximum: Number.MAX_SAFE_INTEGER,
+    minimum: 0
+  }),
+  workingSet: Type.Literal("pending"),
+  /**
+   * Aggregate revision the uncommitted working set holds. Absent when the
+   * pending delta did not decode as a projection at all, which is itself the
+   * report: something is uncommitted and the engine cannot read it.
+   */
+  workingSetRevision: Type.Optional(
+    Type.Integer({ maximum: Number.MAX_SAFE_INTEGER, minimum: 0 })
+  )
+});
 var InitialControllerAcquireSchema = strictObject({
   expected: strictObject({
     children: Type.Literal("absent"),
@@ -29499,6 +29517,53 @@ var PinnedBdEmbeddedProcess = class {
       value: await this.ancestryProof(request2.ancestor, request2.descendant)
     };
   }
+  /**
+   * Reads, and only reads, what the uncommitted working set holds. The head
+   * projection and the working-set projection are each loaded through the
+   * same validated reader a normal load uses, and the delta between them is
+   * proved complete against `dolt diff --data`, so a pending set that also
+   * moved a row outside the projection can never decode as a step.
+   */
+  async pendingWorkingSet() {
+    return {
+      kind: "pending_working_set",
+      value: await this.decodePendingWorkingSet()
+    };
+  }
+  async decodePendingWorkingSet() {
+    const load = this.projections.load;
+    const matches = this.projections.matchesProjectionStepDelta;
+    if (load === void 0 || matches === void 0)
+      return { status: "unavailable" };
+    const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+    if (workingSet === void 0) return { status: "unavailable" };
+    if (workingSet === "clean") return { status: "clean" };
+    const head3 = await this.doltHead(this.databaseDirectory);
+    if (head3 === void 0) return { status: "unavailable" };
+    const working = await load.call(this.projections);
+    const pending = working.status === "observed" ? { pending: working.value } : {};
+    const committed = await load.call(this.projections, head3);
+    if (committed.status !== "observed" || working.status !== "observed")
+      return { delta: "unproven", head: head3, ...pending, status: "pending" };
+    const diff = await this.runDolt(this.databaseDirectory, [
+      "diff",
+      "--data",
+      "-r",
+      "json",
+      head3
+    ]);
+    return {
+      delta: diff !== void 0 && diff.code === 0 && !diff.exceeded && matches.call(
+        this.projections,
+        committed.value,
+        working.value,
+        diff.stdout
+      ) ? "projection_step" : "unproven",
+      head: head3,
+      ...pending,
+      status: "pending"
+    };
+  }
   async execute(request2) {
     switch (request2.kind) {
       case "state": {
@@ -30975,10 +31040,26 @@ var DoltProjectionPersistence = class {
     const batch = validateMutationBatch(batchInput);
     if (!batch.ok) return false;
     const rows = this.rows(batch.value);
+    return rows !== void 0 && this.matchesRowDelta(rows, source);
+  }
+  /**
+   * The same complete-delta proof, keyed on two read projections rather than
+   * on a batch the engine still holds. An interrupted command leaves its
+   * mutation in the working set and its batch nowhere: the only authority a
+   * later process has is the committed projection at HEAD and the one the
+   * working set holds. This proves the uncommitted delta is exactly the row
+   * movement between them -- root plus each child whose commitment moved --
+   * and that nothing else, in this table or any other, moved with it.
+   */
+  matchesProjectionStepDelta(before, after, source) {
+    const rows = this.stepRows(before, after);
+    return rows !== void 0 && this.matchesRowDelta(rows, source);
+  }
+  matchesRowDelta(rows, source) {
     const parsed = parseDoltDiff(source);
     if (parsed === void 0) return false;
     const root = object3(parsed);
-    if (rows === void 0 || root === void 0 || Object.keys(root).length !== 1 || !Object.prototype.hasOwnProperty.call(root, "tables") || !Array.isArray(root.tables) || root.tables.length !== 1)
+    if (root === void 0 || Object.keys(root).length !== 1 || !Object.prototype.hasOwnProperty.call(root, "tables") || !Array.isArray(root.tables) || root.tables.length !== 1)
       return false;
     const table = object3(root.tables[0]);
     if (table === void 0 || Object.keys(table).length !== 2 || table.name !== "issues" || !Array.isArray(table.data_diff) || table.data_diff.length !== rows.length)
@@ -31149,6 +31230,54 @@ var DoltProjectionPersistence = class {
       },
       ...children
     ].sort((left, right) => compareCodeUnits2(left.issueId, right.issueId));
+  }
+  /**
+   * The exact rows one revision step is allowed to have written: the root,
+   * plus every child whose commitment moved. A child that stayed still was
+   * not written, and a child the step invented -- one with no committed row
+   * to move from -- is not a step this engine could have produced.
+   */
+  stepRows(before, after) {
+    const beforeRoot = validateRootProjection(before.root);
+    const afterRoot = validateRootProjection(after.root);
+    if (!beforeRoot.ok || !afterRoot.ok) return void 0;
+    const prior = /* @__PURE__ */ new Map();
+    for (const child of before.children) {
+      const parsed = validateChildProjection(child);
+      if (!parsed.ok || prior.has(parsed.value.unitId)) return void 0;
+      prior.set(parsed.value.unitId, parsed.value);
+    }
+    const rows = [
+      {
+        expectedCommitment: beforeRoot.value.aggregateCommitment,
+        issueId: this.rootIssueId,
+        next: {
+          commitment: afterRoot.value.aggregateCommitment,
+          projection: afterRoot.value
+        }
+      }
+    ];
+    const seen = /* @__PURE__ */ new Set();
+    for (const child of after.children) {
+      const parsed = validateChildProjection(child);
+      if (!parsed.ok || seen.has(parsed.value.unitId)) return void 0;
+      seen.add(parsed.value.unitId);
+      const previous = prior.get(parsed.value.unitId);
+      const issueId = this.childIssueId(parsed.value.unitId);
+      if (previous === void 0 || issueId === void 0) return void 0;
+      if (previous.commitment === parsed.value.commitment) continue;
+      rows.push({
+        expectedCommitment: previous.commitment,
+        issueId,
+        next: {
+          commitment: parsed.value.commitment,
+          projection: parsed.value
+        }
+      });
+    }
+    return new Set(rows.map((row) => row.issueId)).size !== rows.length ? void 0 : rows.sort(
+      (left, right) => compareCodeUnits2(left.issueId, right.issueId)
+    );
   }
   matchesProjectionRow(from, to, expectedCommitment, next) {
     if (!isPinnedBdIssueRow(from) || !isPinnedBdIssueRow(to) || Object.keys(from).length !== Object.keys(to).length || Object.keys(from).some(
@@ -31673,10 +31802,11 @@ var EmbeddedBeadsAdapter = class {
       return { status: "unavailable" };
     if (recovery.workingSet === "pending") {
       const discovered2 = await this.discover("before_commit", batch);
-      if (discovered2.status !== "observed") return { status: "ambiguous" };
+      if (discovered2.status !== "observed")
+        return this.pendingWorkingSetRefusal();
       const baseline2 = this.checkpointBaseline(recovery);
       if (baseline2 === void 0 || !this.matchesCheckpointBaseline(discovered2, baseline2))
-        return { status: "ambiguous" };
+        return this.pendingWorkingSetRefusal();
       const slot2 = await this.slot("check");
       if (!this.slotAdmitsBatch(slot2, batch))
         return { status: "holder_mismatch" };
@@ -31890,26 +32020,172 @@ var EmbeddedBeadsAdapter = class {
     );
     return readback.status === "absent" ? { status: "ambiguous" } : readback;
   }
+  /**
+   * Serves the durable projection, and first settles an uncommitted delta the
+   * engine can prove is its own next checkpoint.
+   *
+   * A command killed between its projection mutation and its commit leaves
+   * that mutation in the working set. Every later command then reads the
+   * committed head, builds a different next revision, and can never prove the
+   * delta it did not write, so the store blocks until an operator commits it
+   * by hand (sce-ul2.4). Where the delta is exactly one legal revision step
+   * from the head this load serves -- same run, same incarnation, same
+   * holder, head revision plus one, an appended journal, a valid run, and no
+   * other row moved -- it is a checkpoint this engine could have written, so
+   * it writes it and serves the result. Anything else is another actor's
+   * uncommitted work: it is reported, never committed and never discarded.
+   */
   async load() {
     if (!this.usable) return { status: "quarantined" };
+    const loaded = await this.readProjection();
+    if (loaded.status !== "observed") return loaded;
+    const pending = await this.pendingWorkingSet();
+    if (pending === void 0 || pending.status !== "pending") return loaded;
+    const settled = await this.settlePendingProjection(loaded.value, pending);
+    if (settled !== void 0) return settled;
+    const report = this.pendingReport(loaded.value, pending);
+    return report === void 0 ? loaded : { ...loaded, pending: report };
+  }
+  async readProjection() {
     const response = await this.call({ kind: "load" });
     if (response?.kind !== "load") return { status: "unavailable" };
     if (response.value.status !== "observed") return response.value;
-    const root = validateRootProjection(response.value.value.root);
-    if (!root.ok || !same6(root.value.scope, this.scope))
-      return { status: "corrupt" };
+    const value = this.validProjectionReadback(response.value.value);
+    return value === void 0 ? { status: "corrupt" } : { status: "observed", value };
+  }
+  /**
+   * A projection crosses the process trust boundary as two loose values. Root
+   * and children are validated against their schemas, bound to this scope and
+   * holder, and required to agree with the root's own child rows; anything
+   * else is not a projection this engine may read, whatever it looks like.
+   */
+  validProjectionReadback(input) {
+    const value = object4(input);
+    if (value === void 0 || Object.keys(value).length !== 2 || !Array.isArray(value.children))
+      return void 0;
+    const root = validateRootProjection(value.root);
+    if (!root.ok || !same6(root.value.scope, this.scope)) return void 0;
     const expected = root.value.childRows;
-    const children = response.value.value.children;
-    if (children.length !== expected.length) return { status: "corrupt" };
+    if (value.children.length !== expected.length) return void 0;
     const seen = /* @__PURE__ */ new Set();
-    for (const child of children) {
+    const children = [];
+    for (const child of value.children) {
       const parsed = validateChildProjection(child);
       const reference = parsed.ok ? expected.find((row) => row.unitId === parsed.value.unitId) : void 0;
       if (!parsed.ok || reference === void 0 || seen.has(parsed.value.unitId) || parsed.value.revision !== reference.revision || parsed.value.commitment !== reference.commitment || !same6(parsed.value.scope, root.value.scope) || parsed.value.holder !== root.value.holder)
-        return { status: "corrupt" };
+        return void 0;
       seen.add(parsed.value.unitId);
+      children.push(parsed.value);
     }
-    return seen.size !== expected.length ? { status: "corrupt" } : { status: "observed", value: response.value.value };
+    return seen.size !== expected.length ? void 0 : { children, root: root.value };
+  }
+  /**
+   * The port's pending-delta probe, when it publishes one. The answer crosses
+   * the process trust boundary, so only the exact shapes are admitted and a
+   * throwing, absent, or malformed probe reports nothing at all -- which is
+   * exactly the behaviour every port had before the probe existed.
+   */
+  async pendingWorkingSet() {
+    if (this.process.pendingWorkingSet === void 0) return void 0;
+    let response;
+    try {
+      response = await this.process.pendingWorkingSet({
+        kind: "pending_working_set"
+      });
+    } catch {
+      return void 0;
+    }
+    const envelope = object4(response);
+    if (envelope === void 0 || Object.keys(envelope).length !== 2 || envelope.kind !== "pending_working_set")
+      return void 0;
+    const value = object4(envelope.value);
+    if (value === void 0) return void 0;
+    if (value.status === "clean" || value.status === "unavailable")
+      return Object.keys(value).length === 1 ? { status: value.status } : void 0;
+    if (value.status !== "pending" || !head2(value.head) || value.delta !== "projection_step" && value.delta !== "unproven" || Object.keys(value).some(
+      (key) => !["delta", "head", "pending", "status"].includes(key)
+    ))
+      return void 0;
+    const readback = value.pending === void 0 ? void 0 : this.validProjectionReadback(value.pending);
+    return {
+      delta: value.delta,
+      head: value.head,
+      ...readback === void 0 ? {} : { pending: readback },
+      status: "pending"
+    };
+  }
+  /**
+   * Commits an uncommitted delta only where it is provably this engine's own
+   * next checkpoint. `undefined` means it was not settled and the caller must
+   * report it; a result means the engine acted and this is what it now reads.
+   */
+  async settlePendingProjection(loaded, pending) {
+    const next = pending.pending;
+    if (pending.delta !== "projection_step" || next === void 0 || !this.isSingleRevisionStep(loaded.root, next.root))
+      return void 0;
+    const slot = await this.slot("check");
+    if (!this.slotAdmitsProjection(slot, next.root)) return void 0;
+    const durable = await this.durableCheckpoint();
+    if (durable.code !== "applied")
+      return {
+        status: durable.code === "unavailable" ? "unavailable" : "ambiguous"
+      };
+    const reread = await this.readProjection();
+    return reread.status === "observed" && same6(reread.value.root, next.root) && same6(reread.value.children, next.children) ? reread : { status: "quarantined" };
+  }
+  /**
+   * One legal revision step by this controller: same run, same incarnation,
+   * same fencing token and holder, the next aggregate revision, an effect
+   * journal that only appended, and a run that satisfies every aggregate
+   * invariant on its own. A delta that fails any of these is not a checkpoint
+   * this engine could have written, whoever wrote it.
+   */
+  isSingleRevisionStep(before, after) {
+    const beforeRun = before.run;
+    const afterRun = after.run;
+    return same6(before.scope, this.scope) && same6(after.scope, this.scope) && before.holder === this.holder && after.holder === this.holder && afterRun.controller.holder === this.holder && afterRun.controller.runId === beforeRun.controller.runId && afterRun.controller.incarnationId === beforeRun.controller.incarnationId && afterRun.controllerFencingToken === beforeRun.controllerFencingToken && after.aggregateRevision === before.aggregateRevision + 1 && afterRun.revision === beforeRun.revision + 1 && afterRun.effectJournal.length >= beforeRun.effectJournal.length && beforeRun.effectJournal.every(
+      (entry, index) => afterRun.effectJournal[index]?.effectId === entry.effectId
+    ) && runInvariantErrors(afterRun).length === 0;
+  }
+  /**
+   * The same slot authority an ordinary write requires, read off a projection
+   * rather than a batch: a run's final write is still the one exception, and
+   * a settled delta must not widen it.
+   */
+  slotAdmitsProjection(slot, root) {
+    if (slot === void 0) return false;
+    if (this.isReleaseObservationRoot(root))
+      return slot.status === "available" && slot.holder === void 0;
+    return slot.status === "acquired" && slot.actor === this.holder && slot.holder === this.holder;
+  }
+  /** The durable/pending split, bounded and validated before it is published. */
+  pendingReport(loaded, pending) {
+    const parsed = validate(PendingWorkingSetSchema, {
+      head: pending.head,
+      headRevision: loaded.root.aggregateRevision,
+      workingSet: "pending",
+      ...pending.pending === void 0 ? {} : { workingSetRevision: pending.pending.root.aggregateRevision }
+    });
+    return parsed.ok ? parsed.value : void 0;
+  }
+  /**
+   * A refusal an operator can act on. The engine settles a pending working
+   * set only where it can prove the delta is its own next checkpoint;
+   * everything else is another actor's uncommitted write, which it will
+   * neither commit nor discard. The exact commands that settle it ride the
+   * diagnostic tail, the one operator-facing channel a store refusal has.
+   */
+  pendingWorkingSetRefusal() {
+    const directory = this.process.identity.databaseDirectory;
+    const keep = this.mode === "git-sync" ? '"bd dolt commit" then "bd dolt push"' : '"bd dolt commit"';
+    const tail = redactedStderrTail(
+      `The Dolt working set in ${directory} holds an uncommitted change this engine cannot prove is its own, so it will neither commit nor discard it. Run ${keep} from the repository root to keep it, or "dolt reset --hard" in ${directory} to discard it, then re-run this command.`,
+      false
+    );
+    return {
+      ...tail === void 0 ? {} : { stderrTail: tail },
+      status: "ambiguous"
+    };
   }
   /**
    * The sole existing-root write permitted before controller ownership. It is
@@ -32011,9 +32287,12 @@ var EmbeddedBeadsAdapter = class {
     return slot.status === "acquired" && slot.actor === this.holder && slot.holder === this.holder;
   }
   isReleaseObservationBatch(batch) {
-    const run2 = batch.next.root.run;
+    return batch.holder === this.holder && this.isReleaseObservationRoot(batch.next.root);
+  }
+  isReleaseObservationRoot(root) {
+    const run2 = root.run;
     const entry = run2.effectJournal.at(-1);
-    return batch.holder === this.holder && run2.controller.holder === this.holder && run2.state === "released" && run2.controller.state === "released" && entry?.kind === "controller_release" && entry.status === "observed";
+    return root.holder === this.holder && run2.controller.holder === this.holder && run2.state === "released" && run2.controller.state === "released" && entry?.kind === "controller_release" && entry.status === "observed";
   }
   isPreOwnershipTransition(before, next) {
     const prior = before?.run;
