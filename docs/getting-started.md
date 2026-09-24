@@ -128,6 +128,12 @@ sce compose-config --harness claude --root-bead <epic-id> \
 - The engine pins `bd` 1.1.0 and `dolt` 2.2.1 exactly. A mismatch is refused
   with `SCE_COMPOSE_EXECUTABLE_VERSION`; install the pinned release and pass
   `--bd-executable` or `--dolt-executable`.
+- `compose-config` and the preflight it runs give every `bd` child your own
+  home, because `bd` resolves `~` itself. Onboarding therefore no longer leaves
+  an untracked literal `~/.config/bd` directory in the checkout for the engine's
+  own sanitized Git status to read as dirty. A home the preflight boundary
+  cannot prove absolute and bounded refuses that child with
+  `PF_SUBPROCESS_UNAVAILABLE` rather than writing the `~` into your repository.
 - The root bead's open children become the run's planned units when each
   carries a strict machine-readable `sce_task` record in its metadata (the
   wave task fields: `acceptanceIds`, `conflictDomains`, `dependencies`,
@@ -206,7 +212,10 @@ Integrate from a clean integration checkout: a dirty non-passive working tree
 in the main checkout is a named refusal (`integrate_refused`, reason
 `integration_checkout_dirty`) that leaves the unit approved, so commit or stash
 your own changes and re-issue integrate; only bd's passive `.beads/*.jsonl`
-exports may be modified.
+exports may be modified. Both refusals now name their reason, so `reason` is
+required on the moved-ref variant (`integration_ref_moved`) too; the addition
+carried no `SCHEMA_VERSION` bump, so note it whenever the CLI event contract is
+published.
 
 Do not run `bd update --claim` or set an assignee on a projected child bead:
 the pinned row shape admits the assignee column a claim writes, but a claim

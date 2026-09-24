@@ -92,8 +92,10 @@ The snapshot is bounded at 65,536 canonical bytes, measured on the bytes
 actually stored, and is held in a strict versioned compact encoding: the
 target definition and resolution are stored once and each per-output entry is
 associated with them positionally, by its index in the stored arrays rather
-than by a stored key, with compaction and hydration both enforcing equal
-lengths. The destination target, the target and origin identifiers, the
+than by a stored key. Compaction enforces the equal lengths before it drops
+anything; hydration rebuilds the resolved sources from the outputs it
+hydrates, so equal length holds there by construction rather than by a check
+of its own. The destination target, the target and origin identifiers, the
 resolved source OID and tuple, and the observation digests are therefore no
 longer repeated per output. Hydration is total and exact, and the view it
 produces is validated against the one schema every consumer reads, so a

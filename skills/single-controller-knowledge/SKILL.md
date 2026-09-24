@@ -80,8 +80,12 @@ Manifest, boundary, instruction, and shared-skill changes are singleton waves.
 7. Materialise and record provenance only through the typed gate effects:
    resolve sources, probe destinations, observe the clock, publish the
    sidecar and artifact with the no-clobber adapter, then commit the
-   projected records. Read [materialisation](references/materialisation.md)
-   and [provenance](references/provenance.md) before the wave gate.
+   projected records. Never claim or assign a projected child bead: the
+   pinned row shape admits the assignee column a claim writes, but a claim
+   landing inside an uncommitted checkpoint batch is still refused as an
+   unintended write and the run blocks until the working set is reconciled.
+   Read [materialisation](references/materialisation.md) and
+   [provenance](references/provenance.md) before the wave gate.
 8. The wave is green only when every promise, probe, entry, provenance
    commit, and aggregate verification is observed or voided and reservations
    are released. Defer a refused entry to a follow-up Bead; never retry an
