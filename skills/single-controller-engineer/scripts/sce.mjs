@@ -22664,6 +22664,7 @@ import {
   relative,
   resolve as resolve3
 } from "node:path";
+import { homedir } from "node:os";
 import { spawn } from "node:child_process";
 function commandLabel(command) {
   return [command.executable, ...command.argv].join(" ");
@@ -22757,15 +22758,27 @@ function canonicalLocalBareRepository(path2) {
   }
 }
 var localBareRemoteCanonicalizer = canonicalLocalBareRepository;
-function sanitizedEnvironment() {
+function sanitizedHome() {
+  const home = homedir();
+  return home.length === 0 || home.length > 4096 || !isAbsolute3(home) || home.includes("\0") ? void 0 : home;
+}
+function sanitizedEnvironment(executable2) {
   const path2 = process.env.PATH;
   if (path2 === void 0 || path2.length === 0 || path2.length > 8192 || path2.includes("\0"))
     return void 0;
-  return { LANG: "C", LC_ALL: "C", PATH: path2, TZ: "UTC" };
+  const base = { LANG: "C", LC_ALL: "C", PATH: path2, TZ: "UTC" };
+  switch (executable2) {
+    case "git":
+      return base;
+    case "bd": {
+      const home = sanitizedHome();
+      return home === void 0 ? void 0 : { HOME: home, ...base };
+    }
+  }
 }
 async function executeCaptured(request2) {
   const cwd = canonicalCwd(request2.cwd);
-  const env = sanitizedEnvironment();
+  const env = sanitizedEnvironment(request2.command.executable);
   if (cwd === void 0 || env === void 0)
     return {
       exitCode: null,
@@ -28941,7 +28954,7 @@ function validateSlotTransitionIntent(input, prefix, scope, mode, expectedHolder
 import { spawn as spawn5 } from "node:child_process";
 import { createHash as createHash3 } from "node:crypto";
 import { closeSync as closeSync2, openSync as openSync2, readSync, realpathSync as realpathSync4, statSync as statSync3 } from "node:fs";
-import { homedir } from "node:os";
+import { homedir as homedir2 } from "node:os";
 import { basename as basename3, dirname as dirname4, isAbsolute as isAbsolute6 } from "node:path";
 
 // src/adapters/beads-embedded/dolt-diff-json.ts
@@ -30316,7 +30329,7 @@ var PinnedBdEmbeddedProcess = class {
         env: {
           // bd and ssh resolve `~`; without HOME bd writes its config into a
           // literal `~/` under the working directory and dirties the tree.
-          HOME: homedir(),
+          HOME: homedir2(),
           LANG: "C",
           LC_ALL: "C",
           PATH: `${dirname4(this.bdExecutable)}:${dirname4(this.doltExecutable)}:/usr/bin:/bin`,
@@ -30490,7 +30503,7 @@ var PinnedBdEmbeddedProcess = class {
         env: {
           // bd and ssh resolve `~`; without HOME bd writes its config into a
           // literal `~/` under the working directory and dirties the tree.
-          HOME: homedir(),
+          HOME: homedir2(),
           LANG: "C",
           LC_ALL: "C",
           PATH: `${dirname4(this.bdExecutable)}:${dirname4(this.doltExecutable)}:/usr/bin:/bin`,
@@ -32800,7 +32813,7 @@ var EmbeddedBeadsAdapter = class {
 import { spawn as spawn7 } from "node:child_process";
 import { createHash as createHash5 } from "node:crypto";
 import { open as open2, realpath as realpath2, stat as stat2 } from "node:fs/promises";
-import { homedir as homedir2 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { dirname as dirname6, isAbsolute as isAbsolute8, join as join6 } from "node:path";
 var MAX_ENDPOINT_BYTES = 320;
 var MAX_SCHEMA_BYTES = 160;
@@ -33567,7 +33580,7 @@ var PinnedBdServerProcess = class {
         // that config into a literal `~/` under the working directory and
         // dirties the repository, so every bd child is given one. Managed
         // server mode's isolated runtime HOME still wins when configured.
-        HOME: runtime?.HOME ?? homedir2(),
+        HOME: runtime?.HOME ?? homedir3(),
         PATH: [dirname6(executable2), ...additionalPath, "/usr/bin", "/bin"].join(
           ":"
         ),
@@ -33836,7 +33849,7 @@ var PinnedBdManagedServerProcess = class {
         // that config into a literal `~/` under the working directory and
         // dirties the repository, so every bd child is given one. Managed
         // server mode's isolated runtime HOME still wins when configured.
-        HOME: runtime?.HOME ?? homedir2(),
+        HOME: runtime?.HOME ?? homedir3(),
         PATH: [dirname6(executable2), ...additionalPath, "/usr/bin", "/bin"].join(
           ":"
         ),
@@ -38684,6 +38697,7 @@ async function uninstallSkills(destinationInput, options = {}) {
 // src/compose/index.ts
 import { randomUUID as randomUUID3 } from "node:crypto";
 import { access, constants as constants5, readFile as readFile4, stat as stat3, writeFile as writeFile5 } from "node:fs/promises";
+import { homedir as homedir4 } from "node:os";
 import { spawn as spawn8 } from "node:child_process";
 import { delimiter, isAbsolute as isAbsolute11, join as join10, resolve as resolve9 } from "node:path";
 var KNOWLEDGE_MANIFEST_FILE = "knowledge-manifest.json";
@@ -39277,7 +39291,11 @@ function capture(cwd, executable2, argv) {
   return new Promise((resolveCapture) => {
     const child = spawn8(executable2, argv, {
       cwd,
-      env: process.env,
+      // `bd` resolves `~` itself: a child with no HOME writes its
+      // configuration into a literal `~` directory under the repository and
+      // dirties the checkout. `homedir()` is the inherited HOME whenever this
+      // process has one, so this only closes the case where it has none.
+      env: { ...process.env, HOME: homedir4() },
       stdio: ["ignore", "pipe", "ignore"]
     });
     const chunks = [];
