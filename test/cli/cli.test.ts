@@ -1092,10 +1092,14 @@ test("default runner deterministically inspects valid repository state", async (
     state: "active",
   });
   const next = await runCli(["next", "--request", source]);
-  assert.deepEqual(JSON.parse(next.stdout).result, {
-    legalActions: legalActions(state),
-    revision: 0,
-  });
+  const summary = JSON.parse(next.stdout).result;
+  assert.deepEqual(Object.keys(summary).sort(), [
+    "legalActions",
+    "requests",
+    "revision",
+  ]);
+  assert.deepEqual(summary.legalActions, legalActions(state));
+  assert.equal(summary.revision, 0);
   assert.equal(inspect.exitCode, 0);
   assert.equal(status.exitCode, 0);
   assert.equal(next.exitCode, 0);
@@ -1469,10 +1473,44 @@ test("next action returns sorted protocol descriptors only for validated state",
     JSON.stringify({ run: state }),
   ]);
   assert.equal(execution.exitCode, 0);
-  assert.deepEqual(JSON.parse(execution.stdout).result, {
-    legalActions: legalActions(state),
-    revision: 0,
-  });
+  const summary = JSON.parse(execution.stdout).result;
+  assert.deepEqual(summary.legalActions, legalActions(state));
+  assert.equal(summary.revision, 0);
+  // Every descriptor arrives beside the exact request that performs it.
+  assert.deepEqual(
+    summary.requests.map(
+      (entry: { event: { type: string } }) => entry.event.type,
+    ),
+    legalActions(state).map((action) => action.type),
+  );
+});
+
+test("next carries a pasteable request per legal action inside the response bound", async () => {
+  const state = run(
+    Array.from({ length: 64 }, (_, index) =>
+      unit(`unit-${String(index).padStart(2, "0")}`),
+    ),
+  );
+  const execution = await runCli([
+    "next",
+    "--json",
+    "--request",
+    JSON.stringify({ run: state }),
+  ]);
+  assert.equal(execution.exitCode, 0);
+  const summary = JSON.parse(execution.stdout).result;
+  assert.ok(summary.requests.length > 0);
+  assert.equal(summary.requests.length, summary.legalActions.length);
+  for (const [index, entry] of summary.requests.entries()) {
+    assert.deepEqual(Object.keys(entry), ["event"]);
+    assert.equal(entry.event.type, summary.legalActions[index].type);
+    assert.equal(entry.event.expectedRevision, state.revision);
+    assert.match(entry.event.idempotencyKey, /^sce:[0-9a-f]{64}$/u);
+  }
+  assert.ok(
+    new TextEncoder().encode(execution.stdout).byteLength <
+      MAX_CLI_RESPONSE_BYTES,
+  );
 });
 test("oversized runner output is replaced by a bounded sanitized envelope", async () => {
   const largeResult = Object.fromEntries(

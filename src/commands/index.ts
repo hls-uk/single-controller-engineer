@@ -18,10 +18,15 @@ import {
   StoreFailureTailSchema,
   type StoreFailureTail,
 } from "../fencing/index.js";
-import { ambiguityRecoveryActions, legalActions } from "../protocol/actions.js";
+import {
+  ambiguityRecoveryActions,
+  legalActions,
+  type ActionDescriptor,
+} from "../protocol/actions.js";
 import { sha256 } from "../protocol/evidence.js";
 import {
   deriveCandidateDiffHash,
+  deriveIdempotencyKey,
   runInvariantErrors,
 } from "../protocol/reducer.js";
 import {
@@ -103,6 +108,8 @@ export const MAX_CLI_REQUEST_BYTES = 128 * 1024;
 export const MAX_CLI_RESPONSE_BYTES = 128 * 1024;
 const MAX_JSON_ITEMS = 256;
 const MAX_TEXT = 16_384;
+/** The protocol's shared identifier bound, which an event id also obeys. */
+const MAX_IDENTIFIER_LENGTH = 160;
 
 function strictObject<T extends TProperties>(properties: T) {
   return Type.Object(properties, { additionalProperties: false });
@@ -357,6 +364,43 @@ export type CommandRunnerResult =
       readonly version: 1;
     };
 
+/**
+ * One legal action bound to the exact `--request` payload that performs it.
+ * The event carries every field its schema requires: the values this run
+ * determines are already filled, and the rest are `<field>` placeholders.
+ */
+export const RequestSkeletonSchema = strictObject({
+  event: Type.Record(
+    Type.String({ maxLength: MAX_IDENTIFIER_LENGTH }),
+    // A skeleton field is a scalar either way: a bound protocol value or the
+    // `<field>` marker standing in for one. Nothing nested belongs here.
+    Type.Union([
+      Type.Null(),
+      Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+      Type.String({ maxLength: MAX_TEXT }),
+    ]),
+    // Every variant names at least an id, a revision, and a type, so an
+    // event type this build cannot resolve is refused, never half-drawn.
+    { maxProperties: 32, minProperties: 3 },
+  ),
+});
+export type RequestSkeleton = Static<typeof RequestSkeletonSchema>;
+
+/** The exact `next` result. Bounded and closed, so no stray key escapes. */
+export const NextResultSchema = strictObject({
+  legalActions: Type.Array(
+    Type.Record(
+      Type.String({ maxLength: MAX_IDENTIFIER_LENGTH }),
+      Type.String({ maxLength: MAX_IDENTIFIER_LENGTH }),
+      { maxProperties: 16 },
+    ),
+    { maxItems: MAX_JSON_ITEMS },
+  ),
+  requests: Type.Array(RequestSkeletonSchema, { maxItems: MAX_JSON_ITEMS }),
+  revision: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+});
+export type NextResult = Static<typeof NextResultSchema>;
+
 /** The only execution seam used by the CLI. */
 export type CommandRunner = (
   request: CommandRequest,
@@ -384,6 +428,16 @@ const requestValidator = ajv.compile(
 const runnerResultValidator = ajv.compile(
   CommandRunnerResultSchema,
 ) as ValidateFunction<CommandRunnerResult>;
+const nextResultValidator = ajv.compile(NextResultSchema);
+
+/**
+ * Re-reads the assembled `next` result against its own closed schema. It is
+ * cheap, and it keeps a malformed or oversized summary from reaching a
+ * controller as though it were an authoritative list of moves.
+ */
+function validateNextResult(input: unknown): boolean {
+  return nextResultValidator(input) === true;
+}
 
 export function validateCommandRequest(
   input: unknown,
@@ -488,18 +542,127 @@ export const stateOnlyCommandRunner: CommandRunner = (request) => {
       },
     };
   }
-  return {
-    schema: "sce.command.result",
-    version: 1,
-    status: "ok",
-    result: {
-      legalActions: legalActions(run).map((action) => ({
-        ...action,
-      })) as JsonValue,
-      revision: run.revision,
-    },
+  const actions = legalActions(run);
+  const result = {
+    legalActions: actions.map((action) => ({ ...action })) as JsonValue,
+    requests: actions
+      .slice(0, MAX_JSON_ITEMS)
+      .map((action) => requestSkeleton(run, action)) as JsonValue,
+    revision: run.revision,
   };
+  return validateNextResult(result)
+    ? { schema: "sce.command.result", version: 1, status: "ok", result }
+    : invalidStateRequest();
 };
+
+/**
+ * The protocol event union read as data. Required-field lists come from the
+ * schemas themselves, so a renamed or newly required field reaches the
+ * skeletons without a second table to keep in step.
+ */
+const protocolEventVariants = (
+  ProtocolEventSchema as unknown as {
+    readonly anyOf: readonly {
+      readonly properties?: { readonly type?: { readonly const?: unknown } };
+      readonly required?: readonly string[];
+    }[];
+  }
+).anyOf;
+
+/**
+ * The narrowest variant of `type` at the action's scope. Several event types
+ * exist in both a unit-scoped and a gate-scoped form, and the gate-scoped one
+ * is exactly the variant that requires `gateEntryId`.
+ */
+function requiredEventFields(
+  type: string,
+  gateScoped: boolean,
+): readonly string[] {
+  const variants = protocolEventVariants.filter(
+    (variant) => variant.properties?.type?.const === type,
+  );
+  const scoped = variants.filter(
+    (variant) =>
+      (variant.required ?? []).includes("gateEntryId") === gateScoped,
+  );
+  return (
+    (scoped.length === 0 ? variants : scoped)
+      .map((variant) => variant.required ?? [])
+      .sort((left, right) => left.length - right.length)[0] ?? []
+  );
+}
+
+/**
+ * The durable effect a record-mode action settles. Descriptors name it only
+ * for ambiguity recovery; along the ordinary lifecycle it is the one journal
+ * entry still outstanding for that unit, kind, and gate entry.
+ */
+function outstandingEffectId(
+  run: RepositoryRun,
+  action: ActionDescriptor,
+): string | undefined {
+  if (action.effectId !== undefined) return action.effectId;
+  if (action.effectKind === undefined) return undefined;
+  return run.effectJournal.find(
+    (entry) =>
+      (entry.status === "intended" || entry.status === "ambiguous") &&
+      entry.kind === action.effectKind &&
+      (entry.unitId ?? undefined) === action.unitId &&
+      entry.gateEntryId === action.gateEntryId,
+  )?.effectId;
+}
+
+/**
+ * The controller's event id convention, kept inside the protocol identifier
+ * bound. A run id long enough to overflow it leaves the controller to name the
+ * event itself rather than offering an identifier the reducer would refuse.
+ */
+function skeletonEventId(run: RepositoryRun, type: string): string {
+  const eventId = `${run.controller.runId}-${type}-${run.revision + 1}`;
+  return eventId.length <= MAX_IDENTIFIER_LENGTH ? eventId : "<eventId>";
+}
+
+/**
+ * A ready-to-send `--request` payload for one legal action: every field its
+ * event schema requires, with the ones this run determines already bound and
+ * the rest marked `<field>` for the controller to supply. Deriving the
+ * idempotency key here is what spares a controller a bespoke helper per intent.
+ */
+function requestSkeleton(
+  run: RepositoryRun,
+  action: ActionDescriptor,
+): JsonObject {
+  const unitId = action.unitId ?? null;
+  const bound: Readonly<Record<string, JsonValue | undefined>> = {
+    effectId: outstandingEffectId(run, action),
+    effectKind: action.effectKind,
+    eventId: skeletonEventId(run, action.type),
+    expectedRevision: run.revision,
+    gateEntryId: action.gateEntryId,
+    idempotencyKey:
+      action.mode === "emit" && action.effectKind !== undefined
+        ? deriveIdempotencyKey(
+            run,
+            run.revision,
+            unitId,
+            action.effectKind,
+            action.gateEntryId,
+          )
+        : undefined,
+    type: action.type,
+    unitId,
+  };
+  return {
+    event: Object.fromEntries(
+      requiredEventFields(action.type, action.gateEntryId !== undefined).map(
+        (field) => {
+          const value = bound[field];
+          return [field, value === undefined ? `<${field}>` : value];
+        },
+      ),
+    ),
+  };
+}
 
 const commandEvent: Readonly<
   Partial<Record<CommandName, readonly ProtocolEvent["type"][]>>

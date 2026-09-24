@@ -24,9 +24,12 @@ import {
 } from "../../src/commands/recovery.js";
 import {
   createRecoveryCommandRunner,
+  stateOnlyCommandRunner,
+  type CommandRequest,
   type CommandRunnerResult,
   type JsonObject,
 } from "../../src/commands/index.js";
+import { legalActions } from "../../src/protocol/actions.js";
 import { makeSlotTransitionIntent } from "../../src/adapters/beads-embedded/index.js";
 import {
   deriveIdempotencyKey,
@@ -34,7 +37,11 @@ import {
   reduce,
 } from "../../src/protocol/reducer.js";
 import type { ProtocolEffect } from "../../src/protocol/reducer.js";
-import type { RepositoryRun } from "../../src/protocol/schemas.js";
+import type {
+  ProtocolEvent,
+  RepositoryRun,
+} from "../../src/protocol/schemas.js";
+import { ProtocolEventSchema } from "../../src/protocol/schemas.js";
 import { event, HASH, run, transition } from "../protocol/fixtures.js";
 
 const holder = "run-1/incarnation-1";
@@ -986,4 +993,104 @@ test("state queries leave an outstanding manual launch intended and report it", 
   } finally {
     await rm(root, { force: true, recursive: true });
   }
+});
+
+/** Reads the `next` summary a controller sees for an exact validated run. */
+async function nextSummary(state: RepositoryRun): Promise<JsonObject> {
+  return okResult(
+    await stateOnlyCommandRunner({
+      command: "next",
+      options: { json: true, request: { run: state } },
+      schema: "sce.command.request",
+      version: 1,
+    } as CommandRequest),
+  );
+}
+
+function skeletons(
+  summary: JsonObject,
+): readonly Readonly<{ event: Record<string, unknown> }>[] {
+  return summary.requests as readonly Readonly<{
+    event: Record<string, unknown>;
+  }>[];
+}
+
+/**
+ * The fields the event union itself demands. Reading them here rather than
+ * restating them is what makes a schema change fail this test instead of
+ * silently shipping a skeleton the reducer would refuse.
+ */
+function requiredEventFields(type: string): readonly string[] {
+  const variants = (
+    ProtocolEventSchema as unknown as {
+      readonly anyOf: readonly {
+        readonly properties?: { readonly type?: { readonly const?: unknown } };
+        readonly required?: readonly string[];
+      }[];
+    }
+  ).anyOf.filter((variant) => variant.properties?.type?.const === type);
+  assert.equal(variants.length, 1, `${type} is not a single-variant event`);
+  return variants[0]!.required ?? [];
+}
+
+test("next binds every legal action to the request that performs it", async () => {
+  const state = run();
+  const summary = await nextSummary(state);
+  const actions = legalActions(state);
+  const requests = skeletons(summary);
+
+  assert.deepEqual(Object.keys(summary).sort(), [
+    "legalActions",
+    "requests",
+    "revision",
+  ]);
+  assert.equal(requests.length, actions.length);
+  for (const [index, action] of actions.entries()) {
+    const skeleton = requests[index]!.event;
+    assert.deepEqual(
+      Object.keys(skeleton).sort(),
+      [...requiredEventFields(action.type)].sort(),
+    );
+    assert.equal(skeleton.eventId, `run-1-${action.type}-1`);
+    assert.equal(skeleton.expectedRevision, state.revision);
+    assert.equal(skeleton.type, action.type);
+    assert.equal(skeleton.unitId, action.unitId ?? null);
+    assert.equal(
+      skeleton.idempotencyKey,
+      deriveIdempotencyKey(
+        state,
+        state.revision,
+        action.unitId ?? null,
+        action.effectKind!,
+        action.gateEntryId,
+      ),
+    );
+  }
+
+  // A value only the controller can supply is named, not guessed at.
+  const reservation = requests.find(
+    (entry) => entry.event.type === "reservation_intent",
+  )!;
+  assert.equal(reservation.event.reservations, "<reservations>");
+});
+
+test("a skeleton the run fully determines is the event the reducer accepts", async () => {
+  const state = run();
+  const park = skeletons(await nextSummary(state)).find(
+    (entry) => entry.event.type === "park_intent",
+  )!;
+  const parked = reduce(state, park.event as unknown as ProtocolEvent);
+  assert.equal(parked.ok, true);
+  if (!parked.ok) return;
+
+  // The observation that settles it names the durable effect it just created.
+  const settle = skeletons(await nextSummary(parked.nextState))[0]!.event;
+  assert.equal(settle.type, "park_observed");
+  assert.equal(settle.expectedRevision, parked.nextState.revision);
+  assert.equal(settle.effectKind, "park");
+  assert.equal(
+    settle.effectId,
+    parked.nextState.effectJournal.at(-1)!.effectId,
+  );
+  assert.equal(settle.observationHash, "<observationHash>");
 });
