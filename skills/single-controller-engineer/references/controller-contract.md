@@ -20,14 +20,17 @@ the maximum is three modifying workhorse sessions.
 
 Bind review and integration to the exact current base/head pair. A moved base,
 conflict resolution, failed qualification, or changed candidate invalidates the
-relevant review. Preserve evidence and stop on ambiguous external state;
-request authority rather than retrying a potentially duplicated effect.
+relevant review; a typed integration refusal does not, because nothing landed
+and the unit returns to approved with that review still bound. Preserve
+evidence and stop on ambiguous external state; request authority rather than
+retrying a potentially duplicated effect.
 
 Integrate one accepted candidate at a time with the repository's protected
-fast-forward/CAS or merge-queue contract. Re-read remote base and candidate
-immediately before submission and the landed object afterward. Never force
-Git, reset someone else's state, repair Dolt destructively, or interpret local
-cleanliness as remote success.
+fast-forward/CAS or merge-queue contract, from an integration checkout clean
+of everything but bd's passive `.beads/*.jsonl` exports. Re-read remote base
+and candidate immediately before submission and the landed object afterward.
+Never force Git, reset someone else's state, repair Dolt destructively, or
+interpret local cleanliness as remote success.
 
 Put a substantive human/controller decision with the source in the repository's
 decision-record convention (`wiki/decisions` if none exists). Record only the

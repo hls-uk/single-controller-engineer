@@ -192,14 +192,36 @@ the loop this repository uses on itself:
    `npm run build` and commits the rebuilt bundle on the integration branch;
    the release tier proves the committed bundle is fresh before a tag.
 
+A unit worktree is a fresh checkout with no `node_modules`, so the packet's
+`mandatoryVerification` fails there with `ERR_MODULE_NOT_FOUND` until the lane
+provides dependencies. Every lane's first step is therefore a gitignored
+`ln -s <integration-checkout>/node_modules <worktree>/node_modules`, left in
+place until the unit lands; `npm ci` in the worktree against the committed
+`package-lock.json` is the equivalent deterministic alternative at the cost of
+one install per lane. Removing the link before committing is what makes a
+verification report zero tests run, and the controller's qualification runs
+that same `mandatoryVerification` inside the worktree.
+
+Integrate from a clean integration checkout: a dirty non-passive working tree
+in the main checkout is a named refusal (`integrate_refused`, reason
+`integration_checkout_dirty`) that leaves the unit approved, so commit or stash
+your own changes and re-issue integrate; only bd's passive `.beads/*.jsonl`
+exports may be modified.
+
+Do not run `bd update --claim` or set an assignee on a projected child bead:
+the pinned row shape admits the assignee column a claim writes, but a claim
+landing inside an uncommitted checkpoint batch is still refused as an
+unintended write and the run blocks until the working set is reconciled.
+
 A manual launch is acknowledged, never retried. `dispatch-request` (or
 `repair-request`) persists the intent and prints a launch tool request, the
 controller launches that worker by hand in its worktree, and `record-dispatch`
 settles the intent with a `launch_inspected` acknowledgement carrying the
-inspected session. `next` and `status` stay read-only in between: they
-reconcile without acting, so they leave the launch intended and report it
-under `ambiguities` and the `record-dispatch` legal action rather than marking
-it ambiguous. No sequencing around an outstanding launch is needed.
+inspected session. `next` and `status` stay read-only in between: they do not
+act on the outstanding launch and journal nothing for it, so they leave it
+intended and report it under `ambiguities` and the `record-dispatch` legal
+action rather than marking it ambiguous. No sequencing around an outstanding
+launch is needed.
 
 Authority is profiled, never assumed: a run records `local-change-only`,
 `push-branch`, `open-pr`, or `integrate` and stops at its completion

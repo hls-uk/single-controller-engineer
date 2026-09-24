@@ -1,8 +1,10 @@
 # Protocol state and recovery
 
 Use the vendored `sce` executable as a stepwise protocol engine, not a daemon.
-`inspect`, `status`, and `next` are read-only. Mutating progress uses an
-explicit controller config, expected revision, idempotency key, and strict JSON
+`inspect`, `status`, and `next` are read-only: they perform no act on an
+outstanding manual launch and journal nothing for it, so it stays intended
+until `record-dispatch` settles it. Mutating progress uses an explicit
+controller config, expected revision, idempotency key, and strict JSON
 event. Typical order is controller acquire, harness configure, wave plan,
 reservation/branch/worktree, dispatch/collect, candidate observation,
 verification, reviewer dispatch/collect, publish/integrate, cleanup, and
@@ -20,6 +22,17 @@ Bind qualification, approval, review, and integration to the current exact
 base/head/tree and observed commands. A moved pair, crash ambiguity, missing
 authority, unsafe privacy/secret boundary, unknown topology, malformed
 readback, or unsupported schema blocks the affected action.
+
+Not every negative blocks; some are typed refusals that settle the effect and
+name the next step. A candidate diff measured past the reviewer packet's bound
+is refused as `candidate_refused` carrying that measurement and routes to
+repair, never to review. An integration refused because the integration ref
+moved or its checkout was dirty is refused as `integrate_refused` and returns
+the unit to approved with its candidate, review, and approval bindings intact.
+A prepared unit still on a stale base refreshes before its first dispatch,
+fast-forwarding its empty branch and worktree so the first packet binds the
+base the worker starts on. Read the event schemas through `sce --help` and the
+engine, not from this prose.
 
 Do not infer completion from elapsed time, an empty queue, or a missing process.
 Preserve the candidate and durable evidence; resume only through the recorded

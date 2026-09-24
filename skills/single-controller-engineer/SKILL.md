@@ -42,6 +42,10 @@ remote state before reporting completion or selecting the next unit. Follow
 [the synchronization procedure](references/controller-contract.md#synchronization-after-each-update),
 using existing repository/user authority without repeated approval requests.
 Explicit `local-only`, `no-commit`, and `no-push` instructions still apply.
+Never claim or assign a projected child bead: the pinned row shape admits the
+assignee column a claim writes, but a claim landing inside an uncommitted
+checkpoint batch is still refused as an unintended write and the run blocks
+until the working set is reconciled.
 
 ## Plan deterministically
 
@@ -61,7 +65,11 @@ readback can establish.
 1. Select one to three dependency-ready, genuinely independent children.
 2. Reserve shared resources, cut isolated worktrees from one verified base,
    and generate exact worker packets with the vendored `sce harness-packet`
-   command.
+   command. A fresh worktree has no installed dependencies, so each lane's
+   first step is a gitignored link to the integration checkout's installed
+   tree (or an `npm ci` from the committed lock) that it leaves in place: the
+   controller qualifies a candidate by running the packet's
+   `mandatoryVerification` inside that same worktree.
 3. Refresh any unit whose base is behind the integration head before its first
    dispatch: with no commits on the unit branch the refresh fast-forwards it
    and its worktree, so the packet binds the base the worker starts on. Then
@@ -71,8 +79,9 @@ readback can establish.
    request persists the intent and prints a launch tool request, the
    controller launches by hand, and `record-dispatch` settles that intent
    with a `launch_inspected` acknowledgement for the inspected session.
-   `next` and `status` stay read-only meanwhile — they leave the launch
-   intended and report it — so they need no sequencing around it.
+   `next` and `status` stay read-only meanwhile — they do not act on the
+   outstanding launch and journal nothing for it, so they leave it intended
+   and report it — and need no sequencing around it.
 4. The controller collects and observes Git/test facts, rebases or otherwise
    updates one candidate using the repository's permitted non-force strategy,
    and freezes its exact base/head/tree.
@@ -84,7 +93,10 @@ readback can establish.
    lane, then freeze and re-review the changed object. Record bounded P2/P3
    follow-up instead of widening the wave.
 6. Re-read the exact pair, integrate it under the repository's CAS/protected
-   contract, record the result in Beads, then qualify the next candidate.
+   contract from a clean integration checkout — a dirty non-passive working
+   tree there is a named refusal that leaves the unit approved for the same
+   intent, and only bd's passive `.beads/*.jsonl` exports may be modified —
+   record the result in Beads, then qualify the next candidate.
 7. After the wave lands, run interaction-sensitive fast/affected integration
    evidence before selecting another wave.
 
