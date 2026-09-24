@@ -23285,7 +23285,7 @@ function allowedGitArgv(argv) {
   if (command === "cat-file")
     return args.length === 2 && (args[0] === "commit" || args[0] === "blob") && OID.test(args[1] ?? "");
   if (command === "rev-list")
-    return args.length === 2 && args[0] === `--max-count=${DISCOVERY_DEPTH}` && OID.test(args[1] ?? "");
+    return args.length === 3 && args[0] === "--topo-order" && args[1] === `--max-count=${DISCOVERY_DEPTH}` && OID.test(args[2] ?? "");
   if (command === "ls-tree")
     return args.length === 5 && args[0] === "-r" && args[1] === "-z" && OID.test(args[2] ?? "") && args[3] === "--" && safeRelativeDirectory(args[4] ?? "");
   if (command === "fetch") {
@@ -24404,25 +24404,29 @@ async function readCommit(runner, repository, oid3) {
   if (tree === void 0) return void 0;
   return { message: result2.stdout.slice(separator + 2), parents, tree };
 }
+function trailerUnreadable(reason) {
+  return { reason, state: "unreadable" };
+}
 async function findCommitByTrailer(runner, repository, input) {
-  if (!exactOid(repository.objectFormat, input.start) || !PROVENANCE_TRAILER.test(input.trailer))
-    return { state: "unreadable" };
+  if (!exactOid(repository.objectFormat, input.start) || !exactOid(repository.objectFormat, input.base) || !PROVENANCE_TRAILER.test(input.trailer))
+    return trailerUnreadable("bad_input");
   const listed = await run(runner, repository, [
     "rev-list",
+    "--topo-order",
     `--max-count=${DISCOVERY_DEPTH}`,
     input.start
   ]);
-  if (!commandOk(listed)) return { state: "unreadable" };
+  if (!commandOk(listed)) return trailerUnreadable("list_refused");
   const oids = listed.stdout.split("\n").filter((line2) => line2.length > 0);
   if (!oids.every((oid3) => exactOid(repository.objectFormat, oid3)))
-    return { state: "unreadable" };
+    return trailerUnreadable("list_refused");
   for (const oid3 of oids) {
     const commit2 = await readCommit(runner, repository, oid3);
-    if (commit2 === void 0) return { state: "unreadable" };
+    if (commit2 === void 0) return trailerUnreadable("commit_unreadable");
     if (commit2.message.split("\n").some((line2) => line2 === input.trailer))
       return { state: "found", oid: oid3, commit: commit2 };
   }
-  return { state: "absent" };
+  return oids.includes(input.base) || oids.length < DISCOVERY_DEPTH ? { state: "absent" } : trailerUnreadable("window_exhausted");
 }
 async function readTreeFiles(runner, repository, input) {
   if (!exactOid(repository.objectFormat, input.commit) || !safeRelativeDirectory(input.directory))
@@ -26023,6 +26027,7 @@ function createProvenanceAdapter(options) {
     const head3 = await integrationHead(run2);
     if (head3 === void 0) return { state: "unreadable" };
     const found = await findCommitByTrailer(runner, repository, {
+      base: effect2.params.baseOid,
       start: head3,
       trailer: provenanceCommitTrailer(effect2.idempotencyKey)
     });
