@@ -117,6 +117,38 @@ test("knowledge destination identities use canonical unsigned 20-digit bounds", 
     }).ok,
     false,
   );
+  assert.equal(
+    validate(MaterialisationDestinationIdentitySchema, {
+      ...identity,
+      root: { device: "16777232", inode: "4711" },
+    }).ok,
+    true,
+    "the admitted root object is journaled beside the pair it held",
+  );
+  assert.equal(
+    validate(MaterialisationDestinationIdentitySchema, {
+      ...identity,
+      root: { canonicalPath: "/mnt", device: "1", inode: "2" },
+    }).ok,
+    false,
+    "the root identity is the pair of readings, and admits nothing else",
+  );
+  assert.equal(
+    validate(MaterialisationDestinationIdentitySchema, {
+      ...identity,
+      root: { device: "123456789012345678901", inode: "2" },
+    }).ok,
+    false,
+    "the root readings carry the same unsigned 20-digit bounds",
+  );
+  assert.equal(
+    validate(MaterialisationDestinationIdentitySchema, {
+      ...identity,
+      root: { device: "1" },
+    }).ok,
+    false,
+    "half a root identity proves nothing and is refused",
+  );
 });
 
 test("provenance observations are strict disjoint variants", () => {

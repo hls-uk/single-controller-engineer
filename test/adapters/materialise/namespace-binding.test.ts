@@ -15,6 +15,7 @@ import {
   replaceHelperSource,
   transformHelper,
   type MaterialisationFixture,
+  type MaterialiseEffect,
 } from "../../integration/materialise/fixture.js";
 
 /**
@@ -45,9 +46,33 @@ function publishedPair(fixture: MaterialisationFixture): readonly string[] {
 }
 
 /**
+ * The admitted root object is journaled with the pair identity at admission,
+ * so every proof of a positive branch below runs against an effect that
+ * carries one. The suite's remaining acts deliberately do not, which keeps the
+ * pair-only path of a run journaled before the amendment covered.
+ * DEC-20260922-018, amended 2026-09-24.
+ */
+async function withJournaledRoot(
+  fixture: MaterialisationFixture,
+): Promise<MaterialiseEffect> {
+  const root = await stat(fixture.destinationRoot, { bigint: true });
+  return {
+    ...fixture.effect,
+    params: {
+      ...fixture.effect.params,
+      destinationIdentity: {
+        ...fixture.effect.params.destinationIdentity,
+        root: { device: String(root.dev), inode: String(root.ino) },
+      },
+    },
+  };
+}
+
+/**
  * Positive evidence is withheld when the parent's post-act admission proof no
- * longer finds the admitted directory object at its admitted canonical path.
- * DEC-20260922-018, amended 2026-09-23.
+ * longer finds the admitted directory object at its admitted canonical path,
+ * or finds it inside a root that is not the admitted root object.
+ * DEC-20260922-018, amended 2026-09-23 and 2026-09-24.
  */
 function relocationHash(
   fixture: MaterialisationFixture,
@@ -55,6 +80,7 @@ function relocationHash(
     canonicalPath: string;
     device: string;
     inode: string;
+    root: Readonly<{ device: string; inode: string }>;
   }> | null,
   reason: string,
 ): string {
@@ -135,6 +161,7 @@ test("a sync-client style directory swap publishes into the admitted inode and w
   const fixture = await materialisationFixture();
   try {
     const admitted = await stat(fixture.destinationDirectory, { bigint: true });
+    const admittedRoot = await stat(fixture.destinationRoot, { bigint: true });
     const relocated = `${fixture.destinationDirectory}-relocated`;
     const decoyBytes = "a foreign file that must survive untouched\n";
     const port = interfereBeforeFirstLink(
@@ -168,6 +195,10 @@ test("a sync-client style directory swap publishes into the admitted inode and w
             canonicalPath: fixture.destinationDirectory,
             device: String(substitute.dev),
             inode: String(substitute.ino),
+            root: {
+              device: String(admittedRoot.dev),
+              inode: String(admittedRoot.ino),
+            },
           },
           "substituted",
         ),
@@ -355,6 +386,154 @@ test("a marker lost with the moved object is a relocation, not an unmounted alia
       await readFile(decoy, "utf8"),
       decoyBytes,
       "and a foreign final of the same name outside the bound object survives",
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("the measured ancestor rename is proved against the journaled root identity", async () => {
+  const fixture = await materialisationFixture();
+  try {
+    const effect = await withJournaledRoot(fixture);
+    const admitted = await stat(fixture.destinationDirectory, { bigint: true });
+    const movedRoot = `${fixture.destinationRoot}-moved`;
+    const port = interfereBeforeFirstLink(
+      `fs.renameSync(${JSON.stringify(fixture.destinationRoot)}, ${JSON.stringify(movedRoot)});`,
+    );
+
+    const result = await createMaterialisationAdapter(
+      fixture.repository,
+      "sha1",
+      port,
+    ).materialise(effect);
+
+    assert.equal(
+      result.status,
+      "observed",
+      "the act read the admitted root above the bound object, so the rename is proved benign",
+    );
+    const held = join(movedRoot, "published");
+    assert.deepEqual(
+      (await readdir(held)).sort(),
+      publishedPair(fixture),
+      "both files land in the admitted directory at its new path",
+    );
+    const relocated = await stat(held, { bigint: true });
+    assert.equal(relocated.dev, admitted.dev);
+    assert.equal(relocated.ino, admitted.ino);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("a publication carried out of the root before the root is renamed is not the measured ancestor rename", async () => {
+  const fixture = await materialisationFixture();
+  try {
+    const effect = await withJournaledRoot(fixture);
+    const admitted = await stat(fixture.destinationDirectory, { bigint: true });
+    const escaped = join(fixture.root, "escaped");
+    const movedRoot = `${fixture.destinationRoot}-moved`;
+    const port = interfereBeforeFirstLink(
+      [
+        `fs.renameSync(${JSON.stringify(fixture.destinationDirectory)}, ${JSON.stringify(escaped)});`,
+        `fs.renameSync(${JSON.stringify(fixture.destinationRoot)}, ${JSON.stringify(movedRoot)});`,
+      ].join(" "),
+    );
+
+    const result = await createMaterialisationAdapter(
+      fixture.repository,
+      "sha1",
+      port,
+    ).materialise(effect);
+
+    assert.equal(
+      result.status,
+      "ambiguous",
+      "an absent admitted root is not evidence that the publication moved with it",
+    );
+    if (result.status === "ambiguous")
+      assert.equal(
+        result.observationHash,
+        relocationHash(fixture, null, "root_escaped"),
+        "the withheld evidence names the root identity the act failed to prove",
+      );
+    assert.deepEqual(
+      (await readdir(escaped)).sort(),
+      publishedPair(fixture),
+      "both no-clobber links still complete in the bound object",
+    );
+    const moved = await stat(escaped, { bigint: true });
+    assert.equal(moved.dev, admitted.dev);
+    assert.equal(moved.ino, admitted.ino);
+    assert.deepEqual(
+      (await readdir(movedRoot)).sort(),
+      [fixture.effect.params.destination.markerFile],
+      "the renamed root carried nothing but its marker",
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
+test("a substituted root that re-receives the admitted directory withholds positive evidence", async () => {
+  const fixture = await materialisationFixture();
+  try {
+    const effect = await withJournaledRoot(fixture);
+    const admitted = await stat(fixture.destinationDirectory, { bigint: true });
+    const aside = `${fixture.destinationRoot}-aside`;
+    const marker = fixture.effect.params.destination.markerFile;
+    const port = interfereBeforeFirstLink(
+      [
+        `fs.renameSync(${JSON.stringify(fixture.destinationRoot)}, ${JSON.stringify(aside)});`,
+        `fs.mkdirSync(${JSON.stringify(fixture.destinationRoot)});`,
+        `fs.writeFileSync(path.join(${JSON.stringify(fixture.destinationRoot)}, ${JSON.stringify(marker)}), ${JSON.stringify("substitute\n")});`,
+        `fs.renameSync(path.join(${JSON.stringify(aside)}, "published"), ${JSON.stringify(fixture.destinationDirectory)});`,
+      ].join(" "),
+    );
+
+    const result = await createMaterialisationAdapter(
+      fixture.repository,
+      "sha1",
+      port,
+    ).materialise(effect);
+
+    const substitute = await stat(fixture.destinationRoot, { bigint: true });
+    assert.equal(
+      result.status,
+      "ambiguous",
+      "the admitted pair identity alone cannot tell a substituted root from an untouched one",
+    );
+    if (result.status === "ambiguous")
+      assert.equal(
+        result.observationHash,
+        relocationHash(
+          fixture,
+          {
+            canonicalPath: fixture.destinationDirectory,
+            device: String(admitted.dev),
+            inode: String(admitted.ino),
+            root: {
+              device: String(substitute.dev),
+              inode: String(substitute.ino),
+            },
+          },
+          "root_substituted",
+        ),
+        "the withheld evidence names the root the admitted directory was carried into",
+      );
+    assert.deepEqual(
+      (await readdir(fixture.destinationDirectory)).sort(),
+      publishedPair(fixture),
+      "both no-clobber links still complete in the bound object",
+    );
+    const rehosted = await stat(fixture.destinationDirectory, { bigint: true });
+    assert.equal(rehosted.dev, admitted.dev);
+    assert.equal(rehosted.ino, admitted.ino);
+    assert.deepEqual(
+      (await readdir(aside)).sort(),
+      [marker],
+      "the admitted root keeps its marker and loses its directory",
     );
   } finally {
     await fixture.cleanup();

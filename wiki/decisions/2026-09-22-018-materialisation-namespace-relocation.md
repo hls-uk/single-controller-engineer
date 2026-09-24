@@ -1,9 +1,10 @@
 # DEC-20260922-018: Publication binds to the admitted directory object
 
 Date: 2026-09-22. Status: accepted; amended 2026-09-23 (see "Amendment
-2026-09-23"). Controller: the single-controller-engineer
-dogfood run on this repository (root sce-7g9). Amends the publication section
-of [DEC-20260903-012](2026-09-03-012-materialisation-source-and-no-clobber.md).
+2026-09-23") and 2026-09-24 (see "Amendment 2026-09-24"). Controller: the
+single-controller-engineer dogfood run on this repository (root sce-7g9).
+Amends the publication section of
+[DEC-20260903-012](2026-09-03-012-materialisation-source-and-no-clobber.md).
 
 ## Context
 
@@ -119,15 +120,17 @@ authority and changes nothing else above.
   branch only when the root is genuinely absent. A marker lost under an intact
   root leaves the bound object outside a destination that still stands, which
   is an A3 relocation and is withheld (finding F1).
-- **A4.1.** That positive branch is trusted, not proved. The root's own device
-  and inode are not journaled at admission, so a publication carried out of the
-  root and then followed by a rename of the root reads exactly like the
-  measured ancestor rename; the act still completes, overwrites nothing, and
-  the trust is bounded by the exclusive namespace control the rest of this
-  record already requires. Deciding it instead of trusting it needs the
-  destination root's device and inode journaled at admission and compared here,
-  a `destination` params schema change outside this unit, recorded as follow-up
-  (finding F2).
+- **A4.1.** Both positive branches above were decided on the admitted pair's
+  device and inode alone, and the pair identity is blind to the root the pair
+  sits in. Each therefore had a face it could not see. A publication carried
+  out of the root and then followed by a rename of the root read exactly like
+  A4's measured ancestor rename (finding F2). A root swapped for a substitute
+  that re-received the admitted directory at the same relative path with a
+  fresh marker read exactly like A2's untouched destination (finding F3). In
+  both the act still completed and overwrote nothing, and the trust was
+  bounded by the exclusive namespace control the rest of this record requires.
+  Both are now proved instead of trusted, by the destination root's own device
+  and inode journaled at admission: see "Amendment 2026-09-24".
 - **A5.** Recovery disposes of `post-act-relocation` by reading, not by
   writing. `discoverMaterialise` at the admitted path reports drift while the
   namespace is broken, so the controller blocks until the destination is
@@ -137,6 +140,63 @@ authority and changes nothing else above.
 Nothing else moves: the reducer stays pure, the observation and refusal
 vocabularies are unchanged because `ambiguous` is already an admitted outcome,
 the helper is untouched, and no runtime dependency is added.
+
+## Amendment 2026-09-24
+
+Frontier review of the amendment above (findings F2 and F3, bead `sce-ul2.6`)
+recorded that its two positive branches rest on the admitted pair identity,
+which cannot see the root the pair sits in, so each keeps positive evidence for
+a namespace it has not read. This amendment closes both; it grants no new
+authority, mints no vocabulary, and the reducer neither changes nor stops being
+pure.
+
+- **B1.** The admitted destination is the pair identity *and* the destination
+  root object that held it at admission. `destination_probe` now observes the
+  root's own device and inode alongside the pair and reports them as
+  `identity.root`: the admission proof of algorithm step 1 already reads that
+  root, so this is one more reading of a `lstat` already taken, never a new
+  syscall, refusal, or effect. The reducer carries an observed identity into
+  the `materialise` effect params opaquely, so the journaling costs it nothing.
+  The field is optional because a run journaled before this amendment carries
+  none: persisted runs stay readable and `SCHEMA_VERSION` does not move.
+- **B2.** Wherever the journaled pair identity is compared, the journaled root
+  identity is compared with it — pre-act admission, a gate-stage reprobe
+  against its unit-stage prior, and read-only discovery. A destination whose
+  pair still matches inside a root object that does not is not the admitted
+  destination, and it blocks before the act rather than after it.
+- **B3.** A2's positive branch keeps the observation only while the root
+  standing at the admitted root path is the admitted root object. A substitute
+  root that re-received the admitted directory at the same relative path
+  records the existing `ambiguous` outcome with operation
+  `post-act-relocation` and reason `root_substituted`, and the withheld
+  evidence names the substitute.
+- **B4.** A4's positive branch is the one the parent cannot re-read: once the
+  root is gone from its path the admitted directory has no path either, and
+  the only handle left on it is the act's own working directory. The helper
+  therefore reads the object as many levels above the bound directory as the
+  admitted subpath has segments — through the held working-directory
+  reference, after both links and its last identity check — and reports that
+  object's device and inode. It decides nothing with them. The parent keeps
+  positive evidence only when that reading is the admitted root object; a
+  publication carried out of the root before the root was renamed records
+  `post-act-relocation` with reason `root_escaped`, and an ancestor the act
+  could not read records `root_unproved`. Ambiguous blocks and is never
+  guessed through, and A1 is untouched: both links complete either way.
+- **B5.** What stays trusted is named rather than implied. The act's reading
+  and the parent's re-read are two instants, so a namespace changed between
+  them, or changed and restored around both, is still bounded by the exclusive
+  namespace control this record requires. A run journaled before this
+  amendment carries no admitted root identity; its positive branches compare
+  against the root the pre-act admission itself read, which proves the act did
+  not leave the root it started in, not that the root is the admitted one.
+
+Proved deterministically in
+`test/adapters/materialise/namespace-binding.test.ts`: the measured ancestor
+rename stays positive against a journaled root identity, a rename out of the
+root followed by a rename of the root withholds it, and a substituted root
+that re-receives the admitted directory withholds it. The last two record
+positive evidence against the adapter this amendment replaces. Recorded as
+bead `sce-ul2.6`.
 
 ## Rejected alternatives
 
@@ -194,6 +254,9 @@ the helper is untouched, and no runtime dependency is added.
   `publication_platform_unsupported` at both boundaries and the gate emits it
   before any read or write, so an unsupported platform is a decided refusal the
   controller disposes of rather than a blocking ambiguity.
+- Discharged by bead `sce-ul2.6`: the destination root identity journaled at
+  admission, both positive branches proved against it, and the deterministic
+  proofs that the two indistinguishable namespaces above are now told apart.
 - **Pending: the linux descriptor-path experiment.** Run it when linux release
   evidence is first recorded and note here whether `/proc/self/fd` adds
   anything over the working-directory binding. Procedure, the twin of the

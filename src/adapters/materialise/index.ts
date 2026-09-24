@@ -10,6 +10,8 @@ import {
   LIMITS,
   MaterialisationSidecarSchema,
   type DestinationProbeRefusal,
+  type MaterialisationDestinationIdentity,
+  type MaterialisationDestinationRootIdentity,
   type MaterialisationResolveRefusal,
   type MaterialiseRefusal,
   type MaterialisationSource,
@@ -53,11 +55,7 @@ export type MaterialisationDiscoveryResult =
 export type DestinationProbeResult =
   | Readonly<{
       status: "observed";
-      identity: Readonly<{
-        canonicalPath: string;
-        device: string;
-        inode: string;
-      }>;
+      identity: MaterialisationDestinationIdentity;
     }>
   | Readonly<{ status: "refused"; refusal: DestinationProbeRefusal }>
   | Readonly<{ status: "ambiguous"; observationHash?: string }>;
@@ -859,6 +857,14 @@ async function objectFormatMatches(
  * platform is a durable fact, not an unresolved reading, so the outcome is a
  * decided refusal the controller disposes of rather than a block. Widening
  * this set requires new evidence, not a new assumption. DEC-20260922-018.
+ *
+ * The same working-directory reference is the only handle anyone still has on
+ * the published object once its path is gone, so the helper also reads the
+ * directory `metadata.rootDepth` levels above it and reports that object's
+ * device and inode. It decides nothing with them: the parent compares the
+ * reading with the admitted root identity, which is what makes a destination
+ * root absent from its admitted path a proved ancestor rename rather than a
+ * trusted one. DEC-20260922-018, amended 2026-09-24.
  */
 const NAMESPACE_BOUND_PLATFORMS: ReadonlySet<string> = new Set([
   "darwin",
@@ -886,6 +892,8 @@ process.stdin.on("end", () => {
     const basename = value => typeof value === "string" && path.basename(value) === value && value !== "." && value !== "..";
     for (const value of [metadata.artifactName, metadata.sidecarName, metadata.artifactTemp, metadata.sidecarTemp])
       if (!basename(value)) return fail("refused", "bad-name");
+    if (!Number.isSafeInteger(metadata.rootDepth) || metadata.rootDepth < 1 || metadata.rootDepth > 96) return fail("ambiguous", "bad-root-depth");
+    const enclosingRoot = new Array(metadata.rootDepth).fill("..").join("/");
     const held = fs.openSync(".", fs.constants.O_RDONLY);
     const identity = () => {
       const bound = fs.fstatSync(held, { bigint: true });
@@ -1007,7 +1015,11 @@ process.stdin.on("end", () => {
     if (!matches(finalArtifact, artifact) || !matches(finalSidecar, sidecar) || finalArtifactTemp.state !== "absent" || finalSidecarTemp.state !== "absent")
       return fail("ambiguous", "final-readback");
     if (!identity()) return fail("ambiguous", "identity-drift");
-    respond({ status: "observed", artifactStatus: artifactResult.status, sidecarStatus: sidecarResult.status });
+    let rootDevice = null;
+    let rootInode = null;
+    try { const enclosing = fs.statSync(enclosingRoot, { bigint: true }); rootDevice = String(enclosing.dev); rootInode = String(enclosing.ino); }
+    catch { rootDevice = null; rootInode = null; }
+    respond({ status: "observed", artifactStatus: artifactResult.status, rootDevice, rootInode, sidecarStatus: sidecarResult.status });
   } catch { fail("ambiguous", "helper-exception"); }
 });
 `;
@@ -1035,7 +1047,7 @@ async function admittedDestination(
 ): Promise<
   | Readonly<{
       status: "observed";
-      identity: { canonicalPath: string; device: string; inode: string };
+      identity: MaterialisationDestinationIdentity;
     }>
   | Readonly<{
       status: "refused";
@@ -1097,6 +1109,7 @@ async function admittedDestination(
         canonicalPath: current,
         device: String(identity.dev),
         inode: String(identity.ino),
+        root: { device: String(rootLink.dev), inode: String(rootLink.ino) },
       },
       status: "observed",
     };
@@ -1106,13 +1119,60 @@ async function admittedDestination(
 }
 
 function sameDestinationIdentity(
-  left: Readonly<{ canonicalPath: string; device: string; inode: string }>,
-  right: Readonly<{ canonicalPath: string; device: string; inode: string }>,
+  left: MaterialisationDestinationIdentity,
+  right: MaterialisationDestinationIdentity,
 ): boolean {
   return (
     left.canonicalPath === right.canonicalPath &&
     left.device === right.device &&
     left.inode === right.inode
+  );
+}
+
+const FILESYSTEM_IDENTIFIER = /^(?:0|[1-9][0-9]{0,19})$/;
+
+/**
+ * The helper reports the object it read above the bound directory as a pair of
+ * canonical unsigned decimals, or `null` where that read failed. Anything else
+ * is not a reading this adapter admits, so the act is an unresolved helper
+ * result rather than a quietly unproved one.
+ */
+function rootIdentityReading(candidate: unknown): string | null | undefined {
+  if (candidate === null) return null;
+  return typeof candidate === "string" && FILESYSTEM_IDENTIFIER.test(candidate)
+    ? candidate
+    : undefined;
+}
+
+function sameRootIdentity(
+  left: MaterialisationDestinationRootIdentity | null | undefined,
+  right: MaterialisationDestinationRootIdentity | null | undefined,
+): boolean {
+  return (
+    left !== null &&
+    left !== undefined &&
+    right !== null &&
+    right !== undefined &&
+    left.device === right.device &&
+    left.inode === right.inode
+  );
+}
+
+/**
+ * The admitted destination is the pair identity *and* the root object that
+ * held it at admission, so wherever the journaled pair identity is compared
+ * the journaled root identity is compared with it. A run journaled before
+ * DEC-20260922-018's 2026-09-24 amendment carries no root identity; its pair
+ * identity still decides, exactly as before.
+ */
+function sameAdmittedDestination(
+  observed: MaterialisationDestinationIdentity,
+  journaled: MaterialisationDestinationIdentity,
+): boolean {
+  return (
+    sameDestinationIdentity(observed, journaled) &&
+    (journaled.root === undefined ||
+      sameRootIdentity(observed.root, journaled.root))
   );
 }
 
@@ -1138,41 +1198,65 @@ async function destinationRootAbsent(root: string): Promise<boolean> {
  * A positive helper result proves both no-clobber links landed in the admitted
  * directory object and that nothing was overwritten; it does not prove that
  * object is still the destination the controller admitted. The parent
- * therefore re-runs the admission proof for the journaled canonical path.
- * The same object still there keeps the positive observation. A substituted or
- * vanished path below a destination root that is itself still admissible
- * withholds it, because the publication demonstrably left the admitted
- * destination and the authority model disclaims concurrent namespace
- * relocation. Only a destination root gone from its own admitted path is the
- * ancestor-rename case the decision measured: the publication is still inside
- * the admitted root object, it stays positive, and the next act's pre-act
- * admission refuses. DEC-20260922-018, amended 2026-09-23.
+ * therefore re-runs the admission proof for the journaled canonical path, and
+ * neither positive branch is taken on the pair identity alone:
+ *
+ * - The admitted object still at its admitted path keeps the observation only
+ *   while the root standing at the admitted root path is the admitted root
+ *   object. A root swapped for a substitute that re-receives the admitted
+ *   directory at the same relative path otherwise reads exactly like an
+ *   untouched destination.
+ * - A destination root gone from its own admitted path is the ancestor-rename
+ *   case the decision measured, and it stays positive only while the root the
+ *   act itself read through the held working directory is that same admitted
+ *   root object. A publication carried out of the root and then followed by a
+ *   rename of the root otherwise reads exactly like the measured rename.
+ *
+ * Anything else — a substituted or vanished path below a root that is itself
+ * still admissible, an unreadable ancestor, an unresolved read — withholds
+ * positive evidence, because the publication is not provably inside the
+ * admitted destination and the authority model disclaims concurrent namespace
+ * relocation. The next act's pre-act admission refuses, unchanged.
+ * DEC-20260922-018, amended 2026-09-23 and 2026-09-24.
  */
 async function relocationAfterAct(
   effect: MaterialiseEffect,
-  admitted: Readonly<{ canonicalPath: string; device: string; inode: string }>,
+  admitted: MaterialisationDestinationIdentity,
+  boundRoot: MaterialisationDestinationRootIdentity | null,
 ): Promise<null | Readonly<{
-  observed: Readonly<{
-    canonicalPath: string;
-    device: string;
-    inode: string;
-  }> | null;
-  reason: "invalid_destination" | "substituted" | "unresolved";
+  observed: MaterialisationDestinationIdentity | null;
+  reason:
+    | "invalid_destination"
+    | "root_escaped"
+    | "root_substituted"
+    | "root_unproved"
+    | "substituted"
+    | "unresolved";
 }>> {
+  const admittedRoot = effect.params.destinationIdentity.root ?? admitted.root;
   const settled = await admittedDestination(
     effect.params.destination,
     effect.params.destinationSubpath,
   );
-  if (settled.status === "observed")
-    return sameDestinationIdentity(settled.identity, admitted)
+  if (settled.status === "observed") {
+    if (!sameDestinationIdentity(settled.identity, admitted))
+      return { observed: settled.identity, reason: "substituted" };
+    return admittedRoot === undefined ||
+      sameRootIdentity(settled.identity.root, admittedRoot)
       ? null
-      : { observed: settled.identity, reason: "substituted" };
-  if (settled.status === "refused")
-    return settled.reason === "alias_unmounted" &&
-      (await destinationRootAbsent(effect.params.destination.canonicalRoot))
-      ? null
-      : { observed: null, reason: "invalid_destination" };
-  return { observed: null, reason: "unresolved" };
+      : { observed: settled.identity, reason: "root_substituted" };
+  }
+  if (settled.status !== "refused")
+    return { observed: null, reason: "unresolved" };
+  if (
+    settled.reason !== "alias_unmounted" ||
+    !(await destinationRootAbsent(effect.params.destination.canonicalRoot))
+  )
+    return { observed: null, reason: "invalid_destination" };
+  if (boundRoot === null) return { observed: null, reason: "root_unproved" };
+  return sameRootIdentity(boundRoot, admittedRoot)
+    ? null
+    : { observed: null, reason: "root_escaped" };
 }
 
 async function probeDestination(
@@ -1202,7 +1286,7 @@ async function probeDestination(
     });
   if (
     effect.params.expectedPriorIdentity !== undefined &&
-    !sameDestinationIdentity(
+    !sameAdmittedDestination(
       result.identity,
       effect.params.expectedPriorIdentity,
     )
@@ -1297,7 +1381,7 @@ async function materialiseBytes(
       operation: "containment",
     });
   if (
-    !sameDestinationIdentity(
+    !sameAdmittedDestination(
       destination.identity,
       effect.params.destinationIdentity,
     )
@@ -1312,6 +1396,7 @@ async function materialiseBytes(
     artifactTemp: `.${effect.params.artifactName}.sce-tmp`,
     dev: destination.identity.device,
     ino: destination.identity.inode,
+    rootDepth: effect.params.destinationSubpath.split("/").length,
     sidecarName: effect.params.sidecarName,
     sidecarTemp: `.${effect.params.sidecarName}.sce-tmp`,
   };
@@ -1348,18 +1433,28 @@ async function materialiseBytes(
     return refusal("hard_links_unsupported", {
       alias: effect.params.destination.alias,
     });
+  const rootDevice = rootIdentityReading(value.rootDevice);
+  const rootInode = rootIdentityReading(value.rootInode);
   if (
     value.status !== "observed" ||
     !["already_present", "published"].includes(String(value.artifactStatus)) ||
     !["already_present", "published"].includes(String(value.sidecarStatus)) ||
+    rootDevice === undefined ||
+    rootInode === undefined ||
     Object.keys(value).sort().join(",") !==
-      "artifactStatus,sidecarStatus,status"
+      "artifactStatus,rootDevice,rootInode,sidecarStatus,status"
   )
     return ambiguous({
       operation: "helper-result",
       outputHash: hashBytes(result.stdout),
     });
-  const relocation = await relocationAfterAct(effect, destination.identity);
+  const relocation = await relocationAfterAct(
+    effect,
+    destination.identity,
+    rootDevice === null || rootInode === null
+      ? null
+      : { device: rootDevice, inode: rootInode },
+  );
   if (relocation !== null)
     return ambiguous({
       alias: effect.params.destination.alias,
@@ -1439,7 +1534,7 @@ async function discoverMaterialisation(
   );
   if (
     destination.status !== "observed" ||
-    !sameDestinationIdentity(
+    !sameAdmittedDestination(
       destination.identity,
       effect.params.destinationIdentity,
     )

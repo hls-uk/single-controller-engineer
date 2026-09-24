@@ -911,10 +911,30 @@ const GateTargetPromiseSchema = strictObject({
 });
 export type GateTargetPromise = Static<typeof GateTargetPromiseSchema>;
 
+const filesystemIdentifier = () =>
+  Type.String({ pattern: "^(?:0|[1-9][0-9]{0,19})$" });
+/**
+ * The destination root is part of the admitted destination, not context for
+ * it: a publication in the admitted directory object is inside the admitted
+ * destination only while that object still sits in the root the controller
+ * admitted. Journaling the root's own device and inode beside the pair
+ * identity is what turns the post-act positive branches from trusted into
+ * proved. It is optional because a run journaled before the amendment carries
+ * none, so persisted runs stay readable and SCHEMA_VERSION does not move.
+ * DEC-20260922-018, amended 2026-09-24.
+ */
+const MaterialisationDestinationRootIdentitySchema = strictObject({
+  device: filesystemIdentifier(),
+  inode: filesystemIdentifier(),
+});
+export type MaterialisationDestinationRootIdentity = Static<
+  typeof MaterialisationDestinationRootIdentitySchema
+>;
 export const MaterialisationDestinationIdentitySchema = strictObject({
   canonicalPath: absolutePath(),
-  device: Type.String({ pattern: "^(?:0|[1-9][0-9]{0,19})$" }),
-  inode: Type.String({ pattern: "^(?:0|[1-9][0-9]{0,19})$" }),
+  device: filesystemIdentifier(),
+  inode: filesystemIdentifier(),
+  root: Type.Optional(MaterialisationDestinationRootIdentitySchema),
 });
 export type MaterialisationDestinationIdentity = Static<
   typeof MaterialisationDestinationIdentitySchema
