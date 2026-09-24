@@ -1366,6 +1366,10 @@ test("remote discovery positively observes an already-landed candidate without p
 test("crash-after-act readback positively discovers every Git mutation boundary", async () => {
   const base = sha1("1");
   const candidate = sha1("2");
+  const crashWorktreePath = join(
+    await realpath(tmpdir()),
+    "sce-crash-worktree",
+  );
   const crashed: GitResult = { exitCode: null, signal: "SIGUSR2", stdout: "" };
   assert.equal(
     (
@@ -1385,7 +1389,7 @@ test("crash-after-act readback positively discovers every Git mutation boundary"
           ok(`worktree /repo\nHEAD ${base}\nbranch refs/heads/main\n\n`),
           crashed,
           ok(
-            `worktree /repo\nHEAD ${base}\nbranch refs/heads/main\n\nworktree /private/tmp/sce-crash-worktree\nHEAD ${base}\nbranch refs/heads/sce/crash-worktree\n\n`,
+            `worktree /repo\nHEAD ${base}\nbranch refs/heads/main\n\nworktree ${crashWorktreePath}\nHEAD ${base}\nbranch refs/heads/sce/crash-worktree\n\n`,
           ),
           ok("/repo/.git\n"),
           ok(),
@@ -1394,7 +1398,7 @@ test("crash-after-act readback positively discovers every Git mutation boundary"
         {
           branch: "sce/crash-worktree",
           head: base,
-          path: "/private/tmp/sce-crash-worktree",
+          path: crashWorktreePath,
         },
       )
     ).state,

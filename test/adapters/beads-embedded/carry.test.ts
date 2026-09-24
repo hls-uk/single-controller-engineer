@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
 import test from "node:test";
 import { join } from "node:path";
 import { deflateRawSync } from "node:zlib";
@@ -1278,7 +1286,9 @@ function issueRow(
 }
 
 test("embedded checkpoint proof admits only the sibling carry singleton delta", async (t) => {
-  const directory = await mkdtemp("/private/tmp/sce-carry-delta-");
+  const directory = await mkdtemp(
+    join(await realpath(tmpdir()), "sce-carry-delta-"),
+  );
   t.after(async () => await rm(directory, { force: true, recursive: true }));
   const fixtureValue = await fixture();
   const record = recordFor(fixtureValue.effect);
@@ -1383,7 +1393,9 @@ test("embedded checkpoint proof admits only the sibling carry singleton delta", 
 });
 
 test("embedded concrete claim keeps slot predicate and singleton readback in one transaction", async (t) => {
-  const directory = await mkdtemp("/private/tmp/sce-carry-sql-");
+  const directory = await mkdtemp(
+    join(await realpath(tmpdir()), "sce-carry-sql-"),
+  );
   t.after(async () => await rm(directory, { force: true, recursive: true }));
   const candidate = await fixture();
   const record = recordFor(candidate.effect);
@@ -1456,7 +1468,9 @@ async function persistenceReturning(
   t: import("node:test").TestContext,
   row: Record<string, unknown>,
 ) {
-  const directory = await mkdtemp("/private/tmp/sce-carry-read-");
+  const directory = await mkdtemp(
+    join(await realpath(tmpdir()), "sce-carry-read-"),
+  );
   t.after(async () => await rm(directory, { force: true, recursive: true }));
   const executable = join(directory, "dolt");
   await writeFile(

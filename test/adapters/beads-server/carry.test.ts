@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { deflateRawSync } from "node:zlib";
@@ -835,7 +843,9 @@ async function concreteCarryDriver(
   testContext: TestContext,
   drift?: CarryReadbackDrift,
 ) {
-  const directory = await mkdtemp("/private/tmp/sce-server-carry-");
+  const directory = await mkdtemp(
+    join(await realpath(tmpdir()), "sce-server-carry-"),
+  );
   testContext.after(
     async () => await rm(directory, { force: true, recursive: true }),
   );

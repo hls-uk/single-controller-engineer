@@ -2917,6 +2917,14 @@ test("software verification state and legacy command wire remain byte-identical"
 
 test("software integrate and release trace preserves projection and recovery bytes", () => {
   let state = run();
+  // Deflate output is zlib-build dependent. The separate closed-evidence
+  // commitment binds its decoded facts, so golden snapshots use that stable
+  // semantic identity in place of the incidental compressed representation.
+  const semanticSnapshot = (value: RepositoryRun) => ({
+    ...value,
+    closedUnitEvidence:
+      value.closedUnitEvidence === "" ? "" : value.closedUnitEvidenceCommitment,
+  });
   const trace: JsonValue[] = [];
   const applySoftware = (input: ProtocolEvent) => {
     const result = reduce(state, input);
@@ -2924,7 +2932,7 @@ test("software integrate and release trace preserves projection and recovery byt
     trace.push({
       effects: result.effects,
       event: input,
-      nextState: result.nextState,
+      nextState: semanticSnapshot(result.nextState),
     } as unknown as JsonValue);
     state = result.nextState;
   };
@@ -3047,21 +3055,39 @@ test("software integrate and release trace preserves projection and recovery byt
   });
   assert.equal(state.knowledgeContract, undefined);
   assert.equal(state.gate, undefined);
+  const stableState = semanticSnapshot(state);
+  const stableAggregateCommitment = sha256(
+    canonicalJson({
+      domain: "sce.fencing.aggregate.v1",
+      run: stableState,
+    } as unknown as JsonValue),
+  );
+  const stableRoot = {
+    ...root,
+    aggregateCommitment: stableAggregateCommitment,
+    checkpoint: {
+      ...root.checkpoint,
+      rootCommitment: stableAggregateCommitment,
+    },
+    run: stableState,
+  };
   assert.equal(
     sha256(canonicalJson(trace)),
-    "30b735cc99c78413fb3493bfdbb5012414b13b54a821139076fde4075e586643",
+    "fee08c973adc4347ad993baa989aaf290abb61f7cb996114a812f97f7a6bbedd",
   );
   assert.equal(
-    sha256(canonicalJson(state as unknown as JsonValue)),
-    "ffce4ae3f112b3ef337fcfafcd1838cea77c926746bd3d725e091c1d6c2b3cdf",
+    sha256(canonicalJson(stableState as unknown as JsonValue)),
+    "d26acb543a626b50626936656d37794a87a661938dc1f57de8c964f8f8326ac0",
   );
   assert.equal(
-    root.aggregateCommitment,
-    "4c1aa89cb6df0f4a6d9bd0d08723abf4f5c0bea7c0f06238540a6317776d5b80",
+    stableAggregateCommitment,
+    "0bc7a0fa2133656182e93c4b7349ab433eadddddd7e44cdb254e074907ece85a",
   );
   assert.equal(
-    sha256(canonicalJson({ children, root } as unknown as JsonValue)),
-    "1be33fae4fad80f5ecbc27b6cd018d846a08c28cf876231d4dd79d8b52095bde",
+    sha256(
+      canonicalJson({ children, root: stableRoot } as unknown as JsonValue),
+    ),
+    "6cde55010e9e5f47be5454456a99df4e2d25a9e90b1da011379ae1e1b8517583",
   );
 });
 

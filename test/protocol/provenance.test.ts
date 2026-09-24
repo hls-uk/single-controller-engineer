@@ -1347,10 +1347,12 @@ test("the compact projection buys real output capacity inside unchanged bounds",
   assert.equal(compactBytes(2) - compactBytes(1), 645);
   assert.equal(retiredBytes(2) - retiredBytes(1), 645);
 
+  // The closed-unit ledger uses deflate, whose encoded length can differ
+  // between zlib builds. Its identical contribution cancels from the exact
+  // savings, while each actual encoding must satisfy the unchanged limits.
+  assert.equal(legacyBytes(64) - compactBytes(64), 42_828);
+  assert.equal(compactBytes(64) - retiredBytes(64), 178);
   // 64 minimal outputs did not fit and now do, with headroom to spare.
-  assert.equal(legacyBytes(64), 90_447);
-  assert.equal(compactBytes(64), 47_619);
-  assert.equal(retiredBytes(64), 47_441);
   assert.ok(legacyBytes(64) > LIMITS.projectionSnapshotBytes);
   assert.ok(retiredBytes(64) <= LIMITS.projectionSnapshotBytes);
   assert.equal(largestFittingOutputCount(legacyBytes), 45);
@@ -1369,8 +1371,9 @@ test("the compact projection buys real output capacity inside unchanged bounds",
   assert.ok(projectionInputIsValid(widestValidProjection(64)));
   assert.equal(wideCompactBytes(2) - wideCompactBytes(1), 1_351);
   assert.equal(wideRetiredBytes(2) - wideRetiredBytes(1), 1_173);
-  assert.equal(wideCompactBytes(64), 92_151);
-  assert.equal(wideRetiredBytes(64), 80_759);
+  assert.equal(wideCompactBytes(64) - wideRetiredBytes(64), 11_392);
+  assert.ok(wideCompactBytes(64) > LIMITS.projectionSnapshotBytes);
+  assert.ok(wideRetiredBytes(64) > LIMITS.projectionSnapshotBytes);
   assert.equal(largestFittingOutputCount(wideCompactBytes), 44);
   assert.equal(largestFittingOutputCount(wideRetiredBytes), 51);
 });
