@@ -33,7 +33,7 @@ import {
   RunStoreResultSchema,
   type StoreFailureTail,
 } from "../fencing/index.js";
-import { Type } from "@sinclair/typebox";
+import { Type, type Static } from "@sinclair/typebox";
 import { ambiguityRecoveryActions, legalActions } from "../protocol/actions.js";
 import { canonicalJson, type JsonValue } from "../protocol/canonical.js";
 import { sha256 } from "../protocol/evidence.js";
@@ -76,9 +76,41 @@ export type AuthoritativeRunReadback = Readonly<{
   root: RootProjection;
 }>;
 
+/**
+ * What a load saw that it did not serve. A store whose durable checkpoint and
+ * whose uncommitted working set disagree serves the checkpoint -- it is the
+ * only state a later command can build on -- but it must say so, or a status
+ * query reports a healthy run while a whole revision sits uncommitted beside
+ * it and every mutation blocks (sce-ul2.4).
+ */
+export const PendingWorkingSetSchema = strictObject({
+  /** The exact committed store head whose projection this load served. */
+  head: Type.String({ maxLength: 64, minLength: 20, pattern: "^[0-9a-z]+$" }),
+  /** Aggregate revision of the projection served from `head`. */
+  headRevision: Type.Integer({
+    maximum: Number.MAX_SAFE_INTEGER,
+    minimum: 0,
+  }),
+  workingSet: Type.Literal("pending"),
+  /**
+   * Aggregate revision the uncommitted working set holds. Absent when the
+   * pending delta did not decode as a projection at all, which is itself the
+   * report: something is uncommitted and the engine cannot read it.
+   */
+  workingSetRevision: Type.Optional(
+    Type.Integer({ maximum: Number.MAX_SAFE_INTEGER, minimum: 0 }),
+  ),
+});
+export type PendingWorkingSet = Static<typeof PendingWorkingSetSchema>;
+
 /** Absence is positive evidence; every other non-observed result fails closed. */
 export type AuthoritativeLoadResult =
-  | Readonly<{ status: "observed"; value: AuthoritativeRunReadback }>
+  | Readonly<{
+      /** Present only when the store holds an uncommitted delta beside it. */
+      pending?: PendingWorkingSet;
+      status: "observed";
+      value: AuthoritativeRunReadback;
+    }>
   | Readonly<{
       status:
         "absent" | "unavailable" | "ambiguous" | "corrupt" | "quarantined";

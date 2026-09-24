@@ -24,9 +24,12 @@ import {
 } from "../../preflight/index.js";
 import {
   InitialControllerAcquireSchema,
+  PendingWorkingSetSchema,
   type AuthoritativeLoadResult,
+  type AuthoritativeRunReadback,
   type ControllerTransitionPlanResult,
   type InitialControllerAcquire,
+  type PendingWorkingSet,
 } from "../../commands/recovery.js";
 import {
   validate,
@@ -37,7 +40,10 @@ import {
   type SlotTransitionIntent as ProtocolSlotTransitionIntent,
 } from "../../protocol/schemas.js";
 import { sha256 } from "../../protocol/evidence.js";
-import { deriveProvenanceCarryClaimKey } from "../../protocol/reducer.js";
+import {
+  deriveProvenanceCarryClaimKey,
+  runInvariantErrors,
+} from "../../protocol/reducer.js";
 import {
   planProvenanceCarryFromProjection,
   type ProvenanceCarryProjectionPlan,
@@ -59,6 +65,7 @@ import {
   type RemoteSlotTransitionProof,
   type SlotTransitionIntent,
 } from "./schemas.js";
+import { redactedStderrTail } from "./schemas.js";
 import {
   makeSlotTransitionIntent,
   validateSlotTransitionIntent,
@@ -66,6 +73,8 @@ import {
 import type {
   EmbeddedAncestryPort,
   EmbeddedAncestryProof,
+  EmbeddedPendingWorkingSet,
+  EmbeddedPendingWorkingSetPort,
 } from "./pinned-bd-process.js";
 
 export * from "./schemas.js";
@@ -89,6 +98,10 @@ export type {
   EmbeddedAncestryProof,
   EmbeddedAncestryRequest,
   EmbeddedAncestryResponse,
+  EmbeddedPendingWorkingSet,
+  EmbeddedPendingWorkingSetPort,
+  EmbeddedPendingWorkingSetRequest,
+  EmbeddedPendingWorkingSetResponse,
   PinnedBdProcessOptions,
   ProjectionPersistencePort,
   SlotInitializationAuthority,
@@ -151,11 +164,12 @@ export type EmbeddedReleaseAuthority = Readonly<{
 
 /**
  * The composition root's process port, plus the optional bounded ancestry
- * proof when that process publishes one. A port without it keeps the exact
- * behaviour it had before the proof existed.
+ * proof and pending-delta probe when that process publishes them. A port
+ * without either keeps the exact behaviour it had before they existed.
  */
 export type EmbeddedAdapterProcessPort = EmbeddedProcessPort &
-  Partial<EmbeddedAncestryPort>;
+  Partial<EmbeddedAncestryPort> &
+  Partial<EmbeddedPendingWorkingSetPort>;
 
 export interface EmbeddedAdapterOptions {
   readonly holder: string;
@@ -664,13 +678,14 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       return { status: "unavailable" };
     if (recovery.workingSet === "pending") {
       const discovered = await this.discover("before_commit", batch);
-      if (discovered.status !== "observed") return { status: "ambiguous" };
+      if (discovered.status !== "observed")
+        return this.pendingWorkingSetRefusal();
       const baseline = this.checkpointBaseline(recovery);
       if (
         baseline === undefined ||
         !this.matchesCheckpointBaseline(discovered, baseline)
       )
-        return { status: "ambiguous" };
+        return this.pendingWorkingSetRefusal();
       // A replacement process must not commit/push a previously written batch
       // after its controller lost or released the built-in slot. This check is
       // deliberately before `durableCheckpoint`, which otherwise can commit.
@@ -978,19 +993,66 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       : readback;
   }
 
+  /**
+   * Serves the durable projection, and first settles an uncommitted delta the
+   * engine can prove is its own next checkpoint.
+   *
+   * A command killed between its projection mutation and its commit leaves
+   * that mutation in the working set. Every later command then reads the
+   * committed head, builds a different next revision, and can never prove the
+   * delta it did not write, so the store blocks until an operator commits it
+   * by hand (sce-ul2.4). Where the delta is exactly one legal revision step
+   * from the head this load serves -- same run, same incarnation, same
+   * holder, head revision plus one, an appended journal, a valid run, and no
+   * other row moved -- it is a checkpoint this engine could have written, so
+   * it writes it and serves the result. Anything else is another actor's
+   * uncommitted work: it is reported, never committed and never discarded.
+   */
   public async load(): Promise<AuthoritativeLoadResult> {
     if (!this.usable) return { status: "quarantined" };
+    const loaded = await this.readProjection();
+    if (loaded.status !== "observed") return loaded;
+    const pending = await this.pendingWorkingSet();
+    if (pending === undefined || pending.status !== "pending") return loaded;
+    const settled = await this.settlePendingProjection(loaded.value, pending);
+    if (settled !== undefined) return settled;
+    const report = this.pendingReport(loaded.value, pending);
+    return report === undefined ? loaded : { ...loaded, pending: report };
+  }
+
+  private async readProjection(): Promise<AuthoritativeLoadResult> {
     const response = await this.call({ kind: "load" });
     if (response?.kind !== "load") return { status: "unavailable" };
     if (response.value.status !== "observed") return response.value;
-    const root = validateRootProjection(response.value.value.root);
-    if (!root.ok || !same(root.value.scope, this.scope))
-      return { status: "corrupt" };
+    const value = this.validProjectionReadback(response.value.value);
+    return value === undefined
+      ? { status: "corrupt" }
+      : { status: "observed", value };
+  }
+
+  /**
+   * A projection crosses the process trust boundary as two loose values. Root
+   * and children are validated against their schemas, bound to this scope and
+   * holder, and required to agree with the root's own child rows; anything
+   * else is not a projection this engine may read, whatever it looks like.
+   */
+  private validProjectionReadback(
+    input: unknown,
+  ): AuthoritativeRunReadback | undefined {
+    const value = object(input);
+    if (
+      value === undefined ||
+      Object.keys(value).length !== 2 ||
+      !Array.isArray(value.children)
+    )
+      return undefined;
+    const root = validateRootProjection(value.root);
+    if (!root.ok || !same(root.value.scope, this.scope)) return undefined;
     const expected = root.value.childRows;
-    const children = response.value.value.children;
-    if (children.length !== expected.length) return { status: "corrupt" };
+    if (value.children.length !== expected.length) return undefined;
     const seen = new Set<string>();
-    for (const child of children) {
+    const children: ChildProjection[] = [];
+    for (const child of value.children) {
       const parsed = validateChildProjection(child);
       const reference = parsed.ok
         ? expected.find((row) => row.unitId === parsed.value.unitId)
@@ -1004,12 +1066,193 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
         !same(parsed.value.scope, root.value.scope) ||
         parsed.value.holder !== root.value.holder
       )
-        return { status: "corrupt" };
+        return undefined;
       seen.add(parsed.value.unitId);
+      children.push(parsed.value);
     }
     return seen.size !== expected.length
-      ? { status: "corrupt" }
-      : { status: "observed", value: response.value.value };
+      ? undefined
+      : { children, root: root.value };
+  }
+
+  /**
+   * The port's pending-delta probe, when it publishes one. The answer crosses
+   * the process trust boundary, so only the exact shapes are admitted and a
+   * throwing, absent, or malformed probe reports nothing at all -- which is
+   * exactly the behaviour every port had before the probe existed.
+   */
+  private async pendingWorkingSet(): Promise<
+    EmbeddedPendingWorkingSet | undefined
+  > {
+    if (this.process.pendingWorkingSet === undefined) return undefined;
+    let response: unknown;
+    try {
+      response = await this.process.pendingWorkingSet({
+        kind: "pending_working_set",
+      });
+    } catch {
+      return undefined;
+    }
+    const envelope = object(response);
+    if (
+      envelope === undefined ||
+      Object.keys(envelope).length !== 2 ||
+      envelope.kind !== "pending_working_set"
+    )
+      return undefined;
+    const value = object(envelope.value);
+    if (value === undefined) return undefined;
+    if (value.status === "clean" || value.status === "unavailable")
+      return Object.keys(value).length === 1
+        ? { status: value.status }
+        : undefined;
+    if (
+      value.status !== "pending" ||
+      !head(value.head) ||
+      (value.delta !== "projection_step" && value.delta !== "unproven") ||
+      Object.keys(value).some(
+        (key) => !["delta", "head", "pending", "status"].includes(key),
+      )
+    )
+      return undefined;
+    const readback =
+      value.pending === undefined
+        ? undefined
+        : this.validProjectionReadback(value.pending);
+    return {
+      delta: value.delta,
+      head: value.head,
+      ...(readback === undefined ? {} : { pending: readback }),
+      status: "pending",
+    };
+  }
+
+  /**
+   * Commits an uncommitted delta only where it is provably this engine's own
+   * next checkpoint. `undefined` means it was not settled and the caller must
+   * report it; a result means the engine acted and this is what it now reads.
+   */
+  private async settlePendingProjection(
+    loaded: AuthoritativeRunReadback,
+    pending: Extract<EmbeddedPendingWorkingSet, { status: "pending" }>,
+  ): Promise<AuthoritativeLoadResult | undefined> {
+    const next = pending.pending;
+    if (
+      pending.delta !== "projection_step" ||
+      next === undefined ||
+      !this.isSingleRevisionStep(loaded.root, next.root)
+    )
+      return undefined;
+    // The slot check is deliberately before `durableCheckpoint`, which
+    // otherwise can commit: a replacement process must not settle a write
+    // whose controller has since lost or released the built-in slot.
+    const slot = await this.slot("check");
+    if (!this.slotAdmitsProjection(slot, next.root)) return undefined;
+    const durable = await this.durableCheckpoint();
+    if (durable.code !== "applied")
+      return {
+        status: durable.code === "unavailable" ? "unavailable" : "ambiguous",
+      };
+    // Prove only what can be read back exactly: the committed projection must
+    // be the delta that was decoded, never merely something that committed.
+    const reread = await this.readProjection();
+    return reread.status === "observed" &&
+      same(reread.value.root, next.root) &&
+      same(reread.value.children, next.children)
+      ? reread
+      : { status: "quarantined" };
+  }
+
+  /**
+   * One legal revision step by this controller: same run, same incarnation,
+   * same fencing token and holder, the next aggregate revision, an effect
+   * journal that only appended, and a run that satisfies every aggregate
+   * invariant on its own. A delta that fails any of these is not a checkpoint
+   * this engine could have written, whoever wrote it.
+   */
+  private isSingleRevisionStep(
+    before: RootProjection,
+    after: RootProjection,
+  ): boolean {
+    const beforeRun = before.run;
+    const afterRun = after.run;
+    return (
+      same(before.scope, this.scope) &&
+      same(after.scope, this.scope) &&
+      before.holder === this.holder &&
+      after.holder === this.holder &&
+      afterRun.controller.holder === this.holder &&
+      afterRun.controller.runId === beforeRun.controller.runId &&
+      afterRun.controller.incarnationId ===
+        beforeRun.controller.incarnationId &&
+      afterRun.controllerFencingToken === beforeRun.controllerFencingToken &&
+      after.aggregateRevision === before.aggregateRevision + 1 &&
+      afterRun.revision === beforeRun.revision + 1 &&
+      afterRun.effectJournal.length >= beforeRun.effectJournal.length &&
+      beforeRun.effectJournal.every(
+        (entry, index) =>
+          afterRun.effectJournal[index]?.effectId === entry.effectId,
+      ) &&
+      runInvariantErrors(afterRun).length === 0
+    );
+  }
+
+  /**
+   * The same slot authority an ordinary write requires, read off a projection
+   * rather than a batch: a run's final write is still the one exception, and
+   * a settled delta must not widen it.
+   */
+  private slotAdmitsProjection(
+    slot: MergeSlotObservation | undefined,
+    root: RootProjection,
+  ): boolean {
+    if (slot === undefined) return false;
+    if (this.isReleaseObservationRoot(root))
+      return slot.status === "available" && slot.holder === undefined;
+    return (
+      slot.status === "acquired" &&
+      slot.actor === this.holder &&
+      slot.holder === this.holder
+    );
+  }
+
+  /** The durable/pending split, bounded and validated before it is published. */
+  private pendingReport(
+    loaded: AuthoritativeRunReadback,
+    pending: Extract<EmbeddedPendingWorkingSet, { status: "pending" }>,
+  ): PendingWorkingSet | undefined {
+    const parsed = validate<PendingWorkingSet>(PendingWorkingSetSchema, {
+      head: pending.head,
+      headRevision: loaded.root.aggregateRevision,
+      workingSet: "pending",
+      ...(pending.pending === undefined
+        ? {}
+        : { workingSetRevision: pending.pending.root.aggregateRevision }),
+    });
+    return parsed.ok ? parsed.value : undefined;
+  }
+
+  /**
+   * A refusal an operator can act on. The engine settles a pending working
+   * set only where it can prove the delta is its own next checkpoint;
+   * everything else is another actor's uncommitted write, which it will
+   * neither commit nor discard. The exact commands that settle it ride the
+   * diagnostic tail, the one operator-facing channel a store refusal has.
+   */
+  private pendingWorkingSetRefusal(): RunStoreResult {
+    const directory = this.process.identity.databaseDirectory;
+    const keep =
+      this.mode === "git-sync"
+        ? '"bd dolt commit" then "bd dolt push"'
+        : '"bd dolt commit"';
+    const tail = redactedStderrTail(
+      `The Dolt working set in ${directory} holds an uncommitted change this engine cannot prove is its own, so it will neither commit nor discard it. Run ${keep} from the repository root to keep it, or "dolt reset --hard" in ${directory} to discard it, then re-run this command.`,
+      false,
+    );
+    return {
+      ...(tail === undefined ? {} : { stderrTail: tail }),
+      status: "ambiguous",
+    };
   }
 
   /**
@@ -1176,10 +1419,17 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
   }
 
   private isReleaseObservationBatch(batch: MutationBatch): boolean {
-    const run = batch.next.root.run;
-    const entry = run.effectJournal.at(-1);
     return (
       batch.holder === this.holder &&
+      this.isReleaseObservationRoot(batch.next.root)
+    );
+  }
+
+  private isReleaseObservationRoot(root: RootProjection): boolean {
+    const run = root.run;
+    const entry = run.effectJournal.at(-1);
+    return (
+      root.holder === this.holder &&
       run.controller.holder === this.holder &&
       run.state === "released" &&
       run.controller.state === "released" &&

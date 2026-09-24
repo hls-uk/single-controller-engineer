@@ -605,6 +605,83 @@ test("an out-of-band retired row move refuses the closure CAS", async () => {
   assert.deepEqual(unpredicated.child, envelope(moved));
 });
 
+/**
+ * An interrupted command leaves its mutation in the working set and its batch
+ * nowhere, so the only authority a later process has is the committed
+ * projection and the one the working set holds. The delta between them is
+ * proved exactly as a batch delta is: the rows that moved and nothing else.
+ */
+test("an uncommitted delta is a projection step only when nothing else moved", () => {
+  const { before, next } = closingStates();
+  const persistence = new DoltProjectionPersistence({
+    childIssueId: (unitId) => (unitId === "unit-1" ? childIssueId : undefined),
+    databaseDirectory: "/private/tmp",
+    doltExecutable: "/usr/bin/true",
+    rootIssueId,
+  });
+  const beforeRoot = makeRootProjection(before);
+  const nextRoot = makeRootProjection(next);
+  const retiredChild = makeChildProjection(beforeRoot, "unit-1");
+  assert.notEqual(retiredChild, undefined, "the closing run must have a child");
+  if (retiredChild === undefined) throw new Error("unreachable");
+  const committed = { children: [retiredChild], root: beforeRoot };
+  const pending = { children: [], root: nextRoot };
+  const rootChange = {
+    from_row: issueRow(
+      rootIssueId,
+      envelope(beforeRoot),
+      "2026-09-22 10:00:01",
+    ),
+    to_row: issueRow(rootIssueId, envelope(nextRoot), "2026-09-22 10:00:02"),
+  };
+  assert.equal(
+    persistence.matchesProjectionStepDelta(
+      committed,
+      pending,
+      issuesDelta([rootChange]),
+    ),
+    true,
+    "the exact row movement between the two projections is a step",
+  );
+  assert.equal(
+    persistence.matchesProjectionStepDelta(
+      committed,
+      pending,
+      issuesDelta([
+        rootChange,
+        {
+          from_row: issueRow(
+            childIssueId,
+            envelope(retiredChild),
+            "2026-09-22 10:00:01",
+          ),
+          to_row: issueRow(
+            childIssueId,
+            envelope(movedRetiredChild(before)),
+            "2026-09-22 10:00:02",
+          ),
+        },
+      ]),
+    ),
+    false,
+    "a retired row moved beside the step is not part of it",
+  );
+  assert.equal(
+    persistence.matchesProjectionStepDelta(committed, pending, issuesDelta([])),
+    false,
+    "an empty delta never publishes a revision",
+  );
+  assert.equal(
+    persistence.matchesProjectionStepDelta(
+      committed,
+      committed,
+      issuesDelta([rootChange]),
+    ),
+    false,
+    "a delta that does not reach the read projection is not that step",
+  );
+});
+
 test("a predicated closure still proves a root-only Dolt delta", () => {
   const { before, next } = closingStates();
   const { batch, retiredChild } = rootOnlyClosureBatch(before, next);

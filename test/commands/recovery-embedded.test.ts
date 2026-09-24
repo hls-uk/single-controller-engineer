@@ -9,8 +9,12 @@ import {
   deriveSlotReadbackHash,
   makeChildProjection,
   makeRootProjection,
+  withBatchCheckpoint,
+  StoreFailureTailSchema,
   type FencingScope,
   type MergeSlotObservation,
+  type MutationBatch,
+  type StoreFailureTail,
 } from "../../src/fencing/index.js";
 import type { InitialControllerAcquire } from "../../src/commands/recovery.js";
 import type { PreflightEnvelope } from "../../src/preflight/index.js";
@@ -24,6 +28,7 @@ import {
   type EmbeddedResponse,
 } from "../../src/adapters/beads-embedded/index.js";
 import { deriveIdempotencyKey, reduce } from "../../src/protocol/reducer.js";
+import { validate } from "../../src/protocol/schemas.js";
 import { run, unit } from "../protocol/fixtures.js";
 
 const holder = "run-1/incarnation-1";
@@ -504,4 +509,101 @@ test("reconciliation is absent only when the advanced head is slot-untouched lin
       port.requests.map((request) => request.kind),
       ["state", "slot", "slot_lineage"],
     );
+});
+
+/**
+ * The batch a command builds after an interrupted one: it steps from the head
+ * the store served, so it can never match the delta the working set already
+ * holds.
+ */
+function journalBatch(): MutationBatch {
+  const base = run([]);
+  const initial = makeRootProjection({
+    ...base,
+    controller: { ...base.controller, state: "unacquired" as const },
+    state: "initializing" as const,
+  });
+  const next = withBatchCheckpoint(initialAcquire().next.root, []);
+  return {
+    changedRows: [],
+    checkpoint: next.checkpoint,
+    expectedAggregateCommitment: initial.aggregateCommitment,
+    expectedAggregateRevision: initial.aggregateRevision,
+    expectedChildren: [],
+    expectedHolder: holder,
+    holder,
+    next: { children: [], root: next },
+    schema: "sce.fencing.batch",
+    scope,
+    version: 1,
+  };
+}
+
+class InterruptedPort implements EmbeddedProcessPort {
+  public readonly identity = identity();
+  public readonly requests: EmbeddedRequest[] = [];
+
+  public async execute(request: EmbeddedRequest): Promise<EmbeddedResponse> {
+    this.requests.push(request);
+    switch (request.kind) {
+      case "state":
+        return {
+          kind: "state",
+          value: {
+            autoCommit: "off",
+            head: "a".repeat(40),
+            reachable: true,
+            workingSet: "pending",
+          },
+        };
+      case "discover":
+        // The uncommitted delta belongs to the interrupted command, never to
+        // the batch this one built from the head the store served.
+        return {
+          kind: "discover",
+          value: { head: "a".repeat(40), status: "ambiguous" },
+        };
+      default:
+        throw new Error(`unexpected ${request.kind}`);
+    }
+  }
+}
+
+/**
+ * A working set the engine cannot prove is its own blocks every mutation, and
+ * a bare refusal leaves an operator with no idea what to do about it. The
+ * refusal therefore names the exact commands that settle it and the directory
+ * they run against, on the same diagnostic channel the CLI already renders
+ * into its SCE_RECOVERY_BLOCKED message (sce-ul2.4).
+ */
+test("a working set the engine will not settle refuses with the exact bd dolt command", async () => {
+  const port = new InterruptedPort();
+  const result = await adapter(port).compareAndSet(journalBatch());
+  assert.equal(result.status, "ambiguous");
+  assert.deepEqual(
+    port.requests.map((request) => request.kind),
+    ["state", "discover"],
+  );
+  const tail = "stderrTail" in result ? result.stderrTail : undefined;
+  assert.notEqual(tail, undefined, "the refusal must name its remedy");
+  if (tail === undefined) throw new Error("unreachable");
+  assert.equal(
+    tail.text.includes('"bd dolt commit"'),
+    true,
+    `the refusal must name bd dolt commit: ${tail.text}`,
+  );
+  assert.equal(
+    tail.text.includes("/repo/.beads/dolt/sce"),
+    true,
+    `the refusal must name the database directory: ${tail.text}`,
+  );
+  assert.equal(
+    tail.text.includes("bd dolt push"),
+    false,
+    "a local-only store must not be told to push",
+  );
+  // The command surface re-validates this exact value against this schema
+  // before it becomes the SCE_RECOVERY_BLOCKED message an operator reads.
+  const parsed = validate<StoreFailureTail>(StoreFailureTailSchema, tail);
+  assert.equal(parsed.ok, true, "the tail must survive the CLI boundary");
 });

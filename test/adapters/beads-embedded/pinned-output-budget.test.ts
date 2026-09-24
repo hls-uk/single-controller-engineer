@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,7 +10,11 @@ import {
   PinnedBdEmbeddedProcess,
   REMOTE_FAILURE_TAIL_BYTES,
   type EmbeddedAncestryProof,
+  type EmbeddedPendingWorkingSet,
+  type EmbeddedReadback,
 } from "../../../src/adapters/beads-embedded/index.js";
+import { makeRootProjection } from "../../../src/fencing/index.js";
+import { run as fixtureRun } from "../../protocol/fixtures.js";
 
 const projections = {
   async discover() {
@@ -238,4 +242,124 @@ test("a budget-killed capture keeps its tail even when the child exited 0", () =
     failureTail({ code: null, exceeded: true, timedOut: false }),
     {},
   );
+});
+
+const PROBE_HEAD = "c".repeat(40);
+
+function unitlessProjection(): EmbeddedReadback {
+  return { children: [], root: makeRootProjection(fixtureRun([])) };
+}
+
+/**
+ * Runs the pinned pending-delta probe against a synthetic `dolt`. No `bd` is
+ * involved and no branch of the script may commit: the probe is a read, and a
+ * process that cannot read its delta must say so rather than claim a step.
+ */
+async function pendingProbe(
+  options: Readonly<{
+    decodes?: boolean;
+    diffExits?: number;
+    matches?: boolean;
+    pending: boolean;
+  }>,
+): Promise<Readonly<{ diffed: boolean; value: EmbeddedPendingWorkingSet }>> {
+  const root = await mkdtemp(join(tmpdir(), "sce-pending-"));
+  try {
+    const dolt = join(root, "dolt");
+    const diffed = join(root, "diffed");
+    const status = options.pending
+      ? '{"rows":[{"staged":0,"status":"modified","table_name":"issues"}]}'
+      : '{"rows":[]}';
+    await writeFile(
+      dolt,
+      [
+        "#!/bin/sh",
+        'if [ "$1" = "version" ]; then printf "dolt version 2.2.1\n"; exit 0; fi',
+        'if [ "$1" = "sql" ]; then',
+        '  case "$5" in',
+        `    *'DOLT_HASHOF("HEAD")'*) printf '{"rows":[{"head":"${PROBE_HEAD}"}]}' ;;`,
+        `    *'SELECT * FROM dolt_status'*) printf '${status}' ;;`,
+        "    *) exit 1 ;;",
+        "  esac",
+        "  exit 0",
+        "fi",
+        'if [ "$1" = "diff" ]; then',
+        `  touch '${diffed}'`,
+        `  printf '{"tables":[]}'`,
+        `  exit ${options.diffExits ?? 0}`,
+        "fi",
+        "exit 1",
+      ].join("\n"),
+      { mode: 0o700 },
+    );
+    await chmod(dolt, 0o700);
+    const decoding = {
+      async load() {
+        return { status: "observed" as const, value: unitlessProjection() };
+      },
+      matchesProjectionStepDelta() {
+        return options.matches ?? true;
+      },
+    };
+    const observed = await new PinnedBdEmbeddedProcess({
+      bdExecutable: join(root, "bd"),
+      cwd: root,
+      databaseDirectory: root,
+      doltExecutable: dolt,
+      prefix: "sce",
+      projections:
+        options.decodes === false
+          ? projections
+          : { ...projections, ...decoding },
+      scope,
+    }).pendingWorkingSet();
+    assert.equal(observed.kind, "pending_working_set");
+    return {
+      diffed: await access(diffed).then(
+        () => true,
+        () => false,
+      ),
+      value: observed.value,
+    };
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+}
+
+/**
+ * The probe decides one thing: whether the uncommitted delta is exactly the
+ * engine's own next checkpoint. A clean store never reads a diff at all, an
+ * unreadable diff is `unproven`, and a process whose projection port cannot
+ * decode a delta reports that rather than a status it did not establish.
+ */
+test("the pending-delta probe proves a step only from a readable exact diff", async () => {
+  const clean = await pendingProbe({ pending: false });
+  assert.deepEqual(clean.value, { status: "clean" });
+  assert.equal(clean.diffed, false, "a clean store reads no diff");
+
+  const step = await pendingProbe({ pending: true });
+  assert.deepEqual(step.value, {
+    delta: "projection_step",
+    head: PROBE_HEAD,
+    pending: unitlessProjection(),
+    status: "pending",
+  });
+
+  const foreign = await pendingProbe({ matches: false, pending: true });
+  assert.equal(
+    foreign.value.status === "pending" ? foreign.value.delta : undefined,
+    "unproven",
+    "a delta the projection port does not match is never a step",
+  );
+
+  const unreadable = await pendingProbe({ diffExits: 1, pending: true });
+  assert.equal(
+    unreadable.value.status === "pending" ? unreadable.value.delta : undefined,
+    "unproven",
+    "a diff capture that failed proves nothing",
+  );
+
+  const undecodable = await pendingProbe({ decodes: false, pending: true });
+  assert.deepEqual(undecodable.value, { status: "unavailable" });
+  assert.equal(undecodable.diffed, false, "an undecodable port reads no diff");
 });

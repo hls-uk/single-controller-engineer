@@ -114,6 +114,16 @@ export interface ProjectionPersistencePort {
   ): Promise<CrashDiscovery | undefined>;
   /** Proves that a complete Dolt data diff contains this batch and nothing else. */
   matchesBatchDelta(batch: MutationBatch, source: string): boolean;
+  /**
+   * Proves that a complete Dolt data diff is exactly the row movement from
+   * the committed projection to the one the working set holds. A port without
+   * it never decodes a pending delta, and the engine keeps refusing one.
+   */
+  matchesProjectionStepDelta?(
+    before: EmbeddedReadback,
+    after: EmbeddedReadback,
+    source: string,
+  ): boolean;
 }
 
 /**
@@ -152,6 +162,54 @@ export type EmbeddedAncestryResponse = Readonly<{
  */
 export interface EmbeddedAncestryPort {
   ancestry(request: EmbeddedAncestryRequest): Promise<EmbeddedAncestryResponse>;
+}
+
+/**
+ * What the uncommitted Dolt working set holds, relative to the committed head
+ * a load serves. A command killed between its projection mutation and its
+ * commit leaves exactly that: a delta no later batch can ever resubmit, which
+ * blocks every mutation until someone settles it (sce-ul2.4).
+ *
+ * Like the ancestry probe this is deliberately not an `EmbeddedRequest`: it
+ * writes nothing, costs no network, and a process that does not publish it
+ * keeps exactly the behaviour it had before the probe existed.
+ */
+export type EmbeddedPendingWorkingSetRequest = Readonly<{
+  kind: "pending_working_set";
+}>;
+
+/**
+ * `clean` proves there is no uncommitted delta at all. `pending` reports one,
+ * always with the exact committed head it was diffed against, with the
+ * projection it decodes to when it decodes, and with `delta` saying whether
+ * that delta is *exactly* the row movement from the head projection to it.
+ * `unproven` is every other pending delta -- a foreign write, an unreadable
+ * or over-budget capture, a partial row set -- and authorizes nothing.
+ */
+export type EmbeddedPendingWorkingSet =
+  | Readonly<{ status: "clean" }>
+  | Readonly<{
+      delta: "projection_step" | "unproven";
+      head: string;
+      pending?: EmbeddedReadback;
+      status: "pending";
+    }>
+  | Readonly<{ status: "unavailable" }>;
+
+export type EmbeddedPendingWorkingSetResponse = Readonly<{
+  kind: "pending_working_set";
+  value: EmbeddedPendingWorkingSet;
+}>;
+
+/**
+ * The optional pending-delta probe. It is read-only: deciding what to do with
+ * a pending delta, and committing it, belongs to the adapter, which alone
+ * holds the holder and slot authority that makes a checkpoint legal.
+ */
+export interface EmbeddedPendingWorkingSetPort {
+  pendingWorkingSet(
+    request: EmbeddedPendingWorkingSetRequest,
+  ): Promise<EmbeddedPendingWorkingSetResponse>;
 }
 
 export const SLOT_INITIALIZATION_AUTHORITY =
@@ -1055,6 +1113,62 @@ export class PinnedBdEmbeddedProcess
     return {
       kind: "ancestry",
       value: await this.ancestryProof(request.ancestor, request.descendant),
+    };
+  }
+
+  /**
+   * Reads, and only reads, what the uncommitted working set holds. The head
+   * projection and the working-set projection are each loaded through the
+   * same validated reader a normal load uses, and the delta between them is
+   * proved complete against `dolt diff --data`, so a pending set that also
+   * moved a row outside the projection can never decode as a step.
+   */
+  public async pendingWorkingSet(): Promise<EmbeddedPendingWorkingSetResponse> {
+    return {
+      kind: "pending_working_set",
+      value: await this.decodePendingWorkingSet(),
+    };
+  }
+
+  private async decodePendingWorkingSet(): Promise<EmbeddedPendingWorkingSet> {
+    const load = this.projections.load;
+    const matches = this.projections.matchesProjectionStepDelta;
+    if (load === undefined || matches === undefined)
+      return { status: "unavailable" };
+    const workingSet = await this.doltWorkingSet(this.databaseDirectory);
+    if (workingSet === undefined) return { status: "unavailable" };
+    if (workingSet === "clean") return { status: "clean" };
+    const head = await this.doltHead(this.databaseDirectory);
+    if (head === undefined) return { status: "unavailable" };
+    const working = await load.call(this.projections);
+    const pending =
+      working.status === "observed" ? { pending: working.value } : {};
+    const committed = await load.call(this.projections, head);
+    if (committed.status !== "observed" || working.status !== "observed")
+      return { delta: "unproven", head, ...pending, status: "pending" };
+    const diff = await this.runDolt(this.databaseDirectory, [
+      "diff",
+      "--data",
+      "-r",
+      "json",
+      head,
+    ]);
+    return {
+      delta:
+        diff !== undefined &&
+        diff.code === 0 &&
+        !diff.exceeded &&
+        matches.call(
+          this.projections,
+          committed.value,
+          working.value,
+          diff.stdout,
+        )
+          ? "projection_step"
+          : "unproven",
+      head,
+      ...pending,
+      status: "pending",
     };
   }
 

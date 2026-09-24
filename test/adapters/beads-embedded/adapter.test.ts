@@ -6,6 +6,7 @@ import {
   MERGE_SLOT_TITLE,
   deriveScopeCommitment,
   deriveSlotReadbackHash,
+  makeChildProjection,
   makeRootProjection,
   type FencingScope,
   type MergeSlotObservation,
@@ -20,6 +21,9 @@ import {
   type EmbeddedAncestryProof,
   type EmbeddedAncestryRequest,
   type EmbeddedAncestryResponse,
+  type EmbeddedPendingWorkingSet,
+  type EmbeddedPendingWorkingSetRequest,
+  type EmbeddedPendingWorkingSetResponse,
   type EmbeddedProcessIdentity,
   type EmbeddedProcessPort,
   type EmbeddedRequest,
@@ -30,7 +34,10 @@ import {
 } from "../../../src/adapters/beads-embedded/index.js";
 import { isSchema } from "../../../src/adapters/git/schemas.js";
 import { deriveIdempotencyKey, reduce } from "../../../src/protocol/reducer.js";
-import { run as fixtureRun } from "../../protocol/fixtures.js";
+import {
+  event as fixtureEvent,
+  run as fixtureRun,
+} from "../../protocol/fixtures.js";
 
 const scope: FencingScope = {
   beadsStoreIdentity: "store-1",
@@ -109,7 +116,9 @@ function processIdentity(sync: boolean): EmbeddedProcessIdentity {
 }
 
 class ScriptedPort implements EmbeddedProcessPort {
-  public readonly requests: (EmbeddedRequest | EmbeddedAncestryRequest)[] = [];
+  public readonly requests: (
+    EmbeddedRequest | EmbeddedAncestryRequest | EmbeddedPendingWorkingSetRequest
+  )[] = [];
   public identity: EmbeddedProcessIdentity;
   /**
    * The bounded ancestry proof is an optional process capability, so a port
@@ -119,13 +128,22 @@ class ScriptedPort implements EmbeddedProcessPort {
   public ancestry?: (
     request: EmbeddedAncestryRequest,
   ) => Promise<EmbeddedAncestryResponse>;
+  /**
+   * The pending-delta probe is the same kind of optional capability, so every
+   * trace written before it existed still exercises a process without one.
+   */
+  public pendingWorkingSet?: (
+    request: EmbeddedPendingWorkingSetRequest,
+  ) => Promise<EmbeddedPendingWorkingSetResponse>;
   private responseIndex = 0;
   private proofIndex = 0;
+  private pendingIndex = 0;
 
   public constructor(
     private readonly responses: readonly EmbeddedResponse[],
     identity = processIdentity(false),
     proofs?: readonly EmbeddedAncestryProof[],
+    pending?: readonly EmbeddedPendingWorkingSet[],
   ) {
     this.identity = identity;
     if (proofs !== undefined)
@@ -134,6 +152,13 @@ class ScriptedPort implements EmbeddedProcessPort {
         const value = proofs[this.proofIndex++];
         if (value === undefined) throw new Error("unexpected ancestry probe");
         return { kind: "ancestry", value };
+      };
+    if (pending !== undefined)
+      this.pendingWorkingSet = async (request) => {
+        this.requests.push(request);
+        const value = pending[this.pendingIndex++];
+        if (value === undefined) throw new Error("unexpected pending probe");
+        return { kind: "pending_working_set", value };
       };
   }
   public async execute(request: EmbeddedRequest): Promise<EmbeddedResponse> {
@@ -1143,6 +1168,146 @@ test("git-sync worker baseline refuses a missing or moved authoritative remote h
     assert.deepEqual(
       port.requests.map((request) => request.kind),
       ["state"],
+    );
+  }
+});
+
+/**
+ * Two consecutive projections of one run: the committed head, and the exact
+ * next revision an interrupted command would have left uncommitted beside it.
+ */
+function revisionStep() {
+  const before = fixtureRun();
+  const reduced = reduce(before, fixtureEvent(before, "cancel_intent"));
+  assert.equal(reduced.ok, true);
+  if (!reduced.ok) throw new Error("unreachable");
+  const projection = (state: typeof before) => {
+    const root = makeRootProjection(state);
+    return {
+      children: root.childRows.map((row) => {
+        const child = makeChildProjection(root, row.unitId);
+        assert.notEqual(child, undefined);
+        if (child === undefined) throw new Error("unreachable");
+        return child;
+      }),
+      root,
+    };
+  };
+  const head = projection(before);
+  const next = projection(reduced.nextState);
+  assert.equal(next.root.aggregateRevision, head.root.aggregateRevision + 1);
+  return { head, next };
+}
+
+const interruptedHead = "a".repeat(40);
+const settledHead = "b".repeat(40);
+
+function storeState(
+  workingSet: "clean" | "pending",
+  head: string,
+): EmbeddedResponse {
+  return {
+    kind: "state",
+    value: { autoCommit: "off", head, reachable: true, workingSet },
+  };
+}
+
+/**
+ * A command killed between its projection mutation and its commit leaves that
+ * mutation in the working set. Every later command reads the committed head,
+ * builds a different next revision, and can never prove the delta it did not
+ * write, so the store blocks until an operator commits it by hand. Where the
+ * delta is provably this engine's own next checkpoint the load commits it and
+ * serves the result, which is exactly what the manual `bd dolt commit` did.
+ */
+test("an interrupted intent batch left in the working set is settled by the next load", async () => {
+  const step = revisionStep();
+  const port = new ScriptedPort(
+    [
+      { kind: "load", value: { status: "observed", value: step.head } },
+      { kind: "slot", value: slot("acquired", holder) },
+      storeState("pending", interruptedHead),
+      { kind: "commit", value: "applied" },
+      storeState("clean", settledHead),
+      { kind: "load", value: { status: "observed", value: step.next } },
+    ],
+    processIdentity(false),
+    undefined,
+    [
+      {
+        delta: "projection_step",
+        head: interruptedHead,
+        pending: step.next,
+        status: "pending",
+      },
+    ],
+  );
+  const loaded = await adapter(port, "local-only").load();
+  assert.equal(loaded.status, "observed", "the settled revision must load");
+  if (loaded.status !== "observed") throw new Error("unreachable");
+  assert.equal(
+    loaded.value.root.aggregateRevision,
+    step.head.root.aggregateRevision + 1,
+    "the load must serve the committed working set, not the stale head",
+  );
+  assert.equal(
+    loaded.pending,
+    undefined,
+    "a settled working set is no longer pending",
+  );
+  assert.deepEqual(
+    port.requests.map((request) => request.kind),
+    ["load", "pending_working_set", "slot", "state", "commit", "state", "load"],
+  );
+});
+
+/**
+ * Everything the engine cannot prove is its own is another actor's
+ * uncommitted write. It is reported -- head revision against working-set
+ * revision -- and never committed, and a delta whose controller no longer
+ * holds the built-in slot is reported the same way: the slot check stays in
+ * front of the checkpoint it would otherwise write.
+ */
+test("an unprovable or unfenced pending working set is reported, never committed", async () => {
+  const step = revisionStep();
+  for (const [delta, currentSlot] of [
+    ["unproven", slot("acquired", holder)],
+    ["projection_step", slot("acquired", "run-2/incarnation-1")],
+    ["projection_step", slot("available")],
+  ] as const) {
+    const port = new ScriptedPort(
+      [
+        { kind: "load", value: { status: "observed", value: step.head } },
+        { kind: "slot", value: currentSlot },
+      ],
+      processIdentity(false),
+      undefined,
+      [
+        {
+          delta,
+          head: interruptedHead,
+          pending: step.next,
+          status: "pending",
+        },
+      ],
+    );
+    const loaded = await adapter(port, "local-only").load();
+    assert.equal(loaded.status, "observed", `${delta} must still load`);
+    if (loaded.status !== "observed") throw new Error("unreachable");
+    assert.deepEqual(
+      loaded.pending,
+      {
+        head: interruptedHead,
+        headRevision: step.head.root.aggregateRevision,
+        workingSet: "pending",
+        workingSetRevision: step.next.root.aggregateRevision,
+      },
+      `${delta} must report the pending working set`,
+    );
+    assert.equal(
+      port.requests.some((request) => request.kind === "commit"),
+      false,
+      `${delta} must never commit another actor's write`,
     );
   }
 });

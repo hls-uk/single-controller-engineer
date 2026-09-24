@@ -731,11 +731,39 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
     const batch = validateMutationBatch(batchInput);
     if (!batch.ok) return false;
     const rows = this.rows(batch.value);
+    return rows !== undefined && this.matchesRowDelta(rows, source);
+  }
+
+  /**
+   * The same complete-delta proof, keyed on two read projections rather than
+   * on a batch the engine still holds. An interrupted command leaves its
+   * mutation in the working set and its batch nowhere: the only authority a
+   * later process has is the committed projection at HEAD and the one the
+   * working set holds. This proves the uncommitted delta is exactly the row
+   * movement between them -- root plus each child whose commitment moved --
+   * and that nothing else, in this table or any other, moved with it.
+   */
+  public matchesProjectionStepDelta(
+    before: EmbeddedReadback,
+    after: EmbeddedReadback,
+    source: string,
+  ): boolean {
+    const rows = this.stepRows(before, after);
+    return rows !== undefined && this.matchesRowDelta(rows, source);
+  }
+
+  private matchesRowDelta(
+    rows: readonly {
+      issueId: string;
+      expectedCommitment: string;
+      next: unknown;
+    }[],
+    source: string,
+  ): boolean {
     const parsed = parseDoltDiff(source);
     if (parsed === undefined) return false;
     const root = object(parsed);
     if (
-      rows === undefined ||
       root === undefined ||
       Object.keys(root).length !== 1 ||
       !Object.prototype.hasOwnProperty.call(root, "tables") ||
@@ -1027,6 +1055,70 @@ export class DoltProjectionPersistence implements ProjectionPersistencePort {
         next: unknown;
       }[]),
     ].sort((left, right) => compareCodeUnits(left.issueId, right.issueId));
+  }
+
+  /**
+   * The exact rows one revision step is allowed to have written: the root,
+   * plus every child whose commitment moved. A child that stayed still was
+   * not written, and a child the step invented -- one with no committed row
+   * to move from -- is not a step this engine could have produced.
+   */
+  private stepRows(
+    before: EmbeddedReadback,
+    after: EmbeddedReadback,
+  ):
+    | readonly {
+        issueId: string;
+        expectedCommitment: string;
+        next: unknown;
+      }[]
+    | undefined {
+    const beforeRoot = validateRootProjection(before.root);
+    const afterRoot = validateRootProjection(after.root);
+    if (!beforeRoot.ok || !afterRoot.ok) return undefined;
+    const prior = new Map<string, ChildProjection>();
+    for (const child of before.children) {
+      const parsed = validateChildProjection(child);
+      if (!parsed.ok || prior.has(parsed.value.unitId)) return undefined;
+      prior.set(parsed.value.unitId, parsed.value);
+    }
+    const rows: {
+      issueId: string;
+      expectedCommitment: string;
+      next: unknown;
+    }[] = [
+      {
+        expectedCommitment: beforeRoot.value.aggregateCommitment,
+        issueId: this.rootIssueId,
+        next: {
+          commitment: afterRoot.value.aggregateCommitment,
+          projection: afterRoot.value,
+        },
+      },
+    ];
+    const seen = new Set<string>();
+    for (const child of after.children) {
+      const parsed = validateChildProjection(child);
+      if (!parsed.ok || seen.has(parsed.value.unitId)) return undefined;
+      seen.add(parsed.value.unitId);
+      const previous = prior.get(parsed.value.unitId);
+      const issueId = this.childIssueId(parsed.value.unitId);
+      if (previous === undefined || issueId === undefined) return undefined;
+      if (previous.commitment === parsed.value.commitment) continue;
+      rows.push({
+        expectedCommitment: previous.commitment,
+        issueId,
+        next: {
+          commitment: parsed.value.commitment,
+          projection: parsed.value,
+        },
+      });
+    }
+    return new Set(rows.map((row) => row.issueId)).size !== rows.length
+      ? undefined
+      : rows.sort((left, right) =>
+          compareCodeUnits(left.issueId, right.issueId),
+        );
   }
 
   private matchesProjectionRow(
