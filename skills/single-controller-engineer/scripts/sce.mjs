@@ -11449,15 +11449,30 @@ var ProtocolEventSchema = Type.Union([
     type: Type.Literal("integrate_intent"),
     ...effectIntent
   }),
-  // An exact refusal: the integration ref moved past the unit base and the
-  // candidate is provably not landed. Nothing happened; the unit returns to
-  // approved so the controller can refresh it on the same identity.
+  // Two exact refusals, each naming why nothing landed, so neither can decay
+  // into an unsettled effect. `integration_ref_moved`: the integration ref
+  // moved past the unit base with the candidate provably not beneath it, so
+  // the refusal carries the head it found and the controller refreshes on
+  // the same identity. `integration_checkout_dirty`: the integration
+  // checkout was not in the state a fast-forward requires, read as a
+  // precondition before any act ran, so it carries no head at all and the
+  // controller cleans the checkout and re-issues the same integrate intent.
+  // Both return the unit to approved with its candidate, review, and
+  // approval bindings untouched.
   strictObject({
     ...eventBase,
     type: Type.Literal("integrate_refused"),
     ...observedEffect,
+    reason: Type.Literal("integration_ref_moved"),
     baseOid: oid(),
     integrationOid: oid()
+  }),
+  strictObject({
+    ...eventBase,
+    type: Type.Literal("integrate_refused"),
+    ...observedEffect,
+    reason: Type.Literal("integration_checkout_dirty"),
+    baseOid: oid()
   }),
   strictObject({
     ...eventBase,
@@ -16231,7 +16246,12 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
       });
       break;
     case "integrate_refused":
-      if (unit.state !== "integrate_intent" || state.integrationOwnerUnitId !== unit.id || event.baseOid !== unit.baseOid || event.integrationOid === unit.reviewHeadOid)
+      if (unit.state !== "integrate_intent" || state.integrationOwnerUnitId !== unit.id || event.baseOid !== unit.baseOid || // A moved ref must name a head that is not the reviewed one: a ref
+      // already sitting on the candidate head means the act landed. A
+      // dirty checkout names no head at all; `baseOid` alone binds the
+      // refusal to the unit, because the adapter only names that refusal
+      // from a precondition it read before any act, so nothing landed.
+      event.reason === "integration_ref_moved" && event.integrationOid === unit.reviewHeadOid)
         return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "integrate"))
         return badObservation();
@@ -27553,20 +27573,22 @@ function createProductionRecoveryEffectAdapter(options) {
                 )
               }
             );
-            return await integrationRefused(effect2, run2, probe, git) ?? discovered(done, probe);
+            return await integrationRefused(effect2, run2, probe, git) ?? integrationCheckoutRefused(effect2, run2, probe) ?? discovered(done, probe);
           }
           const configuredRemote = remote(options);
           if (effect2.params.integrationProfile !== "remote-ff" || configuredRemote === void 0)
             return ambiguous3();
-          return discovered(
-            done,
-            await discoverRemoteIntegration(git.runner, git.repository, {
+          const remoteProbe = await discoverRemoteIntegration(
+            git.runner,
+            git.repository,
+            {
               base: effect2.params.candidate.baseOid,
               candidate: effect2.params.candidate.headOid,
               integrationBranch: effect2.params.integrationBranch,
               remote: configuredRemote
-            })
+            }
           );
+          return integrationCheckoutRefused(effect2, run2, remoteProbe) ?? discovered(done, remoteProbe);
         }
         default:
           return ambiguous3();
@@ -27702,20 +27724,22 @@ function createProductionRecoveryEffectAdapter(options) {
                 )
               }
             );
-            return await integrationRefused(effect2, run2, landed, git) ?? executed(done, landed);
+            return await integrationRefused(effect2, run2, landed, git) ?? integrationCheckoutRefused(effect2, run2, landed) ?? executed(done, landed);
           }
           const configuredRemote = remote(options);
           if (effect2.params.integrationProfile !== "remote-ff" || configuredRemote === void 0)
             return ambiguous3();
-          return executed(
-            done,
-            await integrateRemoteFastForward(git.runner, git.repository, {
+          const pushed = await integrateRemoteFastForward(
+            git.runner,
+            git.repository,
+            {
               base: effect2.params.candidate.baseOid,
               candidate: effect2.params.candidate.headOid,
               integrationBranch: effect2.params.integrationBranch,
               remote: configuredRemote
-            })
+            }
           );
+          return integrationCheckoutRefused(effect2, run2, pushed) ?? executed(done, pushed);
         }
         default:
           return ambiguous3();
@@ -27923,6 +27947,20 @@ async function integrationRefused(effect2, run2, result2, git) {
       ...eventBase2(effect2, run2),
       baseOid: effect2.params.candidate.baseOid,
       integrationOid,
+      reason: "integration_ref_moved",
+      type: "integrate_refused"
+    },
+    status: "observed"
+  };
+}
+function integrationCheckoutRefused(effect2, run2, result2) {
+  if (result2.state !== "refused" || result2.code !== "GIT_DIRTY")
+    return void 0;
+  return {
+    observation: {
+      ...eventBase2(effect2, run2),
+      baseOid: effect2.params.candidate.baseOid,
+      reason: "integration_checkout_dirty",
       type: "integrate_refused"
     },
     status: "observed"
