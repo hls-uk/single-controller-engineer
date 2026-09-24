@@ -6169,6 +6169,7 @@ test("a refused fast-forward returns the approved unit to approved with its exac
     {
       baseOid: intended.units[unitId]!.baseOid,
       integrationOid: OID_C,
+      reason: "integration_ref_moved",
     },
   );
   const unit = refused.units[unitId]!;
@@ -6205,11 +6206,130 @@ test("a refused fast-forward returns the approved unit to approved with its exac
         observationHash: HASH,
         baseOid: intended.units[unitId]!.baseOid,
         integrationOid: intended.units[unitId]!.reviewHeadOid ?? OID_B,
+        reason: "integration_ref_moved",
       },
       unitId,
     ),
   );
   assert.equal(contradiction.ok, false);
+});
+
+test("a dirty integration checkout is a named refusal that keeps the unit approved", () => {
+  const approved = approvedCandidate("integrate", "local-ff");
+  const unitId = "unit-1";
+  const intended = stepUnit(approved, unitId, "integrate_intent");
+  assert.equal(intended.units[unitId]?.state, "integrate_intent");
+  const refused = observeUnit(
+    intended,
+    unitId,
+    "integrate_refused",
+    "integrate",
+    {
+      baseOid: intended.units[unitId]!.baseOid,
+      reason: "integration_checkout_dirty",
+    },
+  );
+  const unit = refused.units[unitId]!;
+  // Nothing landed and nothing was discarded: the same approved candidate,
+  // review, and base survive, and the integration effect is settled, not
+  // ambiguous, so no recovery pass can report the run corrupt.
+  assert.equal(unit.state, "approved");
+  assert.equal(unit.landedOid, undefined);
+  assert.equal(refused.integrationOwnerUnitId, undefined);
+  assert.equal(refused.qualificationOwnerUnitId, unitId);
+  assert.equal(unit.baseOid, intended.units[unitId]!.baseOid);
+  assert.equal(unit.candidateHead, intended.units[unitId]!.candidateHead);
+  assert.equal(unit.candidateTree, intended.units[unitId]!.candidateTree);
+  assert.equal(unit.reviewBaseOid, intended.units[unitId]!.reviewBaseOid);
+  assert.equal(unit.reviewHeadOid, intended.units[unitId]!.reviewHeadOid);
+  assert.equal(unit.reviewTree, intended.units[unitId]!.reviewTree);
+  assert.deepEqual(refused.integrationQueue, intended.integrationQueue);
+  assert.deepEqual(runInvariantErrors(refused), []);
+  assert.equal(
+    refused.effectJournal.find((entry) => entry.kind === "integrate")?.status,
+    "observed",
+  );
+  // The controller cleans the checkout and re-issues the very same intent.
+  assert.deepEqual(
+    legalActions(refused)
+      .filter((action) => action.unitId === unitId && action.mode === "emit")
+      .map((action) => action.type)
+      .filter(
+        (type) =>
+          ![
+            "cancel_intent",
+            "failure_intent",
+            "park_intent",
+            "timeout_intent",
+          ].includes(type),
+      )
+      .sort(),
+    ["integrate_intent", "refresh_intent"],
+  );
+  const reissued = stepUnit(refused, unitId, "integrate_intent");
+  assert.equal(reissued.units[unitId]?.state, "integrate_intent");
+  assert.deepEqual(runInvariantErrors(reissued), []);
+
+  // The reason is only legal against a live integrate intent on this unit,
+  // and it may not smuggle a ref head past the strict schema.
+  assert.equal(
+    reduce(
+      approved,
+      event(
+        approved,
+        "integrate_refused",
+        {
+          effectId: refused.effectJournal.find((e) => e.kind === "integrate")!
+            .effectId,
+          effectKind: "integrate",
+          observationHash: HASH,
+          baseOid: approved.units[unitId]!.baseOid,
+          reason: "integration_checkout_dirty",
+        },
+        unitId,
+      ),
+    ).ok,
+    false,
+  );
+  assert.equal(
+    reduce(
+      intended,
+      event(
+        intended,
+        "integrate_refused",
+        {
+          effectId: intended.effectJournal.find((e) => e.kind === "integrate")!
+            .effectId,
+          effectKind: "integrate",
+          observationHash: HASH,
+          baseOid: OID_C,
+          reason: "integration_checkout_dirty",
+        },
+        unitId,
+      ),
+    ).ok,
+    false,
+  );
+  assert.equal(
+    reduce(
+      intended,
+      event(
+        intended,
+        "integrate_refused",
+        {
+          effectId: intended.effectJournal.find((e) => e.kind === "integrate")!
+            .effectId,
+          effectKind: "integrate",
+          observationHash: HASH,
+          baseOid: intended.units[unitId]!.baseOid,
+          integrationOid: OID_C,
+          reason: "integration_checkout_dirty",
+        },
+        unitId,
+      ),
+    ).ok,
+    false,
+  );
 });
 
 test("a refresh after a repair binds the launch base to the repair packet, not the first refresh", () => {

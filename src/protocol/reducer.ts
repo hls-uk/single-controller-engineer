@@ -6006,13 +6006,20 @@ function reduceInternal(
         unit.state !== "integrate_intent" ||
         state.integrationOwnerUnitId !== unit.id ||
         event.baseOid !== unit.baseOid ||
-        event.integrationOid === unit.reviewHeadOid
+        // A moved ref must name a head that is not the reviewed one: a ref
+        // already sitting on the candidate head means the act landed. A
+        // dirty checkout names no head at all; `baseOid` alone binds the
+        // refusal to the unit, because the adapter only names that refusal
+        // from a precondition it read before any act, so nothing landed.
+        (event.reason === "integration_ref_moved" &&
+          event.integrationOid === unit.reviewHeadOid)
       )
         return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "integrate"))
         return badObservation();
       // The approval and its exact pair survive: nothing landed. The unit
-      // waits at the head of the integration queue for a refresh.
+      // waits at the head of the integration queue for a refresh, or for the
+      // same integrate intent once the integration checkout is clean again.
       result = observe(
         state,
         unit,

@@ -461,6 +461,44 @@ test("an oversize candidate refusal carries only a measurement past the bound", 
   assert.equal(validate(ProtocolEventSchema, withoutTree).ok, false);
 });
 
+test("every integrate refusal names its reason and carries only that reason's facts", () => {
+  const base = {
+    eventId: "integrate-refused-1",
+    expectedRevision: 0,
+    unitId: "unit-1",
+    type: "integrate_refused",
+    effectId: "integrate-intent:integrate",
+    effectKind: "integrate",
+    observationHash: HASH,
+    baseOid: OID_A,
+  };
+  const moved = {
+    ...base,
+    reason: "integration_ref_moved",
+    integrationOid: OID_C,
+  };
+  const dirty = { ...base, reason: "integration_checkout_dirty" };
+  assert.equal(validate(ProtocolEventSchema, moved).ok, true);
+  assert.equal(validate(ProtocolEventSchema, dirty).ok, true);
+  // A refusal with no reason is no longer expressible; a moved ref must name
+  // the head it found; and a dirty checkout may not smuggle one, because it
+  // read the ref still on the unit base and has no head to report.
+  for (const invalid of [
+    base,
+    { ...moved, reason: "integration_checkout_dirty" },
+    { ...dirty, integrationOid: OID_C },
+    { ...moved, reason: "git_dirty" },
+    { ...moved, integrationOid: OID_C.slice(0, 39) },
+    { ...dirty, baseOid: undefined },
+    { ...dirty, extra: "nope" },
+  ])
+    assert.equal(
+      validate(ProtocolEventSchema, invalid).ok,
+      false,
+      JSON.stringify(invalid),
+    );
+});
+
 test("runtime effects are strict executable discriminants, not opaque hashes", () => {
   const effect = {
     kind: "dispatch",

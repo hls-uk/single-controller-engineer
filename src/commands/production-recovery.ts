@@ -1250,6 +1250,7 @@ export function createProductionRecoveryEffectAdapter(
             );
             return (
               (await integrationRefused(effect, run, probe, git)) ??
+              integrationCheckoutRefused(effect, run, probe) ??
               discovered(done, probe)
             );
           }
@@ -1259,14 +1260,19 @@ export function createProductionRecoveryEffectAdapter(
             configuredRemote === undefined
           )
             return ambiguous();
-          return discovered(
-            done,
-            await discoverRemoteIntegration(git.runner, git.repository, {
+          const remoteProbe = await discoverRemoteIntegration(
+            git.runner,
+            git.repository,
+            {
               base: effect.params.candidate.baseOid,
               candidate: effect.params.candidate.headOid,
               integrationBranch: effect.params.integrationBranch,
               remote: configuredRemote,
-            }),
+            },
+          );
+          return (
+            integrationCheckoutRefused(effect, run, remoteProbe) ??
+            discovered(done, remoteProbe)
           );
         }
         default:
@@ -1438,6 +1444,7 @@ export function createProductionRecoveryEffectAdapter(
             );
             return (
               (await integrationRefused(effect, run, landed, git)) ??
+              integrationCheckoutRefused(effect, run, landed) ??
               executed(done, landed)
             );
           }
@@ -1447,14 +1454,19 @@ export function createProductionRecoveryEffectAdapter(
             configuredRemote === undefined
           )
             return ambiguous();
-          return executed(
-            done,
-            await integrateRemoteFastForward(git.runner, git.repository, {
+          const pushed = await integrateRemoteFastForward(
+            git.runner,
+            git.repository,
+            {
               base: effect.params.candidate.baseOid,
               candidate: effect.params.candidate.headOid,
               integrationBranch: effect.params.integrationBranch,
               remote: configuredRemote,
-            }),
+            },
+          );
+          return (
+            integrationCheckoutRefused(effect, run, pushed) ??
+            executed(done, pushed)
           );
         }
         default:
@@ -1789,6 +1801,38 @@ async function integrationRefused(
       ...eventBase(effect, run),
       baseOid: effect.params.candidate.baseOid,
       integrationOid,
+      reason: "integration_ref_moved",
+      type: "integrate_refused",
+    } as ProtocolEvent,
+    status: "observed",
+  };
+}
+
+/**
+ * `GIT_DIRTY` from an integration attempt is a precondition the integration
+ * checkout failed, not an unresolved act: every dirty site reads the tree
+ * before it writes anything, and the local profile has already proved the
+ * integration ref sits exactly on the unit base by then. Left to
+ * `executed`/`discovered` it collapses to ambiguous, blocks the unit, and
+ * the following `next` reports the run corrupt. Named here it settles the
+ * effect as `integrate_refused` and returns the unit to approved, so the
+ * controller cleans the checkout and re-issues the same integrate intent
+ * (or refreshes, if the ref moved meanwhile). It is profile-independent by
+ * construction — it reads nothing — so `local-ff` and `remote-ff` route a
+ * dirty checkout identically.
+ */
+function integrationCheckoutRefused(
+  effect: Extract<ProtocolEffect, { kind: "integrate" }>,
+  run: RepositoryRun,
+  result: GitEffect,
+): Extract<ReconcileResult, { status: "observed" }> | undefined {
+  if (result.state !== "refused" || result.code !== "GIT_DIRTY")
+    return undefined;
+  return {
+    observation: {
+      ...eventBase(effect, run),
+      baseOid: effect.params.candidate.baseOid,
+      reason: "integration_checkout_dirty",
       type: "integrate_refused",
     } as ProtocolEvent,
     status: "observed",

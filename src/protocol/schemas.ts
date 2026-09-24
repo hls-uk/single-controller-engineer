@@ -2122,15 +2122,30 @@ export const ProtocolEventSchema = Type.Union([
     type: Type.Literal("integrate_intent"),
     ...effectIntent,
   }),
-  // An exact refusal: the integration ref moved past the unit base and the
-  // candidate is provably not landed. Nothing happened; the unit returns to
-  // approved so the controller can refresh it on the same identity.
+  // Two exact refusals, each naming why nothing landed, so neither can decay
+  // into an unsettled effect. `integration_ref_moved`: the integration ref
+  // moved past the unit base with the candidate provably not beneath it, so
+  // the refusal carries the head it found and the controller refreshes on
+  // the same identity. `integration_checkout_dirty`: the integration
+  // checkout was not in the state a fast-forward requires, read as a
+  // precondition before any act ran, so it carries no head at all and the
+  // controller cleans the checkout and re-issues the same integrate intent.
+  // Both return the unit to approved with its candidate, review, and
+  // approval bindings untouched.
   strictObject({
     ...eventBase,
     type: Type.Literal("integrate_refused"),
     ...observedEffect,
+    reason: Type.Literal("integration_ref_moved"),
     baseOid: oid(),
     integrationOid: oid(),
+  }),
+  strictObject({
+    ...eventBase,
+    type: Type.Literal("integrate_refused"),
+    ...observedEffect,
+    reason: Type.Literal("integration_checkout_dirty"),
+    baseOid: oid(),
   }),
   strictObject({
     ...eventBase,

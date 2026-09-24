@@ -3093,6 +3093,108 @@ test("production recovery resumes a persisted local integration intent once afte
   assert.equal(root.run.effectJournal.at(-1)?.status, "observed");
 });
 
+test("a dirty integration checkout refuses the integrate intent and the next clean pass lands", async () => {
+  const state = integrationIntentRun("local-ff");
+  assert.deepEqual(runInvariantErrors(state), []);
+  let root = makeRootProjection(state);
+  let children = [makeChildProjection(root, "unit-1")!];
+  let head = OID_A;
+  let merges = 0;
+  // A human edit to a tracked file: not a bd passive export, so the
+  // integration tree is dirty and the fast-forward must not run.
+  let porcelain = " M src/index.ts\u0000";
+  const store = {
+    async compareAndSet(batch: MutationBatch) {
+      root = batch.next.root;
+      children = [...batch.next.children];
+      return {
+        affectedRowCount: batch.changedRows.length + 1,
+        checkpoint: batch.checkpoint,
+        children,
+        root,
+        status: "applied" as const,
+      };
+    },
+    async load() {
+      return { status: "observed" as const, value: { children, root } };
+    },
+    async persistControllerAcquireIntent(batch: MutationBatch) {
+      return this.compareAndSet(batch);
+    },
+  };
+  const gitRunner: GitRunner = async ({ argv }) => {
+    const call = argv.join(" ");
+    if (call === "rev-parse --git-common-dir")
+      return { exitCode: 0, signal: null, stdout: ".git\n" };
+    if (call === "rev-parse --show-object-format")
+      return { exitCode: 0, signal: null, stdout: "sha1\n" };
+    if (argv[0] === "config") return { exitCode: 1, signal: null, stdout: "" };
+    if (argv[0] === "for-each-ref")
+      return { exitCode: 0, signal: null, stdout: `${head}\n` };
+    if (argv[0] === "symbolic-ref")
+      return { exitCode: 0, signal: null, stdout: "refs/heads/main\n" };
+    if (argv[0] === "status")
+      return { exitCode: 0, signal: null, stdout: porcelain };
+    if (argv[0] === "merge") {
+      merges += 1;
+      head = OID_B;
+      return { exitCode: 0, signal: null, stdout: "" };
+    }
+    return { exitCode: 1, signal: null, stdout: "" };
+  };
+  const runner = createProductionRecoveryRunner({
+    acquireOperationLock: async () => ({
+      status: "acquired" as const,
+      lock: {
+        async release() {
+          return { status: "released" as const };
+        },
+      },
+    }),
+    git: { repository, runner: gitRunner },
+    nonce: "nonce-integrate-dirty",
+    preOwnership: store,
+    proveTopology: async () => ({
+      commonDir: repository.commonDir,
+      holder: state.controller.holder,
+      scope: {
+        beadsStoreIdentity: state.storeIdentity,
+        gitRepositoryIdentity: repository.identity,
+        integrationBranch: state.integrationBranch,
+      },
+    }),
+    store,
+  });
+
+  // The dirty checkout is a named refusal, not an unresolved act: the intent
+  // settles, no merge runs, and the unit is approved again rather than
+  // blocked behind an ambiguity that the next pass would call corrupt.
+  assert.equal((await runner()).status, "idle");
+  assert.equal(merges, 0);
+  assert.equal(head, OID_A);
+  const refusal = root.run.effectJournal.at(-1)!;
+  assert.equal(refusal.kind, "integrate");
+  assert.equal(refusal.status, "observed");
+  assert.equal(root.run.units["unit-1"]?.state, "approved");
+  assert.equal(root.run.integrationOwnerUnitId, undefined);
+  assert.equal(root.run.units["unit-1"]?.landedOid, undefined);
+  assert.deepEqual(runInvariantErrors(root.run), []);
+  // A repeat pass finds nothing unsettled and never retries the merge blindly.
+  assert.equal((await runner()).status, "idle");
+  assert.equal(merges, 0);
+
+  // The controller cleans the checkout; a bd passive export may still churn.
+  porcelain = " M .beads/interactions.jsonl\u0000";
+  const applied = await runner(event(root.run, "integrate_intent"));
+  assert.equal(applied.status, "applied", JSON.stringify(applied));
+  assert.equal(merges, 1);
+  assert.equal(head, OID_B);
+  assert.equal(root.run.units["unit-1"]?.state, "landed");
+  assert.equal(root.run.units["unit-1"]?.landedOid, OID_B);
+  assert.equal(root.run.effectJournal.at(-1)?.status, "observed");
+  assert.deepEqual(runInvariantErrors(root.run), []);
+});
+
 test("production recovery resumes a persisted remote integration intent with one guarded push", async () => {
   let state = integrationIntentRun("remote-ff");
   assert.deepEqual(runInvariantErrors(state), []);

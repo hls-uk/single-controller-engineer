@@ -1581,7 +1581,8 @@ test("a modified bd passive export never blocks local fast-forward integration; 
   const repo = await actualRepository(cwd);
   await mkdir(join(cwd, ".beads"), { recursive: true });
   await writeFile(join(cwd, ".beads", "interactions.jsonl"), "{}\n");
-  await git(cwd, "add", ".beads/interactions.jsonl");
+  await writeFile(join(cwd, "tracked.txt"), "integration\n");
+  await git(cwd, "add", ".beads/interactions.jsonl", "tracked.txt");
   await git(cwd, "commit", "-m", "audit export");
   const exportBase = (await git(cwd, "rev-parse", "HEAD")).trim();
   await git(cwd, "branch", "unit/ff", exportBase);
@@ -1594,6 +1595,37 @@ test("a modified bd passive export never blocks local fast-forward integration; 
   await git(worktreePath, "add", "unit.txt");
   await git(worktreePath, "commit", "-m", "candidate");
   const candidate = (await git(worktreePath, "rev-parse", "HEAD")).trim();
+  // A tracked modification and an untracked non-passive file each refuse the
+  // fast-forward before any merge runs, so the ref never leaves the base the
+  // approval was bound to. The refusal is the whole act.
+  const stray = join(cwd, "stray.txt");
+  for (const dirty of [
+    async () => {
+      await writeFile(join(cwd, "tracked.txt"), "edited by a human\n");
+      return async () => {
+        await git(cwd, "checkout", "--", "tracked.txt");
+      };
+    },
+    async () => {
+      await writeFile(stray, "untracked\n");
+      return async () => {
+        await rm(stray, { force: true });
+      };
+    },
+  ]) {
+    const restore = await dirty();
+    const refused = await integrateLocalFastForward(nodeGitRunner, repo, {
+      base: exportBase,
+      candidate,
+      integrationRef: "refs/heads/main",
+    });
+    assert.deepEqual(refused, { code: "GIT_DIRTY", state: "refused" });
+    assert.equal(
+      (await git(cwd, "rev-parse", "refs/heads/main")).trim(),
+      exportBase,
+    );
+    await restore();
+  }
   // The audit export churns underneath; the fast-forward still lands.
   await writeFile(join(cwd, ".beads", "interactions.jsonl"), "{}\n{}\n");
   const landed = await integrateLocalFastForward(nodeGitRunner, repo, {
