@@ -71,6 +71,8 @@ import {
   validateSlotTransitionIntent,
 } from "./slot-transition.js";
 import type {
+  EmbeddedAheadRange,
+  EmbeddedAheadRangePort,
   EmbeddedAncestryPort,
   EmbeddedAncestryProof,
   EmbeddedPendingWorkingSet,
@@ -94,6 +96,10 @@ export {
   SLOT_INITIALIZATION_AUTHORITY,
 } from "./pinned-bd-process.js";
 export type {
+  EmbeddedAheadRange,
+  EmbeddedAheadRangePort,
+  EmbeddedAheadRangeRequest,
+  EmbeddedAheadRangeResponse,
   EmbeddedAncestryPort,
   EmbeddedAncestryProof,
   EmbeddedAncestryRequest,
@@ -164,10 +170,12 @@ export type EmbeddedReleaseAuthority = Readonly<{
 
 /**
  * The composition root's process port, plus the optional bounded ancestry
- * proof and pending-delta probe when that process publishes them. A port
- * without either keeps the exact behaviour it had before they existed.
+ * proof, pending-delta probe, and ahead-range probe when that process
+ * publishes them. A port without one keeps the exact behaviour it had before
+ * that probe existed, and never the benefit of a proof it cannot make.
  */
 export type EmbeddedAdapterProcessPort = EmbeddedProcessPort &
+  Partial<EmbeddedAheadRangePort> &
   Partial<EmbeddedAncestryPort> &
   Partial<EmbeddedPendingWorkingSetPort>;
 
@@ -746,7 +754,7 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
             };
       }
     }
-    const prepared = await this.prepareSharedState();
+    const prepared = await this.prepareSharedState(batch);
     if (prepared.result.code !== "applied")
       return this.storeFailure(prepared.result);
     const slot = await this.slot("check");
@@ -1148,6 +1156,8 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     // whose controller has since lost or released the built-in slot.
     const slot = await this.slot("check");
     if (!this.slotAdmitsProjection(slot, next.root)) return undefined;
+    if (!(await this.pendingStepStillProved(loaded, pending, next)))
+      return undefined;
     const durable = await this.durableCheckpoint();
     if (durable.code !== "applied")
       return {
@@ -1161,6 +1171,45 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       same(reread.value.children, next.children)
       ? reread
       : { status: "quarantined" };
+  }
+
+  /**
+   * Re-proves, immediately before the commit, everything the decision to
+   * commit rested on.
+   *
+   * The probe that decoded the delta, the slot check, and this commit are
+   * separate reads of a store another actor shares. `durableCheckpoint()` is
+   * called here without a batch, so its own `before_commit` re-proof is
+   * skipped, and a foreign row written into the working set after the probe
+   * would otherwise ride into the engine's commit unnamed. So the base
+   * projection must still be the one the step was proved from, the head must
+   * still be the commit the probe diffed against, and the working set must
+   * still decode to exactly the proved step. Anything else is refused and
+   * reported, never committed.
+   */
+  private async pendingStepStillProved(
+    loaded: AuthoritativeRunReadback,
+    pending: Extract<EmbeddedPendingWorkingSet, { status: "pending" }>,
+    next: EmbeddedReadback,
+  ): Promise<boolean> {
+    const base = await this.readProjection();
+    if (base.status !== "observed" || !same(base.value, loaded)) return false;
+    const state = await this.state();
+    if (
+      state === undefined ||
+      !state.reachable ||
+      state.workingSet !== "pending" ||
+      state.head !== pending.head
+    )
+      return false;
+    const reproved = await this.pendingWorkingSet();
+    return (
+      reproved !== undefined &&
+      reproved.status === "pending" &&
+      reproved.delta === "projection_step" &&
+      reproved.head === pending.head &&
+      same(reproved.pending, next)
+    );
   }
 
   /**
@@ -1238,6 +1287,10 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
    * everything else is another actor's uncommitted write, which it will
    * neither commit nor discard. The exact commands that settle it ride the
    * diagnostic tail, the one operator-facing channel a store refusal has.
+   *
+   * The database directory is named once, at the front. A tail is published
+   * as its last bounded window, so a long store path repeated after the
+   * commands would be exactly what pushed them out of it.
    */
   private pendingWorkingSetRefusal(): RunStoreResult {
     const directory = this.process.identity.databaseDirectory;
@@ -1246,7 +1299,7 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
         ? '"bd dolt commit" then "bd dolt push"'
         : '"bd dolt commit"';
     const tail = redactedStderrTail(
-      `The Dolt working set in ${directory} holds an uncommitted change this engine cannot prove is its own, so it will neither commit nor discard it. Run ${keep} from the repository root to keep it, or "dolt reset --hard" in ${directory} to discard it, then re-run this command.`,
+      `The Dolt working set in ${directory} holds an uncommitted change this engine cannot prove is its own, so it will neither commit nor discard it. Run "dolt reset --hard" in that directory to discard it, or ${keep} from the repository root to keep it, then re-run this command.`,
       false,
     );
     return {
@@ -1661,7 +1714,13 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
       : result("worker_mutation");
   }
 
-  private async prepareSharedState(): Promise<
+  /**
+   * `batch` is the write this preparation serves. Only a caller that holds
+   * one can publish an unpublished local range, because only that caller can
+   * be admitted by the built-in slot; a pre-ownership caller passes none and
+   * the pull stays the only thing that moves its head.
+   */
+  private async prepareSharedState(batch?: MutationBatch): Promise<
     Readonly<{
       result: EmbeddedResult;
       state?: EmbeddedState;
@@ -1673,14 +1732,20 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     if (before.workingSet !== "clean") return { result: result("blocked") };
     if (this.mode === "local-only")
       return { result: result("applied"), state: before };
-    const reconciled = await this.reconcileAheadOfRemote(before);
-    if (reconciled !== undefined) return { result: reconciled };
+    const reconciled =
+      batch === undefined
+        ? {}
+        : await this.reconcileAheadOfRemote(before, batch);
+    if (reconciled.refusal !== undefined) return { result: reconciled.refusal };
     const pull = await this.call({ kind: "pull" });
     if (pull?.kind !== "pull") return { result: result("ambiguous") };
-    if (pull.value === "conflict")
-      return { result: result("conflict", pull.stderrTail) };
     if (pull.value !== "applied")
-      return { result: result(pull.value, pull.stderrTail) };
+      return {
+        result: result(
+          pull.value,
+          this.carriedTail(reconciled.pushTail, pull.stderrTail),
+        ),
+      };
     const after = await this.state();
     return after === undefined || !after.reachable
       ? { result: result("unavailable") }
@@ -1694,16 +1759,29 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
    * durable leaves this clone strictly ahead of the remote. A pull cannot
    * fast-forward that, so it answers `conflict` and every later command
    * refuses until an operator runs `bd dolt push` by hand. Where the remote
-   * head is provably an ancestor of the durable local head, the engine
-   * performs exactly that push itself -- same path, same budget, same
+   * head is provably an ancestor of the durable local head, and the range
+   * between them is provably this engine's own projection movement, the
+   * engine performs exactly that push itself -- same path, same budget, same
    * observation -- immediately before the pull, and only then.
    *
-   * `undefined` means the pull decides, exactly as it always has. A refusal
-   * is returned only for a re-push whose outcome the pull cannot re-describe.
+   * Ancestry alone is not enough. An operator's own `bd` write on this clone
+   * auto-commits, and is then just as much a clean local descendant of the
+   * remote head; pushing it would publish, under this batch's intent, a
+   * change the intent does not describe. So the range must also be proved
+   * engine-shaped, and the built-in slot must admit this batch first, exactly
+   * as it must before the exact-batch push a step below.
+   *
+   * An empty answer means the pull decides, exactly as it always has,
+   * optionally carrying the tail of a re-push the remote refused. A refusal
+   * is returned for a re-push whose outcome the pull cannot re-describe, and
+   * for a range this engine will not publish at all.
    */
   private async reconcileAheadOfRemote(
     state: EmbeddedState,
-  ): Promise<EmbeddedResult | undefined> {
+    batch: MutationBatch,
+  ): Promise<
+    Readonly<{ pushTail?: RemoteFailureTail; refusal?: EmbeddedResult }>
+  > {
     if (
       !head(state.head) ||
       !head(state.remoteHead) ||
@@ -1712,15 +1790,102 @@ export class EmbeddedBeadsAdapter implements RunStorePort {
     )
       // Behind, diverged, and unprovable all keep today's classification: the
       // pull stays the only thing allowed to move this clone's head.
-      return undefined;
+      return {};
+    if (
+      (await this.aheadRange(state.remoteHead, state.head)) !== "engine_delta"
+    )
+      return { refusal: this.aheadOfRemoteRefusal() };
+    // A replacement process must not publish a previously written range after
+    // its controller lost or released the built-in slot. This check is
+    // deliberately before the push, as it is on the exact-batch path.
+    const slot = await this.slot("check");
+    if (!this.slotAdmitsBatch(slot, batch))
+      return { refusal: result("holder_mismatch") };
     const push = await this.call({ kind: "push" });
-    if (push?.kind !== "push") return result("ambiguous");
+    if (push?.kind !== "push") return { refusal: result("ambiguous") };
     // One attempt, never a loop. A push that exceeded its budget refuses with
     // its tail; a push the remote refused falls through to the pull, which
-    // re-reads the remote and classifies it authoritatively.
-    return push.value === "applied" || push.value === "conflict"
-      ? undefined
-      : result(push.value, push.stderrTail);
+    // re-reads the remote and classifies it authoritatively -- carrying this
+    // push's tail, because the pull's own conflict cannot name that cause.
+    if (push.value === "applied") return {};
+    return push.value === "conflict"
+      ? {
+          ...(push.stderrTail === undefined
+            ? {}
+            : { pushTail: push.stderrTail }),
+        }
+      : { refusal: result(push.value, push.stderrTail) };
+  }
+
+  /**
+   * A refusal an operator can act on, on the one channel a store refusal has.
+   * The engine publishes an unpublished local range only where it can prove
+   * the range is its own projection movement; anything else is somebody
+   * else's commit, which it will not push under this batch's intent. The
+   * database directory is named once, before the command, so the tail's byte
+   * cut can never be what drops `bd dolt push` out of the advice.
+   */
+  private aheadOfRemoteRefusal(): EmbeddedResult {
+    return result(
+      "conflict",
+      redactedStderrTail(
+        `The Dolt clone in ${this.process.identity.databaseDirectory} holds a committed change ahead of its remote that this engine cannot prove it wrote, so it will not push it. Run "bd dolt push" from the repository root to publish it, then re-run this command.`,
+        false,
+      ),
+    );
+  }
+
+  /**
+   * Publishes both halves of a remote refusal on the single tail channel. The
+   * re-push is the cause and the pull that follows only re-describes it, so
+   * the cause goes last: a tail is published as its final bounded window, and
+   * the cut can then only ever drop the downstream half.
+   */
+  private carriedTail(
+    push: RemoteFailureTail | undefined,
+    pull: RemoteFailureTail | undefined,
+  ): RemoteFailureTail | undefined {
+    if (push === undefined) return pull;
+    if (pull === undefined) return push;
+    return (
+      redactedStderrTail(
+        `${pull.text}\n${push.text}`,
+        pull.truncated || push.truncated,
+      ) ?? push
+    );
+  }
+
+  /**
+   * The port's bounded ahead-range probe, when it publishes one. The answer
+   * crosses the process trust boundary, so only the exact two-key shape
+   * carrying one of the three classifications is admitted; everything else,
+   * including a throwing or absent probe, is `unavailable` and proves
+   * nothing, which admits no push.
+   */
+  private async aheadRange(
+    remoteHead: string,
+    localHead: string,
+  ): Promise<EmbeddedAheadRange> {
+    if (this.process.aheadRange === undefined) return "unavailable";
+    let response: unknown;
+    try {
+      response = await this.process.aheadRange({
+        head: localHead,
+        kind: "ahead_range",
+        remoteHead,
+      });
+    } catch {
+      return "unavailable";
+    }
+    const value = object(response);
+    return value !== undefined &&
+      Object.keys(value).length === 2 &&
+      value.kind === "ahead_range" &&
+      (value.value === "engine_delta" ||
+        value.value === "foreign" ||
+        value.value === "unavailable")
+      ? value.value
+      : "unavailable";
   }
 
   /**

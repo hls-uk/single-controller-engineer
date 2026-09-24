@@ -212,6 +212,49 @@ export interface EmbeddedPendingWorkingSetPort {
   ): Promise<EmbeddedPendingWorkingSetResponse>;
 }
 
+/**
+ * What the commits this clone holds beyond its remote actually moved. Like
+ * the two probes above it is read-only, costs no network, and is deliberately
+ * not an `EmbeddedRequest`.
+ *
+ * Both hashes are closed inputs; the caller proves the ancestry relation
+ * first, so this asks only what the proved range contains.
+ */
+export type EmbeddedAheadRangeRequest = Readonly<{
+  /** The durable local head whose unpublished range is classified. */
+  head: string;
+  kind: "ahead_range";
+  /** The remote head the range is measured from, already proved an ancestor. */
+  remoteHead: string;
+}>;
+
+/**
+ * `engine_delta` proves the whole range moved exactly the projection rows
+ * this engine writes -- the root plus each child whose commitment moved, in
+ * the issues table, in their `sce` envelope alone -- and nothing else. Any
+ * other row, table, column, insert, or deletion in the range is `foreign`: an
+ * operator's own uncommitted-then-committed `bd` write is the ordinary case.
+ * `unavailable` is an unreadable, over-budget, or uncapable probe and proves
+ * nothing either way.
+ */
+export type EmbeddedAheadRange = "engine_delta" | "foreign" | "unavailable";
+
+export type EmbeddedAheadRangeResponse = Readonly<{
+  kind: "ahead_range";
+  value: EmbeddedAheadRange;
+}>;
+
+/**
+ * The optional ahead-range probe. It classifies; it never publishes. Deciding
+ * to push the range belongs to the adapter, which alone holds the slot and
+ * holder authority that makes a push legal.
+ */
+export interface EmbeddedAheadRangePort {
+  aheadRange(
+    request: EmbeddedAheadRangeRequest,
+  ): Promise<EmbeddedAheadRangeResponse>;
+}
+
 export const SLOT_INITIALIZATION_AUTHORITY =
   "sce.embedded.slot.initialize.v1" as const;
 export type SlotInitializationAuthority = typeof SLOT_INITIALIZATION_AUTHORITY;
@@ -1011,7 +1054,11 @@ function parseRemoteSlotDocument(
  * has no atomic generic "write these arbitrary metadata rows" command.
  */
 export class PinnedBdEmbeddedProcess
-  implements EmbeddedProcessPort, EmbeddedAncestryPort
+  implements
+    EmbeddedProcessPort,
+    EmbeddedAheadRangePort,
+    EmbeddedAncestryPort,
+    EmbeddedPendingWorkingSetPort
 {
   public readonly identity: EmbeddedProcessIdentity;
   private readonly bdExecutable: string;
@@ -1128,6 +1175,63 @@ export class PinnedBdEmbeddedProcess
       kind: "pending_working_set",
       value: await this.decodePendingWorkingSet(),
     };
+  }
+
+  /**
+   * Reads, and only reads, what the unpublished commits moved. The same
+   * validated reader loads the projection each end of the range holds, and
+   * `dolt diff --data` between the two commits is proved to be exactly the
+   * row movement between them -- the identical completeness proof the pending
+   * probe applies to the working set, applied to a committed range instead.
+   * A commit anyone else made inside that range moved a row, a column, or a
+   * table this engine never writes, so the range stops being engine-shaped
+   * and nothing here can make it so again.
+   */
+  public async aheadRange(
+    request: EmbeddedAheadRangeRequest,
+  ): Promise<EmbeddedAheadRangeResponse> {
+    return {
+      kind: "ahead_range",
+      value: await this.classifyAheadRange(request.remoteHead, request.head),
+    };
+  }
+
+  private async classifyAheadRange(
+    remoteHead: string,
+    head: string,
+  ): Promise<EmbeddedAheadRange> {
+    const load = this.projections.load;
+    const matches = this.projections.matchesProjectionStepDelta;
+    if (
+      load === undefined ||
+      matches === undefined ||
+      safeHead(remoteHead) === undefined ||
+      safeHead(head) === undefined ||
+      remoteHead === head
+    )
+      return "unavailable";
+    const published = await load.call(this.projections, remoteHead);
+    const local = await load.call(this.projections, head);
+    if (published.status !== "observed" || local.status !== "observed")
+      return "unavailable";
+    const diff = await this.runDolt(this.databaseDirectory, [
+      "diff",
+      "--data",
+      "-r",
+      "json",
+      remoteHead,
+      head,
+    ]);
+    if (diff === undefined || diff.code !== 0 || diff.exceeded)
+      return "unavailable";
+    return matches.call(
+      this.projections,
+      published.value,
+      local.value,
+      diff.stdout,
+    )
+      ? "engine_delta"
+      : "foreign";
   }
 
   private async decodePendingWorkingSet(): Promise<EmbeddedPendingWorkingSet> {

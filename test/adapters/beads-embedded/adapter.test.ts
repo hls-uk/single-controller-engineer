@@ -18,6 +18,9 @@ import {
   EmbeddedBeadsAdapter,
   EmbeddedResultSchema,
   type EmbeddedAdapterProcessPort,
+  type EmbeddedAheadRange,
+  type EmbeddedAheadRangeRequest,
+  type EmbeddedAheadRangeResponse,
   type EmbeddedAncestryProof,
   type EmbeddedAncestryRequest,
   type EmbeddedAncestryResponse,
@@ -29,6 +32,8 @@ import {
   type EmbeddedRequest,
   type EmbeddedResponse,
   type EmbeddedState,
+  type SlotTransitionIntent,
+  makeSlotTransitionIntent,
   parsePinnedBdState,
   redactedStderrTail,
 } from "../../../src/adapters/beads-embedded/index.js";
@@ -117,7 +122,10 @@ function processIdentity(sync: boolean): EmbeddedProcessIdentity {
 
 class ScriptedPort implements EmbeddedProcessPort {
   public readonly requests: (
-    EmbeddedRequest | EmbeddedAncestryRequest | EmbeddedPendingWorkingSetRequest
+    | EmbeddedRequest
+    | EmbeddedAheadRangeRequest
+    | EmbeddedAncestryRequest
+    | EmbeddedPendingWorkingSetRequest
   )[] = [];
   public identity: EmbeddedProcessIdentity;
   /**
@@ -135,15 +143,25 @@ class ScriptedPort implements EmbeddedProcessPort {
   public pendingWorkingSet?: (
     request: EmbeddedPendingWorkingSetRequest,
   ) => Promise<EmbeddedPendingWorkingSetResponse>;
+  /**
+   * The ahead-range classification is the same kind of optional capability,
+   * so a port that scripts none exercises a process that can never prove an
+   * unpublished range is the engine's own.
+   */
+  public aheadRange?: (
+    request: EmbeddedAheadRangeRequest,
+  ) => Promise<EmbeddedAheadRangeResponse>;
   private responseIndex = 0;
   private proofIndex = 0;
   private pendingIndex = 0;
+  private rangeIndex = 0;
 
   public constructor(
     private readonly responses: readonly EmbeddedResponse[],
     identity = processIdentity(false),
     proofs?: readonly EmbeddedAncestryProof[],
     pending?: readonly EmbeddedPendingWorkingSet[],
+    ranges?: readonly EmbeddedAheadRange[],
   ) {
     this.identity = identity;
     if (proofs !== undefined)
@@ -159,6 +177,13 @@ class ScriptedPort implements EmbeddedProcessPort {
         const value = pending[this.pendingIndex++];
         if (value === undefined) throw new Error("unexpected pending probe");
         return { kind: "pending_working_set", value };
+      };
+    if (ranges !== undefined)
+      this.aheadRange = async (request) => {
+        this.requests.push(request);
+        const value = ranges[this.rangeIndex++];
+        if (value === undefined) throw new Error("unexpected range probe");
+        return { kind: "ahead_range", value };
       };
   }
   public async execute(request: EmbeddedRequest): Promise<EmbeddedResponse> {
@@ -195,17 +220,18 @@ function adapter(
   });
 }
 
-function journalBatch(
+/** The unacquired run a pre-ownership acquire intent is written over. */
+function journalBase(
   options: {
     holder?: string;
     scope?: FencingScope;
   } = {},
-): MutationBatch {
+) {
   const base = fixtureRun([]);
   const expectedScope = options.scope ?? scope;
   const expectedHolder = options.holder ?? holder;
   const [runId, incarnationId] = expectedHolder.split("/");
-  const initial = {
+  return {
     ...base,
     controller: {
       ...base.controller,
@@ -219,6 +245,17 @@ function journalBatch(
     storeIdentity: expectedScope.beadsStoreIdentity,
     state: "initializing" as const,
   };
+}
+
+function journalBatch(
+  options: {
+    holder?: string;
+    scope?: FencingScope;
+    /** Journalled alongside the intent; a pre-ownership write requires it. */
+    slotTransition?: SlotTransitionIntent;
+  } = {},
+): MutationBatch {
+  const initial = journalBase(options);
   const transition = reduce(initial, {
     eventId: "controller-acquire",
     expectedRevision: initial.revision,
@@ -228,6 +265,9 @@ function journalBatch(
       null,
       "controller_acquire",
     ),
+    ...(options.slotTransition === undefined
+      ? {}
+      : { slotTransition: options.slotTransition }),
     type: "controller_acquire_intent",
   });
   assert.equal(transition.ok, true);
@@ -620,6 +660,7 @@ const aheadState: EmbeddedState = {
 /** The clean local-ahead store a timed-out push leaves behind, twice read. */
 function aheadPort(
   proofs: readonly EmbeddedAncestryProof[],
+  ranges: readonly EmbeddedAheadRange[] | undefined,
   ...tail: readonly EmbeddedResponse[]
 ): ScriptedPort {
   return new ScriptedPort(
@@ -633,6 +674,8 @@ function aheadPort(
     ],
     processIdentity(true),
     proofs,
+    undefined,
+    ranges,
   );
 }
 
@@ -648,6 +691,8 @@ function aheadPort(
 test("git-sync re-pushes a proved local-ahead head before the pull", async () => {
   const port = aheadPort(
     ["observed"],
+    ["engine_delta"],
+    { kind: "slot", value: slot("acquired", holder) },
     { kind: "push", value: "applied" },
     { kind: "pull", value: "applied" },
     {
@@ -668,6 +713,8 @@ test("git-sync re-pushes a proved local-ahead head before the pull", async () =>
       "discover",
       "state",
       "ancestry",
+      "ahead_range",
+      "slot",
       "push",
       "pull",
       "state",
@@ -675,11 +722,17 @@ test("git-sync re-pushes a proved local-ahead head before the pull", async () =>
       "mutation",
     ],
   );
-  // The probe asks exactly one question: is the remote head reachable from
-  // the durable local head? Nothing else can admit the push.
+  // The ancestry probe asks exactly one question: is the remote head
+  // reachable from the durable local head? The range probe asks the other
+  // one: is everything in that range this engine's own projection movement?
+  // Neither alone admits the push.
   assert.deepEqual(
     port.requests.find((request) => request.kind === "ancestry"),
     { ancestor: AHEAD_REMOTE, descendant: AHEAD_LOCAL, kind: "ancestry" },
+  );
+  assert.deepEqual(
+    port.requests.find((request) => request.kind === "ahead_range"),
+    { head: AHEAD_LOCAL, kind: "ahead_range", remoteHead: AHEAD_REMOTE },
   );
 });
 
@@ -689,7 +742,10 @@ test("git-sync re-pushes a proved local-ahead head before the pull", async () =>
  * it, exactly as before.
  */
 test("git-sync keeps the pull's conflict when local-ahead is not proved", async () => {
-  const port = aheadPort(["absent"], { kind: "pull", value: "conflict" });
+  const port = aheadPort(["absent"], undefined, {
+    kind: "pull",
+    value: "conflict",
+  });
   assert.deepEqual(
     await adapter(port, "git-sync").compareAndSet(journalBatch()),
     { status: "ambiguous" },
@@ -712,18 +768,178 @@ test("a re-push over its budget refuses with its tail and is never retried", asy
     false,
   );
   assert.ok(stderrTail !== undefined);
-  const port = aheadPort(["observed"], {
-    kind: "push",
-    stderrTail,
-    value: "unavailable",
-  });
+  const port = aheadPort(
+    ["observed"],
+    ["engine_delta"],
+    { kind: "slot", value: slot("acquired", holder) },
+    { kind: "push", stderrTail, value: "unavailable" },
+  );
   assert.deepEqual(
     await adapter(port, "git-sync").compareAndSet(journalBatch()),
     { status: "unavailable", stderrTail },
   );
   assert.deepEqual(
     port.requests.map((request) => request.kind),
-    ["state", "discover", "state", "ancestry", "push"],
+    ["state", "discover", "state", "ancestry", "ahead_range", "slot", "push"],
+  );
+});
+
+/**
+ * Ancestry proves only that the range can be fast-forwarded, never who wrote
+ * it. An operator's own `bd` write on this clone auto-commits and is just as
+ * clean a descendant of the remote head, so pushing on ancestry alone would
+ * publish, under this batch's intent, a change the intent does not describe.
+ * A range that is not provably the engine's own projection movement -- and a
+ * process that cannot classify one at all -- is refused by name instead.
+ */
+test("a local-ahead range this engine cannot prove it wrote is never pushed", async () => {
+  for (const ranges of [
+    ["foreign"] as const,
+    ["unavailable"] as const,
+    undefined,
+  ]) {
+    const port = aheadPort(["observed"], ranges);
+    const refused = await adapter(port, "git-sync").compareAndSet(
+      journalBatch(),
+    );
+    assert.equal(
+      refused.status,
+      "ambiguous",
+      `${ranges?.[0] ?? "uncapable"} must refuse the range`,
+    );
+    assert.equal(
+      refused.stderrTail?.text.includes('"bd dolt push"'),
+      true,
+      `the refusal must name the command that publishes it: ${refused.stderrTail?.text}`,
+    );
+    assert.deepEqual(
+      port.requests.map((request) => request.kind),
+      ranges === undefined
+        ? ["state", "discover", "state", "ancestry"]
+        : ["state", "discover", "state", "ancestry", "ahead_range"],
+      `${ranges?.[0] ?? "uncapable"} must stop at the probe`,
+    );
+  }
+});
+
+/**
+ * The generic re-push carries the same slot authority as the exact-batch push
+ * a step below it: a replacement process must not publish a previously
+ * written range after its controller lost or released the built-in slot, and
+ * the check stays in front of the push it would otherwise perform.
+ */
+test("a proved local-ahead range is not pushed once the slot stops admitting the batch", async () => {
+  for (const held of [
+    slot("acquired", "run-2/incarnation-1"),
+    slot("available"),
+  ]) {
+    const port = aheadPort(["observed"], ["engine_delta"], {
+      kind: "slot",
+      value: held,
+    });
+    assert.deepEqual(
+      await adapter(port, "git-sync").compareAndSet(journalBatch()),
+      { status: "holder_mismatch" },
+    );
+    assert.deepEqual(
+      port.requests.map((request) => request.kind),
+      ["state", "discover", "state", "ancestry", "ahead_range", "slot"],
+    );
+  }
+});
+
+/**
+ * A re-push the remote refuses falls through to the pull, which classifies
+ * the remote authoritatively -- and then answers `conflict` in its own words,
+ * which never name the push that was refused. The cause rides along, last, so
+ * the tail's byte cut can only ever drop the pull's half of it.
+ */
+test("a re-push the remote refuses carries its tail through the pull's conflict", async () => {
+  const pushTail = redactedStderrTail(
+    "error: push refused: remote has diverged",
+    false,
+  );
+  const pullTail = redactedStderrTail(
+    "error: pull failed: cannot fast-forward a local-ahead head",
+    false,
+  );
+  assert.notEqual(pushTail, undefined);
+  assert.notEqual(pullTail, undefined);
+  if (pushTail === undefined || pullTail === undefined)
+    throw new Error("unreachable");
+  const port = aheadPort(
+    ["observed"],
+    ["engine_delta"],
+    { kind: "slot", value: slot("acquired", holder) },
+    { kind: "push", stderrTail: pushTail, value: "conflict" },
+    { kind: "pull", stderrTail: pullTail, value: "conflict" },
+  );
+  const refused = await adapter(port, "git-sync").compareAndSet(journalBatch());
+  assert.equal(refused.status, "ambiguous");
+  assert.equal(
+    refused.stderrTail?.text,
+    `${pullTail.text}\n${pushTail.text}`,
+    "both halves of the refusal must reach the store result",
+  );
+  assert.deepEqual(
+    port.requests.map((request) => request.kind),
+    [
+      "state",
+      "discover",
+      "state",
+      "ancestry",
+      "ahead_range",
+      "slot",
+      "push",
+      "pull",
+    ],
+  );
+});
+
+/**
+ * A pre-ownership acquire holds no slot and carries no batch that could name
+ * an unpublished range, so it may not publish one. The pull stays the only
+ * thing that moves its head, exactly as before this reconciliation existed.
+ */
+test("a pre-ownership acquire intent never probes or publishes a local-ahead range", async () => {
+  const port = new ScriptedPort(
+    [
+      {
+        kind: "load",
+        value: {
+          status: "observed",
+          value: { children: [], root: makeRootProjection(journalBase()) },
+        },
+      },
+      { kind: "state", value: aheadState },
+      { kind: "pull", value: "conflict" },
+    ],
+    processIdentity(true),
+    ["observed"],
+    undefined,
+    ["engine_delta"],
+  );
+  assert.deepEqual(
+    await adapter(port, "git-sync").persistControllerAcquireIntent(
+      journalBatch({
+        slotTransition: makeSlotTransitionIntent(
+          "acquire",
+          holder,
+          scope,
+          {
+            head: AHEAD_REMOTE,
+            remoteHead: AHEAD_REMOTE,
+            slot: slot("available"),
+          },
+          slot("acquired", holder),
+        ),
+      }),
+    ),
+    { status: "ambiguous" },
+  );
+  assert.deepEqual(
+    port.requests.map((request) => request.kind),
+    ["load", "state", "pull"],
   );
 });
 
@@ -1222,10 +1438,20 @@ function storeState(
  */
 test("an interrupted intent batch left in the working set is settled by the next load", async () => {
   const step = revisionStep();
+  const proved = {
+    delta: "projection_step" as const,
+    head: interruptedHead,
+    pending: step.next,
+    status: "pending" as const,
+  };
   const port = new ScriptedPort(
     [
       { kind: "load", value: { status: "observed", value: step.head } },
       { kind: "slot", value: slot("acquired", holder) },
+      // The re-proof immediately before the commit: the same base, the same
+      // head, and the same decoded step.
+      { kind: "load", value: { status: "observed", value: step.head } },
+      storeState("pending", interruptedHead),
       storeState("pending", interruptedHead),
       { kind: "commit", value: "applied" },
       storeState("clean", settledHead),
@@ -1233,14 +1459,7 @@ test("an interrupted intent batch left in the working set is settled by the next
     ],
     processIdentity(false),
     undefined,
-    [
-      {
-        delta: "projection_step",
-        head: interruptedHead,
-        pending: step.next,
-        status: "pending",
-      },
-    ],
+    [proved, proved],
   );
   const loaded = await adapter(port, "local-only").load();
   assert.equal(loaded.status, "observed", "the settled revision must load");
@@ -1257,7 +1476,18 @@ test("an interrupted intent batch left in the working set is settled by the next
   );
   assert.deepEqual(
     port.requests.map((request) => request.kind),
-    ["load", "pending_working_set", "slot", "state", "commit", "state", "load"],
+    [
+      "load",
+      "pending_working_set",
+      "slot",
+      "load",
+      "state",
+      "pending_working_set",
+      "state",
+      "commit",
+      "state",
+      "load",
+    ],
   );
 });
 
@@ -1270,10 +1500,20 @@ test("an interrupted intent batch left in the working set is settled by the next
  */
 test("an unprovable or unfenced pending working set is reported, never committed", async () => {
   const step = revisionStep();
-  for (const [delta, currentSlot] of [
-    ["unproven", slot("acquired", holder)],
-    ["projection_step", slot("acquired", "run-2/incarnation-1")],
-    ["projection_step", slot("available")],
+  for (const [delta, currentSlot, trace] of [
+    // An unproven delta is refused by the probe alone: the slot is never even
+    // asked about a write the engine already knows it will not make.
+    ["unproven", slot("acquired", holder), ["load", "pending_working_set"]],
+    [
+      "projection_step",
+      slot("acquired", "run-2/incarnation-1"),
+      ["load", "pending_working_set", "slot"],
+    ],
+    [
+      "projection_step",
+      slot("available"),
+      ["load", "pending_working_set", "slot"],
+    ],
   ] as const) {
     const port = new ScriptedPort(
       [
@@ -1304,12 +1544,183 @@ test("an unprovable or unfenced pending working set is reported, never committed
       },
       `${delta} must report the pending working set`,
     );
-    assert.equal(
-      port.requests.some((request) => request.kind === "commit"),
-      false,
+    assert.deepEqual(
+      port.requests.map((request) => request.kind),
+      trace,
       `${delta} must never commit another actor's write`,
     );
   }
+});
+
+/**
+ * The probe that decodes the delta and the commit that settles it are
+ * separate reads of a store another actor shares. A foreign row written into
+ * the working set between them would ride into this engine's commit under an
+ * intent that does not describe it, and the checkpoint here carries no batch,
+ * so its own before-commit re-proof is skipped. Everything the decision
+ * rested on is therefore proved once more, immediately before the commit.
+ */
+test("a pending step that stops agreeing between probe and commit is never committed", async () => {
+  const step = revisionStep();
+  const proved = {
+    delta: "projection_step" as const,
+    head: interruptedHead,
+    pending: step.next,
+    status: "pending" as const,
+  };
+  for (const [moved, responses, reproved, trace] of [
+    [
+      "the base projection",
+      [{ kind: "load", value: { status: "observed", value: step.next } }],
+      [],
+      ["load", "pending_working_set", "slot", "load"],
+    ],
+    [
+      "the committed head",
+      [
+        { kind: "load", value: { status: "observed", value: step.head } },
+        storeState("pending", settledHead),
+      ],
+      [],
+      ["load", "pending_working_set", "slot", "load", "state"],
+    ],
+    [
+      "the working set",
+      [
+        { kind: "load", value: { status: "observed", value: step.head } },
+        storeState("pending", interruptedHead),
+      ],
+      [{ ...proved, delta: "unproven" as const }],
+      [
+        "load",
+        "pending_working_set",
+        "slot",
+        "load",
+        "state",
+        "pending_working_set",
+      ],
+    ],
+  ] as const) {
+    const port = new ScriptedPort(
+      [
+        { kind: "load", value: { status: "observed", value: step.head } },
+        { kind: "slot", value: slot("acquired", holder) },
+        ...(responses as readonly EmbeddedResponse[]),
+      ],
+      processIdentity(false),
+      undefined,
+      [proved, ...reproved],
+    );
+    const loaded = await adapter(port, "local-only").load();
+    assert.equal(loaded.status, "observed", `${moved} must still load`);
+    if (loaded.status !== "observed") throw new Error("unreachable");
+    assert.deepEqual(
+      loaded.pending,
+      {
+        head: interruptedHead,
+        headRevision: step.head.root.aggregateRevision,
+        workingSet: "pending",
+        workingSetRevision: step.next.root.aggregateRevision,
+      },
+      `${moved} must report the pending working set instead`,
+    );
+    assert.deepEqual(
+      port.requests.map((request) => request.kind),
+      trace,
+      `${moved} must stop before the commit`,
+    );
+  }
+});
+
+/**
+ * The two halves of this unit meet on one store. A settle whose commit lands
+ * and whose push does not leaves the clone exactly one engine-authored commit
+ * ahead of its remote -- the failure the local-ahead reconciliation exists
+ * for -- so the next command proves that range its own and publishes it,
+ * rather than refusing until an operator pushes by hand.
+ */
+test("a settled step whose push failed is published by the next command's re-push", async () => {
+  const step = revisionStep();
+  const proved = {
+    delta: "projection_step" as const,
+    head: interruptedHead,
+    pending: step.next,
+    status: "pending" as const,
+  };
+  const pending: EmbeddedState = {
+    autoCommit: "off",
+    head: interruptedHead,
+    reachable: true,
+    remoteHead: interruptedHead,
+    workingSet: "pending",
+  };
+  const ahead: EmbeddedState = {
+    autoCommit: "off",
+    head: settledHead,
+    reachable: true,
+    remoteHead: interruptedHead,
+    workingSet: "clean",
+  };
+  const port = new ScriptedPort(
+    [
+      { kind: "load", value: { status: "observed", value: step.head } },
+      { kind: "slot", value: slot("acquired", holder) },
+      { kind: "load", value: { status: "observed", value: step.head } },
+      { kind: "state", value: pending },
+      { kind: "state", value: pending },
+      { kind: "commit", value: "applied" },
+      { kind: "state", value: ahead },
+      { kind: "push", value: "conflict" },
+      { kind: "state", value: ahead },
+      { kind: "discover", value: { status: "absent" } },
+      { kind: "state", value: ahead },
+      { kind: "slot", value: slot("acquired", holder) },
+      { kind: "push", value: "applied" },
+      { kind: "pull", value: "applied" },
+      { kind: "state", value: { ...ahead, remoteHead: settledHead } },
+      { kind: "slot", value: slot("acquired", holder) },
+      { kind: "mutation", value: "unavailable" },
+    ],
+    processIdentity(true),
+    ["observed"],
+    [proved, proved],
+    ["engine_delta"],
+  );
+  const runtime = adapter(port, "git-sync");
+  assert.deepEqual(
+    await runtime.load(),
+    { status: "ambiguous" },
+    "a commit whose push failed cannot be served as a durable load",
+  );
+  assert.deepEqual(await runtime.compareAndSet(journalBatch()), {
+    status: "unavailable",
+  });
+  assert.deepEqual(
+    port.requests.map((request) => request.kind),
+    [
+      "load",
+      "pending_working_set",
+      "slot",
+      "load",
+      "state",
+      "pending_working_set",
+      "state",
+      "commit",
+      "state",
+      "push",
+      "state",
+      "discover",
+      "state",
+      "ancestry",
+      "ahead_range",
+      "slot",
+      "push",
+      "pull",
+      "state",
+      "slot",
+      "mutation",
+    ],
+  );
 });
 
 test("pending exact-batch recovery rechecks the durable controller holder before commit", async () => {

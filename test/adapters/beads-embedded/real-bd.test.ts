@@ -8,7 +8,10 @@ import test from "node:test";
 import {
   DoltProjectionPersistence,
   EmbeddedBeadsAdapter,
-  type EmbeddedProcessPort,
+  type EmbeddedAdapterProcessPort,
+  type EmbeddedAheadRangeRequest,
+  type EmbeddedAncestryRequest,
+  type EmbeddedPendingWorkingSetRequest,
   type EmbeddedRequest,
   type EmbeddedResponse,
   PinnedBdEmbeddedProcess,
@@ -46,12 +49,49 @@ async function json(cwd: string, args: readonly string[]) {
   return JSON.parse(stdout) as unknown;
 }
 
-class RecordingProcess implements EmbeddedProcessPort {
-  public readonly requests: EmbeddedRequest[] = [];
+/**
+ * The recorder forwards every optional capability the wrapped process
+ * publishes. A recorder that quietly dropped one would make the real fixture
+ * exercise a weaker port than production composes, and the paths those probes
+ * admit -- settling a pending delta, publishing an unpublished range -- would
+ * never run here at all.
+ */
+class RecordingProcess implements EmbeddedAdapterProcessPort {
+  public readonly requests: (
+    | EmbeddedRequest
+    | EmbeddedAheadRangeRequest
+    | EmbeddedAncestryRequest
+    | EmbeddedPendingWorkingSetRequest
+  )[] = [];
   public readonly identity;
+  public readonly aheadRange?: NonNullable<
+    EmbeddedAdapterProcessPort["aheadRange"]
+  >;
+  public readonly ancestry?: NonNullable<
+    EmbeddedAdapterProcessPort["ancestry"]
+  >;
+  public readonly pendingWorkingSet?: NonNullable<
+    EmbeddedAdapterProcessPort["pendingWorkingSet"]
+  >;
 
-  public constructor(private readonly delegate: EmbeddedProcessPort) {
+  public constructor(private readonly delegate: EmbeddedAdapterProcessPort) {
     this.identity = delegate.identity;
+    const { aheadRange, ancestry, pendingWorkingSet } = delegate;
+    if (aheadRange !== undefined)
+      this.aheadRange = async (request) => {
+        this.requests.push(request);
+        return aheadRange.call(delegate, request);
+      };
+    if (ancestry !== undefined)
+      this.ancestry = async (request) => {
+        this.requests.push(request);
+        return ancestry.call(delegate, request);
+      };
+    if (pendingWorkingSet !== undefined)
+      this.pendingWorkingSet = async (request) => {
+        this.requests.push(request);
+        return pendingWorkingSet.call(delegate, request);
+      };
   }
 
   public async execute(request: EmbeddedRequest): Promise<EmbeddedResponse> {
@@ -1445,6 +1485,336 @@ test("pinned process and adapter synchronize a batch across two embedded clones"
     const stalePush = await secondProcess.execute({ kind: "push" });
     assert.equal(stalePush.kind, "push");
     assert.equal(stalePush.value, "conflict");
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
+});
+
+/**
+ * The failure the local-ahead reconciliation exists for, against real bd and
+ * real Dolt: a durable engine commit the remote never received. Ancestry
+ * proves only that the range fast-forwards, so it is proved engine-shaped as
+ * well -- the same completeness proof a pending delta gets -- before the
+ * engine publishes it under a batch that does not describe it. An operator's
+ * own `bd` write is the counter-example: it auto-commits on this clone and is
+ * just as clean a descendant of the remote head, and it must be refused by
+ * name instead of pushed.
+ */
+test("a locally-ahead clone publishes engine deltas and refuses a foreign commit", async () => {
+  const root = await mkdtemp("/private/tmp/sce-real-ahead-");
+  const remote = join(root, "remote.git");
+  const first = join(root, "first");
+  const second = join(root, "second");
+  try {
+    await run(root, "git", ["init", "-q", "--bare", remote]);
+    await run(root, "git", ["clone", "-q", remote, first]);
+    await run(first, "git", ["config", "user.email", "test@example.invalid"]);
+    await run(first, "git", ["config", "user.name", "test"]);
+    await run(first, "git", ["commit", "--allow-empty", "-qm", "initial"]);
+    await run(first, "git", ["push", "-q", "origin", "HEAD:main"]);
+    await run(first, "bd", [
+      "init",
+      "--non-interactive",
+      "--skip-agents",
+      "--skip-hooks",
+      "-p",
+      "sce",
+      "--remote",
+      `file://${remote}`,
+    ]);
+    await json(first, ["merge-slot", "create", "--json"]);
+    await json(first, ["create", "--id", "sce-root", "root", "--json"]);
+    const scope = {
+      beadsStoreIdentity: "store-1",
+      gitRepositoryIdentity: "repo-1",
+      integrationBranch: "main",
+    };
+    await json(first, [
+      "update",
+      "sce-merge-slot",
+      "--external-ref",
+      `sce-scope:v1:${deriveScopeCommitment(scope)}`,
+      "--design",
+      JSON.stringify(scope),
+      "--json",
+    ]);
+    const base = fixtureRun([]);
+    const initial = {
+      ...base,
+      controller: { ...base.controller, state: "unacquired" as const },
+      state: "initializing" as const,
+    };
+    const holder = initial.controller.holder;
+    const step = (
+      state: Parameters<typeof reduce>[0],
+      event: Parameters<typeof reduce>[1],
+      expected: number,
+    ) => {
+      const reduced = reduce(state, event);
+      assert.equal(reduced.ok, true, JSON.stringify(reduced));
+      if (!reduced.ok) throw new Error("unreachable");
+      assert.equal(reduced.nextState.revision, expected);
+      return reduced;
+    };
+    const acquired = step(
+      initial,
+      {
+        eventId: "controller-acquire",
+        expectedRevision: initial.revision,
+        idempotencyKey: deriveIdempotencyKey(
+          initial,
+          initial.revision,
+          null,
+          "controller_acquire",
+        ),
+        type: "controller_acquire_intent",
+      },
+      1,
+    );
+    const settled = step(
+      acquired.nextState,
+      {
+        eventId: "controller-acquired",
+        expectedRevision: acquired.nextState.revision,
+        effectId: acquired.effects[0]?.effectId ?? "",
+        effectKind: "controller_acquire",
+        holder,
+        controllerFencingToken: acquired.nextState.controllerFencingToken,
+        observationHash: "e".repeat(64),
+        type: "controller_acquired",
+      },
+      2,
+    );
+    const releasing = step(
+      settled.nextState,
+      {
+        eventId: "controller-release",
+        expectedRevision: settled.nextState.revision,
+        idempotencyKey: deriveIdempotencyKey(
+          settled.nextState,
+          settled.nextState.revision,
+          null,
+          "controller_release",
+        ),
+        type: "controller_release_intent",
+      },
+      3,
+    );
+    const batchFor = (
+      before: ReturnType<typeof reduce> & { ok: true },
+      after: ReturnType<typeof reduce> & { ok: true },
+    ) => {
+      const previous = makeRootProjection(before.nextState);
+      const next = withBatchCheckpoint(makeRootProjection(after.nextState), []);
+      return {
+        changedRows: [],
+        checkpoint: next.checkpoint,
+        expectedAggregateCommitment: previous.aggregateCommitment,
+        expectedAggregateRevision: previous.aggregateRevision,
+        expectedChildren: [],
+        expectedHolder: holder,
+        holder,
+        next: { children: [], root: next },
+        schema: "sce.fencing.batch" as const,
+        scope: next.scope,
+        version: 1 as const,
+      };
+    };
+    const bootstrapRoot = withBatchCheckpoint(
+      makeRootProjection(acquired.nextState),
+      [],
+    );
+    const bootstrapBatch = {
+      changedRows: [],
+      checkpoint: bootstrapRoot.checkpoint,
+      expectedAggregateCommitment:
+        makeRootProjection(initial).aggregateCommitment,
+      expectedAggregateRevision: makeRootProjection(initial).aggregateRevision,
+      expectedChildren: [],
+      expectedHolder: holder,
+      holder,
+      next: { children: [], root: bootstrapRoot },
+      schema: "sce.fencing.batch" as const,
+      scope: bootstrapRoot.scope,
+      version: 1 as const,
+    };
+    // The commit the remote never received, and the command that follows it.
+    const aheadBatch = batchFor(acquired, settled);
+    const commandBatch = batchFor(settled, releasing);
+    const database = (cwd: string) =>
+      join(cwd, ".beads", "embeddeddolt", "sce");
+    const persistenceFor = (cwd: string) =>
+      new DoltProjectionPersistence({
+        childIssueId: () => undefined,
+        databaseDirectory: database(cwd),
+        doltExecutable: "/opt/homebrew/bin/dolt",
+        rootIssueId: "sce-root",
+      });
+    const firstPersistence = persistenceFor(first);
+    assert.equal(
+      (
+        await firstPersistence.initialize(
+          PROJECTION_INITIALIZATION_AUTHORITY,
+          bootstrapBatch,
+        )
+      ).value,
+      "applied",
+    );
+    await run(first, "bd", ["dolt", "commit", "--json"]);
+    await run(first, "bd", ["dolt", "push", "--json"]);
+    // The controller holds the built-in slot, published, exactly as it would
+    // before any ordinary write.
+    await json(first, ["--actor", holder, "merge-slot", "acquire", "--json"]);
+    await run(first, "bd", ["dolt", "push", "--json"]);
+    const preflight = (cwd: string) => ({
+      payload: {
+        beads: {
+          beadsDir: join(cwd, ".beads"),
+          contextSchemaVersion: 1 as const,
+          database: "sce",
+          mode: "embedded" as const,
+          prefix: "sce",
+          projectId: "store-1",
+          provenance: "embedded_config" as const,
+          storePath: join(cwd, ".beads", "embeddeddolt"),
+          syncRef: "refs/dolt/data",
+          syncRemote: `git+file://${remote}`,
+          toolVersion: "1.1.0" as const,
+        },
+        git: {
+          commonDir: join(cwd, ".git"),
+          identity: "repo-1",
+          objectFormat: "sha1" as const,
+          topLevel: cwd,
+        },
+        status: "ready" as const,
+      },
+      schema: "sce.preflight" as const,
+      version: 1 as const,
+    });
+    const processFor = (cwd: string, projections: DoltProjectionPersistence) =>
+      new PinnedBdEmbeddedProcess({
+        bdExecutable: "/opt/homebrew/bin/bd",
+        cwd,
+        databaseDirectory: database(cwd),
+        doltExecutable: "/opt/homebrew/bin/dolt",
+        prefix: "sce",
+        projections,
+        remote: {
+          name: "origin",
+          ref: "refs/dolt/data",
+          url: `git+file://${remote}`,
+        },
+        scope,
+      });
+    const firstProcess = processFor(first, firstPersistence);
+    const synced = await firstProcess.execute({ kind: "state" });
+    assert.equal(synced.kind, "state");
+    assert.equal(synced.value.workingSet, "clean");
+    assert.equal(synced.value.remoteHead, synced.value.head);
+    // Crash boundary: the batch is written and committed, and the push that
+    // would have published it never completed.
+    assert.equal((await firstPersistence.mutate(aheadBatch)).value, "applied");
+    assert.equal(
+      (await firstProcess.execute({ kind: "commit" })).value,
+      "applied",
+    );
+    const ahead = await firstProcess.execute({ kind: "state" });
+    assert.equal(ahead.kind, "state");
+    assert.equal(ahead.value.workingSet, "clean");
+    assert.notEqual(ahead.value.head, synced.value.head);
+    assert.equal(ahead.value.remoteHead, synced.value.head);
+    assert.equal(ahead.value.head === undefined, false);
+    assert.equal(ahead.value.remoteHead === undefined, false);
+    if (ahead.value.head === undefined || ahead.value.remoteHead === undefined)
+      throw new Error("unreachable");
+    assert.deepEqual(
+      await firstProcess.aheadRange({
+        head: ahead.value.head,
+        kind: "ahead_range",
+        remoteHead: ahead.value.remoteHead,
+      }),
+      { kind: "ahead_range", value: "engine_delta" },
+      "one engine checkpoint is exactly the projection movement it wrote",
+    );
+    const port = new RecordingProcess(firstProcess);
+    const adapter = new EmbeddedBeadsAdapter({
+      holder,
+      mode: "git-sync",
+      prefix: "sce",
+      preflight: preflight(first),
+      process: port,
+      scope,
+    });
+    assert.equal(
+      (await adapter.compareAndSet(commandBatch)).status,
+      "applied",
+      "the command carries on once its clone's own range is published",
+    );
+    const published = await firstProcess.execute({ kind: "state" });
+    assert.equal(published.kind, "state");
+    assert.equal(published.value.remoteHead, published.value.head);
+    assert.equal(
+      port.requests.some((request) => request.kind === "ahead_range"),
+      true,
+      "the adapter must classify the range before publishing it",
+    );
+    // A second clone reads the remote: both the re-pushed checkpoint and the
+    // command's own checkpoint really left this machine.
+    await run(root, "git", ["clone", "-q", remote, second]);
+    await run(second, "bd", [
+      "init",
+      "--non-interactive",
+      "--skip-agents",
+      "--skip-hooks",
+      "-p",
+      "sce",
+      "--remote",
+      `file://${remote}`,
+    ]);
+    await run(second, "bd", ["dolt", "pull", "--json"]);
+    const mirrored = await persistenceFor(second).load();
+    assert.equal(mirrored.status, "observed");
+    if (mirrored.status !== "observed") throw new Error("unreachable");
+    assert.deepEqual(mirrored.value.root, commandBatch.next.root);
+    // The counter-example: an operator's own write on this clone, committed
+    // by bd's ordinary auto-commit policy and never published.
+    await json(first, ["create", "--id", "sce-operator", "operator", "--json"]);
+    const foreign = await firstProcess.execute({ kind: "state" });
+    assert.equal(foreign.kind, "state");
+    assert.equal(foreign.value.workingSet, "clean");
+    assert.notEqual(foreign.value.head, published.value.head);
+    assert.equal(foreign.value.remoteHead, published.value.head);
+    if (
+      foreign.value.head === undefined ||
+      foreign.value.remoteHead === undefined
+    )
+      throw new Error("unreachable");
+    assert.deepEqual(
+      await firstProcess.aheadRange({
+        head: foreign.value.head,
+        kind: "ahead_range",
+        remoteHead: foreign.value.remoteHead,
+      }),
+      { kind: "ahead_range", value: "foreign" },
+      "somebody else's row moved in the range",
+    );
+    // Which batch follows is immaterial: the range is refused before any
+    // batch is submitted to the store.
+    const refused = await adapter.compareAndSet(commandBatch);
+    assert.equal(refused.status, "ambiguous");
+    assert.equal(
+      refused.stderrTail?.text.includes('"bd dolt push"'),
+      true,
+      `the refusal must name the command that publishes it: ${refused.stderrTail?.text}`,
+    );
+    const unpublished = await firstProcess.execute({ kind: "state" });
+    assert.equal(unpublished.kind, "state");
+    assert.equal(
+      unpublished.value.remoteHead,
+      published.value.head,
+      "a refused range must leave the remote exactly where it was",
+    );
   } finally {
     await rm(root, { force: true, recursive: true });
   }
