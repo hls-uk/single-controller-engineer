@@ -12104,7 +12104,8 @@ function hydrateProvenanceInput(input) {
     if (hydrated === void 0) return void 0;
     targetEvidence.push(hydrated);
   }
-  return { ...input, targetEvidence };
+  const view = { ...input, targetEvidence };
+  return validate(HydratedProvenanceInputSchema, view).ok ? view : void 0;
 }
 function projectionEncodingIsCanonical(input, hydrated) {
   const stored = canonicalJson(input);
