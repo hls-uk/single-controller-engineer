@@ -1538,6 +1538,33 @@ function workerPacketBase(unit: Unit): string | undefined {
   }
 }
 
+/**
+ * Every binding a unit holds to a reviewed diff: the reviewer packet, the
+ * session and models that produced the judgment, the prompt it was issued
+ * under, the exact pair it approved, and the approval response. A review
+ * belongs to one candidate diff and no other, so whatever supersedes that
+ * diff discards the whole set at once — a newly observed candidate, a refused
+ * collect, a refresh that landed on a new base, a refresh that conflicted,
+ * and a review that asked for changes (sce-296.23, sce-dcx.21, sce-ul2.10).
+ * Keeping one field behind leaves the packet describing a diff nothing
+ * measured, which is an invariant failure, not a stale hint.
+ */
+function withoutReviewBindings(unit: Unit) {
+  const {
+    approvalResponseHash: _approval,
+    reviewBaseOid: _reviewBase,
+    reviewHeadOid: _reviewHead,
+    reviewPromptHash: _reviewPrompt,
+    reviewTree: _reviewTree,
+    reviewerPacket: _reviewerPacket,
+    reviewerRequestedModel: _reviewerRequested,
+    reviewerReturnedModel: _reviewerReturned,
+    reviewerSessionId: _reviewerSession,
+    ...retained
+  } = unit;
+  return retained;
+}
+
 /** The exact at-rest form of a task; a planned unit stores nothing else. */
 export function canonicalTaskMetadata(
   task: WaveTaskMetadata,
@@ -5443,18 +5470,7 @@ function reduceInternal(
         // earlier diff (a run persisted before sce-296.23 may still carry
         // one after a rejected review); only the current diff can be
         // reviewed.
-        const {
-          approvalResponseHash: _approval,
-          reviewBaseOid: _reviewBase,
-          reviewHeadOid: _reviewHead,
-          reviewPromptHash: _reviewPrompt,
-          reviewTree: _reviewTree,
-          reviewerPacket: _reviewerPacket,
-          reviewerRequestedModel: _reviewerRequested,
-          reviewerReturnedModel: _reviewerReturned,
-          reviewerSessionId: _reviewerSession,
-          ...retained
-        } = unit;
+        const retained = withoutReviewBindings(unit);
         result = observe(
           state,
           unit,
@@ -5488,19 +5504,8 @@ function reduceInternal(
       // but its terminal ones (sce-dcx.21, as sce-296.19 for a refused
       // refresh).
       {
-        const {
-          approvalResponseHash: _approval,
-          candidateDiffHash: _diff,
-          reviewBaseOid: _reviewBase,
-          reviewHeadOid: _reviewHead,
-          reviewPromptHash: _reviewPrompt,
-          reviewTree: _reviewTree,
-          reviewerPacket: _reviewerPacket,
-          reviewerRequestedModel: _reviewerRequested,
-          reviewerReturnedModel: _reviewerReturned,
-          reviewerSessionId: _reviewerSession,
-          ...retained
-        } = unit;
+        const { candidateDiffHash: _diff, ...retained } =
+          withoutReviewBindings(unit);
         result = observe(
           state,
           unit,
@@ -5607,26 +5612,17 @@ function reduceInternal(
       // Every binding to the old base is discarded with it; the unit returns
       // to `collected` and re-observes its candidate on the new base.
       const {
-        approvalResponseHash: _approval,
         candidateDiffHash: _diff,
         candidateHead: _head,
         candidateTree: _tree,
         refreshBaseOid: _refresh,
-        reviewBaseOid: _reviewBase,
-        reviewHeadOid: _reviewHead,
-        reviewPromptHash: _reviewPrompt,
-        reviewTree: _reviewTree,
-        reviewerPacket: _reviewerPacket,
-        reviewerRequestedModel: _reviewerRequested,
-        reviewerReturnedModel: _reviewerReturned,
-        reviewerSessionId: _reviewerSession,
         verificationBaseOid: _verificationBase,
         verificationCommands: _commands,
         verificationEvidenceHash: _evidence,
         verificationHeadOid: _verificationHead,
         verificationTree: _verificationTree,
         ...retained
-      } = unit;
+      } = withoutReviewBindings(unit);
       result = observe(
         state,
         unit,
@@ -5650,14 +5646,23 @@ function reduceInternal(
         return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "candidate_refresh"))
         return badObservation();
+      // The refresh discarded the candidate binding; the repair judgment must
+      // bind to the exact head that conflicted, so rebind it here. The review
+      // the superseded diff carried is discarded with that diff, exactly as a
+      // refused collect discards it (sce-dcx.21): a reviewer packet left bound
+      // to the head the refresh started from describes a diff nothing
+      // measured, and the observation itself would fail the review-packet
+      // invariant, leaving the refresh effect unresolved and the unit with no
+      // legal act at all (sce-ul2.10).
       result = observe(
         state,
         unit,
         "repair_required",
         event,
+        {},
+        clearUnitOwners(state, unit.id),
         {
-          // The refresh discarded the candidate binding; the repair judgment
-          // must bind to the exact head that conflicted, so rebind it here.
+          ...withoutReviewBindings(unit),
           candidateHead: event.headOid,
           candidateTree: event.treeOid,
           repairContext: {
@@ -5676,7 +5681,6 @@ function reduceInternal(
             ],
           },
         },
-        clearUnitOwners(state, unit.id),
       );
       break;
     case "verification_intent":
@@ -5886,18 +5890,7 @@ function reduceInternal(
         // A rejected review is consumed: its packet and session bindings are
         // discarded with it (sce-296.23), exactly as a base refresh discards
         // them, so the repaired candidate can bind a fresh review.
-        const {
-          approvalResponseHash: _approval,
-          reviewBaseOid: _reviewBase,
-          reviewHeadOid: _reviewHead,
-          reviewPromptHash: _reviewPrompt,
-          reviewTree: _reviewTree,
-          reviewerPacket: _reviewerPacket,
-          reviewerRequestedModel: _reviewerRequested,
-          reviewerReturnedModel: _reviewerReturned,
-          reviewerSessionId: _reviewerSession,
-          ...retained
-        } = unit;
+        const retained = withoutReviewBindings(unit);
         result = observe(
           state,
           unit,

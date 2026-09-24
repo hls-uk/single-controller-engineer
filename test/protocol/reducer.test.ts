@@ -6592,6 +6592,101 @@ test("a refused refresh leaves a repairable unit bound to the conflicted head", 
   if (!result.ok) return;
   assert.equal(result.nextState.units[unitId]?.state, "repair_intent");
 });
+// sce-ul2.10: `refresh_intent` is legal from `approved`, where the reviewer
+// packet and the verdict bind the diff the refresh is about to supersede. A
+// conflicted refresh rebinds the candidate pair to the head that conflicted,
+// so keeping those bindings left the packet describing a diff nothing
+// measured, and the review-packet invariant failed on a unit whose only way
+// out is repair.
+test("a refused refresh from approved discards the superseded candidate's review bindings", () => {
+  const unitId = "unit-1";
+  const approved = approvedCandidate("integrate", "local-ff");
+  assert.equal(approved.units[unitId]?.state, "approved");
+  assert.notEqual(
+    approved.units[unitId]?.reviewerPacket,
+    undefined,
+    "the approved unit must carry the reviewer packet the refresh supersedes",
+  );
+  const intended = stepUnit(approved, unitId, "refresh_intent", {
+    baseOid: OID_B,
+  });
+  assert.equal(intended.units[unitId]?.state, "refresh_intent");
+  const failed = observeUnit(
+    intended,
+    unitId,
+    "refresh_failed",
+    "candidate_refresh",
+    { baseOid: OID_A, headOid: OID_C, treeOid: OID_C },
+  );
+  const repairable = failed.units[unitId]!;
+  assert.equal(repairable.state, "repair_required");
+  // The repair judgment binds the conflicted head ...
+  assert.equal(repairable.candidateHead, OID_C);
+  assert.equal(repairable.candidateTree, OID_C);
+  assert.equal(repairable.repairContext?.headOid, OID_C);
+  // ... and the review of the diff that head supersedes is discarded with it,
+  // exactly as a newly observed or refused candidate discards it.
+  assert.deepEqual(
+    {
+      approvalResponseHash: repairable.approvalResponseHash,
+      reviewBaseOid: repairable.reviewBaseOid,
+      reviewHeadOid: repairable.reviewHeadOid,
+      reviewPromptHash: repairable.reviewPromptHash,
+      reviewTree: repairable.reviewTree,
+      reviewerPacket: repairable.reviewerPacket,
+      reviewerRequestedModel: repairable.reviewerRequestedModel,
+      reviewerReturnedModel: repairable.reviewerReturnedModel,
+      reviewerSessionId: repairable.reviewerSessionId,
+    },
+    {
+      approvalResponseHash: undefined,
+      reviewBaseOid: undefined,
+      reviewHeadOid: undefined,
+      reviewPromptHash: undefined,
+      reviewTree: undefined,
+      reviewerPacket: undefined,
+      reviewerRequestedModel: undefined,
+      reviewerReturnedModel: undefined,
+      reviewerSessionId: undefined,
+    },
+    "a refused refresh must discard every binding of the superseded review",
+  );
+  assert.deepEqual(runInvariantErrors(failed), []);
+  // The unit repairs rather than blocking: the act is legal and applies.
+  const emitTypes = legalActions(failed)
+    .filter((action) => action.unitId === unitId && action.mode === "emit")
+    .map((action) => action.type);
+  assert.equal(
+    emitTypes.includes("repair_intent"),
+    true,
+    `repair must stay legal; legal emits were ${emitTypes.join(", ")}`,
+  );
+  const judgment = {
+    schemaVersion: 1,
+    role: "controller" as const,
+    kind: "repair_disposition" as const,
+    unitId,
+    sessionId: "incarnation-1",
+    requestedModel: "frontier",
+    returnedModel: "frontier-1",
+    aggregateRevision: failed.revision,
+    promptHash: "e".repeat(64),
+    responseHash: HASH,
+    rationale: "resolve the conflict on the same branch and collect again",
+    factOid: OID_C,
+    decision: "repair" as const,
+    ...repairEvidence(failed),
+  };
+  const result = attemptTransition(
+    failed,
+    event(failed, "repair_intent", { judgment }),
+    reduce,
+  );
+  assert.equal(result.ok, true, result.ok ? "" : JSON.stringify(result));
+  if (!result.ok) return;
+  assert.equal(result.nextState.units[unitId]?.state, "repair_intent");
+  assert.deepEqual(runInvariantErrors(result.nextState), []);
+});
 
 // sce-dcx.21: a candidate whose diff passes the packet bound used to leave the
 // collect effect unobserved, so the unit blocked with no stated cause.
