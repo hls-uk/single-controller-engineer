@@ -10298,10 +10298,16 @@ var GateTargetPromiseSchema = strictObject({
   followUpBeadId: Type.Optional(identifier()),
   status: Type.Union([Type.Literal("pending"), Type.Literal("voided")])
 });
+var filesystemIdentifier = () => Type.String({ pattern: "^(?:0|[1-9][0-9]{0,19})$" });
+var MaterialisationDestinationRootIdentitySchema = strictObject({
+  device: filesystemIdentifier(),
+  inode: filesystemIdentifier()
+});
 var MaterialisationDestinationIdentitySchema = strictObject({
   canonicalPath: absolutePath(),
-  device: Type.String({ pattern: "^(?:0|[1-9][0-9]{0,19})$" }),
-  inode: Type.String({ pattern: "^(?:0|[1-9][0-9]{0,19})$" })
+  device: filesystemIdentifier(),
+  inode: filesystemIdentifier(),
+  root: Type.Optional(MaterialisationDestinationRootIdentitySchema)
 });
 var GateDestinationProbeSchema = strictObject({
   currentEffectId: Type.Optional(effectIdentifier()),
@@ -25170,6 +25176,8 @@ process.stdin.on("end", () => {
     const basename = value => typeof value === "string" && path.basename(value) === value && value !== "." && value !== "..";
     for (const value of [metadata.artifactName, metadata.sidecarName, metadata.artifactTemp, metadata.sidecarTemp])
       if (!basename(value)) return fail("refused", "bad-name");
+    if (!Number.isSafeInteger(metadata.rootDepth) || metadata.rootDepth < 1 || metadata.rootDepth > 96) return fail("ambiguous", "bad-root-depth");
+    const enclosingRoot = new Array(metadata.rootDepth).fill("..").join("/");
     const held = fs.openSync(".", fs.constants.O_RDONLY);
     const identity = () => {
       const bound = fs.fstatSync(held, { bigint: true });
@@ -25291,7 +25299,11 @@ process.stdin.on("end", () => {
     if (!matches(finalArtifact, artifact) || !matches(finalSidecar, sidecar) || finalArtifactTemp.state !== "absent" || finalSidecarTemp.state !== "absent")
       return fail("ambiguous", "final-readback");
     if (!identity()) return fail("ambiguous", "identity-drift");
-    respond({ status: "observed", artifactStatus: artifactResult.status, sidecarStatus: sidecarResult.status });
+    let rootDevice = null;
+    let rootInode = null;
+    try { const enclosing = fs.statSync(enclosingRoot, { bigint: true }); rootDevice = String(enclosing.dev); rootInode = String(enclosing.ino); }
+    catch { rootDevice = null; rootInode = null; }
+    respond({ status: "observed", artifactStatus: artifactResult.status, rootDevice, rootInode, sidecarStatus: sidecarResult.status });
   } catch { fail("ambiguous", "helper-exception"); }
 });
 `;
@@ -25359,7 +25371,8 @@ async function admittedDestination(destination, destinationSubpath) {
       identity: {
         canonicalPath: current,
         device: String(identity2.dev),
-        inode: String(identity2.ino)
+        inode: String(identity2.ino),
+        root: { device: String(rootLink.dev), inode: String(rootLink.ino) }
       },
       status: "observed"
     };
@@ -25370,6 +25383,17 @@ async function admittedDestination(destination, destinationSubpath) {
 function sameDestinationIdentity2(left, right) {
   return left.canonicalPath === right.canonicalPath && left.device === right.device && left.inode === right.inode;
 }
+var FILESYSTEM_IDENTIFIER = /^(?:0|[1-9][0-9]{0,19})$/;
+function rootIdentityReading(candidate) {
+  if (candidate === null) return null;
+  return typeof candidate === "string" && FILESYSTEM_IDENTIFIER.test(candidate) ? candidate : void 0;
+}
+function sameRootIdentity(left, right) {
+  return left !== null && left !== void 0 && right !== null && right !== void 0 && left.device === right.device && left.inode === right.inode;
+}
+function sameAdmittedDestination(observed2, journaled) {
+  return sameDestinationIdentity2(observed2, journaled) && (journaled.root === void 0 || sameRootIdentity(observed2.root, journaled.root));
+}
 async function destinationRootAbsent(root) {
   try {
     await lstat(root);
@@ -25378,16 +25402,23 @@ async function destinationRootAbsent(root) {
     return error.code === "ENOENT";
   }
 }
-async function relocationAfterAct(effect2, admitted) {
+async function relocationAfterAct(effect2, admitted, boundRoot) {
+  const admittedRoot = effect2.params.destinationIdentity.root ?? admitted.root;
   const settled = await admittedDestination(
     effect2.params.destination,
     effect2.params.destinationSubpath
   );
-  if (settled.status === "observed")
-    return sameDestinationIdentity2(settled.identity, admitted) ? null : { observed: settled.identity, reason: "substituted" };
-  if (settled.status === "refused")
-    return settled.reason === "alias_unmounted" && await destinationRootAbsent(effect2.params.destination.canonicalRoot) ? null : { observed: null, reason: "invalid_destination" };
-  return { observed: null, reason: "unresolved" };
+  if (settled.status === "observed") {
+    if (!sameDestinationIdentity2(settled.identity, admitted))
+      return { observed: settled.identity, reason: "substituted" };
+    return admittedRoot === void 0 || sameRootIdentity(settled.identity.root, admittedRoot) ? null : { observed: settled.identity, reason: "root_substituted" };
+  }
+  if (settled.status !== "refused")
+    return { observed: null, reason: "unresolved" };
+  if (settled.reason !== "alias_unmounted" || !await destinationRootAbsent(effect2.params.destination.canonicalRoot))
+    return { observed: null, reason: "invalid_destination" };
+  if (boundRoot === null) return { observed: null, reason: "root_unproved" };
+  return sameRootIdentity(boundRoot, admittedRoot) ? null : { observed: null, reason: "root_escaped" };
 }
 async function probeDestination(effect2) {
   const result2 = await admittedDestination(
@@ -25408,7 +25439,7 @@ async function probeDestination(effect2) {
       alias: effect2.params.destination.alias,
       operation: "containment"
     });
-  if (effect2.params.expectedPriorIdentity !== void 0 && !sameDestinationIdentity2(
+  if (effect2.params.expectedPriorIdentity !== void 0 && !sameAdmittedDestination(
     result2.identity,
     effect2.params.expectedPriorIdentity
   ))
@@ -25479,7 +25510,7 @@ async function materialiseBytes(cwd, effect2, processPort, objectFormat, platfor
       alias: effect2.params.destination.alias,
       operation: "containment"
     });
-  if (!sameDestinationIdentity2(
+  if (!sameAdmittedDestination(
     destination.identity,
     effect2.params.destinationIdentity
   ))
@@ -25493,6 +25524,7 @@ async function materialiseBytes(cwd, effect2, processPort, objectFormat, platfor
     artifactTemp: `.${effect2.params.artifactName}.sce-tmp`,
     dev: destination.identity.device,
     ino: destination.identity.inode,
+    rootDepth: effect2.params.destinationSubpath.split("/").length,
     sidecarName: effect2.params.sidecarName,
     sidecarTemp: `.${effect2.params.sidecarName}.sce-tmp`
   };
@@ -25521,12 +25553,18 @@ async function materialiseBytes(cwd, effect2, processPort, objectFormat, platfor
     return refusal2("hard_links_unsupported", {
       alias: effect2.params.destination.alias
     });
-  if (value.status !== "observed" || !["already_present", "published"].includes(String(value.artifactStatus)) || !["already_present", "published"].includes(String(value.sidecarStatus)) || Object.keys(value).sort().join(",") !== "artifactStatus,sidecarStatus,status")
+  const rootDevice = rootIdentityReading(value.rootDevice);
+  const rootInode = rootIdentityReading(value.rootInode);
+  if (value.status !== "observed" || !["already_present", "published"].includes(String(value.artifactStatus)) || !["already_present", "published"].includes(String(value.sidecarStatus)) || rootDevice === void 0 || rootInode === void 0 || Object.keys(value).sort().join(",") !== "artifactStatus,rootDevice,rootInode,sidecarStatus,status")
     return ambiguous({
       operation: "helper-result",
       outputHash: hashBytes(result2.stdout)
     });
-  const relocation = await relocationAfterAct(effect2, destination.identity);
+  const relocation = await relocationAfterAct(
+    effect2,
+    destination.identity,
+    rootDevice === null || rootInode === null ? null : { device: rootDevice, inode: rootInode }
+  );
   if (relocation !== null)
     return ambiguous({
       alias: effect2.params.destination.alias,
@@ -25581,7 +25619,7 @@ async function discoverMaterialisation(cwd, effect2, processPort, objectFormat) 
     effect2.params.destination,
     effect2.params.destinationSubpath
   );
-  if (destination.status !== "observed" || !sameDestinationIdentity2(
+  if (destination.status !== "observed" || !sameAdmittedDestination(
     destination.identity,
     effect2.params.destinationIdentity
   ))
