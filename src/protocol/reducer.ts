@@ -9525,13 +9525,41 @@ function commit(
   };
   const schema = validate<RepositoryRun>(RepositoryRunSchema, nextState);
   if (!schema.ok) return reject("invariant", schema.errors.join("; "));
+  // Envelope admission, measured on the candidate `nextState` in the exact
+  // encoding the aggregate invariant measures below. A run that cannot afford
+  // to record this transition is not a corrupt run, so it is refused here by
+  // name instead of falling into the invariant sweep, whose joined free-form
+  // errors mean "this aggregate is internally inconsistent". A refused
+  // reduction persists nothing and executes no effect, so this is a refusal
+  // before the act. See DEC-20260924-020.
+  if (runEnvelopeByteLength(nextState) > LIMITS.envelopeBytes)
+    return reject(
+      "illegal_transition",
+      "transition exceeds the repository run envelope budget",
+    );
   const errors = runInvariantErrorsWithClosedEvidence(
     nextState,
     closedEvidenceDetails,
+    true,
   );
   return errors.length
     ? reject("invariant", errors.join("; "))
     : { ok: true, nextState, effects };
+}
+
+/**
+ * The durable aggregate's size in its at-rest envelope encoding. Admission
+ * and the invariant must never disagree by a byte: the guaranteed
+ * configuration clears `LIMITS.envelopeBytes` by six.
+ */
+function runEnvelopeByteLength(state: RepositoryRun): number {
+  return utf8.encode(
+    JSON.stringify({
+      schema: "sce.repository-run",
+      version: SCHEMA_VERSION,
+      payload: state,
+    }),
+  ).byteLength;
 }
 
 export function runInvariantErrors(state: RepositoryRun): readonly string[] {
@@ -9544,6 +9572,9 @@ export function runInvariantErrors(state: RepositoryRun): readonly string[] {
 function runInvariantErrorsWithClosedEvidence(
   state: RepositoryRun,
   closedEvidenceDetails: ClosedUnitEvidenceDetails | undefined,
+  // Set only by `commit`, which has already admitted this exact state's
+  // envelope by the identical measurement; hydration always re-measures.
+  envelopeAdmitted = false,
 ): readonly string[] {
   const errors: string[] = [];
   const effectIds = new Set<string>();
@@ -9556,15 +9587,7 @@ function runInvariantErrorsWithClosedEvidence(
     entries.push(entry);
     unresolvedByUnit.set(entry.unitId, entries);
   };
-  if (
-    utf8.encode(
-      JSON.stringify({
-        schema: "sce.repository-run",
-        version: SCHEMA_VERSION,
-        payload: state,
-      }),
-    ).byteLength > LIMITS.envelopeBytes
-  )
+  if (!envelopeAdmitted && runEnvelopeByteLength(state) > LIMITS.envelopeBytes)
     errors.push("repository run envelope exceeds byte limit");
   if (
     state.controller.holder !==

@@ -13,17 +13,27 @@ export const LIMITS = {
   // costs `sessionFingerprintBytes` per occupied slot, and the two bounded
   // `eventHistory` replay windows and the deflated closure ledger sit beside
   // it. That buys 61 retained units at 16 bounded repairs each, not all
-  // `units` of them, and it is this invariant that says so: a 62-unit run is
-  // refused partway through its fifty-ninth unit and a 64-unit one partway
-  // through its fifty-seventh, so neither ever reaches an end state to
-  // measure. The reducer stress scenario in `test/protocol/reducer.test.ts`
-  // pins that capacity and its exact per-step peak, six bytes under this
-  // limit.
+  // `units` of them, and it is this budget that says so. The reducer stress
+  // scenario in `test/protocol/reducer.test.ts` measures every reduced step
+  // of that run and pins all three facts: 61 units peak six bytes under this
+  // limit, a 62-unit run is refused at `unit-59`'s eleventh
+  // `reviewer_observed`, and a 64-unit one at `unit-57`'s second, so neither
+  // ever reaches an end state to measure. Those are unit names in that
+  // scenario's lexicographic drain order, not the fifty-ninth and
+  // fifty-seventh units of the run. The refusal is `commit`'s typed envelope
+  // admission in `src/protocol/reducer.ts` — `illegal_transition`,
+  // "transition exceeds the repository run envelope budget" — measured on
+  // the candidate next state before anything is persisted, not the aggregate
+  // invariant that re-states the same bound for a hydrated run.
+  // `sessionHistory` and `units` are the wider slot bounds they have always
+  // been; this is the one that binds first, and DEC-20260924-020 records why
+  // it is not raised.
   envelopeBytes: 131_072,
   effectJournal: 256,
   eventHistory: 256,
   // 64 units can each retain an initial worker/reviewer pair plus all 16
-  // bounded repair pairs without permitting historical session reuse.
+  // bounded repair pairs without permitting historical session reuse. It is
+  // a slot bound, not a capacity promise: `envelopeBytes` runs out first.
   sessionHistory: 2_176,
   sessionFingerprintBytes: 32,
   units: 64,

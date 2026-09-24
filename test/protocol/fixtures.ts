@@ -333,16 +333,21 @@ export function event(
         }),
   } as ProtocolEvent;
 }
-export function transition(
+/**
+ * One reduction with its emitted effects checked against the journal. A
+ * refusal is returned rather than thrown, so a scenario that drives a run to
+ * the boundary of a bound can read the refusal's code.
+ */
+export function attemptTransition(
   state: RepositoryRun,
   input: ProtocolEvent,
   reduce: (
     current: RepositoryRun,
     next: ProtocolEvent,
   ) => import("../../src/protocol/reducer.js").Reduction,
-): RepositoryRun {
+): import("../../src/protocol/reducer.js").Reduction {
   const result = reduce(state, input);
-  if (!result.ok) throw new Error(`${result.code}: ${result.reason}`);
+  if (!result.ok) return result;
   for (const effect of result.effects) {
     if (effect.paramsHash !== deriveParamsHash(effect.kind, effect.params))
       throw new Error(`effect ${effect.effectId} has an unbound params hash`);
@@ -355,6 +360,19 @@ export function transition(
         `journal ${effect.effectId} disagrees with effect params`,
       );
   }
+  return result;
+}
+
+export function transition(
+  state: RepositoryRun,
+  input: ProtocolEvent,
+  reduce: (
+    current: RepositoryRun,
+    next: ProtocolEvent,
+  ) => import("../../src/protocol/reducer.js").Reduction,
+): RepositoryRun {
+  const result = attemptTransition(state, input, reduce);
+  if (!result.ok) throw new Error(`${result.code}: ${result.reason}`);
   return result.nextState;
 }
 

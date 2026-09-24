@@ -63,6 +63,7 @@ import {
   OID_A,
   OID_B,
   OID_C,
+  attemptTransition,
   event,
   repairEvidence,
   run,
@@ -5017,38 +5018,68 @@ test("intent idempotency digest rejects domain, revision, unit, and kind substit
 // drain order, 61 units peak at 131,066 bytes against the 131,072-byte limit:
 // six bytes of headroom, at `unit-61`'s sixteenth `reviewer_observed`, with
 // four units still retained. 62 and 64 units do not overshoot at the end —
-// they never reach an end state at all. This same invariant refuses them
-// mid-run with `repository run envelope exceeds byte limit`: the 62-unit run
-// at `unit-59`'s eleventh `reviewer_observed`, the 64-unit run at
-// `unit-57`'s second. So 61 units is the exact capacity this order
-// guarantees. Raising `LIMITS.envelopeBytes` or relaxing the aggregate
-// invariant would hide that boundary rather than state it; see
-// the `LIMITS` block in `src/protocol/schemas.ts` and "Crash-consistent
-// protocol states" in `wiki/designs/2026-08-24-single-controller-engineer.md`.
+// they never reach an end state at all. `commit`'s envelope admission refuses
+// them mid-run, by name and before anything is persisted: the 62-unit run at
+// `unit-59`'s eleventh `reviewer_observed`, the 64-unit run at `unit-57`'s
+// second. Those are unit names in this scenario's lexicographic drain order,
+// not the fifty-ninth and fifty-seventh units of the run. So 61 units is the
+// exact capacity this order guarantees. Raising `LIMITS.envelopeBytes` or
+// relaxing the admission would hide that boundary rather than state it; see
+// the `LIMITS` block in `src/protocol/schemas.ts`,
+// `wiki/decisions/2026-09-24-020-envelope-admission-under-repair-pressure.md`,
+// and "Crash-consistent protocol states" in
+// `wiki/designs/2026-08-24-single-controller-engineer.md`.
 const ENVELOPE_REPAIR_UNITS = 61;
 const ENVELOPE_REPAIR_PEAK_BYTES = 131_066;
 const ENVELOPE_REPAIR_LINEAGE_BYTES = 66_596;
+const ENVELOPE_REFUSED_UNITS = 62;
+const ENVELOPE_REFUSED_STEP = "unit-59 repair 11 reviewer_observed";
+const ENVELOPE_REFUSED_PRECEDING_BYTES = 130_898;
 
-// The name keeps the `64 retained units …` prefix that `test/fast.manifest.json`
-// pins as its single fast-tier skip pattern; the capacity this scenario proves
-// is the 61 units the envelope actually guarantees.
-test("64 retained units complete 16 repairs in waves of at most three within the envelope only to its exact 61-unit capacity", () => {
-  let peakEnvelopeBytes = 0;
-  const observeEnvelope = (current: RepositoryRun): void => {
-    peakEnvelopeBytes = Math.max(
-      peakEnvelopeBytes,
-      Buffer.byteLength(
-        JSON.stringify({
-          schema: "sce.repository-run" as const,
-          version: 1 as const,
-          payload: current,
-        }),
-        "utf8",
-      ),
-    );
-  };
+function repairPressureEnvelopeBytes(state: RepositoryRun): number {
+  return Buffer.byteLength(
+    JSON.stringify({
+      schema: "sce.repository-run" as const,
+      version: 1 as const,
+      payload: state,
+    }),
+    "utf8",
+  );
+}
+
+type RepairPressureOutcome =
+  | {
+      readonly kind: "drained";
+      readonly state: RepositoryRun;
+      readonly peakBytes: number;
+    }
+  | {
+      readonly kind: "refused";
+      readonly code: string;
+      readonly reason: string;
+      readonly step: string;
+      readonly precedingBytes: number;
+    };
+
+class RepairPressureRefused extends Error {
+  constructor(
+    readonly outcome: Extract<RepairPressureOutcome, { kind: "refused" }>,
+  ) {
+    super(`${outcome.step}: ${outcome.code}: ${outcome.reason}`);
+  }
+}
+
+/**
+ * Drives `unitCount` retained units through 16 bounded repairs each, three at
+ * a time, in the lexicographic order this scenario's waves drain. It returns
+ * the drained run with the widest envelope it ever held, or the first
+ * transition the run could not afford and the state that preceded it.
+ */
+function driveFullRepairPressure(unitCount: number): RepairPressureOutcome {
+  let peakBytes = 0;
+  let cursor = "";
   let state = run(
-    Array.from({ length: ENVELOPE_REPAIR_UNITS }, (_, index) => ({
+    Array.from({ length: unitCount }, (_, index) => ({
       ...unit(`unit-${index + 1}`, "repair_required"),
       branchRef: `sce/unit-${index + 1}`,
       worktreePath: `/tmp/unit-${index + 1}`,
@@ -5066,110 +5097,120 @@ test("64 retained units complete 16 repairs in waves of at most three within the
       },
     })),
   );
-
+  const drive = (
+    unitId: string,
+    type: ProtocolEvent["type"],
+    fields: Record<string, unknown> = {},
+  ): void => {
+    const result = attemptTransition(
+      state,
+      event(state, type, fields, unitId),
+      reduce,
+    );
+    if (!result.ok)
+      throw new RepairPressureRefused({
+        kind: "refused",
+        code: result.code,
+        reason: result.reason,
+        step: `${cursor} ${type}`,
+        precedingBytes: repairPressureEnvelopeBytes(state),
+      });
+    state = result.nextState;
+  };
+  const driveObserved = (
+    unitId: string,
+    type: ProtocolEvent["type"],
+    kind: string,
+    fields: Record<string, unknown> = {},
+  ): void =>
+    drive(unitId, type, {
+      effectId: effectId(state, kind),
+      effectKind: kind,
+      observationHash: HASH,
+      ...fields,
+    });
   const unitIds = Object.keys(state.units).sort();
-  for (let waveStart = 0; waveStart < unitIds.length; waveStart += 3) {
-    const currentWave = unitIds.slice(waveStart, waveStart + 3);
-    if (waveStart > 0) {
-      assert.equal(
-        unitIds
-          .slice(waveStart - 3, waveStart)
-          .every((unitId) => state.units[unitId] === undefined),
-        true,
-      );
-      // Phase 1 deliberately has no wave-planning command. This is the
-      // controller-authored snapshot that Phase 3 will persist through its
-      // planning act, after the prior wave has drained and closed.
-      state = {
-        ...state,
-        wave: { id: `wave-${waveStart / 3 + 1}`, unitIds: currentWave },
-      };
-      assert.deepEqual(runInvariantErrors(state), []);
-    }
-    for (const unitId of currentWave) {
-      for (let attempt = 1; attempt <= 16; attempt += 1) {
-        state = stepUnit(state, unitId, "repair_intent", {
-          judgment: {
-            schemaVersion: 1,
-            role: "controller",
-            kind: "repair_disposition",
-            unitId,
-            sessionId: "incarnation-1",
-            requestedModel: "frontier",
-            returnedModel: "frontier-1",
-            aggregateRevision: state.revision,
+  try {
+    for (let waveStart = 0; waveStart < unitIds.length; waveStart += 3) {
+      const currentWave = unitIds.slice(waveStart, waveStart + 3);
+      if (waveStart > 0) {
+        assert.equal(
+          unitIds
+            .slice(waveStart - 3, waveStart)
+            .every((unitId) => state.units[unitId] === undefined),
+          true,
+        );
+        // Phase 1 deliberately has no wave-planning command. This is the
+        // controller-authored snapshot that Phase 3 will persist through its
+        // planning act, after the prior wave has drained and closed.
+        state = {
+          ...state,
+          wave: { id: `wave-${waveStart / 3 + 1}`, unitIds: currentWave },
+        };
+        assert.deepEqual(runInvariantErrors(state), []);
+      }
+      for (const unitId of currentWave) {
+        for (let attempt = 1; attempt <= 16; attempt += 1) {
+          cursor = `${unitId} repair ${attempt}`;
+          drive(unitId, "repair_intent", {
+            judgment: {
+              schemaVersion: 1,
+              role: "controller",
+              kind: "repair_disposition",
+              unitId,
+              sessionId: "incarnation-1",
+              requestedModel: "frontier",
+              returnedModel: "frontier-1",
+              aggregateRevision: state.revision,
+              promptHash: HASH,
+              responseHash: HASH,
+              rationale: `repair ${attempt}`,
+              factOid: OID_B,
+              decision: "repair",
+              ...repairEvidence(state, unitId),
+            },
+          });
+          driveObserved(unitId, "repair_observed", "repair", {
+            sessionId: `worker-${unitId}-${attempt}`,
+            requestedModel: "workhorse",
+            returnedModel: "workhorse-1",
             promptHash: HASH,
-            responseHash: HASH,
-            rationale: `repair ${attempt}`,
-            factOid: OID_B,
-            decision: "repair",
-            ...repairEvidence(state, unitId),
-          },
-        });
-        state = observeUnit(state, unitId, "repair_observed", "repair", {
-          sessionId: `worker-${unitId}-${attempt}`,
-          requestedModel: "workhorse",
-          returnedModel: "workhorse-1",
-          promptHash: HASH,
-        });
-        state = stepUnit(state, unitId, "collect_intent", {});
-        state = observeUnit(
-          state,
-          unitId,
-          "worker_collected",
-          "worker_collect",
-          {
+          });
+          drive(unitId, "collect_intent", {});
+          driveObserved(unitId, "worker_collected", "worker_collect", {
             workerResult: {
               status: "completed",
               summary: "done",
               residualRisks: [],
             },
-          },
-        );
-        state = stepUnit(state, unitId, "candidate_intent", {});
-        state = observeUnit(
-          state,
-          unitId,
-          "candidate_observed",
-          "candidate_collect",
-          {
+          });
+          drive(unitId, "candidate_intent", {});
+          driveObserved(unitId, "candidate_observed", "candidate_collect", {
             headOid: OID_B,
             treeOid: OID_C,
-          },
-        );
-        state = stepUnit(state, unitId, "verification_intent", {});
-        state = observeUnit(state, unitId, "verification_observed", "verify", {
-          baseOid: OID_A,
-          headOid: OID_B,
-          treeOid: OID_C,
-        });
-        state = stepUnit(state, unitId, "reviewer_dispatch_intent", {});
-        state = observeUnit(
-          state,
-          unitId,
-          "reviewer_observed",
-          "review_dispatch",
-          {
+          });
+          drive(unitId, "verification_intent", {});
+          driveObserved(unitId, "verification_observed", "verify", {
+            baseOid: OID_A,
+            headOid: OID_B,
+            treeOid: OID_C,
+          });
+          drive(unitId, "reviewer_dispatch_intent", {});
+          driveObserved(unitId, "reviewer_observed", "review_dispatch", {
             sessionId: `reviewer-${unitId}-${attempt}`,
             requestedModel: "frontier",
             returnedModel: "frontier-1",
             promptHash: HASH,
-          },
-        );
-        // An attempt is at its widest here, not at its end: the unit record
-        // still carries the reviewer dispatch session and model that
-        // `review_collected` strips again. Every step of this run is bounded
-        // by one of these samples, so the run's true peak is among them.
-        // Sampling after the verdict instead reads 129,614 and claims 1,458
-        // bytes of headroom the run never has.
-        observeEnvelope(state);
-        state = stepUnit(state, unitId, "review_collect_intent", {});
-        state = observeUnit(
-          state,
-          unitId,
-          "review_collected",
-          "review_collect",
-          {
+          });
+          // An attempt is at its widest here, not at its end: the unit record
+          // still carries the reviewer dispatch session and model that
+          // `review_collected` strips again. Every step of this run is bounded
+          // by one of these samples, so the run's true peak is among them.
+          // Sampling after the verdict instead reads 129,614 and claims 1,458
+          // bytes of headroom the run never has.
+          peakBytes = Math.max(peakBytes, repairPressureEnvelopeBytes(state));
+          drive(unitId, "review_collect_intent", {});
+          driveObserved(unitId, "review_collected", "review_collect", {
             judgment: {
               schemaVersion: 1,
               role: "reviewer",
@@ -5190,51 +5231,66 @@ test("64 retained units complete 16 repairs in waves of at most three within the
                 { id: "finding-1", severity: "blocking", detail: "fix" },
               ],
             },
-          },
-        );
-      }
-      assert.equal(state.units[unitId]?.repairCount, 16);
-      assert.equal(
-        reduce(
-          state,
-          event(
+          });
+        }
+        assert.equal(state.units[unitId]?.repairCount, 16);
+        assert.equal(
+          reduce(
             state,
-            "repair_intent",
-            {
-              judgment: {
-                schemaVersion: 1,
-                role: "controller",
-                kind: "repair_disposition",
-                unitId,
-                sessionId: "incarnation-1",
-                requestedModel: "frontier",
-                returnedModel: "frontier-1",
-                aggregateRevision: state.revision,
-                promptHash: HASH,
-                responseHash: HASH,
-                rationale: "seventeenth repair",
-                factOid: OID_B,
-                decision: "repair",
-                ...repairEvidence(state, unitId),
+            event(
+              state,
+              "repair_intent",
+              {
+                judgment: {
+                  schemaVersion: 1,
+                  role: "controller",
+                  kind: "repair_disposition",
+                  unitId,
+                  sessionId: "incarnation-1",
+                  requestedModel: "frontier",
+                  returnedModel: "frontier-1",
+                  aggregateRevision: state.revision,
+                  promptHash: HASH,
+                  responseHash: HASH,
+                  rationale: "seventeenth repair",
+                  factOid: OID_B,
+                  decision: "repair",
+                  ...repairEvidence(state, unitId),
+                },
               },
-            },
-            unitId,
-          ),
-        ).ok,
-        false,
-      );
-      state = stepUnit(state, unitId, "park_intent", {});
-      state = observeUnit(state, unitId, "park_observed", "park");
-      state = stepUnit(state, unitId, "reservation_release_intent", {});
-      state = observeUnit(
-        state,
-        unitId,
-        "reservation_released",
-        "reservation_release",
-      );
+              unitId,
+            ),
+          ).ok,
+          false,
+        );
+        cursor = `${unitId} drain`;
+        drive(unitId, "park_intent", {});
+        driveObserved(unitId, "park_observed", "park");
+        drive(unitId, "reservation_release_intent", {});
+        driveObserved(unitId, "reservation_released", "reservation_release");
+      }
     }
+  } catch (error) {
+    if (error instanceof RepairPressureRefused) return error.outcome;
+    throw error;
   }
+  return { kind: "drained", state, peakBytes };
+}
 
+// The name keeps the `64 retained units …` prefix that `test/fast.manifest.json`
+// pins as its single fast-tier skip pattern; the capacity this scenario proves
+// is the 61 units the envelope actually guarantees.
+test("64 retained units complete 16 repairs in waves of at most three within the envelope only to its exact 61-unit capacity", () => {
+  const outcome = driveFullRepairPressure(ENVELOPE_REPAIR_UNITS);
+  assert.equal(
+    outcome.kind,
+    "drained",
+    outcome.kind === "refused"
+      ? `${outcome.step} refused with ${outcome.code}: ${outcome.reason}`
+      : "the guaranteed capacity must drain",
+  );
+  if (outcome.kind !== "drained") return;
+  const { peakBytes, state } = outcome;
   const envelope = {
     schema: "sce.repository-run" as const,
     version: 1 as const,
@@ -5255,11 +5311,14 @@ test("64 retained units complete 16 repairs in waves of at most three within the
     Buffer.from(state.sessionLineage, "base64").length,
     ENVELOPE_REPAIR_LINEAGE_BYTES,
   );
-  for (const unitId of unitIds)
+  for (let index = 1; index <= ENVELOPE_REPAIR_UNITS; index += 1)
     for (let attempt = 1; attempt <= 16; attempt += 1) {
-      assert.equal(hasUsedSession(state, `worker-${unitId}-${attempt}`), true);
       assert.equal(
-        hasUsedSession(state, `reviewer-${unitId}-${attempt}`),
+        hasUsedSession(state, `worker-unit-${index}-${attempt}`),
+        true,
+      );
+      assert.equal(
+        hasUsedSession(state, `reviewer-unit-${index}-${attempt}`),
         true,
       );
     }
@@ -5274,8 +5333,56 @@ test("64 retained units complete 16 repairs in waves of at most three within the
   // six. Pin it exactly so any growth in the durable per-unit, per-session or
   // per-closure footprint has to restate this capacity, instead of crossing
   // the boundary unseen by a scenario that only measured its cheap end.
-  assert.equal(peakEnvelopeBytes, ENVELOPE_REPAIR_PEAK_BYTES);
-  assert.ok(peakEnvelopeBytes <= LIMITS.envelopeBytes);
+  assert.equal(peakBytes, ENVELOPE_REPAIR_PEAK_BYTES);
+  assert.equal(
+    peakBytes <= LIMITS.envelopeBytes,
+    true,
+    "the guaranteed capacity must never exceed the envelope",
+  );
+});
+
+// One unit past the guaranteed capacity. The point is not that the run stops
+// — it has to — but that it stops the way a bound is supposed to stop a run:
+// a named refusal on the transition that cannot be afforded, decided on the
+// candidate state before anything is persisted and before the reviewer's
+// verdict is collected. `invariant` is this reducer's word for "the aggregate
+// I was handed is internally inconsistent"; a legal run that has simply spent
+// its envelope is neither inconsistent nor the controller's mistake, and a
+// controller that reads an invariant failure there cannot tell the two apart.
+// The name keeps the fast-tier skip prefix: this scenario is as slow as the
+// capacity it complements.
+test("64 retained units complete 16 repairs in waves of at most three within the envelope, and one unit past its capacity refuses by name instead of failing an invariant", () => {
+  const outcome = driveFullRepairPressure(ENVELOPE_REFUSED_UNITS);
+  assert.equal(outcome.kind, "refused", "a 62-unit run must not drain");
+  if (outcome.kind !== "refused") return;
+  assert.equal(
+    outcome.step,
+    ENVELOPE_REFUSED_STEP,
+    "the first unaffordable transition moved",
+  );
+  assert.equal(
+    outcome.code,
+    "illegal_transition",
+    `envelope refusal used ${outcome.code}`,
+  );
+  assert.equal(
+    outcome.reason,
+    "transition exceeds the repository run envelope budget",
+    "envelope refusal must name the budget it spent",
+  );
+  // The refused transition never reached the aggregate: the state the
+  // controller still holds is the admitted one that preceded it, and it is
+  // whole.
+  assert.equal(
+    outcome.precedingBytes,
+    ENVELOPE_REFUSED_PRECEDING_BYTES,
+    "the admitted state preceding the refusal changed size",
+  );
+  assert.equal(
+    outcome.precedingBytes <= LIMITS.envelopeBytes,
+    true,
+    "the state the refusal left behind must still fit the envelope",
+  );
 });
 
 test("hydration rejects fabricated reservation lineage and active parking remains slot-consistent", () => {
