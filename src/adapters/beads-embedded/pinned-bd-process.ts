@@ -1178,14 +1178,10 @@ export class PinnedBdEmbeddedProcess
   }
 
   /**
-   * Reads, and only reads, what the unpublished commits moved. The same
-   * validated reader loads the projection each end of the range holds, and
-   * `dolt diff --data` between the two commits is proved to be exactly the
-   * row movement between them -- the identical completeness proof the pending
-   * probe applies to the working set, applied to a committed range instead.
-   * A commit anyone else made inside that range moved a row, a column, or a
-   * table this engine never writes, so the range stops being engine-shaped
-   * and nothing here can make it so again.
+   * Reads, and only reads, what the unpublished commits moved. Only a
+   * direct-parent edge is admitted. Its complete `dolt diff --data`
+   * must match the projection step; an endpoint diff over multiple commits
+   * could hide foreign writes that were later reverted.
    */
   public async aheadRange(
     request: EmbeddedAheadRangeRequest,
@@ -1210,6 +1206,9 @@ export class PinnedBdEmbeddedProcess
       remoteHead === head
     )
       return "unavailable";
+    const parents = await this.directParents(head);
+    if (parents === undefined) return "unavailable";
+    if (parents.length !== 1 || parents[0] !== remoteHead) return "foreign";
     const published = await load.call(this.projections, remoteHead);
     const local = await load.call(this.projections, head);
     if (published.status !== "observed" || local.status !== "observed")

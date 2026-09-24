@@ -1737,6 +1737,32 @@ test("a locally-ahead clone publishes engine deltas and refuses a foreign commit
       { kind: "ahead_range", value: "engine_delta" },
       "one engine checkpoint is exactly the projection movement it wrote",
     );
+    // A later commit can leave the endpoint data diff unchanged. Its history
+    // is still outside the engine checkpoint and must not ride along.
+    await run(database(first), "dolt", ["branch", "foreign-tail"]);
+    await run(database(first), "dolt", ["checkout", "foreign-tail"]);
+    await run(database(first), "dolt", [
+      "commit",
+      "--allow-empty",
+      "--author",
+      "Test <test@example.invalid>",
+      "-m",
+      "foreign history",
+    ]);
+    const hidden = await firstProcess.execute({ kind: "state" });
+    assert.equal(hidden.kind, "state");
+    assert.notEqual(hidden.value.head, ahead.value.head);
+    if (hidden.value.head === undefined) throw new Error("unreachable");
+    assert.deepEqual(
+      await firstProcess.aheadRange({
+        head: hidden.value.head,
+        kind: "ahead_range",
+        remoteHead: ahead.value.remoteHead,
+      }),
+      { kind: "ahead_range", value: "foreign" },
+      "an unchanged endpoint diff cannot hide an extra commit",
+    );
+    await run(database(first), "dolt", ["checkout", "-f", "main"]);
     const port = new RecordingProcess(firstProcess);
     const adapter = new EmbeddedBeadsAdapter({
       holder,
