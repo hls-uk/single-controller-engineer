@@ -66,7 +66,13 @@ readback can establish.
    dispatch: with no commits on the unit branch the refresh fast-forwards it
    and its worktree, so the packet binds the base the worker starts on. Then
    dispatch workhorse models only. Workers edit their owned scope and run the
-   focused fast gate; they do not write Beads, publish, or integrate.
+   focused fast gate; they do not write Beads, publish, or integrate. A
+   manual launch is acknowledged, never retried: the dispatch (or repair)
+   request persists the intent and prints a launch tool request, the
+   controller launches by hand, and `record-dispatch` settles that intent
+   with a `launch_inspected` acknowledgement for the inspected session.
+   `next` and `status` stay read-only meanwhile — they leave the launch
+   intended and report it — so they need no sequencing around it.
 4. The controller collects and observes Git/test facts, rebases or otherwise
    updates one candidate using the repository's permitted non-force strategy,
    and freezes its exact base/head/tree.

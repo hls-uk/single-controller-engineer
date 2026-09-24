@@ -32,7 +32,7 @@ import {
   createProductionRecoveryRunner,
   type ProductionRecoveryRunnerOptions,
 } from "./production-recovery.js";
-import type { RecoveryRequest } from "./recovery.js";
+import type { RecoveryInvocation, RecoveryRequest } from "./recovery.js";
 
 export * from "./candidate-digest.js";
 export * from "./recovery.js";
@@ -541,7 +541,10 @@ const commandEvent: Readonly<
  * closed until a topology composition root supplies that runner.
  */
 export function createRecoveryCommandRunner(
-  runner: (request?: RecoveryRequest) => Promise<
+  runner: (
+    request?: RecoveryRequest,
+    invocation?: RecoveryInvocation,
+  ) => Promise<
     /**
      * A refusal may carry the diagnostic tail of the remote child that caused
      * it. It is deliberately `unknown` here: this seam is structural, so the
@@ -562,7 +565,9 @@ export function createRecoveryCommandRunner(
     if (isCandidateDigestCommandRequest(request))
       return stateOnlyCommandRunner(request);
     if (isStateCommandRequest(request)) {
-      const outcome = await runner();
+      // A state query reconciles but never acts on its own behalf, so an
+      // outstanding manual launch must survive it as an intent.
+      const outcome = await runner(undefined, { stateQuery: true });
       if (!("run" in outcome)) {
         const tail = storeFailureTail(outcome);
         return outcome.status === "unavailable"

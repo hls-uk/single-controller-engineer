@@ -22,6 +22,11 @@ import {
   type RecoveryEffectAdapter,
   type RecoveryFaultPoint,
 } from "../../src/commands/recovery.js";
+import {
+  createRecoveryCommandRunner,
+  type CommandRunnerResult,
+  type JsonObject,
+} from "../../src/commands/index.js";
 import { makeSlotTransitionIntent } from "../../src/adapters/beads-embedded/index.js";
 import {
   deriveIdempotencyKey,
@@ -816,4 +821,169 @@ test("a store refusal carries the remote child's cause into the recovery outcome
   // A refusal with no failed remote child stays exactly the bare status.
   refusal = { status: "unavailable" };
   assert.deepEqual(await runner(intent()), { status: "unavailable" });
+});
+
+function outstandingManualLaunchRun(): RepositoryRun {
+  let state = run();
+  const step = (
+    type: import("../../src/protocol/schemas.js").ProtocolEvent["type"],
+    fields: Record<string, unknown> = {},
+  ) => {
+    state = transition(state, event(state, type, fields), reduce);
+  };
+  const observe = (
+    type: import("../../src/protocol/schemas.js").ProtocolEvent["type"],
+    kind: string,
+    fields: Record<string, unknown> = {},
+  ) =>
+    step(type, {
+      effectId: state.effectJournal.at(-1)!.effectId,
+      effectKind: kind,
+      observationHash: HASH,
+      ...fields,
+    });
+  step("reservation_intent", {
+    reservations: [{ id: "res-1", namespace: "test", resource: "one" }],
+  });
+  observe("reservation_observed", "reservation_acquire");
+  step("branch_intent", { branchRef: "sce/unit-1" });
+  observe("branch_observed", "branch_create", { branchRef: "sce/unit-1" });
+  step("worktree_intent", { worktreePath: "/tmp/sce-unit-1" });
+  observe("worktree_observed", "worktree_create", {
+    worktreePath: "/tmp/sce-unit-1",
+  });
+  step("dispatch_intent", { promptHash: HASH, requestedModel: "workhorse" });
+  return state;
+}
+
+function okResult(value: CommandRunnerResult): JsonObject {
+  assert.equal(value.status, "ok");
+  if (!("result" in value)) throw new Error("expected an ok command result");
+  return value.result;
+}
+
+/**
+ * A read-only query drives reconciliation but acts on nothing, so it may not
+ * author the ambiguity that would settle an outstanding manual launch.
+ */
+test("state queries leave an outstanding manual launch intended and report it", async () => {
+  const state = outstandingManualLaunchRun();
+  const launch = state.effectJournal.at(-1)!;
+  assert.equal(launch.kind, "dispatch");
+  assert.equal(launch.status, "intended");
+  const store = new MemoryStore();
+  store.current = readback(state);
+  const root = await mkdtemp(join(tmpdir(), "sce-recovery-"));
+  const commonDir = join(root, ".git");
+  await mkdir(commonDir, { mode: 0o700 });
+  await chmod(commonDir, 0o700);
+  try {
+    let reconciles = 0;
+    const runner = createRunner({
+      adapter: {
+        canExecute: (effect) => effect.kind === "dispatch",
+        canReconcile: (effect) => effect.kind === "dispatch",
+        async execute() {
+          throw new Error("a state query must never act");
+        },
+        async reconcile() {
+          reconciles += 1;
+          // An at-most-once-manual family cannot look a launch up again, so
+          // discovery is unavoidably inconclusive.
+          return { status: "ambiguous" as const };
+        },
+        async acknowledge(_acknowledgement, current) {
+          const entry = current.effectJournal.at(-1)!;
+          return {
+            observation: event(current, "dispatch_observed", {
+              effectId: entry.effectId,
+              effectKind: "dispatch",
+              observationHash: HASH,
+              promptHash: HASH,
+              requestedModel: "workhorse",
+              returnedModel: "workhorse-1",
+              sessionId: "worker-1",
+            }),
+            status: "observed" as const,
+          };
+        },
+      },
+      acquireOperationLock: async () => ({
+        status: "acquired",
+        lock: { release: async () => ({ status: "released" as const }) },
+      }),
+      nonce: "nonce-state-query",
+      preOwnership: store,
+      proveTopology: async () => ({
+        commonDir: await realpath(commonDir),
+        holder,
+        scope,
+      }),
+      store,
+    });
+    const commands = createRecoveryCommandRunner(runner);
+    const command = async (name: "next" | "resume" | "status") =>
+      await commands({
+        command: name,
+        options: { json: true },
+        schema: "sce.command.request",
+        version: 1,
+      });
+
+    const status = okResult(await command("status"));
+    assert.equal(status.state, "active");
+    assert.deepEqual(status.ambiguities, [
+      {
+        effectId: launch.effectId,
+        effectKind: "dispatch",
+        observationType: "dispatch_observed",
+        unitId: "unit-1",
+      },
+    ]);
+    // `next` names the acknowledgement that settles the outstanding launch.
+    assert.deepEqual(okResult(await command("next")).legalActions, [
+      {
+        effectKind: "dispatch",
+        mode: "record",
+        type: "dispatch_observed",
+        unitId: "unit-1",
+      },
+    ]);
+
+    // Both queries reconciled, and neither wrote: the launch is still an
+    // outstanding intent at the exact revision the operator last saw.
+    assert.equal(reconciles, 2);
+    assert.equal(store.casCalls, 0);
+    assert.equal(store.current!.root.run.revision, state.revision);
+    assert.equal(
+      store.current!.root.run.effectJournal.at(-1)!.status,
+      "intended",
+    );
+
+    // A mutating command is still refused while the launch is outstanding,
+    // and it is still entitled to record the ambiguity it found.
+    const resumed = await command("resume");
+    assert.equal(resumed.status, "blocked");
+    assert.equal(store.casCalls, 1);
+    assert.equal(
+      store.current!.root.run.effectJournal.at(-1)!.status,
+      "ambiguous",
+    );
+
+    // The exact acknowledgement still settles an already-ambiguous launch.
+    const settled = await runner({
+      harnessAcknowledgement: {
+        effectId: launch.effectId,
+        kind: "launch_inspected",
+      },
+    });
+    assert.equal(settled.status, "applied");
+    assert.equal(
+      store.current!.root.run.effectJournal.at(-1)!.status,
+      "observed",
+    );
+    assert.equal(store.current!.root.run.units["unit-1"]?.state, "dispatched");
+  } finally {
+    await rm(root, { force: true, recursive: true });
+  }
 });

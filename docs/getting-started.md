@@ -192,6 +192,15 @@ the loop this repository uses on itself:
    `npm run build` and commits the rebuilt bundle on the integration branch;
    the release tier proves the committed bundle is fresh before a tag.
 
+A manual launch is acknowledged, never retried. `dispatch-request` (or
+`repair-request`) persists the intent and prints a launch tool request, the
+controller launches that worker by hand in its worktree, and `record-dispatch`
+settles the intent with a `launch_inspected` acknowledgement carrying the
+inspected session. `next` and `status` stay read-only in between: they
+reconcile without acting, so they leave the launch intended and report it
+under `ambiguities` and the `record-dispatch` legal action rather than marking
+it ambiguous. No sequencing around an outstanding launch is needed.
+
 Authority is profiled, never assumed: a run records `local-change-only`,
 `push-branch`, `open-pr`, or `integrate` and stops at its completion
 boundary. Publishing, tags, pushes, external issue mutation, and feedback

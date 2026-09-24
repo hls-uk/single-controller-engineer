@@ -308,6 +308,16 @@ export type RecoveryRequest =
     }>;
 
 /**
+ * How the command surface entered the coordinator.  A state query (`inspect`,
+ * `next`, `status`) submits no request: it is entitled to reconcile, but it
+ * performs no external act of its own, so it is never entitled to author an
+ * ambiguity.  An outstanding at-most-once-manual launch therefore stays
+ * `intended` across a state query and is reported as outstanding; only its
+ * exact acknowledgement, or a command that actually acts, may settle it.
+ */
+export type RecoveryInvocation = Readonly<{ stateQuery?: boolean }>;
+
+/**
  * Positive absence permits replay only for Phase-2 effects with adapter-level
  * idempotency/discovery. Everything else (reservations, verification,
  * terminal cleanup, and all harness work) remains a no-act blocked fact.
@@ -666,6 +676,7 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
   async function reconcile(
     root: RootProjection,
     run: RepositoryRun,
+    stateQuery = false,
   ): Promise<RepositoryRun | RecoveryOutcome> {
     let currentRoot = root;
     let current = run;
@@ -683,6 +694,11 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
       if (answer.status === "unavailable") return { status: "unavailable" };
       if (answer.status === "tool_request") {
         if (answer.delivery === "mark_ambiguous") {
+          // A state query issues no manual request of its own, so it has no
+          // delivery to record. Marking the still-outstanding effect here
+          // would be the controller admitting an ignorance the query did not
+          // create; the entry stays intended and is reported instead.
+          if (stateQuery) continue;
           const delivered = await persistEvent(
             currentRoot,
             current,
@@ -707,6 +723,12 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
       // Only an exact acknowledgement can settle its already-ambiguous entry.
       if (entry.status === "ambiguous" && answer.status === "ambiguous")
         return { status: "ambiguous" };
+      // Discovery that cannot observe the effect teaches a state query
+      // nothing. The query performed no act, so there is no observation to
+      // journal: the intent stays outstanding and is reported through the
+      // state result. Only a command that acts writes the ambiguity its own
+      // act made real.
+      if (stateQuery && answer.status === "ambiguous") continue;
       let settledAnswer:
         | Exclude<
             ExecuteResult,
@@ -752,7 +774,12 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
 
   return async function recoverAndRun(
     requested?: RecoveryRequest,
+    invocation?: RecoveryInvocation,
   ): Promise<RecoveryOutcome> {
+    // Read-only by construction: a state query carries no request, so the
+    // claim cannot be used to smuggle a mutation past reconciliation.
+    const stateQuery =
+      invocation?.stateQuery === true && requested === undefined;
     const proof = await options.proveTopology();
     if (proof === undefined) return { status: "unavailable" };
     const lockResult = await (
@@ -917,7 +944,7 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
       const reconciled =
         requested !== undefined && isHarnessAcknowledgementRequest(requested)
           ? run
-          : await reconcile(root, run);
+          : await reconcile(root, run, stateQuery);
       if (!isRun(reconciled)) return reconciled;
       let dedicatedCarryPlan = false;
       if (requested !== undefined && isProvenanceCarryClaimRequest(requested)) {
