@@ -410,11 +410,11 @@ var require_codegen = __commonJS({
         const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
         return `${varKind} ${this.name}${rhs};` + _n;
       }
-      optimizeNames(names, constants6) {
+      optimizeNames(names, constants7) {
         if (!names[this.name.str])
           return;
         if (this.rhs)
-          this.rhs = optimizeExpr(this.rhs, names, constants6);
+          this.rhs = optimizeExpr(this.rhs, names, constants7);
         return this;
       }
       get names() {
@@ -431,10 +431,10 @@ var require_codegen = __commonJS({
       render({ _n }) {
         return `${this.lhs} = ${this.rhs};` + _n;
       }
-      optimizeNames(names, constants6) {
+      optimizeNames(names, constants7) {
         if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects)
           return;
-        this.rhs = optimizeExpr(this.rhs, names, constants6);
+        this.rhs = optimizeExpr(this.rhs, names, constants7);
         return this;
       }
       get names() {
@@ -495,8 +495,8 @@ var require_codegen = __commonJS({
       optimizeNodes() {
         return `${this.code}` ? this : void 0;
       }
-      optimizeNames(names, constants6) {
-        this.code = optimizeExpr(this.code, names, constants6);
+      optimizeNames(names, constants7) {
+        this.code = optimizeExpr(this.code, names, constants7);
         return this;
       }
       get names() {
@@ -525,12 +525,12 @@ var require_codegen = __commonJS({
         }
         return nodes.length > 0 ? this : void 0;
       }
-      optimizeNames(names, constants6) {
+      optimizeNames(names, constants7) {
         const { nodes } = this;
         let i = nodes.length;
         while (i--) {
           const n = nodes[i];
-          if (n.optimizeNames(names, constants6))
+          if (n.optimizeNames(names, constants7))
             continue;
           subtractNames(names, n.names);
           nodes.splice(i, 1);
@@ -583,12 +583,12 @@ var require_codegen = __commonJS({
           return void 0;
         return this;
       }
-      optimizeNames(names, constants6) {
+      optimizeNames(names, constants7) {
         var _a;
-        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants6);
-        if (!(super.optimizeNames(names, constants6) || this.else))
+        this.else = (_a = this.else) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants7);
+        if (!(super.optimizeNames(names, constants7) || this.else))
           return;
-        this.condition = optimizeExpr(this.condition, names, constants6);
+        this.condition = optimizeExpr(this.condition, names, constants7);
         return this;
       }
       get names() {
@@ -611,10 +611,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.iteration})` + super.render(opts);
       }
-      optimizeNames(names, constants6) {
-        if (!super.optimizeNames(names, constants6))
+      optimizeNames(names, constants7) {
+        if (!super.optimizeNames(names, constants7))
           return;
-        this.iteration = optimizeExpr(this.iteration, names, constants6);
+        this.iteration = optimizeExpr(this.iteration, names, constants7);
         return this;
       }
       get names() {
@@ -650,10 +650,10 @@ var require_codegen = __commonJS({
       render(opts) {
         return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
       }
-      optimizeNames(names, constants6) {
-        if (!super.optimizeNames(names, constants6))
+      optimizeNames(names, constants7) {
+        if (!super.optimizeNames(names, constants7))
           return;
-        this.iterable = optimizeExpr(this.iterable, names, constants6);
+        this.iterable = optimizeExpr(this.iterable, names, constants7);
         return this;
       }
       get names() {
@@ -695,11 +695,11 @@ var require_codegen = __commonJS({
         (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNodes();
         return this;
       }
-      optimizeNames(names, constants6) {
+      optimizeNames(names, constants7) {
         var _a, _b;
-        super.optimizeNames(names, constants6);
-        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants6);
-        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants6);
+        super.optimizeNames(names, constants7);
+        (_a = this.catch) === null || _a === void 0 ? void 0 : _a.optimizeNames(names, constants7);
+        (_b = this.finally) === null || _b === void 0 ? void 0 : _b.optimizeNames(names, constants7);
         return this;
       }
       get names() {
@@ -1000,7 +1000,7 @@ var require_codegen = __commonJS({
     function addExprNames(names, from) {
       return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
     }
-    function optimizeExpr(expr, names, constants6) {
+    function optimizeExpr(expr, names, constants7) {
       if (expr instanceof code_1.Name)
         return replaceName(expr);
       if (!canOptimize(expr))
@@ -1015,14 +1015,14 @@ var require_codegen = __commonJS({
         return items;
       }, []));
       function replaceName(n) {
-        const c = constants6[n.str];
+        const c = constants7[n.str];
         if (c === void 0 || names[n.str] !== 1)
           return n;
         delete names[n.str];
         return c;
       }
       function canOptimize(e) {
-        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants6[c.str] !== void 0);
+        return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants7[c.str] !== void 0);
       }
     }
     function subtractNames(names, from) {
@@ -6871,8 +6871,8 @@ var require_ajv = __commonJS({
 });
 
 // src/cli.ts
-import { realpathSync as realpathSync8 } from "node:fs";
-import { readFile as readFile5 } from "node:fs/promises";
+import { constants as constants6, realpathSync as realpathSync8 } from "node:fs";
+import { open as open4 } from "node:fs/promises";
 import {
   basename as basename5,
   dirname as dirname8,
@@ -12159,8 +12159,9 @@ function reduceHarnessConfiguration(state, event) {
 function hasHarnessConfiguration(state) {
   return state.harness !== void 0;
 }
+var CANDIDATE_DIFF_DOMAIN = "sce.protocol.candidate-diff/v1";
 function deriveCandidateDiffHash(diff) {
-  return sha256(`sce.protocol.candidate-diff/v1
+  return sha256(`${CANDIDATE_DIFF_DOMAIN}
 ${diff}`);
 }
 function canonicalCandidateDiffCommand(baseOid, headOid) {
@@ -21952,8 +21953,7 @@ function sortActions(actions) {
 }
 
 // src/commands/candidate-digest.ts
-var MAX_CANDIDATE_DIFF_BYTES = 65536;
-var CANDIDATE_DIFF_DOMAIN = "sce.protocol.candidate-diff/v1";
+var MAX_CANDIDATE_DIFF_BYTES = CANDIDATE_DIFF_MAX_BYTES;
 var CandidateDigestRequestSchema = Type.Object(
   {
     diff: Type.String({
@@ -40261,7 +40261,7 @@ async function runCandidateDigest(invocation, dependencies) {
 async function readCandidateDiff2(invocation, dependencies) {
   let bytes2;
   try {
-    bytes2 = invocation.file !== void 0 ? await readFile5(invocation.file) : dependencies.standardInput !== void 0 ? await dependencies.standardInput() : await readProcessStandardInput();
+    bytes2 = invocation.file !== void 0 ? await readCandidateDiffFile(invocation.file) : dependencies.standardInput !== void 0 ? await dependencies.standardInput() : await readProcessStandardInput();
   } catch (error) {
     if (error instanceof CliError)
       return {
@@ -40293,19 +40293,42 @@ async function readCandidateDiff2(invocation, dependencies) {
     );
   let diff;
   try {
-    diff = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
-      bytes2
-    );
+    diff = new TextDecoder("utf-8", { fatal: true }).decode(bytes2);
   } catch {
     return invalid2(
       "The reproduced diff is not valid UTF-8; the protocol digest is taken over the UTF-8 bytes the collector observed."
     );
   }
+  if (diff.length === 0)
+    return invalid2(
+      "The reproduced diff is nothing but a byte-order mark, which the collector strips before hashing, so no candidate bytes remain."
+    );
   if (diff.includes("\0"))
     return invalid2(
       "The reproduced diff contains a NUL byte, which the candidate collector refuses; these bytes were never hashed as a candidate."
     );
   return { diff, ok: true };
+}
+async function readCandidateDiffFile(path2) {
+  const handle = await open4(path2, constants6.O_RDONLY | constants6.O_NONBLOCK);
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile())
+      throw new CliError(
+        "SCE_CANDIDATE_DIFF_UNREADABLE",
+        `${path2} is not a regular file, so it holds no diff bytes the candidate collector could have observed.`,
+        EXIT_UNAVAILABLE
+      );
+    if (stats.size > MAX_CANDIDATE_DIFF_BYTES)
+      throw new CliError(
+        "SCE_CANDIDATE_DIFF_INVALID",
+        `${path2} measures ${stats.size} bytes, past the ${MAX_CANDIDATE_DIFF_BYTES} bytes a collected candidate diff may have, so these bytes were never hashed as a candidate.`,
+        EXIT_USAGE
+      );
+    return await handle.readFile();
+  } finally {
+    await handle.close();
+  }
 }
 async function readProcessStandardInput() {
   if (process.stdin.isTTY === true)
@@ -40529,7 +40552,11 @@ function helpResult(command, version) {
   return {
     ...command === "feedback" ? { actions: [...feedbackActions] } : {},
     command,
-    usage: command === "feedback" ? "sce feedback <prepare|preview|submit|flush> --request <json>" : command === "install-skill" ? "sce install-skill [--host <codex|claude>] --destination <absolute path> [--dry-run]" : command === "uninstall-skill" ? "sce uninstall-skill [--host <codex|claude>] --destination <absolute path>" : command === candidateDigestCommand ? "sce candidate-digest [--file <absolute path>] [--raw] [--json] (the reproduced diff is read from standard input when --file is absent)" : command === composeCommand ? "sce compose-config --harness <claude|codex> --root-bead <id> --output <absolute path> [--cwd <absolute path>] [--branch <name>] [--authority <local-change-only|push-branch|open-pr|integrate>] [--beads-mode <local-only|git-sync>] [--controller-model <id>] [--frontier-model <id>] [--workhorse-model <id>] [--knowledge|--no-knowledge] [--bd-executable <absolute path>] [--dolt-executable <absolute path>] [--bind-slot] [--overwrite] [--json]" : `sce ${command} [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]`
+    usage: command === "feedback" ? "sce feedback <prepare|preview|submit|flush> --request <json>" : command === "install-skill" ? "sce install-skill [--host <codex|claude>] --destination <absolute path> [--dry-run]" : command === "uninstall-skill" ? "sce uninstall-skill [--host <codex|claude>] --destination <absolute path>" : command === candidateDigestCommand ? [
+      "sce candidate-digest [--file <absolute path>] [--raw] [--json] (the reproduced diff is read from standard input when --file is absent)",
+      "SCE_CANDIDATE_DIFF_INVALID: the bytes are not bytes the collector could have hashed (empty, oversize, NUL-bearing, or not UTF-8).",
+      "SCE_CANDIDATE_DIFF_UNREADABLE: the bytes could not be read at all (a missing file, a file that is not a regular file, or a terminal on standard input)."
+    ].join("\n") : command === composeCommand ? "sce compose-config --harness <claude|codex> --root-bead <id> --output <absolute path> [--cwd <absolute path>] [--branch <name>] [--authority <local-change-only|push-branch|open-pr|integrate>] [--beads-mode <local-only|git-sync>] [--controller-model <id>] [--frontier-model <id>] [--workhorse-model <id>] [--knowledge|--no-knowledge] [--bd-executable <absolute path>] [--dolt-executable <absolute path>] [--bind-slot] [--overwrite] [--json]" : `sce ${command} [--controller-config <absolute path>] [--json] [--request <json>] [--expected-revision <n>] [--idempotency-key <key>]`
   };
 }
 function canonicalJson2(value) {
