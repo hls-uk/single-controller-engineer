@@ -1123,13 +1123,15 @@ admits — `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_AUTHOR_DATE`,
 `GIT_COMMITTER_NAME`, `GIT_COMMITTER_EMAIL`, `GIT_COMMITTER_DATE` — each at
 most 512 characters with no NUL, CR or LF, and the date rendered exactly as
 `<unix seconds> +0000`. Keyed discovery on resume is the same trailer read
-back: a bounded `rev-list --max-count=64` walk from the integration head, then
+back: a bounded `rev-list --topo-order --max-count=64` walk from the integration
+head (topological, so no commit is listed before every reachable child of it,
+which is what lets a listed base prove absence, per bead sce-dcx.4), then
 `cat-file commit` on each candidate, matching the trailer as a whole line.
 
 K3 adds exactly these vectors to the Git allowlist and no others:
 `worktree add --detach <absolute path> <OID>`, `add --all`, `write-tree`, the
 `commit-tree` vector above, `update-ref --no-deref HEAD <OID>`,
-`cat-file commit|blob <OID>`, `rev-list --max-count=64 <OID>`,
+`cat-file commit|blob <OID>`, `rev-list --topo-order --max-count=64 <OID>`,
 `ls-tree -r -z <OID> -- <relative directory>`, whose directory argument must
 be a bounded canonical relative path with no `.`, `..`, doubled or trailing
 slash, and
