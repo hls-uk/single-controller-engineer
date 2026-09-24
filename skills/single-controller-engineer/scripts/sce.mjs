@@ -26537,7 +26537,7 @@ function createRecoveryRunner(options) {
   async function persistEvent(beforeRoot, run2, event, preOwnership = false) {
     return persist(beforeRoot, reduce(run2, event), preOwnership);
   }
-  async function reconcile2(root, run2) {
+  async function reconcile2(root, run2, stateQuery = false) {
     let currentRoot = root;
     let current = run2;
     for (const entry of current.effectJournal.filter(
@@ -26551,6 +26551,7 @@ function createRecoveryRunner(options) {
       if (answer.status === "unavailable") return { status: "unavailable" };
       if (answer.status === "tool_request") {
         if (answer.delivery === "mark_ambiguous") {
+          if (stateQuery) continue;
           const delivered = await persistEvent(
             currentRoot,
             current,
@@ -26573,6 +26574,7 @@ function createRecoveryRunner(options) {
       }
       if (entry.status === "ambiguous" && answer.status === "ambiguous")
         return { status: "ambiguous" };
+      if (stateQuery && answer.status === "ambiguous") continue;
       let settledAnswer = answer;
       if (answer.status === "absent") {
         try {
@@ -26601,7 +26603,8 @@ function createRecoveryRunner(options) {
     }
     return current;
   }
-  return async function recoverAndRun(requested) {
+  return async function recoverAndRun(requested, invocation) {
+    const stateQuery = invocation?.stateQuery === true && requested === void 0;
     const proof = await options.proveTopology();
     if (proof === void 0) return { status: "unavailable" };
     const lockResult = await (options.acquireOperationLock ?? OperationLock.acquire)({
@@ -26708,7 +26711,7 @@ function createRecoveryRunner(options) {
       if (runInvariantErrors(run2).length > 0 || loaded.root.holder !== proof.holder || run2.controller.holder !== proof.holder)
         return { status: "corrupt" };
       const root = loaded.root;
-      const reconciled = requested !== void 0 && isHarnessAcknowledgementRequest(requested) ? run2 : await reconcile2(root, run2);
+      const reconciled = requested !== void 0 && isHarnessAcknowledgementRequest(requested) ? run2 : await reconcile2(root, run2, stateQuery);
       if (!isRun(reconciled)) return reconciled;
       let dedicatedCarryPlan = false;
       if (requested !== void 0 && isProvenanceCarryClaimRequest(requested)) {
@@ -28346,7 +28349,7 @@ function createRecoveryCommandRunner(runner) {
     if (isCandidateDigestCommandRequest(request2))
       return stateOnlyCommandRunner(request2);
     if (isStateCommandRequest(request2)) {
-      const outcome2 = await runner();
+      const outcome2 = await runner(void 0, { stateQuery: true });
       if (!("run" in outcome2)) {
         const tail = storeFailureTail(outcome2);
         return outcome2.status === "unavailable" ? unavailable3(tail) : recoveryBlocked(tail);
