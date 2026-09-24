@@ -9,6 +9,7 @@ import { canonicalJson, type JsonValue } from "../../src/protocol/canonical.js";
 import {
   decodeClosedUnitEvidence,
   deriveIdempotencyKey,
+  deriveMaterialisationTargetId,
   materialisationAggregateExpansionCost,
   materialisationExpansionCost,
   materialisationProjectionExpansionCost,
@@ -40,9 +41,11 @@ import type {
   HydratedProvenanceInput,
   KnowledgeContract,
   ProtocolEvent,
+  ProvenanceInput,
   RepositoryRun,
 } from "../../src/protocol/schemas.js";
 import {
+  HydratedProvenanceInputSchema,
   LIMITS,
   ProvenanceInputSchema,
   validate,
@@ -866,26 +869,60 @@ const FULL_CAPACITIES = {
   remainingSourceByteCapacity: LIMITS.materialisationWaveBytes,
 } as const;
 
-function minimalLegalTarget(ordinal: number, outputs: number): GateTargetState {
+/**
+ * The closure ledger a projection must carry to be valid at all: a real
+ * closed unit, its commitment, and the unit ids that ledger accounts for.
+ * Nothing synthesises it, so a fixture that omits it is schema-legal and
+ * still a projection the protocol would refuse.
+ */
+const CLOSED_UNIT = (() => {
+  const { state } = provenanceIntent(knowledgeContract());
+  return {
+    closedUnitEvidence: state.closedUnitEvidence,
+    closureEvidenceCommitment: state.closedUnitEvidenceCommitment,
+    unitIds: Object.keys(
+      decodeClosedUnitEvidence(state.closedUnitEvidence)!,
+    ).sort(),
+  };
+})();
+const ORIGIN_UNIT_ID = CLOSED_UNIT.unitIds[0]!;
+
+/**
+ * One target holding `outputs` minimal outputs, numbered from `first` in the
+ * projection-wide output sequence. Every identifier and every published name
+ * is unique, because the projection refuses a repeated gate entry id and
+ * records a collision witness on repeated names: minimal here means the
+ * smallest shape the protocol accepts, not the smallest the schema admits.
+ */
+function minimalValidTarget(
+  ordinal: number,
+  outputs: number,
+  first: number,
+): GateTargetState {
   const sources = Array.from({ length: outputs }, (_, index) => ({
     blobOid: LEGAL.oid,
     byteCount: 0,
-    path: `p${index}`,
+    path: `p${first + index}`,
     sha256: LEGAL.digest,
   }));
   const definition = {
-    originUnitId: "u",
+    originUnitId: ORIGIN_UNIT_ID,
     scope: "unit" as const,
     target: LEGAL.target,
-    targetId: LEGAL.targetId,
+    targetId: deriveMaterialisationTargetId(
+      "unit",
+      ORIGIN_UNIT_ID,
+      ordinal,
+      LEGAL.target,
+    ),
     targetOrdinal: ordinal,
   };
   return {
     definition,
     materialisations: sources.map((source, index) => ({
-      artifactName: "a",
+      artifactName: (first + index).toString(36),
       destinationProbeGateEntryId: LEGAL.probeId,
-      gateEntryId: `sce:gate:${index.toString().padStart(64, "0")}`,
+      gateEntryId: `sce:gate:${(first + index).toString().padStart(64, "0")}`,
       observation: {
         artifactByteCount: source.byteCount,
         artifactSha256: source.sha256,
@@ -896,7 +933,7 @@ function minimalLegalTarget(ordinal: number, outputs: number): GateTargetState {
       },
       originUnitId: definition.originUnitId,
       sidecarByteCount: 1,
-      sidecarName: "a",
+      sidecarName: (first + index).toString(36),
       sidecarSha256: LEGAL.digest,
       source,
       sourceOid: LEGAL.oid,
@@ -907,7 +944,7 @@ function minimalLegalTarget(ordinal: number, outputs: number): GateTargetState {
     })),
     resolution: {
       capacities: FULL_CAPACITIES,
-      gateEntryId: LEGAL.resolutionId,
+      gateEntryId: `sce:gate:${`r${ordinal}`.padStart(64, "0")}`,
       sourceOid: LEGAL.oid,
       sources,
       status: "observed" as const,
@@ -917,17 +954,18 @@ function minimalLegalTarget(ordinal: number, outputs: number): GateTargetState {
   };
 }
 
-/** A schema-legal projection holding exactly `outputs` minimal outputs. */
-function minimalLegalProjection(outputs: number): HydratedProvenanceInput {
+/** A projection-valid snapshot holding exactly `outputs` minimal outputs. */
+function minimalValidProjection(outputs: number): HydratedProvenanceInput {
   const targets: GateTargetState[] = [];
+  let first = 0;
   for (let left = outputs, ordinal = 0; left > 0; ordinal += 1) {
     const take = Math.min(LIMITS.materialisationMatches, left);
-    targets.push(minimalLegalTarget(ordinal, take));
+    targets.push(minimalValidTarget(ordinal, take, first));
+    first += take;
     left -= take;
   }
   return {
-    closedUnitEvidence: "",
-    closureEvidenceCommitment: LEGAL.digest,
+    ...CLOSED_UNIT,
     destinationProbeEvidence: [
       {
         destinationAlias: LEGAL.target.destinationAlias,
@@ -943,7 +981,6 @@ function minimalLegalProjection(outputs: number): HydratedProvenanceInput {
       },
     ],
     targetEvidence: targets,
-    unitIds: ["u"],
   };
 }
 
@@ -968,11 +1005,11 @@ const retiredProjection = (
 });
 
 /** The opposite shape: `targets` minimal targets holding one output each. */
-function widestLegalProjection(targets: number): HydratedProvenanceInput {
+function widestValidProjection(targets: number): HydratedProvenanceInput {
   return {
-    ...minimalLegalProjection(1),
+    ...minimalValidProjection(1),
     targetEvidence: Array.from({ length: targets }, (_, ordinal) =>
-      minimalLegalTarget(ordinal, 1),
+      minimalValidTarget(ordinal, 1, ordinal),
     ),
   };
 }
@@ -1032,7 +1069,7 @@ test("the frozen projection is stored compactly and hydrates byte-identically", 
 });
 
 test("the projection upcaster is total and refuses evidence it cannot reconstruct", () => {
-  const legacy = minimalLegalProjection(2);
+  const legacy = minimalValidProjection(2);
   assert.ok(validate(ProvenanceInputSchema, legacy).ok);
   const compact = compactProvenanceInput(legacy);
   assert.ok(compact !== undefined);
@@ -1085,12 +1122,17 @@ test("the projection upcaster is total and refuses evidence it cannot reconstruc
   ])
     assert.equal(compactProvenanceInput(contradiction(broken)), undefined);
 
-  // A half-compacted projection is ambiguous machine state, not evidence.
+  // A half-compacted projection is ambiguous machine state, not evidence:
+  // two targets, one compacted and one not, each valid on its own.
+  const wide = widestValidProjection(2);
+  const wideCompact = compactProvenanceInput(wide)!;
+  assert.ok(projectionInputIsValid(wide));
+  assert.ok(projectionInputIsValid(wideCompact));
   const mixed = {
-    ...compact,
+    ...wideCompact,
     targetEvidence: [
-      ...compact.targetEvidence.slice(0, 1),
-      ...legacy.targetEvidence.slice(1),
+      ...wideCompact.targetEvidence.slice(0, 1),
+      ...wide.targetEvidence.slice(1),
     ],
   };
   assert.ok(validate(ProvenanceInputSchema, mixed).ok);
@@ -1146,7 +1188,7 @@ test("version 3 retires the live budget at freeze, so no frozen view moves", () 
 
   // A carried version-2 entry beside a newly frozen version-3 one: each entry
   // is the one canonical encoding of itself, so the projection is canonical.
-  const wide = widestLegalProjection(2);
+  const wide = widestValidProjection(2);
   const partlyRetired: HydratedProvenanceInput = {
     ...wide,
     targetEvidence: [
@@ -1199,6 +1241,79 @@ test("version 3 retires the live budget at freeze, so no frozen view moves", () 
   );
 });
 
+test("a compact entry that hydrates outside the one view is refused", () => {
+  // The compact arms drop fields the version-free arm constrains, so they are
+  // legal where the view they rebuild is not: a resolution stored without its
+  // source list is observed with no outputs, and hydration rebuilds the empty
+  // `sources` that arm forbids. Every other projection rule passes on it, so
+  // the view itself has to be validated or the encoding smuggles it through.
+  const definition = {
+    originUnitId: ORIGIN_UNIT_ID,
+    scope: "unit" as const,
+    target: LEGAL.target,
+    targetId: deriveMaterialisationTargetId(
+      "unit",
+      ORIGIN_UNIT_ID,
+      0,
+      LEGAL.target,
+    ),
+    targetOrdinal: 0,
+  };
+  const resolution = {
+    gateEntryId: LEGAL.resolutionId,
+    sourceOid: LEGAL.oid,
+    status: "observed" as const,
+  };
+  const entry = {
+    definition,
+    disposition: "deferral_cascade" as const,
+    followUpBeadId: "sce-follow-up",
+    materialisations: [],
+    status: "voided" as const,
+  };
+  for (const target of [
+    {
+      ...entry,
+      resolution: { ...resolution, capacities: FULL_CAPACITIES },
+      version: 2 as const,
+    },
+    { ...entry, resolution, version: 3 as const },
+  ]) {
+    const snapshot: ProvenanceInput = {
+      ...CLOSED_UNIT,
+      destinationProbeEvidence: [],
+      targetEvidence: [target],
+    };
+    assert.ok(validate(ProvenanceInputSchema, snapshot).ok);
+    // The view it rebuilds is not legal in either schema, and both arms of
+    // the projection now say so.
+    assert.equal(hydrateProvenanceInput(snapshot), undefined);
+    assert.equal(projectionInputIsValid(snapshot), false);
+  }
+  const view = {
+    ...CLOSED_UNIT,
+    destinationProbeEvidence: [],
+    targetEvidence: [
+      {
+        ...entry,
+        resolution: {
+          ...resolution,
+          capacities: FULL_CAPACITIES,
+          sources: [],
+          targetId: definition.targetId,
+        },
+      },
+    ],
+  };
+  assert.equal(validate(HydratedProvenanceInputSchema, view).ok, false);
+  assert.equal(validate(ProvenanceInputSchema, view).ok, false);
+  // The same shape holding the one output its resolution claims still passes,
+  // in either encoding, so the check refuses the view and nothing else.
+  const accepted = minimalValidProjection(1);
+  assert.ok(hydrateProvenanceInput(accepted) !== undefined);
+  assert.ok(projectionInputIsValid(compactProvenanceInput(accepted)!));
+});
+
 test("the compact projection buys real output capacity inside unchanged bounds", () => {
   // No bound moves, and neither does the per-target ceiling.
   assert.equal(LIMITS.projectionSnapshotBytes, 65_536);
@@ -1206,52 +1321,58 @@ test("the compact projection buys real output capacity inside unchanged bounds",
   assert.equal(LIMITS.materialisationMatches, 64);
 
   const legacyBytes = (outputs: number) =>
-    canonicalBytes(minimalLegalProjection(outputs));
+    canonicalBytes(minimalValidProjection(outputs));
   const compactBytes = (outputs: number) =>
-    projectionStorageByteLength(minimalLegalProjection(outputs));
-  for (const outputs of [1, 64])
-    for (const encoded of [
-      minimalLegalProjection(outputs),
-      compactProvenanceInput(minimalLegalProjection(outputs)),
-    ])
-      assert.ok(validate(ProvenanceInputSchema, encoded).ok);
-
+    projectionStorageByteLength(minimalValidProjection(outputs));
   const retiredBytes = (outputs: number) =>
     projectionStorageByteLength(
-      retiredProjection(minimalLegalProjection(outputs)),
+      retiredProjection(minimalValidProjection(outputs)),
     );
+  // Every literal below is measured on a projection the protocol accepts, in
+  // each encoding it accepts. Capacity claimed on a merely schema-legal shape
+  // is capacity the reducer would never grant.
+  for (const outputs of [1, 64])
+    for (const view of [
+      minimalValidProjection(outputs),
+      retiredProjection(minimalValidProjection(outputs)),
+    ])
+      for (const encoded of [view, compactProvenanceInput(view)!]) {
+        assert.ok(validate(ProvenanceInputSchema, encoded).ok);
+        assert.ok(projectionInputIsValid(encoded));
+      }
 
-  // Exact marginal cost of one more minimal legal output. The retired budget
-  // is per resolution, not per output, so the per-output cost is unchanged.
-  assert.equal(legacyBytes(2) - legacyBytes(1), 1_307);
+  // Exact marginal cost of one more minimal output. The retired budget is per
+  // resolution, not per output, so the per-output cost is unchanged.
+  assert.equal(legacyBytes(2) - legacyBytes(1), 1_312);
   assert.equal(compactBytes(2) - compactBytes(1), 645);
   assert.equal(retiredBytes(2) - retiredBytes(1), 645);
 
   // 64 minimal outputs did not fit and now do, with headroom to spare.
-  assert.equal(legacyBytes(64), 89_093);
-  assert.equal(compactBytes(64), 46_585);
-  assert.equal(retiredBytes(64), 46_407);
+  assert.equal(legacyBytes(64), 90_447);
+  assert.equal(compactBytes(64), 47_619);
+  assert.equal(retiredBytes(64), 47_441);
   assert.ok(legacyBytes(64) > LIMITS.projectionSnapshotBytes);
   assert.ok(retiredBytes(64) <= LIMITS.projectionSnapshotBytes);
-  assert.equal(largestFittingOutputCount(legacyBytes), 46);
-  assert.equal(largestFittingOutputCount(compactBytes), 92);
-  assert.equal(largestFittingOutputCount(retiredBytes), 92);
+  assert.equal(largestFittingOutputCount(legacyBytes), 45);
+  assert.equal(largestFittingOutputCount(compactBytes), 90);
+  assert.equal(largestFittingOutputCount(retiredBytes), 91);
 
   // Per target, which is what version 3 actually pays for: one minimal target
   // holding one output costs 178 stored bytes less, and seven more of them
   // fit inside the same unchanged ceiling.
   const wideCompactBytes = (targets: number) =>
-    projectionStorageByteLength(widestLegalProjection(targets));
+    projectionStorageByteLength(widestValidProjection(targets));
   const wideRetiredBytes = (targets: number) =>
     projectionStorageByteLength(
-      retiredProjection(widestLegalProjection(targets)),
+      retiredProjection(widestValidProjection(targets)),
     );
-  assert.equal(wideCompactBytes(2) - wideCompactBytes(1), 1_346);
-  assert.equal(wideRetiredBytes(2) - wideRetiredBytes(1), 1_168);
-  assert.equal(wideCompactBytes(64), 90_748);
-  assert.equal(wideRetiredBytes(64), 79_356);
-  assert.equal(largestFittingOutputCount(wideCompactBytes), 45);
-  assert.equal(largestFittingOutputCount(wideRetiredBytes), 52);
+  assert.ok(projectionInputIsValid(widestValidProjection(64)));
+  assert.equal(wideCompactBytes(2) - wideCompactBytes(1), 1_351);
+  assert.equal(wideRetiredBytes(2) - wideRetiredBytes(1), 1_173);
+  assert.equal(wideCompactBytes(64), 92_151);
+  assert.equal(wideRetiredBytes(64), 80_759);
+  assert.equal(largestFittingOutputCount(wideCompactBytes), 44);
+  assert.equal(largestFittingOutputCount(wideRetiredBytes), 51);
 });
 
 test("the exact legal reserve is measured on the encoding each copy is stored in", () => {

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   CANDIDATE_DIFF_MAX_BYTES,
   GateMaterialisationRefusalSchema,
+  HydratedProvenanceInputSchema,
   JudgmentSchema,
   MATERIALISE_REFUSAL_CODES,
   MaterialisationDestinationIdentitySchema,
@@ -705,8 +706,41 @@ test("the compact projection encoding stays strict and disjoint", () => {
     ).ok,
     true,
   );
+  // The stored union is deliberately wider than the view it hydrates into: a
+  // compact resolution keeps no source list, so an observed one with no
+  // outputs is legal stored and illegal as the view rebuilt from it. The
+  // codec, not this schema, is what closes that gap.
+  assert.equal(
+    validate(
+      ProvenanceInputSchema,
+      projection([{ ...compactTarget, materialisations: [] }]),
+    ).ok,
+    true,
+  );
+  assert.equal(
+    validate(
+      HydratedProvenanceInputSchema,
+      projection([
+        {
+          definition,
+          materialisations: [],
+          resolution: {
+            gateEntryId: "resolution-1",
+            sourceOid: OID_A,
+            sources: [],
+            status: "observed",
+            targetId: definition.targetId,
+          },
+          status: "observed",
+        },
+      ]),
+    ).ok,
+    false,
+  );
   // Version 3 is that encoding with the resolution's live budget retired: it
-  // is always resolved and never restates the budget it dropped.
+  // is resolution-bearing, and never restates the budget it dropped. Bearing
+  // a resolution is not being settled; a pending one is legal here and is
+  // refused by the projection's settlement rule instead.
   const retiredTarget = { ...compactTarget, version: 3 };
   assert.equal(
     validate(ProvenanceInputSchema, projection([retiredTarget])).ok,

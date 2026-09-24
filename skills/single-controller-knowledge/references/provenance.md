@@ -90,14 +90,18 @@ direction this discovery must never fail in.
 
 The snapshot is bounded at 65,536 canonical bytes, measured on the bytes
 actually stored, and is held in a strict versioned compact encoding: the
-target definition and resolution are stored once and each per-output entry
-references them, so the destination target, the target and origin
-identifiers, the resolved source OID and tuple, and the observation digests
-are no longer repeated per output. Hydration is total and exact, and the
-snapshot commitment, the provenance entry id, and the carry export id all
-bind the hydrated view rather than the stored bytes, so a run holding the
-older version-free encoding keeps the identifiers it was issued and a carry
-crossing the two encodings commits to the same snapshot.
+target definition and resolution are stored once and each per-output entry is
+associated with them positionally, by its index in the stored arrays rather
+than by a stored key, with compaction and hydration both enforcing equal
+lengths. The destination target, the target and origin identifiers, the
+resolved source OID and tuple, and the observation digests are therefore no
+longer repeated per output. Hydration is total and exact, and the view it
+produces is validated against the one schema every consumer reads, so a
+stored encoding that is legal in itself cannot smuggle an illegal view past
+it. The snapshot commitment, the provenance entry id, and the carry export id
+all bind that hydrated view rather than the stored bytes, so a run holding
+the older version-free encoding keeps the identifiers it was issued and a
+carry crossing the two encodings commits to the same snapshot.
 
 Version 3 also retires the resolution's remaining live budget. That budget is
 the controller's own bookkeeping at the moment the resolve intent was issued:
@@ -106,21 +110,32 @@ so freezing drops it rather than parking it beside the snapshot. The drop
 happens where a live target is frozen and never when a stored projection is
 re-encoded, so a projection frozen before version 3 keeps its budget, keeps
 hydrating to the exact view its commitments were taken over, and is never
-migrated. A version-3 entry is always resolved and never restates the budget
-it dropped; a carried entry frozen earlier sits beside a newly frozen one and
-each stays the one canonical encoding of itself.
+migrated. A version-3 entry is resolution-bearing and never restates the
+budget it dropped; bearing a resolution is not being settled, so a pending
+one is legal in the encoding and is refused by the projection's settlement
+rule instead. A carried entry frozen earlier sits beside a newly frozen one
+and each stays the one canonical encoding of itself.
 
-The capacity is exact, not estimated. One more minimal legal output costs 645
-stored bytes instead of 1,307, so sixty-four occupy 46,407 bytes where they
-needed 89,093 and did not fit; at most forty-six fitted before and ninety-two
-fit now. The retired budget is charged per resolved target rather than per
-output: one minimal target holding one output costs 1,168 stored bytes
-instead of 1,346, so sixty-four of them occupy 79,356 bytes instead of
-90,748 and fifty-two fit where forty-five did. A resolved unit tuple reserves
-the full live gate record, 1,903 bytes, plus the frozen copy, 1,239 bytes,
-for an aggregate of 3,142 rather than twice the live one. No ceiling moves:
-65,536 snapshot bytes, 131,072 envelope bytes, and sixty-four outputs per
-target are all unchanged.
+Because the budget is gone from the stored bytes, a version-3 run no longer
+binds capacities-only drift: the run invariant compares the snapshot against
+the live evidence with that budget retired, so a live gate record differing
+from its snapshot in nothing but its remaining budget is no longer drift. A
+run frozen before version 3 is still compared against the exact budget it
+stored, so neither form is normalised into the other.
+
+The capacity is exact, not estimated, and it is measured on projections the
+protocol accepts rather than on shapes the schema merely admits. One more
+minimal accepted output costs 645 stored bytes instead of 1,312, so
+sixty-four occupy 47,441 bytes where they needed 90,447 and did not fit; at
+most forty-five fitted before and ninety-one fit now. The retired budget is
+charged per resolved target rather than per output: one minimal target
+holding one output costs 1,173 stored bytes instead of 1,351, so sixty-four
+of them occupy 80,759 bytes instead of 92,151 and fifty-one fit where
+forty-four did. A resolved unit tuple reserves the full live gate record,
+1,903 bytes, plus the frozen copy, 1,239 bytes, for an aggregate of 3,142
+rather than twice the live one. No ceiling moves: 65,536 snapshot bytes,
+131,072 envelope bytes, and sixty-four outputs per target are all
+unchanged.
 
 ## Aggregate verification
 

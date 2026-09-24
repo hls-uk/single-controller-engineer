@@ -14,6 +14,7 @@
  * Pure: no clock, environment, subprocess, or randomness.
  */
 import { canonicalJson, type JsonValue } from "./canonical.js";
+import { HydratedProvenanceInputSchema, validate } from "./schemas.js";
 import type {
   CompactGateMaterialisation,
   CompactGateResolution,
@@ -251,7 +252,15 @@ function hydrateTargetEvidence(
   };
 }
 
-/** The pure downcaster onto the one semantic view. Total. */
+/**
+ * The pure downcaster onto the one semantic view. Total, and checked against
+ * the schema of that view rather than against an erased type: a compact arm
+ * drops fields the version-free arm constrains, so it is legal in places the
+ * view it rebuilds is not. An observed resolution with no outputs is the
+ * witness — it is a legal compact entry and rebuilds the empty `sources` the
+ * version-free arm forbids — so a stored encoding could otherwise smuggle a
+ * view past the one schema every consumer and commitment reads.
+ */
 export function hydrateProvenanceInput(
   input: ProvenanceInput,
 ): HydratedProvenanceInput | undefined {
@@ -261,7 +270,8 @@ export function hydrateProvenanceInput(
     if (hydrated === undefined) return undefined;
     targetEvidence.push(hydrated);
   }
-  return { ...input, targetEvidence };
+  const view = { ...input, targetEvidence };
+  return validate(HydratedProvenanceInputSchema, view).ok ? view : undefined;
 }
 
 /**

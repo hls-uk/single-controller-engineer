@@ -859,7 +859,13 @@ export const CompactGateResolutionV3Schema = strictObject({
 export type CompactGateResolutionV3 = Static<
   typeof CompactGateResolutionV3Schema
 >;
-/** A version-3 entry is always resolved; an unresolved one stays version 2. */
+/**
+ * A version-3 entry is resolution-bearing: it carries the resolution record
+ * whose live budget it retired, so an entry with no resolution at all stays
+ * version 2. Bearing one is not the same as being settled — a pending or
+ * refused resolution is schema-legal here and is refused later, by the
+ * projection's settlement rule, not by this arm.
+ */
 export const CompactGateTargetStateV3Schema = strictObject({
   definition: GateTargetDefinitionSchema,
   disposition: Type.Optional(gateDisposition()),
