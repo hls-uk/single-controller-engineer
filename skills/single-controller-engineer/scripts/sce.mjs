@@ -13027,6 +13027,21 @@ function workerPacketBase(unit) {
     return void 0;
   }
 }
+function withoutReviewBindings(unit) {
+  const {
+    approvalResponseHash: _approval,
+    reviewBaseOid: _reviewBase,
+    reviewHeadOid: _reviewHead,
+    reviewPromptHash: _reviewPrompt,
+    reviewTree: _reviewTree,
+    reviewerPacket: _reviewerPacket,
+    reviewerRequestedModel: _reviewerRequested,
+    reviewerReturnedModel: _reviewerReturned,
+    reviewerSessionId: _reviewerSession,
+    ...retained
+  } = unit;
+  return retained;
+}
 function canonicalTaskMetadata(task) {
   return {
     ...task,
@@ -15789,18 +15804,7 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
       if (!matchesIntended(state, event, unit.id, "candidate_collect"))
         return badObservation();
       {
-        const {
-          approvalResponseHash: _approval,
-          reviewBaseOid: _reviewBase,
-          reviewHeadOid: _reviewHead,
-          reviewPromptHash: _reviewPrompt,
-          reviewTree: _reviewTree,
-          reviewerPacket: _reviewerPacket,
-          reviewerRequestedModel: _reviewerRequested,
-          reviewerReturnedModel: _reviewerReturned,
-          reviewerSessionId: _reviewerSession,
-          ...retained
-        } = unit;
+        const retained = withoutReviewBindings(unit);
         result2 = observe(
           state,
           unit,
@@ -15824,19 +15828,7 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
       if (!matchesIntended(state, event, unit.id, "candidate_collect"))
         return badObservation();
       {
-        const {
-          approvalResponseHash: _approval,
-          candidateDiffHash: _diff,
-          reviewBaseOid: _reviewBase,
-          reviewHeadOid: _reviewHead,
-          reviewPromptHash: _reviewPrompt,
-          reviewTree: _reviewTree,
-          reviewerPacket: _reviewerPacket,
-          reviewerRequestedModel: _reviewerRequested,
-          reviewerReturnedModel: _reviewerReturned,
-          reviewerSessionId: _reviewerSession,
-          ...retained
-        } = unit;
+        const { candidateDiffHash: _diff, ...retained } = withoutReviewBindings(unit);
         result2 = observe(
           state,
           unit,
@@ -15918,26 +15910,17 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
         break;
       }
       const {
-        approvalResponseHash: _approval,
         candidateDiffHash: _diff,
         candidateHead: _head,
         candidateTree: _tree,
         refreshBaseOid: _refresh,
-        reviewBaseOid: _reviewBase,
-        reviewHeadOid: _reviewHead,
-        reviewPromptHash: _reviewPrompt,
-        reviewTree: _reviewTree,
-        reviewerPacket: _reviewerPacket,
-        reviewerRequestedModel: _reviewerRequested,
-        reviewerReturnedModel: _reviewerReturned,
-        reviewerSessionId: _reviewerSession,
         verificationBaseOid: _verificationBase,
         verificationCommands: _commands,
         verificationEvidenceHash: _evidence,
         verificationHeadOid: _verificationHead,
         verificationTree: _verificationTree,
         ...retained
-      } = unit;
+      } = withoutReviewBindings(unit);
       result2 = observe(
         state,
         unit,
@@ -15966,9 +15949,10 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
         unit,
         "repair_required",
         event,
+        {},
+        clearUnitOwners(state, unit.id),
         {
-          // The refresh discarded the candidate binding; the repair judgment
-          // must bind to the exact head that conflicted, so rebind it here.
+          ...withoutReviewBindings(unit),
           candidateHead: event.headOid,
           candidateTree: event.treeOid,
           repairContext: {
@@ -15985,8 +15969,7 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
               }
             ]
           }
-        },
-        clearUnitOwners(state, unit.id)
+        }
       );
       break;
     case "verification_intent":
@@ -16157,18 +16140,7 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
             "illegal_transition",
             "request_changes requires a blocking finding"
           );
-        const {
-          approvalResponseHash: _approval,
-          reviewBaseOid: _reviewBase,
-          reviewHeadOid: _reviewHead,
-          reviewPromptHash: _reviewPrompt,
-          reviewTree: _reviewTree,
-          reviewerPacket: _reviewerPacket,
-          reviewerRequestedModel: _reviewerRequested,
-          reviewerReturnedModel: _reviewerReturned,
-          reviewerSessionId: _reviewerSession,
-          ...retained
-        } = unit;
+        const retained = withoutReviewBindings(unit);
         result2 = observe(
           state,
           unit,
