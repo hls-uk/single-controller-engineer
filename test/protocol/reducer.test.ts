@@ -3055,6 +3055,16 @@ test("software integrate and release trace preserves projection and recovery byt
   });
   assert.equal(state.knowledgeContract, undefined);
   assert.equal(state.gate, undefined);
+  assert.equal(
+    root.aggregateCommitment,
+    sha256(
+      canonicalJson({
+        domain: "sce.fencing.aggregate.v1",
+        run: state,
+      } as unknown as JsonValue),
+    ),
+  );
+  assert.equal(root.checkpoint.rootCommitment, root.aggregateCommitment);
   const stableState = semanticSnapshot(state);
   const stableAggregateCommitment = sha256(
     canonicalJson({
