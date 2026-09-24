@@ -510,19 +510,25 @@ test("every integrate refusal names its reason and carries only that reason's fa
     integrationOid: OID_C,
   };
   const dirty = { ...base, reason: "integration_checkout_dirty" };
+  const foreign = { ...base, reason: "integration_checkout_foreign" };
   assert.equal(validate(ProtocolEventSchema, moved).ok, true);
   assert.equal(validate(ProtocolEventSchema, dirty).ok, true);
+  assert.equal(validate(ProtocolEventSchema, foreign).ok, true);
   // A refusal with no reason is no longer expressible; a moved ref must name
-  // the head it found; and a dirty checkout may not smuggle one, because it
-  // read the ref still on the unit base and has no head to report.
+  // the head it found; and checkout refusals may not smuggle one, because
+  // they read the ref still on the unit base and have no head to report.
   for (const invalid of [
     base,
     { ...moved, reason: "integration_checkout_dirty" },
     { ...dirty, integrationOid: OID_C },
+    { ...moved, reason: "integration_checkout_foreign" },
+    { ...foreign, integrationOid: OID_C },
     { ...moved, reason: "git_dirty" },
     { ...moved, integrationOid: OID_C.slice(0, 39) },
     { ...dirty, baseOid: undefined },
     { ...dirty, extra: "nope" },
+    { ...foreign, baseOid: undefined },
+    { ...foreign, extra: "nope" },
   ])
     assert.equal(
       validate(ProtocolEventSchema, invalid).ok,

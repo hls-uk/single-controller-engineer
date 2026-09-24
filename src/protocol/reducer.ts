@@ -6009,9 +6009,9 @@ function reduceInternal(
         event.baseOid !== unit.baseOid ||
         // A moved ref must name a head that is not the reviewed one: a ref
         // already sitting on the candidate head means the act landed. A
-        // dirty checkout names no head at all; `baseOid` alone binds the
-        // refusal to the unit, because the adapter only names that refusal
-        // from a precondition it read before any act, so nothing landed.
+        // checkout refusal names no head at all; `baseOid` alone binds it
+        // to the unit, because the adapter read the precondition before any
+        // act, so nothing landed.
         (event.reason === "integration_ref_moved" &&
           event.integrationOid === unit.reviewHeadOid)
       )

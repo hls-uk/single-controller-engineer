@@ -1595,6 +1595,22 @@ test("a modified bd passive export never blocks local fast-forward integration; 
   await git(worktreePath, "add", "unit.txt");
   await git(worktreePath, "commit", "-m", "candidate");
   const candidate = (await git(worktreePath, "rev-parse", "HEAD")).trim();
+  // The integration ref is still at the approved base, but this checkout is
+  // on another branch. Refuse before merge without moving either branch.
+  await git(cwd, "checkout", "-b", "foreign");
+  assert.deepEqual(
+    await integrateLocalFastForward(nodeGitRunner, repo, {
+      base: exportBase,
+      candidate,
+      integrationRef: "refs/heads/main",
+    }),
+    { code: "GIT_FOREIGN_WORKTREE", state: "refused" },
+  );
+  assert.equal(
+    (await git(cwd, "rev-parse", "refs/heads/main")).trim(),
+    exportBase,
+  );
+  await git(cwd, "checkout", "main");
   // A tracked modification and an untracked non-passive file each refuse the
   // fast-forward before any merge runs, so the ref never leaves the base the
   // approval was bound to. The refusal is the whole act.

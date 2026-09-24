@@ -1809,30 +1809,36 @@ async function integrationRefused(
 }
 
 /**
- * `GIT_DIRTY` from an integration attempt is a precondition the integration
- * checkout failed, not an unresolved act: every dirty site reads the tree
- * before it writes anything, and the local profile has already proved the
- * integration ref sits exactly on the unit base by then. Left to
+ * `GIT_DIRTY` and `GIT_FOREIGN_WORKTREE` from an integration attempt are
+ * precondition refusals, not unresolved acts: the local profile has already
+ * proved the integration ref sits exactly on the unit base and reads the
+ * checkout before writing anything. Left to
  * `executed`/`discovered` it collapses to ambiguous, blocks the unit, and
  * the following `next` reports the run corrupt. Named here it settles the
  * effect as `integrate_refused` and returns the unit to approved, so the
- * controller cleans the checkout and re-issues the same integrate intent
+ * controller fixes the checkout and re-issues the same integrate intent
  * (or refreshes, if the ref moved meanwhile). It is profile-independent by
  * construction — it reads nothing — so `local-ff` and `remote-ff` route a
- * dirty checkout identically.
+ * checkout refusal identically.
  */
 function integrationCheckoutRefused(
   effect: Extract<ProtocolEffect, { kind: "integrate" }>,
   run: RepositoryRun,
   result: GitEffect,
 ): Extract<ReconcileResult, { status: "observed" }> | undefined {
-  if (result.state !== "refused" || result.code !== "GIT_DIRTY")
+  if (
+    result.state !== "refused" ||
+    (result.code !== "GIT_DIRTY" && result.code !== "GIT_FOREIGN_WORKTREE")
+  )
     return undefined;
   return {
     observation: {
       ...eventBase(effect, run),
       baseOid: effect.params.candidate.baseOid,
-      reason: "integration_checkout_dirty",
+      reason:
+        result.code === "GIT_DIRTY"
+          ? "integration_checkout_dirty"
+          : "integration_checkout_foreign",
       type: "integrate_refused",
     } as ProtocolEvent,
     status: "observed",
