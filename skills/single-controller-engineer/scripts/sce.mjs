@@ -11465,7 +11465,7 @@ var ProtocolEventSchema = Type.Union([
     type: Type.Literal("integrate_intent"),
     ...effectIntent
   }),
-  // Two exact refusals, each naming why nothing landed, so neither can decay
+  // Exact refusals name why nothing landed, so none can decay
   // into an unsettled effect. `integration_ref_moved`: the integration ref
   // moved past the unit base with the candidate provably not beneath it, so
   // the refusal carries the head it found and the controller refreshes on
@@ -11473,7 +11473,9 @@ var ProtocolEventSchema = Type.Union([
   // checkout was not in the state a fast-forward requires, read as a
   // precondition before any act ran, so it carries no head at all and the
   // controller cleans the checkout and re-issues the same integrate intent.
-  // Both return the unit to approved with its candidate, review, and
+  // `integration_checkout_foreign` likewise names a pre-act checkout on the
+  // wrong branch, without claiming an integration head.
+  // All return the unit to approved with its candidate, review, and
   // approval bindings untouched.
   strictObject({
     ...eventBase,
@@ -11488,6 +11490,13 @@ var ProtocolEventSchema = Type.Union([
     type: Type.Literal("integrate_refused"),
     ...observedEffect,
     reason: Type.Literal("integration_checkout_dirty"),
+    baseOid: oid()
+  }),
+  strictObject({
+    ...eventBase,
+    type: Type.Literal("integrate_refused"),
+    ...observedEffect,
+    reason: Type.Literal("integration_checkout_foreign"),
     baseOid: oid()
   }),
   strictObject({
@@ -16237,9 +16246,9 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
     case "integrate_refused":
       if (unit.state !== "integrate_intent" || state.integrationOwnerUnitId !== unit.id || event.baseOid !== unit.baseOid || // A moved ref must name a head that is not the reviewed one: a ref
       // already sitting on the candidate head means the act landed. A
-      // dirty checkout names no head at all; `baseOid` alone binds the
-      // refusal to the unit, because the adapter only names that refusal
-      // from a precondition it read before any act, so nothing landed.
+      // checkout refusal names no head at all; `baseOid` alone binds it
+      // to the unit, because the adapter read the precondition before any
+      // act, so nothing landed.
       event.reason === "integration_ref_moved" && event.integrationOid === unit.reviewHeadOid)
         return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "integrate"))
@@ -28014,13 +28023,13 @@ async function integrationRefused(effect2, run2, result2, git) {
   };
 }
 function integrationCheckoutRefused(effect2, run2, result2) {
-  if (result2.state !== "refused" || result2.code !== "GIT_DIRTY")
+  if (result2.state !== "refused" || result2.code !== "GIT_DIRTY" && result2.code !== "GIT_FOREIGN_WORKTREE")
     return void 0;
   return {
     observation: {
       ...eventBase2(effect2, run2),
       baseOid: effect2.params.candidate.baseOid,
-      reason: "integration_checkout_dirty",
+      reason: result2.code === "GIT_DIRTY" ? "integration_checkout_dirty" : "integration_checkout_foreign",
       type: "integrate_refused"
     },
     status: "observed"
