@@ -10498,7 +10498,16 @@ function runInvariantErrorsWithClosedEvidence(
       errors.push(`unit ${id} reuses one session for worker and reviewer`);
     if (
       unit.candidateRecheck === true &&
-      (unit.state !== "candidate_intent" ||
+      ((unit.state !== "candidate_intent" &&
+        !(
+          unit.state === "blocked" &&
+          state.effectJournal.some(
+            (effect) =>
+              effect.unitId === id &&
+              effect.kind === "candidate_collect" &&
+              effect.status === "ambiguous",
+          )
+        )) ||
         unit.candidateHead === undefined ||
         unit.candidateTree === undefined ||
         unit.candidateDiffHash !== undefined ||

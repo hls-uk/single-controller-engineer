@@ -654,7 +654,8 @@ function requestSkeleton(
   const unit =
     action.unitId === undefined ? undefined : run.units[action.unitId];
   const bound: Readonly<Record<string, JsonValue | undefined>> = {
-    baseOid: unit?.baseOid,
+    baseOid:
+      action.type === "candidate_recheck_intent" ? unit?.baseOid : undefined,
     branchRef: unit?.branchRef,
     effectId: outstandingEffectId(run, action),
     effectKind: action.effectKind,

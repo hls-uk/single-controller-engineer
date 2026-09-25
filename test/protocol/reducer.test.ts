@@ -6986,6 +6986,69 @@ test("a qualified candidate recheck discards verification and routes oversize to
   assert.deepEqual(runInvariantErrors(state), []);
 });
 
+test("an ambiguous qualified recheck retains its exact pair and recovers through the original observation", () => {
+  const unitId = "unit-1";
+  let state = completeCandidate();
+  state = stepUnit(state, unitId, "verification_intent");
+  state = observeUnit(state, unitId, "verification_observed", "verify", {
+    baseOid: OID_A,
+    headOid: OID_B,
+    treeOid: OID_C,
+  });
+  state = stepUnit(state, unitId, "candidate_recheck_intent", {
+    baseOid: OID_A,
+    headOid: OID_B,
+    treeOid: OID_C,
+    branchRef: "sce/unit-1",
+    worktreePath: "/tmp/unit-1",
+  });
+  const pending = state.effectJournal.at(-1)!;
+  const params = rehydrateEffect(state, pending)?.params;
+  state = stepUnit(state, unitId, "effect_ambiguous", {
+    effectId: pending.effectId,
+    effectKind: "candidate_collect",
+    observationHash: HASH,
+  });
+  assert.equal(state.state, "blocked");
+  assert.equal(state.units[unitId]?.state, "blocked");
+  assert.equal(state.units[unitId]?.candidateRecheck, true);
+  assert.equal(state.units[unitId]?.verificationEvidenceHash, undefined);
+  assert.deepEqual(
+    rehydrateEffect(state, state.effectJournal.at(-1)!)?.params,
+    params,
+  );
+  assert.deepEqual(runInvariantErrors(state), []);
+  const moved = reduce(
+    state,
+    event(state, "candidate_refused", {
+      effectId: pending.effectId,
+      effectKind: "candidate_collect",
+      observationHash: HASH,
+      reason: "diff_oversize",
+      maximumByteCount: CANDIDATE_DIFF_MAX_BYTES,
+      measuredByteCount: 94_802,
+      headOid: OID_C,
+      treeOid: OID_C,
+    }),
+  );
+  assert.equal(moved.ok, false);
+  state = stepUnit(state, unitId, "candidate_refused", {
+    effectId: pending.effectId,
+    effectKind: "candidate_collect",
+    observationHash: HASH,
+    reason: "diff_oversize",
+    maximumByteCount: CANDIDATE_DIFF_MAX_BYTES,
+    measuredByteCount: 94_802,
+    headOid: OID_B,
+    treeOid: OID_C,
+  });
+  assert.equal(state.state, "active");
+  assert.equal(state.units[unitId]?.state, "repair_required");
+  assert.equal(state.units[unitId]?.candidateRecheck, undefined);
+  assert.equal(state.units[unitId]?.verificationEvidenceHash, undefined);
+  assert.deepEqual(runInvariantErrors(state), []);
+});
+
 // sce-dcx.21: a candidate whose diff passes the packet bound used to leave the
 // collect effect unobserved, so the unit blocked with no stated cause.
 test("an oversize candidate diff repairs the unit with the exact measurement", () => {

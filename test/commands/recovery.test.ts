@@ -171,7 +171,7 @@ class MemoryStore {
   }
 }
 
-function softwareReleaseIntentRun(): RepositoryRun {
+function softwareReleaseIntentRun(stopAtQualified = false): RepositoryRun {
   let state = run();
   const step = (
     type: import("../../src/protocol/schemas.js").ProtocolEvent["type"],
@@ -227,6 +227,7 @@ function softwareReleaseIntentRun(): RepositoryRun {
     headOid: oidB,
     treeOid: oidC,
   });
+  if (stopAtQualified) return state;
   step("reviewer_dispatch_intent");
   observe("reviewer_observed", "review_dispatch", {
     promptHash: HASH,
@@ -1093,4 +1094,127 @@ test("a skeleton the run fully determines is the event the reducer accepts", asy
     parked.nextState.effectJournal.at(-1)!.effectId,
   );
   assert.equal(settle.observationHash, "<observationHash>");
+});
+
+test("next leaves a refresh target base for the controller to supply", async () => {
+  const initial = run();
+  const state: RepositoryRun = {
+    ...initial,
+    qualificationQueue: ["unit-1"],
+    units: {
+      ...initial.units,
+      "unit-1": {
+        ...initial.units["unit-1"]!,
+        state: "candidate_committed",
+        branchRef: "sce/unit-1",
+        worktreePath: "/tmp/unit-1",
+        candidateHead: "b".repeat(40),
+        candidateTree: "c".repeat(40),
+        candidateDiffHash: HASH,
+      },
+    },
+  };
+  const summary = await nextSummary(state);
+  const refresh = skeletons(summary).find(
+    (entry) => entry.event.type === "refresh_intent",
+  );
+  assert.equal(refresh?.event.baseOid, "<baseOid>");
+  const qualified: RepositoryRun = {
+    ...state,
+    qualificationOwnerUnitId: "unit-1",
+    units: {
+      ...state.units,
+      "unit-1": {
+        ...state.units["unit-1"]!,
+        state: "qualified",
+        verificationBaseOid: "a".repeat(40),
+        verificationHeadOid: "b".repeat(40),
+        verificationTree: "c".repeat(40),
+        verificationEvidenceHash: HASH,
+        verificationCommands: ["npm test"],
+      },
+    },
+  };
+  const recheck = skeletons(await nextSummary(qualified)).find(
+    (entry) => entry.event.type === "candidate_recheck_intent",
+  );
+  assert.equal(recheck?.event.baseOid, qualified.units["unit-1"]?.baseOid);
+});
+
+test("a moved recheck read persists blocked and exact recovery settles the same effect", async () => {
+  const qualified = softwareReleaseIntentRun(true);
+  const unit = qualified.units["unit-1"]!;
+  const store = new MemoryStore();
+  store.current = readback(qualified);
+  let moved = true;
+  const adapter: RecoveryEffectAdapter = {
+    canExecute: (effect) => effect.kind === "candidate_collect",
+    canReconcile: (effect) => effect.kind === "candidate_collect",
+    async execute() {
+      return { status: "ambiguous" };
+    },
+    async reconcile(effect, current) {
+      if (moved) return { status: "ambiguous" };
+      return {
+        status: "observed",
+        observation: event(current, "candidate_refused", {
+          effectId: effect.effectId,
+          effectKind: "candidate_collect",
+          observationHash: HASH,
+          reason: "diff_oversize",
+          maximumByteCount: 65_536,
+          measuredByteCount: 94_802,
+          headOid: unit.candidateHead,
+          treeOid: unit.candidateTree,
+        }),
+      };
+    },
+  };
+  const runner = createRunner({
+    adapter,
+    acquireOperationLock: async () => ({
+      status: "acquired",
+      lock: { release: async () => ({ status: "released" as const }) },
+    }),
+    nonce: "nonce-candidate-recheck",
+    preOwnership: store,
+    proveTopology: async () => ({ commonDir: "/repo/.git", holder, scope }),
+    store,
+  });
+  const request = event(qualified, "candidate_recheck_intent", {
+    baseOid: unit.baseOid,
+    headOid: unit.candidateHead,
+    treeOid: unit.candidateTree,
+    branchRef: unit.branchRef,
+    worktreePath: unit.worktreePath,
+  });
+  const first = await runner(request);
+  assert.equal(first.status, "ambiguous");
+  const blocked = store.current?.root.run;
+  assert.equal(blocked?.state, "blocked");
+  assert.equal(blocked?.units["unit-1"]?.candidateRecheck, true);
+  const pending = blocked?.effectJournal.at(-1);
+  assert.equal(pending?.status, "ambiguous");
+  assert.deepEqual(
+    pending === undefined || blocked === undefined
+      ? undefined
+      : rehydrateEffect(blocked, pending)?.params,
+    {
+      branchRef: unit.branchRef,
+      worktreePath: unit.worktreePath,
+      expectedHeadOid: unit.candidateHead,
+      expectedTreeOid: unit.candidateTree,
+    },
+  );
+  moved = false;
+  const recovered = await runner();
+  assert.equal(recovered.status, "idle");
+  assert.equal(
+    store.current?.root.run.units["unit-1"]?.state,
+    "repair_required",
+  );
+  assert.equal(
+    store.current?.root.run.units["unit-1"]?.verificationEvidenceHash,
+    undefined,
+  );
 });
