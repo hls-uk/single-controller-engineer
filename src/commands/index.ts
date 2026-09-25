@@ -9,6 +9,7 @@ import {
 import {
   RepositoryRunSchema,
   HarnessPacketInputSchema,
+  PublicationRecoveryAcknowledgementSchema,
   validate,
   ProtocolEventSchema,
   type ProtocolEvent,
@@ -61,6 +62,7 @@ export const commandNames = [
   "review-prepare",
   "review-record",
   "publish",
+  "recover-publication-ref",
   "integrate",
   "close-unit",
   "gate-wave",
@@ -197,6 +199,9 @@ const RecoveryEventPayloadSchema = strictObject({
 const RecoveryAcknowledgementPayloadSchema = strictObject({
   harnessAcknowledgement: JsonObjectSchema,
 });
+const PublicationRecoveryPayloadSchema = strictObject({
+  publicationRecovery: PublicationRecoveryAcknowledgementSchema,
+});
 const ProvenanceCarryClaimOptionsSchema = strictObject({
   json: Type.Boolean(),
   request: strictObject({
@@ -215,6 +220,10 @@ const RecoveryOptionsSchema = strictObject({
       RecoveryAcknowledgementPayloadSchema,
     ]),
   ),
+});
+const PublicationRecoveryOptionsSchema = strictObject({
+  ...RequestMetadataSchema,
+  request: PublicationRecoveryPayloadSchema,
 });
 
 const StateCommandSchema = strictObject({
@@ -288,6 +297,12 @@ const UnavailableCommandSchema = strictObject({
   schema: Type.Literal("sce.command.request"),
   version: Type.Literal(1),
 });
+const PublicationRecoveryCommandSchema = strictObject({
+  command: Type.Literal("recover-publication-ref"),
+  options: PublicationRecoveryOptionsSchema,
+  schema: Type.Literal("sce.command.request"),
+  version: Type.Literal(1),
+});
 const ProvenanceCarryClaimCommandSchema = strictObject({
   command: Type.Literal("claim-provenance-carry"),
   options: ProvenanceCarryClaimOptionsSchema,
@@ -301,6 +316,7 @@ export const CommandRequestSchema = Type.Union([
   CandidateDigestCommandSchema,
   FeedbackCommandSchema,
   ProvenanceCarryClaimCommandSchema,
+  PublicationRecoveryCommandSchema,
   UnavailableCommandSchema,
 ]);
 export type CommandRequest = Static<typeof CommandRequestSchema>;
@@ -745,6 +761,23 @@ export function createRecoveryCommandRunner(
         provenanceCarryClaim: {
           predecessorRootBeadId: request.options.request.predecessorRootBeadId,
         },
+      });
+      if (!("revision" in outcome) || outcome.revision < 0) {
+        const tail = storeFailureTail(outcome);
+        return outcome.status === "unavailable"
+          ? unavailable(tail)
+          : recoveryBlocked(tail);
+      }
+      return {
+        result: { revision: outcome.revision, state: outcome.run.state },
+        schema: "sce.command.result",
+        status: "ok",
+        version: 1,
+      };
+    }
+    if (request.command === "recover-publication-ref") {
+      const outcome = await runner({
+        publicationRecovery: request.options.request.publicationRecovery,
       });
       if (!("revision" in outcome) || outcome.revision < 0) {
         const tail = storeFailureTail(outcome);

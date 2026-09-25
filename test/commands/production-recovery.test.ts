@@ -29,6 +29,7 @@ import {
   provenanceCarryAncestorDigest,
   provenanceCarryLineageCommitment,
   provenanceCarrySnapshotCommitment,
+  rehydrateEffect,
   reduce,
   runInvariantErrors,
   type ProtocolEffect,
@@ -139,6 +140,7 @@ function remoteIntegrationEffect(): ProtocolEffect {
 
 function integrationIntentRun(
   integrationProfile: "local-ff" | "remote-ff",
+  stopAt: "approved" | "integrate" = "integrate",
 ): RepositoryRun {
   let state: RepositoryRun = {
     ...localRun(),
@@ -239,6 +241,7 @@ function integrationIntentRun(
       requestedModel: "frontier",
     },
   });
+  if (stopAt === "approved") return state;
   if (integrationProfile === "remote-ff") {
     state = transition(state, event(state, "publish_intent"), reduce);
     observe("publish_observed", "publish", {
@@ -246,6 +249,55 @@ function integrationIntentRun(
     });
   }
   return transition(state, event(state, "integrate_intent"), reduce);
+}
+
+function legacyPublishBlocked(): RepositoryRun {
+  let state = integrationIntentRun("remote-ff", "approved");
+  state = {
+    ...state,
+    units: {
+      ...state.units,
+      "unit-1": {
+        ...state.units["unit-1"]!,
+        branchRef: "refs/heads/codex/unit-1",
+      },
+    },
+  };
+  state = transition(state, event(state, "publish_intent"), reduce);
+  const publish = state.effectJournal.at(-1)!;
+  return transition(
+    state,
+    event(state, "effect_ambiguous", {
+      effectId: publish.effectId,
+      effectKind: "publish",
+      observationHash: HASH,
+    }),
+    reduce,
+  );
+}
+
+function publicationAcknowledgement(state: RepositoryRun) {
+  const entry = state.effectJournal.at(-1)!;
+  const unit = state.units["unit-1"]!;
+  return {
+    aggregateRevision: state.revision,
+    attestation: "operator_confirmed_exact_provider_rejection" as const,
+    baseOid: unit.baseOid,
+    controllerFencingToken: state.controllerFencingToken,
+    effectId: entry.effectId,
+    headOid: unit.candidateHead!,
+    holder: state.controller.holder,
+    incarnationId: state.controller.incarnationId,
+    kind: "operator_attested_provider_rejection" as const,
+    legacyBranchRef: unit.branchRef!,
+    paramsHash: entry.paramsHash,
+    replacementBranch: "codex/unit-1",
+    runId: state.controller.runId,
+    schema: "sce.publication-recovery-acknowledgement" as const,
+    treeOid: unit.candidateTree!,
+    unitId: unit.id,
+    version: 1 as const,
+  };
 }
 
 function carryRun(
@@ -432,6 +484,212 @@ function carryStore(initial: RepositoryRun, order: string[] = []) {
     },
   };
 }
+
+test("attested publication-ref recovery probes both remote targets without a push", async () => {
+  type RemoteCase =
+    "old-present" | "replacement-foreign" | "unreadable" | "absent";
+  const recover = (initial: RepositoryRun, remoteCase: RemoteCase) => {
+    const store = carryStore(initial);
+    const calls: string[] = [];
+    const gitRunner: GitRunner = async ({ argv }) => {
+      calls.push(argv.join(" "));
+      if (argv[0] === "rev-parse")
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: argv[1] === "--git-common-dir" ? ".git\n" : "sha1\n",
+        };
+      if (argv[0] === "config")
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: "remote.origin.url\nhttps://example.invalid/repo.git\u0000",
+        };
+      if (argv[0] === "remote")
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: "https://example.invalid/repo.git\n",
+        };
+      if (argv[0] !== "ls-remote")
+        return { exitCode: 1, signal: null, stdout: "" };
+      const ref = argv.at(-1);
+      if (remoteCase === "unreadable")
+        return { exitCode: 1, signal: null, stdout: "" };
+      if (
+        remoteCase === "old-present" &&
+        ref === "refs/heads/refs/heads/codex/unit-1"
+      )
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: `${OID_B}\t${ref}\n`,
+        };
+      if (
+        remoteCase === "replacement-foreign" &&
+        ref === "refs/heads/codex/unit-1"
+      )
+        return {
+          exitCode: 0,
+          signal: null,
+          stdout: `${OID_C}\t${ref}\n`,
+        };
+      return { exitCode: 2, signal: null, stdout: "" };
+    };
+    const runner = createProductionRecoveryRunner({
+      acquireOperationLock: async () => acquiredLock(),
+      git: {
+        remote: "origin",
+        repository: carryRemoteRepository,
+        runner: gitRunner,
+      },
+      nonce: `publication-${remoteCase}`,
+      preOwnership: store.port,
+      proveTopology: async () => ({
+        commonDir: carryRemoteRepository.commonDir,
+        holder: initial.controller.holder,
+        scope: {
+          beadsStoreIdentity: initial.storeIdentity,
+          gitRepositoryIdentity: carryRemoteRepository.identity,
+          integrationBranch: initial.integrationBranch,
+        },
+      }),
+      store: store.port,
+    });
+    return { calls, runner, store };
+  };
+
+  const initial = legacyPublishBlocked();
+  const acknowledgement = publicationAcknowledgement(initial);
+  const original = initial.effectJournal.at(-1)!;
+  const success = recover(initial, "absent");
+  const outcome = await success.runner({
+    publicationRecovery: acknowledgement,
+  });
+  assert.equal(outcome.status, "applied", success.calls.join("\n"));
+  assert.equal(
+    success.calls.some((call) => call.startsWith("push ")),
+    false,
+  );
+  assert.equal(
+    success.calls.includes(
+      "ls-remote --refs --exit-code origin refs/heads/refs/heads/codex/unit-1",
+    ),
+    true,
+  );
+  assert.equal(
+    success.calls.includes(
+      "ls-remote --refs --exit-code origin refs/heads/codex/unit-1",
+    ),
+    true,
+  );
+  assert.equal(success.store.writes, 1);
+  const recovered = success.store.root.run;
+  const repairedUnit = recovered.units["unit-1"]!;
+  assert.equal(recovered.state, "active");
+  assert.equal(repairedUnit.state, "approved");
+  assert.equal(repairedUnit.branchRef, acknowledgement.legacyBranchRef);
+  assert.equal(
+    repairedUnit.worktreePath,
+    initial.units["unit-1"]?.worktreePath,
+  );
+  assert.equal(
+    repairedUnit.publicationBranchRef,
+    acknowledgement.replacementBranch,
+  );
+  assert.equal(
+    repairedUnit.candidateHead,
+    initial.units["unit-1"]?.candidateHead,
+  );
+  assert.equal(
+    repairedUnit.reviewHeadOid,
+    initial.units["unit-1"]?.reviewHeadOid,
+  );
+  assert.equal(recovered.effectJournal.at(-1)?.paramsHash, original.paramsHash);
+  assert.equal(
+    recovered.effectJournal.at(-1)?.intentCommitment,
+    original.intentCommitment,
+  );
+  assert.equal(
+    rehydrateEffect(recovered, recovered.effectJournal.at(-1)!),
+    undefined,
+  );
+  const restarted = await success.runner();
+  assert.equal(restarted.status, "idle");
+  const next = transition(
+    recovered,
+    event(recovered, "publish_intent"),
+    reduce,
+  );
+  const nextEffect = rehydrateEffect(next, next.effectJournal.at(-1)!);
+  assert.equal(nextEffect?.kind, "publish");
+  if (nextEffect?.kind === "publish")
+    assert.equal(
+      nextEffect.params.branchRef,
+      acknowledgement.replacementBranch,
+    );
+
+  for (const remoteCase of [
+    "old-present",
+    "replacement-foreign",
+    "unreadable",
+  ] as const) {
+    const refusedState = legacyPublishBlocked();
+    const refused = recover(refusedState, remoteCase);
+    assert.equal(
+      (
+        await refused.runner({
+          publicationRecovery: publicationAcknowledgement(refusedState),
+        })
+      ).status,
+      "blocked",
+    );
+    assert.equal(refused.store.writes, 0);
+    assert.equal(
+      refused.calls.some((call) => call.startsWith("push ")),
+      false,
+    );
+  }
+
+  const staleState = legacyPublishBlocked();
+  const stale = recover(staleState, "absent");
+  assert.equal(
+    (
+      await stale.runner({
+        publicationRecovery: {
+          ...publicationAcknowledgement(staleState),
+          aggregateRevision: staleState.revision - 1,
+        },
+      })
+    ).status,
+    "blocked",
+  );
+  assert.equal(stale.store.writes, 0);
+
+  const rawState = legacyPublishBlocked();
+  const raw = recover(rawState, "absent");
+  const rawAcknowledgement = publicationAcknowledgement(rawState);
+  assert.equal(
+    (
+      await raw.runner({
+        attestation: rawAcknowledgement,
+        effectId: rawAcknowledgement.effectId,
+        effectKind: "publish",
+        eventId: "forged-publish-refusal",
+        expectedRevision: rawState.revision,
+        observationHash: HASH,
+        type: "publish_refused",
+        unitId: "unit-1",
+      })
+    ).status,
+    "blocked",
+  );
+  assert.equal(raw.store.writes, 0);
+  assert.equal(
+    raw.calls.some((call) => call.startsWith("ls-remote ")),
+    false,
+  );
+});
 
 function carryGitRunner(
   profile: "local-ff" | "remote-ff",

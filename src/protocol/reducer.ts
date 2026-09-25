@@ -5166,6 +5166,8 @@ function reduceInternal(
       ? badObservation()
       : commit(blocked, event, []);
   }
+  if (event.type === "publish_refused")
+    return reducePublicationRefusal(state, event);
   if (state.state === "blocked" && !reconcilingBlockedObservation) {
     const recovered = prepareBlockedObservation(state, event);
     if (recovered === undefined)
@@ -5270,6 +5272,11 @@ function reduceInternal(
       break;
     case "branch_intent":
       if (unit.state !== "resources_reserved") return illegal(unit, event.type);
+      if (!isShortBranchRef(event.branchRef))
+        return reject(
+          "invalid_event",
+          "branch ref must be a short branch name, not a refs/ name",
+        );
       result = intent(state, unit, "branch_intent", event, "branch_create", {
         units: replaceUnit(state, { ...unit, branchRef: event.branchRef }),
       });
@@ -7112,6 +7119,95 @@ function restoreIntended(entry: EffectJournalEntry): EffectJournalEntry {
   return { ...intended, status: "intended" };
 }
 
+/**
+ * New local branches are always short names. Stored legacy branch bindings
+ * remain readable because this admission check is deliberately at the intent
+ * transition, not in the shared wire schema.
+ */
+function isShortBranchRef(value: string): boolean {
+  return (
+    !value.startsWith("refs/") &&
+    /^[A-Za-z0-9](?:[A-Za-z0-9._/-]*[A-Za-z0-9._/-])?$/u.test(value) &&
+    !value.endsWith("/") &&
+    !value.includes("//") &&
+    !value.includes("..") &&
+    !value.includes("@{") &&
+    value
+      .split("/")
+      .every(
+        (part) =>
+          part.length > 0 &&
+          !part.startsWith(".") &&
+          !part.endsWith(".") &&
+          !part.endsWith(".lock"),
+      )
+  );
+}
+
+/**
+ * The one supported repair for an already-ambiguous malformed publication.
+ * Its acknowledgement is admitted only through the production command's
+ * dedicated live-repository check; the reducer still binds every durable
+ * identity before retaining the corrected publication ref.
+ */
+function reducePublicationRefusal(
+  state: RepositoryRun,
+  event: Extract<ProtocolEvent, { type: "publish_refused" }>,
+): Reduction {
+  const unit = state.units[event.unitId];
+  const entry = state.effectJournal.find(
+    (candidate) =>
+      candidate.effectId === event.effectId &&
+      candidate.unitId === event.unitId &&
+      candidate.kind === "publish" &&
+      candidate.status === "ambiguous",
+  );
+  const acknowledgement = event.attestation;
+  if (
+    state.state !== "blocked" ||
+    state.controller.state !== "acquired" ||
+    unit === undefined ||
+    unit.state !== "blocked" ||
+    entry === undefined ||
+    event.effectKind !== "publish" ||
+    acknowledgement.effectId !== event.effectId ||
+    acknowledgement.paramsHash !== entry.paramsHash ||
+    acknowledgement.unitId !== unit.id ||
+    acknowledgement.aggregateRevision !== state.revision ||
+    acknowledgement.runId !== state.controller.runId ||
+    acknowledgement.holder !== state.controller.holder ||
+    acknowledgement.incarnationId !== state.controller.incarnationId ||
+    acknowledgement.controllerFencingToken !== state.controllerFencingToken ||
+    acknowledgement.legacyBranchRef !== unit.branchRef ||
+    acknowledgement.legacyBranchRef !==
+      `refs/heads/${acknowledgement.replacementBranch}` ||
+    !isShortBranchRef(acknowledgement.replacementBranch) ||
+    unit.publicationBranchRef !== undefined ||
+    acknowledgement.baseOid !== unit.baseOid ||
+    acknowledgement.headOid !== unit.candidateHead ||
+    acknowledgement.treeOid !== unit.candidateTree ||
+    !hasCurrentApproval(unit)
+  )
+    return reject(
+      "illegal_transition",
+      "publication recovery acknowledgement is not bound to the ambiguous publish",
+    );
+  const recovered = markObserved(
+    {
+      ...state,
+      units: replaceUnit(state, {
+        ...unit,
+        publicationBranchRef: acknowledgement.replacementBranch,
+        revision: unit.revision + 1,
+        state: "approved",
+      }),
+    },
+    event.effectId,
+    event.observationHash,
+  );
+  return commit(settleAmbiguityState(recovered), event, []);
+}
+
 /** Mark exactly one already-intended effect ambiguous without emitting work. */
 function markEffectAmbiguous(
   state: RepositoryRun,
@@ -7539,7 +7635,11 @@ function runtimeEffectParams(
       };
     case "publish":
       return {
-        branchRef: required(unit.branchRef, "branch ref", kind),
+        branchRef: required(
+          unit.publicationBranchRef ?? unit.branchRef,
+          "publication branch ref",
+          kind,
+        ),
         candidate: candidate(),
         authorityProfile: state.authorityProfile,
         completionBoundary: state.completionBoundary,

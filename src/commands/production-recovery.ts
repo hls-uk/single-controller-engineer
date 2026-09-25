@@ -59,6 +59,7 @@ import {
 } from "../protocol/reducer.js";
 import type { FencingScope, RootProjection } from "../fencing/index.js";
 import type {
+  PublicationRecoveryAcknowledgement,
   ProtocolEvent,
   KnowledgeContract,
   RepositoryRun,
@@ -67,6 +68,7 @@ import type {
 import {
   CANDIDATE_DIFF_MAX_BYTES,
   LIMITS,
+  PublicationRecoveryAcknowledgementSchema,
   ProvenanceInputSchema,
   validate,
   type ProvenanceCarry,
@@ -950,6 +952,26 @@ function localIntegrationRef(branch: string): string {
   return `refs/heads/${branch}`;
 }
 
+function shortBranchRef(value: string): boolean {
+  return (
+    !value.startsWith("refs/") &&
+    /^[A-Za-z0-9](?:[A-Za-z0-9._/-]*[A-Za-z0-9._/-])?$/u.test(value) &&
+    !value.endsWith("/") &&
+    !value.includes("//") &&
+    !value.includes("..") &&
+    !value.includes("@{") &&
+    value
+      .split("/")
+      .every(
+        (part) =>
+          part.length > 0 &&
+          !part.startsWith(".") &&
+          !part.endsWith(".") &&
+          !part.endsWith(".lock"),
+      )
+  );
+}
+
 /**
  * Builds the production recovery adapter.  Every discovery branch below is
  * read-only; `execute` contains the only calls to Git mutators.
@@ -1711,6 +1733,105 @@ export function createProductionRecoveryRunner(
             };
           },
         }),
+    preparePublicationRecovery: async (acknowledgement, run) => {
+      const parsed = validate<PublicationRecoveryAcknowledgement>(
+        PublicationRecoveryAcknowledgementSchema,
+        acknowledgement,
+      );
+      const attestation = parsed.ok ? parsed.value : undefined;
+      if (
+        attestation === undefined ||
+        !gitMatchesRun(git.repository, run) ||
+        attestation.aggregateRevision !== run.revision ||
+        attestation.runId !== run.controller.runId ||
+        attestation.holder !== run.controller.holder ||
+        attestation.incarnationId !== run.controller.incarnationId ||
+        attestation.controllerFencingToken !== run.controllerFencingToken ||
+        attestation.legacyBranchRef !==
+          `refs/heads/${attestation.replacementBranch}` ||
+        !shortBranchRef(attestation.replacementBranch)
+      )
+        return { status: "blocked" as const };
+      const unit = run.units[attestation.unitId];
+      const entry = run.effectJournal.find(
+        (candidate) =>
+          candidate.effectId === attestation.effectId &&
+          candidate.unitId === attestation.unitId &&
+          candidate.kind === "publish" &&
+          candidate.status === "ambiguous",
+      );
+      const effect =
+        entry === undefined ? undefined : rehydrateEffect(run, entry);
+      if (
+        run.state !== "blocked" ||
+        unit === undefined ||
+        unit.state !== "blocked" ||
+        unit.branchRef !== attestation.legacyBranchRef ||
+        unit.publicationBranchRef !== undefined ||
+        unit.baseOid !== attestation.baseOid ||
+        unit.candidateHead !== attestation.headOid ||
+        unit.candidateTree !== attestation.treeOid ||
+        entry === undefined ||
+        entry.paramsHash !== attestation.paramsHash ||
+        effect?.kind !== "publish" ||
+        effect.params.branchRef !== attestation.legacyBranchRef
+      )
+        return { status: "blocked" as const };
+      const configuredRemote = remote({ git });
+      if (configuredRemote === undefined) return { status: "blocked" as const };
+      let absence: GitEffect;
+      try {
+        absence = await discoverPublication(git.runner, git.repository, {
+          candidate: attestation.headOid,
+          remote: configuredRemote,
+          // This deliberately expands the historical full ref once more.
+          remoteBranch: attestation.legacyBranchRef,
+        });
+      } catch {
+        return { status: "ambiguous" as const };
+      }
+      if (absence.state !== "refused" || absence.code !== "GIT_ABSENT")
+        return { status: "blocked" as const };
+      let replacement: GitEffect;
+      try {
+        replacement = await discoverPublication(git.runner, git.repository, {
+          candidate: attestation.headOid,
+          remote: configuredRemote,
+          remoteBranch: attestation.replacementBranch,
+        });
+      } catch {
+        return { status: "ambiguous" as const };
+      }
+      if (!(
+        (replacement.state === "refused" &&
+          replacement.code === "GIT_ABSENT") ||
+        (replacement.state === "observed" && replacement.code === "GIT_OK")
+      ))
+        return { status: "blocked" as const };
+      return {
+        event: {
+          attestation,
+          effectId: attestation.effectId,
+          effectKind: "publish",
+          eventId: recoveryEventId(
+            `publication-refusal-${attestation.effectId}`,
+          ),
+          expectedRevision: run.revision,
+          observationHash: sha256(
+            canonicalJson({
+              acknowledgement: attestation,
+              domain: "sce.publication-recovery-refusal.v1",
+              oldTarget: `refs/heads/${attestation.legacyBranchRef}`,
+              oldTargetResult: absence,
+              replacementTargetResult: replacement,
+            }),
+          ),
+          type: "publish_refused",
+          unitId: attestation.unitId,
+        } as ProtocolEvent,
+        status: "planned" as const,
+      };
+    },
     validateLoadedRun: ({ proof, run }) =>
       run.repositoryIdentity === git.repository.identity &&
       run.gitObjectFormat === git.repository.objectFormat &&
@@ -1723,7 +1844,9 @@ export function createProductionRecoveryRunner(
         ? { status: "ok" }
         : { status: "unavailable" },
     validateEvent: (event) =>
-      event.type !== "wave_planned" || contractMatches(event.knowledgeContract),
+      event.type !== "publish_refused" &&
+      (event.type !== "wave_planned" ||
+        contractMatches(event.knowledgeContract)),
     proveTopology: async () => {
       let proof;
       try {

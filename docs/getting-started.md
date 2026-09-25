@@ -237,6 +237,33 @@ Authority is profiled, never assumed: a run records `local-change-only`,
 boundary. Publishing, tags, pushes, external issue mutation, and feedback
 submission always need separate current authority.
 
+### Correcting a provider-rejected malformed publication ref
+
+`recover-publication-ref` is a narrow repair for one already-ambiguous
+publish whose historical local branch was mistakenly recorded as a full
+`refs/heads/...` name. Before supplying its request, inspect the exact
+provider rejection for that effect and confirm the old expanded remote target
+is absent. Then supply the strict
+`sce.publication-recovery-acknowledgement` v1 request with the exact
+run/revision/holder/incarnation/fence, effect and params hash, candidate
+base/head/tree, legacy ref, and short replacement branch. Its attestation is
+an operator assertion based on that inspection; it is not a provider receipt
+or a cryptographic proof of the rejection.
+
+```sh
+sce recover-publication-ref --json --expected-revision <revision> \
+  --request '{"publicationRecovery":<exact acknowledgement>}'
+```
+
+The command reads the configured repository and sole push remote, rechecks
+that old expanded target, and requires the corrected target to be absent or
+already at the exact candidate. It records the attested refusal, and does not
+push or rename the local branch/worktree. It restores the existing approval only when
+the candidate and review still bind exactly; a later ordinary `publish` emits
+a fresh intent for the replacement short branch. A present, foreign, or
+unreadable old target, a stale acknowledgement, or any mismatched binding
+refuses the repair.
+
 ## What is and is not supported today
 
 Claude Code is a supported install host, and the Claude harness family is

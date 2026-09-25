@@ -1212,6 +1212,12 @@ export const UnitSchema = strictObject({
   /** Durable controller plan binding; absent only on a legacy v1 run. */
   taskMetadata: Type.Optional(WaveTaskMetadataSchema),
   branchRef: Type.Optional(identifier()),
+  /**
+   * The remote branch used only for a newly-derived publish effect. The local
+   * branch/worktree binding above remains immutable evidence of the worker's
+   * physical checkout.
+   */
+  publicationBranchRef: Type.Optional(identifier()),
   worktreePath: Type.Optional(text()),
   reservationIds: Type.Array(identifier(), {
     maxItems: LIMITS.reservations,
@@ -1615,6 +1621,28 @@ const observedEffect = {
   effectKind: EffectKindSchema,
   observationHash: hash(),
 };
+export const PublicationRecoveryAcknowledgementSchema = strictObject({
+  aggregateRevision: revision(),
+  attestation: Type.Literal("operator_confirmed_exact_provider_rejection"),
+  baseOid: oid(),
+  controllerFencingToken: identifier(),
+  effectId: effectIdentifier(),
+  headOid: oid(),
+  holder: controllerHolder(),
+  incarnationId: identifier(),
+  kind: Type.Literal("operator_attested_provider_rejection"),
+  legacyBranchRef: identifier(),
+  paramsHash: hash(),
+  replacementBranch: identifier(),
+  runId: identifier(),
+  schema: Type.Literal("sce.publication-recovery-acknowledgement"),
+  treeOid: oid(),
+  unitId: identifier(),
+  version: Type.Literal(1),
+});
+export type PublicationRecoveryAcknowledgement = Static<
+  typeof PublicationRecoveryAcknowledgementSchema
+>;
 const session = {
   sessionId: identifier(),
   requestedModel: text(),
@@ -2146,6 +2174,13 @@ export const ProtocolEventSchema = Type.Union([
         pullRequest: PullRequestObservationSchema,
       }),
     ]),
+  }),
+  strictObject({
+    ...eventBase,
+    ...observedEffect,
+    type: Type.Literal("publish_refused"),
+    /** An operator assertion after inspecting the exact provider rejection. */
+    attestation: PublicationRecoveryAcknowledgementSchema,
   }),
   strictObject({
     ...eventBase,

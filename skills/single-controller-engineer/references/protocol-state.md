@@ -38,6 +38,26 @@ Do not infer completion from elapsed time, an empty queue, or a missing process.
 Preserve the candidate and durable evidence; resume only through the recorded
 idempotency key and authority boundary.
 
+## Attested malformed-publication recovery
+
+New unit branches are short names only; a `refs/heads/...` value is rejected
+before branch or worktree effects exist. Legacy stored runs remain readable.
+For the one case where an earlier full ref reached an ambiguous publish,
+`recover-publication-ref` accepts only an exact
+`sce.publication-recovery-acknowledgement` v1. The operator must first inspect
+the exact provider rejection and attest that inspection, then bind the run,
+revision, holder, incarnation, fence, effect, old params hash, candidate
+base/head/tree, old full ref, and a valid short replacement.
+
+Recovery performs read-only repository and sole-push-remote checks: the old
+expanded target must be absent and the replacement must be absent or already
+at the candidate. It records a truthful attested refusal but issues no push.
+The physical `unit.branchRef` and worktree stay unchanged; only the optional
+publication ref is set, so a later normal publish derives a distinct intent.
+The acknowledgement is an operator assertion, not a provider receipt or
+cryptographic proof. A generic raw `publish_refused` event is not an admitted
+recovery path.
+
 ## Reproduce the reviewed candidate diff
 
 A reviewer packet carries `candidateDiffCommand`, the exact argv that prints

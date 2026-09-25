@@ -55,6 +55,7 @@ test("mutating and external commands report stable unavailability", async () => 
         "candidate-digest",
         "feedback",
         "claim-provenance-carry",
+        "recover-publication-ref",
       ].includes(item),
   )) {
     const argv = command === "feedback" ? [command, "prepare"] : [command];

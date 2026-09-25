@@ -10554,6 +10554,12 @@ var UnitSchema = strictObject({
   /** Durable controller plan binding; absent only on a legacy v1 run. */
   taskMetadata: Type.Optional(WaveTaskMetadataSchema),
   branchRef: Type.Optional(identifier()),
+  /**
+   * The remote branch used only for a newly-derived publish effect. The local
+   * branch/worktree binding above remains immutable evidence of the worker's
+   * physical checkout.
+   */
+  publicationBranchRef: Type.Optional(identifier()),
   worktreePath: Type.Optional(text()),
   reservationIds: Type.Array(identifier(), {
     maxItems: LIMITS.reservations,
@@ -10932,6 +10938,25 @@ var observedEffect = {
   effectKind: EffectKindSchema,
   observationHash: hash()
 };
+var PublicationRecoveryAcknowledgementSchema = strictObject({
+  aggregateRevision: revision(),
+  attestation: Type.Literal("operator_confirmed_exact_provider_rejection"),
+  baseOid: oid(),
+  controllerFencingToken: identifier(),
+  effectId: effectIdentifier(),
+  headOid: oid(),
+  holder: controllerHolder(),
+  incarnationId: identifier(),
+  kind: Type.Literal("operator_attested_provider_rejection"),
+  legacyBranchRef: identifier(),
+  paramsHash: hash(),
+  replacementBranch: identifier(),
+  runId: identifier(),
+  schema: Type.Literal("sce.publication-recovery-acknowledgement"),
+  treeOid: oid(),
+  unitId: identifier(),
+  version: Type.Literal(1)
+});
 var session = {
   sessionId: identifier(),
   requestedModel: text(),
@@ -11459,6 +11484,13 @@ var ProtocolEventSchema = Type.Union([
         pullRequest: PullRequestObservationSchema
       })
     ])
+  }),
+  strictObject({
+    ...eventBase,
+    ...observedEffect,
+    type: Type.Literal("publish_refused"),
+    /** An operator assertion after inspecting the exact provider rejection. */
+    attestation: PublicationRecoveryAcknowledgementSchema
   }),
   strictObject({
     ...eventBase,
@@ -15551,6 +15583,8 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
     const blocked = markEffectAmbiguous(state, event);
     return blocked === void 0 ? badObservation() : commit(blocked, event, []);
   }
+  if (event.type === "publish_refused")
+    return reducePublicationRefusal(state, event);
   if (state.state === "blocked" && !reconcilingBlockedObservation) {
     const recovered = prepareBlockedObservation(state, event);
     if (recovered === void 0)
@@ -15641,6 +15675,11 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
       break;
     case "branch_intent":
       if (unit.state !== "resources_reserved") return illegal(unit, event.type);
+      if (!isShortBranchRef(event.branchRef))
+        return reject(
+          "invalid_event",
+          "branch ref must be a short branch name, not a refs/ name"
+        );
       result2 = intent(state, unit, "branch_intent", event, "branch_create", {
         units: replaceUnit(state, { ...unit, branchRef: event.branchRef })
       });
@@ -16971,6 +17010,37 @@ function restoreIntended(entry) {
   const { observationHash: _ambiguousObservation, ...intended } = entry;
   return { ...intended, status: "intended" };
 }
+function isShortBranchRef(value) {
+  return !value.startsWith("refs/") && /^[A-Za-z0-9](?:[A-Za-z0-9._/-]*[A-Za-z0-9._/-])?$/u.test(value) && !value.endsWith("/") && !value.includes("//") && !value.includes("..") && !value.includes("@{") && value.split("/").every(
+    (part) => part.length > 0 && !part.startsWith(".") && !part.endsWith(".") && !part.endsWith(".lock")
+  );
+}
+function reducePublicationRefusal(state, event) {
+  const unit = state.units[event.unitId];
+  const entry = state.effectJournal.find(
+    (candidate) => candidate.effectId === event.effectId && candidate.unitId === event.unitId && candidate.kind === "publish" && candidate.status === "ambiguous"
+  );
+  const acknowledgement = event.attestation;
+  if (state.state !== "blocked" || state.controller.state !== "acquired" || unit === void 0 || unit.state !== "blocked" || entry === void 0 || event.effectKind !== "publish" || acknowledgement.effectId !== event.effectId || acknowledgement.paramsHash !== entry.paramsHash || acknowledgement.unitId !== unit.id || acknowledgement.aggregateRevision !== state.revision || acknowledgement.runId !== state.controller.runId || acknowledgement.holder !== state.controller.holder || acknowledgement.incarnationId !== state.controller.incarnationId || acknowledgement.controllerFencingToken !== state.controllerFencingToken || acknowledgement.legacyBranchRef !== unit.branchRef || acknowledgement.legacyBranchRef !== `refs/heads/${acknowledgement.replacementBranch}` || !isShortBranchRef(acknowledgement.replacementBranch) || unit.publicationBranchRef !== void 0 || acknowledgement.baseOid !== unit.baseOid || acknowledgement.headOid !== unit.candidateHead || acknowledgement.treeOid !== unit.candidateTree || !hasCurrentApproval(unit))
+    return reject(
+      "illegal_transition",
+      "publication recovery acknowledgement is not bound to the ambiguous publish"
+    );
+  const recovered = markObserved(
+    {
+      ...state,
+      units: replaceUnit(state, {
+        ...unit,
+        publicationBranchRef: acknowledgement.replacementBranch,
+        revision: unit.revision + 1,
+        state: "approved"
+      })
+    },
+    event.effectId,
+    event.observationHash
+  );
+  return commit(settleAmbiguityState(recovered), event, []);
+}
 function markEffectAmbiguous(state, event) {
   const entry = state.effectJournal.find(
     (candidate) => candidate.effectId === event.effectId && candidate.unitId === event.unitId && candidate.kind === event.effectKind && candidate.gateEntryId === event.gateEntryId && candidate.status === "intended"
@@ -17304,7 +17374,11 @@ function runtimeEffectParams(state, unitId, kind, slotTransition, gateEntryId) {
       };
     case "publish":
       return {
-        branchRef: required(unit.branchRef, "branch ref", kind),
+        branchRef: required(
+          unit.publicationBranchRef ?? unit.branchRef,
+          "publication branch ref",
+          kind
+        ),
         candidate: candidate(),
         authorityProfile: state.authorityProfile,
         completionBoundary: state.completionBoundary
@@ -26714,7 +26788,7 @@ function createRecoveryRunner(options) {
       if (loadedResult.status !== "observed" && loadedResult.status !== "absent")
         return loadOutcome(loadedResult.status);
       if (loadedResult.status === "absent") {
-        if (requested === void 0 || isHarnessAcknowledgementRequest(requested) || options.initialRun === void 0 || options.preOwnership.createControllerAcquireIntent === void 0)
+        if (requested === void 0 || isHarnessAcknowledgementRequest(requested) || isPublicationRecoveryRequest(requested) || options.initialRun === void 0 || options.preOwnership.createControllerAcquireIntent === void 0)
           return { status: "uninitialized" };
         const initial = validate(
           RepositoryRunSchema,
@@ -26801,9 +26875,10 @@ function createRecoveryRunner(options) {
       if (runInvariantErrors(run2).length > 0 || loaded.root.holder !== proof.holder || run2.controller.holder !== proof.holder)
         return { status: "corrupt" };
       const root = loaded.root;
-      const reconciled = requested !== void 0 && isHarnessAcknowledgementRequest(requested) ? run2 : await reconcile2(root, run2, stateQuery);
+      const reconciled = requested !== void 0 && (isHarnessAcknowledgementRequest(requested) || isPublicationRecoveryRequest(requested) || isRawPublicationRefusalRequest(requested)) ? run2 : await reconcile2(root, run2, stateQuery);
       if (!isRun(reconciled)) return reconciled;
       let dedicatedCarryPlan = false;
+      let dedicatedPublicationRecovery = false;
       if (requested !== void 0 && isProvenanceCarryClaimRequest(requested)) {
         if (options.prepareProvenanceCarryClaim === void 0)
           return { status: "blocked" };
@@ -26819,6 +26894,22 @@ function createRecoveryRunner(options) {
         if (planned.status !== "planned") return { status: planned.status };
         requested = planned.event;
         dedicatedCarryPlan = true;
+      }
+      if (requested !== void 0 && isPublicationRecoveryRequest(requested)) {
+        if (options.preparePublicationRecovery === void 0)
+          return { status: "blocked" };
+        let planned;
+        try {
+          planned = await options.preparePublicationRecovery(
+            requested.publicationRecovery,
+            reconciled
+          );
+        } catch {
+          return { status: "unavailable" };
+        }
+        if (planned.status !== "planned") return { status: planned.status };
+        requested = planned.event;
+        dedicatedPublicationRecovery = true;
       }
       if (requested === void 0)
         return {
@@ -26872,7 +26963,9 @@ function createRecoveryRunner(options) {
       if (!event.ok || event.value === void 0) return { status: "corrupt" };
       if ((event.value.type === "provenance_carry_claim_intent" || event.value.type === "provenance_carry_claim_observed") && !dedicatedCarryPlan)
         return { status: "blocked" };
-      if (options.validateEvent?.(event.value, reconciled) === false)
+      if (event.value.type === "publish_refused" && !dedicatedPublicationRecovery)
+        return { status: "blocked" };
+      if (!dedicatedPublicationRecovery && options.validateEvent?.(event.value, reconciled) === false)
         return { status: "blocked" };
       if (event.value.expectedRevision !== reconciled.revision)
         return { status: "stale" };
@@ -26964,6 +27057,12 @@ function createRecoveryRunner(options) {
 }
 function isHarnessAcknowledgementRequest(value) {
   return value !== null && typeof value === "object" && "harnessAcknowledgement" in value && Object.keys(value).length === 1;
+}
+function isPublicationRecoveryRequest(value) {
+  return typeof value === "object" && value !== null && "publicationRecovery" in value && Object.keys(value).length === 1;
+}
+function isRawPublicationRefusalRequest(value) {
+  return typeof value === "object" && value !== null && "type" in value && value.type === "publish_refused";
 }
 function isProvenanceCarryClaimRequest(value) {
   return value !== null && typeof value === "object" && "provenanceCarryClaim" in value && Object.keys(value).length === 1 && value.provenanceCarryClaim !== null && typeof value.provenanceCarryClaim === "object" && Object.keys(value.provenanceCarryClaim).length === 1 && typeof value.provenanceCarryClaim.predecessorRootBeadId === "string";
@@ -27417,6 +27516,11 @@ function transitionMatchesRun(effect2, run2) {
 }
 function localIntegrationRef(branch) {
   return `refs/heads/${branch}`;
+}
+function shortBranchRef(value) {
+  return !value.startsWith("refs/") && /^[A-Za-z0-9](?:[A-Za-z0-9._/-]*[A-Za-z0-9._/-])?$/u.test(value) && !value.endsWith("/") && !value.includes("//") && !value.includes("..") && !value.includes("@{") && value.split("/").every(
+    (part) => part.length > 0 && !part.startsWith(".") && !part.endsWith(".") && !part.endsWith(".lock")
+  );
 }
 function createProductionRecoveryEffectAdapter(options) {
   const git = options.git;
@@ -27979,8 +28083,74 @@ function createProductionRecoveryRunner(options) {
         };
       }
     },
+    preparePublicationRecovery: async (acknowledgement, run2) => {
+      const parsed = validate(
+        PublicationRecoveryAcknowledgementSchema,
+        acknowledgement
+      );
+      const attestation = parsed.ok ? parsed.value : void 0;
+      if (attestation === void 0 || !gitMatchesRun(git.repository, run2) || attestation.aggregateRevision !== run2.revision || attestation.runId !== run2.controller.runId || attestation.holder !== run2.controller.holder || attestation.incarnationId !== run2.controller.incarnationId || attestation.controllerFencingToken !== run2.controllerFencingToken || attestation.legacyBranchRef !== `refs/heads/${attestation.replacementBranch}` || !shortBranchRef(attestation.replacementBranch))
+        return { status: "blocked" };
+      const unit = run2.units[attestation.unitId];
+      const entry = run2.effectJournal.find(
+        (candidate) => candidate.effectId === attestation.effectId && candidate.unitId === attestation.unitId && candidate.kind === "publish" && candidate.status === "ambiguous"
+      );
+      const effect2 = entry === void 0 ? void 0 : rehydrateEffect(run2, entry);
+      if (run2.state !== "blocked" || unit === void 0 || unit.state !== "blocked" || unit.branchRef !== attestation.legacyBranchRef || unit.publicationBranchRef !== void 0 || unit.baseOid !== attestation.baseOid || unit.candidateHead !== attestation.headOid || unit.candidateTree !== attestation.treeOid || entry === void 0 || entry.paramsHash !== attestation.paramsHash || effect2?.kind !== "publish" || effect2.params.branchRef !== attestation.legacyBranchRef)
+        return { status: "blocked" };
+      const configuredRemote = remote({ git });
+      if (configuredRemote === void 0) return { status: "blocked" };
+      let absence;
+      try {
+        absence = await discoverPublication(git.runner, git.repository, {
+          candidate: attestation.headOid,
+          remote: configuredRemote,
+          // This deliberately expands the historical full ref once more.
+          remoteBranch: attestation.legacyBranchRef
+        });
+      } catch {
+        return { status: "ambiguous" };
+      }
+      if (absence.state !== "refused" || absence.code !== "GIT_ABSENT")
+        return { status: "blocked" };
+      let replacement;
+      try {
+        replacement = await discoverPublication(git.runner, git.repository, {
+          candidate: attestation.headOid,
+          remote: configuredRemote,
+          remoteBranch: attestation.replacementBranch
+        });
+      } catch {
+        return { status: "ambiguous" };
+      }
+      if (!(replacement.state === "refused" && replacement.code === "GIT_ABSENT" || replacement.state === "observed" && replacement.code === "GIT_OK"))
+        return { status: "blocked" };
+      return {
+        event: {
+          attestation,
+          effectId: attestation.effectId,
+          effectKind: "publish",
+          eventId: recoveryEventId(
+            `publication-refusal-${attestation.effectId}`
+          ),
+          expectedRevision: run2.revision,
+          observationHash: sha256(
+            canonicalJson({
+              acknowledgement: attestation,
+              domain: "sce.publication-recovery-refusal.v1",
+              oldTarget: `refs/heads/${attestation.legacyBranchRef}`,
+              oldTargetResult: absence,
+              replacementTargetResult: replacement
+            })
+          ),
+          type: "publish_refused",
+          unitId: attestation.unitId
+        },
+        status: "planned"
+      };
+    },
     validateLoadedRun: ({ proof, run: run2 }) => run2.repositoryIdentity === git.repository.identity && run2.gitObjectFormat === git.repository.objectFormat && run2.storeIdentity === proof.scope.beadsStoreIdentity && run2.repositoryIdentity === proof.scope.gitRepositoryIdentity && run2.integrationBranch === proof.scope.integrationBranch && run2.controller.holder === proof.holder && (contractMatches(run2.knowledgeContract) || contractMayBeFrozenByFirstWave(run2)) ? { status: "ok" } : { status: "unavailable" },
-    validateEvent: (event) => event.type !== "wave_planned" || contractMatches(event.knowledgeContract),
+    validateEvent: (event) => event.type !== "publish_refused" && (event.type !== "wave_planned" || contractMatches(event.knowledgeContract)),
     proveTopology: async () => {
       let proof;
       try {
@@ -28058,6 +28228,7 @@ var commandNames = [
   "review-prepare",
   "review-record",
   "publish",
+  "recover-publication-ref",
   "integrate",
   "close-unit",
   "gate-wave",
@@ -28162,6 +28333,9 @@ var RecoveryEventPayloadSchema = strictObject5({
 var RecoveryAcknowledgementPayloadSchema = strictObject5({
   harnessAcknowledgement: JsonObjectSchema
 });
+var PublicationRecoveryPayloadSchema = strictObject5({
+  publicationRecovery: PublicationRecoveryAcknowledgementSchema
+});
 var ProvenanceCarryClaimOptionsSchema = strictObject5({
   json: Type.Boolean(),
   request: strictObject5({
@@ -28180,6 +28354,10 @@ var RecoveryOptionsSchema = strictObject5({
       RecoveryAcknowledgementPayloadSchema
     ])
   )
+});
+var PublicationRecoveryOptionsSchema = strictObject5({
+  ...RequestMetadataSchema,
+  request: PublicationRecoveryPayloadSchema
 });
 var StateCommandSchema = strictObject5({
   command: Type.Union([
@@ -28252,6 +28430,12 @@ var UnavailableCommandSchema = strictObject5({
   schema: Type.Literal("sce.command.request"),
   version: Type.Literal(1)
 });
+var PublicationRecoveryCommandSchema = strictObject5({
+  command: Type.Literal("recover-publication-ref"),
+  options: PublicationRecoveryOptionsSchema,
+  schema: Type.Literal("sce.command.request"),
+  version: Type.Literal(1)
+});
 var ProvenanceCarryClaimCommandSchema = strictObject5({
   command: Type.Literal("claim-provenance-carry"),
   options: ProvenanceCarryClaimOptionsSchema,
@@ -28264,6 +28448,7 @@ var CommandRequestSchema = Type.Union([
   CandidateDigestCommandSchema,
   FeedbackCommandSchema,
   ProvenanceCarryClaimCommandSchema,
+  PublicationRecoveryCommandSchema,
   UnavailableCommandSchema
 ]);
 var CommandRunnerResultSchema = Type.Union([
@@ -28548,6 +28733,21 @@ function createRecoveryCommandRunner(runner) {
         provenanceCarryClaim: {
           predecessorRootBeadId: request2.options.request.predecessorRootBeadId
         }
+      });
+      if (!("revision" in outcome2) || outcome2.revision < 0) {
+        const tail = storeFailureTail(outcome2);
+        return outcome2.status === "unavailable" ? unavailable3(tail) : recoveryBlocked(tail);
+      }
+      return {
+        result: { revision: outcome2.revision, state: outcome2.run.state },
+        schema: "sce.command.result",
+        status: "ok",
+        version: 1
+      };
+    }
+    if (request2.command === "recover-publication-ref") {
+      const outcome2 = await runner({
+        publicationRecovery: request2.options.request.publicationRecovery
       });
       if (!("revision" in outcome2) || outcome2.revision < 0) {
         const tail = storeFailureTail(outcome2);

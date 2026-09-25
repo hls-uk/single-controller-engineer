@@ -262,6 +262,14 @@ export interface RecoveryRunnerOptions {
     | Readonly<{ status: "planned"; event: ProtocolEvent }>
     | Readonly<{ status: "blocked" | "ambiguous" | "unavailable" }>
   >;
+  /** Dedicated admission for the one attested malformed-publication repair. */
+  readonly preparePublicationRecovery?: (
+    acknowledgement: unknown,
+    run: RepositoryRun,
+  ) => Promise<
+    | Readonly<{ status: "planned"; event: ProtocolEvent }>
+    | Readonly<{ status: "blocked" | "ambiguous" | "unavailable" }>
+  >;
   /** Injectable only for deterministic coordinator tests; production uses OperationLock. */
   readonly acquireOperationLock?: (
     input: Readonly<{
@@ -335,6 +343,7 @@ export type RecoveryOutcome =
 export type RecoveryRequest =
   | ProtocolEvent
   | Readonly<{ harnessAcknowledgement: unknown }>
+  | Readonly<{ publicationRecovery: unknown }>
   | Readonly<{
       provenanceCarryClaim: Readonly<{ predecessorRootBeadId: string }>;
     }>;
@@ -844,6 +853,7 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
         if (
           requested === undefined ||
           isHarnessAcknowledgementRequest(requested) ||
+          isPublicationRecoveryRequest(requested) ||
           options.initialRun === undefined ||
           options.preOwnership.createControllerAcquireIntent === undefined
         )
@@ -974,11 +984,15 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
       // intent. Reconciliation must not first mark that same intent ambiguous
       // and thereby discard a valid manual-tool completion.
       const reconciled =
-        requested !== undefined && isHarnessAcknowledgementRequest(requested)
+        requested !== undefined &&
+        (isHarnessAcknowledgementRequest(requested) ||
+          isPublicationRecoveryRequest(requested) ||
+          isRawPublicationRefusalRequest(requested))
           ? run
           : await reconcile(root, run, stateQuery);
       if (!isRun(reconciled)) return reconciled;
       let dedicatedCarryPlan = false;
+      let dedicatedPublicationRecovery = false;
       if (requested !== undefined && isProvenanceCarryClaimRequest(requested)) {
         if (options.prepareProvenanceCarryClaim === undefined)
           return { status: "blocked" };
@@ -995,6 +1009,22 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
         if (planned.status !== "planned") return { status: planned.status };
         requested = planned.event;
         dedicatedCarryPlan = true;
+      }
+      if (requested !== undefined && isPublicationRecoveryRequest(requested)) {
+        if (options.preparePublicationRecovery === undefined)
+          return { status: "blocked" };
+        let planned;
+        try {
+          planned = await options.preparePublicationRecovery(
+            requested.publicationRecovery,
+            reconciled,
+          );
+        } catch {
+          return { status: "unavailable" };
+        }
+        if (planned.status !== "planned") return { status: planned.status };
+        requested = planned.event;
+        dedicatedPublicationRecovery = true;
       }
       if (requested === undefined)
         return {
@@ -1055,7 +1085,15 @@ export function createRecoveryRunner(options: RecoveryRunnerOptions) {
         !dedicatedCarryPlan
       )
         return { status: "blocked" };
-      if (options.validateEvent?.(event.value, reconciled) === false)
+      if (
+        event.value.type === "publish_refused" &&
+        !dedicatedPublicationRecovery
+      )
+        return { status: "blocked" };
+      if (
+        !dedicatedPublicationRecovery &&
+        options.validateEvent?.(event.value, reconciled) === false
+      )
         return { status: "blocked" };
       if (event.value.expectedRevision !== reconciled.revision)
         return { status: "stale" };
@@ -1166,6 +1204,27 @@ function isHarnessAcknowledgementRequest(
     typeof value === "object" &&
     "harnessAcknowledgement" in value &&
     Object.keys(value).length === 1
+  );
+}
+
+function isPublicationRecoveryRequest(
+  value: RecoveryRequest,
+): value is Readonly<{ publicationRecovery: unknown }> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "publicationRecovery" in value &&
+    Object.keys(value).length === 1
+  );
+}
+
+/** A raw recovery event must never trigger a retry before it is rejected. */
+function isRawPublicationRefusalRequest(value: RecoveryRequest): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    value.type === "publish_refused"
   );
 }
 

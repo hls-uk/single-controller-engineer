@@ -3998,6 +3998,82 @@ test("ambiguous effect blocks instead of retrying and controller release needs l
   );
 });
 
+test("branch admission rejects full refs before a branch effect and publication recovery keeps the local binding", () => {
+  let admission = step(run(), "reservation_intent", {
+    reservations: [{ id: "res-1", namespace: "path", resource: "src" }],
+  });
+  admission = observe(admission, "reservation_observed", "reservation_acquire");
+  const rejected = reduce(
+    admission,
+    event(admission, "branch_intent", { branchRef: "refs/heads/codex/unit" }),
+  );
+  assert.equal(rejected.ok, false);
+  assert.equal(admission.effectJournal.length, 1);
+  assert.equal(admission.units["unit-1"]?.branchRef, undefined);
+
+  let state = approvedCandidate();
+  const legacyBranchRef = "refs/heads/codex/unit";
+  state = {
+    ...state,
+    units: {
+      ...state.units,
+      "unit-1": { ...state.units["unit-1"]!, branchRef: legacyBranchRef },
+    },
+  };
+  state = step(state, "publish_intent", {});
+  const publish = state.effectJournal.at(-1)!;
+  state = step(state, "effect_ambiguous", {
+    effectId: publish.effectId,
+    effectKind: "publish",
+    observationHash: HASH,
+  });
+  const recovered = reduce(state, {
+    attestation: {
+      aggregateRevision: state.revision,
+      attestation: "operator_confirmed_exact_provider_rejection",
+      baseOid: OID_A,
+      controllerFencingToken: state.controllerFencingToken,
+      effectId: publish.effectId,
+      headOid: OID_B,
+      holder: state.controller.holder,
+      incarnationId: state.controller.incarnationId,
+      kind: "operator_attested_provider_rejection",
+      legacyBranchRef,
+      paramsHash: publish.paramsHash,
+      replacementBranch: "codex/unit",
+      runId: state.controller.runId,
+      schema: "sce.publication-recovery-acknowledgement",
+      treeOid: OID_C,
+      unitId: "unit-1",
+      version: 1,
+    },
+    effectId: publish.effectId,
+    effectKind: "publish",
+    eventId: "publication-refusal",
+    expectedRevision: state.revision,
+    observationHash: HASH,
+    type: "publish_refused",
+    unitId: "unit-1",
+  });
+  assert.equal(recovered.ok, true, recovered.ok ? "" : recovered.reason);
+  if (!recovered.ok) return;
+  const repaired = recovered.nextState;
+  assert.equal(repaired.state, "active");
+  assert.equal(repaired.units["unit-1"]?.state, "approved");
+  assert.equal(repaired.units["unit-1"]?.branchRef, legacyBranchRef);
+  assert.equal(repaired.units["unit-1"]?.publicationBranchRef, "codex/unit");
+  assert.equal(repaired.effectJournal.at(-1)?.paramsHash, publish.paramsHash);
+  assert.equal(
+    rehydrateEffect(repaired, repaired.effectJournal.at(-1)!),
+    undefined,
+  );
+  const next = step(repaired, "publish_intent", {});
+  const nextPublish = rehydrateEffect(next, next.effectJournal.at(-1)!);
+  assert.equal(nextPublish?.kind, "publish");
+  if (nextPublish?.kind === "publish")
+    assert.equal(nextPublish.params.branchRef, "codex/unit");
+});
+
 test("hydrated multi-unit ambiguity converges through exact observations", () => {
   const unitIds = ["unit-1", "unit-2", "unit-3"] as const;
   let state = run(unitIds.map((id) => unit(id)));
