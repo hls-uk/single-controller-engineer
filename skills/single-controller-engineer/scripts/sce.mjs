@@ -9635,7 +9635,7 @@ var identifier = () => Type.String({
 var ownedPath = () => Type.String({
   minLength: 1,
   maxLength: 192,
-  pattern: "^(?![A-Za-z]:)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\\\)(?!.*\\/$)[A-Za-z0-9][A-Za-z0-9._/-]*$"
+  pattern: "^(?![A-Za-z]:)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\\\)(?!.*\\/$)[A-Za-z0-9.][A-Za-z0-9._/-]*$"
 });
 var effectIdentifier = () => Type.String({
   minLength: 1,
@@ -10568,6 +10568,8 @@ var UnitSchema = strictObject({
   candidateHead: Type.Optional(oid()),
   candidateTree: Type.Optional(oid()),
   candidateDiffHash: Type.Optional(hash()),
+  /** Frozen pair retained only while a qualified candidate is rechecked. */
+  candidateRecheck: Type.Optional(Type.Literal(true)),
   /** The integration head a pending base refresh rebases the candidate onto. */
   refreshBaseOid: Type.Optional(oid()),
   /**
@@ -11368,6 +11370,16 @@ var ProtocolEventSchema = Type.Union([
   }),
   strictObject({
     ...eventBase,
+    type: Type.Literal("candidate_recheck_intent"),
+    ...effectIntent,
+    baseOid: oid(),
+    headOid: oid(),
+    treeOid: oid(),
+    branchRef: identifier(),
+    worktreePath: text()
+  }),
+  strictObject({
+    ...eventBase,
     type: Type.Literal("candidate_observed"),
     ...observedEffect,
     headOid: oid(),
@@ -11713,7 +11725,12 @@ var RuntimeEffectSchema = Type.Union([
     ...runtimeEffectBase,
     kind: Type.Literal("candidate_collect"),
     unitId: identifier(),
-    params: strictObject({ branchRef: identifier(), worktreePath: text() })
+    params: strictObject({
+      branchRef: identifier(),
+      worktreePath: text(),
+      expectedHeadOid: Type.Optional(oid()),
+      expectedTreeOid: Type.Optional(oid())
+    })
   }),
   strictObject({
     ...runtimeEffectBase,
@@ -15853,12 +15870,42 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
         "candidate_collect"
       );
       break;
+    case "candidate_recheck_intent": {
+      if (unit.state !== "qualified" || state.qualificationOwnerUnitId !== unit.id || state.currentReviewerUnitId !== void 0 || unit.baseOid !== event.baseOid || unit.candidateHead !== event.headOid || unit.candidateTree !== event.treeOid || unit.branchRef !== event.branchRef || unit.worktreePath !== event.worktreePath)
+        return illegal(unit, event.type);
+      const {
+        candidateDiffHash: _diff,
+        verificationBaseOid: _verificationBase,
+        verificationHeadOid: _verificationHead,
+        verificationTree: _verificationTree,
+        verificationEvidenceHash: _verificationEvidence,
+        verificationCommands: _verificationCommands,
+        ...retained
+      } = withoutReviewBindings(unit);
+      result2 = intent(
+        state,
+        unit,
+        "candidate_intent",
+        event,
+        "candidate_collect",
+        {
+          qualificationOwnerUnitId: null,
+          qualificationQueue: state.qualificationQueue.filter(
+            (id) => id !== unit.id
+          ),
+          units: replaceUnit(state, { ...retained, candidateRecheck: true })
+        }
+      );
+      break;
+    }
     case "candidate_observed":
       if (unit.state !== "candidate_intent") return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "candidate_collect"))
         return badObservation();
+      if (unit.candidateRecheck === true && (unit.candidateHead !== event.headOid || unit.candidateTree !== event.treeOid))
+        return badObservation();
       {
-        const retained = withoutReviewBindings(unit);
+        const { candidateRecheck: _recheck, ...retained } = withoutReviewBindings(unit);
         result2 = observe(
           state,
           unit,
@@ -15881,8 +15928,14 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
       if (unit.state !== "candidate_intent") return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "candidate_collect"))
         return badObservation();
+      if (unit.candidateRecheck === true && (unit.candidateHead !== event.headOid || unit.candidateTree !== event.treeOid))
+        return badObservation();
       {
-        const { candidateDiffHash: _diff, ...retained } = withoutReviewBindings(unit);
+        const {
+          candidateDiffHash: _diff,
+          candidateRecheck: _recheck,
+          ...retained
+        } = withoutReviewBindings(unit);
         result2 = observe(
           state,
           unit,
@@ -16546,6 +16599,7 @@ function effectKindForIntent(type) {
     dispatch_intent: "dispatch",
     collect_intent: "worker_collect",
     candidate_intent: "candidate_collect",
+    candidate_recheck_intent: "candidate_collect",
     refresh_intent: "candidate_refresh",
     verification_intent: "verify",
     reviewer_dispatch_intent: "review_dispatch",
@@ -17333,7 +17387,19 @@ function runtimeEffectParams(state, unitId, kind, slotTransition, gateEntryId) {
     case "candidate_collect":
       return {
         branchRef: required(unit.branchRef, "branch ref", kind),
-        worktreePath: required(unit.worktreePath, "worktree path", kind)
+        worktreePath: required(unit.worktreePath, "worktree path", kind),
+        ...unit.candidateRecheck === true ? {
+          expectedHeadOid: required(
+            unit.candidateHead,
+            "recheck head",
+            kind
+          ),
+          expectedTreeOid: required(
+            unit.candidateTree,
+            "recheck tree",
+            kind
+          )
+        } : {}
       };
     case "candidate_refresh":
       return {
@@ -19239,6 +19305,10 @@ function runInvariantErrorsWithClosedEvidence(state, closedEvidenceDetails, enve
       errors.push(`repair-required ${id} lacks retained repair context`);
     if (unit.workerSessionId !== void 0 && unit.workerSessionId === unit.reviewerSessionId)
       errors.push(`unit ${id} reuses one session for worker and reviewer`);
+    if (unit.candidateRecheck === true && (unit.state !== "candidate_intent" && !(unit.state === "blocked" && state.effectJournal.some(
+      (effect2) => effect2.unitId === id && effect2.kind === "candidate_collect" && effect2.status === "ambiguous"
+    )) || unit.candidateHead === void 0 || unit.candidateTree === void 0 || unit.candidateDiffHash !== void 0 || unit.verificationEvidenceHash !== void 0))
+      errors.push(`unit ${id} has invalid candidate recheck binding`);
     for (const [role, session2] of [
       ["worker", unit.workerSessionId],
       ["reviewer", unit.reviewerSessionId]
@@ -21730,7 +21800,7 @@ var observationsForEffect = {
   worktree_create: ["worktree_observed"],
   dispatch: ["dispatch_observed"],
   worker_collect: ["worker_collected"],
-  candidate_collect: ["candidate_observed"],
+  candidate_collect: ["candidate_observed", "candidate_refused"],
   candidate_refresh: ["refresh_observed", "refresh_failed"],
   verify: ["verification_observed", "verification_failed"],
   review_dispatch: ["reviewer_observed"],
@@ -21871,7 +21941,8 @@ function lifecycleActions(state, unit) {
       ];
     case "candidate_intent":
       return [
-        unitAction(unit, "candidate_observed", "record", "candidate_collect")
+        unitAction(unit, "candidate_observed", "record", "candidate_collect"),
+        unitAction(unit, "candidate_refused", "record", "candidate_collect")
       ];
     case "candidate_committed":
       return [
@@ -21885,6 +21956,14 @@ function lifecycleActions(state, unit) {
       ] : [];
     case "qualified":
       return [
+        ...state.qualificationOwnerUnitId === unit.id && state.currentReviewerUnitId === void 0 ? [
+          unitAction(
+            unit,
+            "candidate_recheck_intent",
+            "emit",
+            "candidate_collect"
+          )
+        ] : [],
         ...state.qualificationOwnerUnitId === unit.id && state.currentReviewerUnitId === void 0 ? [
           unitAction(
             unit,
@@ -27344,7 +27423,7 @@ function worktreeBase(effect2, run2) {
 }
 function candidateInput(effect2, run2) {
   const unit = run2.units[effect2.unitId];
-  if (unit === void 0 || unit.branchRef !== effect2.params.branchRef || unit.worktreePath !== effect2.params.worktreePath || unit.taskMetadata === void 0 || unit.taskMetadata.unitId !== unit.id)
+  if (unit === void 0 || unit.branchRef !== effect2.params.branchRef || unit.worktreePath !== effect2.params.worktreePath || unit.candidateRecheck === true && (effect2.params.expectedHeadOid !== unit.candidateHead || effect2.params.expectedTreeOid !== unit.candidateTree) || unit.candidateRecheck !== true && (effect2.params.expectedHeadOid !== void 0 || effect2.params.expectedTreeOid !== void 0) || unit.taskMetadata === void 0 || unit.taskMetadata.unitId !== unit.id)
     return void 0;
   return {
     allowedPaths: unit.taskMetadata.ownedPaths,
@@ -27449,6 +27528,9 @@ async function candidateObserved(effect2, run2, git) {
   const input = candidateInput(effect2, run2);
   if (input === void 0) return ambiguous3();
   const result2 = await observeCandidate(git.runner, git.repository, input);
+  const observedPair = result2.oversize === void 0 ? result2.snapshot : result2.oversize;
+  if (effect2.params.expectedHeadOid !== void 0 && (observedPair === void 0 || observedPair.head !== effect2.params.expectedHeadOid || observedPair.tree !== effect2.params.expectedTreeOid))
+    return ambiguous3();
   if (result2.state === "refused" && result2.code === "GIT_DIFF_OVERSIZE" && result2.oversize !== void 0 && result2.oversize.byteCount > CANDIDATE_DIFF_MAX_BYTES && result2.oversize.byteCount <= CANDIDATE_DIFF_MAX_BYTES * 2)
     return {
       observation: {
@@ -28223,6 +28305,7 @@ var commandNames = [
   "repair-request",
   "record-dispatch",
   "collect-candidate",
+  "recheck-candidate",
   "refresh-candidate",
   "qualify",
   "review-prepare",
@@ -28415,6 +28498,7 @@ var UnavailableCommandSchema = strictObject5({
     Type.Literal("repair-request"),
     Type.Literal("record-dispatch"),
     Type.Literal("collect-candidate"),
+    Type.Literal("recheck-candidate"),
     Type.Literal("refresh-candidate"),
     Type.Literal("qualify"),
     Type.Literal("review-prepare"),
@@ -28654,12 +28738,16 @@ function skeletonEventId(run2, type) {
 }
 function requestSkeleton(run2, action) {
   const unitId = action.unitId ?? null;
+  const unit = action.unitId === void 0 ? void 0 : run2.units[action.unitId];
   const bound = {
+    baseOid: action.type === "candidate_recheck_intent" ? unit?.baseOid : void 0,
+    branchRef: unit?.branchRef,
     effectId: outstandingEffectId(run2, action),
     effectKind: action.effectKind,
     eventId: skeletonEventId(run2, action.type),
     expectedRevision: run2.revision,
     gateEntryId: action.gateEntryId,
+    headOid: unit?.candidateHead,
     idempotencyKey: action.mode === "emit" && action.effectKind !== void 0 ? deriveIdempotencyKey(
       run2,
       run2.revision,
@@ -28668,7 +28756,9 @@ function requestSkeleton(run2, action) {
       action.gateEntryId
     ) : void 0,
     type: action.type,
-    unitId
+    treeOid: unit?.candidateTree,
+    unitId,
+    worktreePath: unit?.worktreePath
   };
   return {
     event: Object.fromEntries(
@@ -28694,6 +28784,7 @@ var commandEvent = {
     "reviewer_observed"
   ],
   "collect-candidate": ["collect_intent", "candidate_intent"],
+  "recheck-candidate": ["candidate_recheck_intent"],
   "refresh-candidate": ["refresh_intent"],
   qualify: ["verification_intent"],
   "review-prepare": ["reviewer_dispatch_intent", "review_collect_intent"],
