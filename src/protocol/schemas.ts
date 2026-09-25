@@ -76,7 +76,7 @@ const ownedPath = () =>
     minLength: 1,
     maxLength: 192,
     pattern:
-      "^(?![A-Za-z]:)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\\\)(?!.*\\/$)[A-Za-z0-9][A-Za-z0-9._/-]*$",
+      "^(?![A-Za-z]:)(?!.*//)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*\\\\)(?!.*\\/$)[A-Za-z0-9.][A-Za-z0-9._/-]*$",
   });
 const effectIdentifier = () =>
   Type.String({
@@ -1226,6 +1226,8 @@ export const UnitSchema = strictObject({
   candidateHead: Type.Optional(oid()),
   candidateTree: Type.Optional(oid()),
   candidateDiffHash: Type.Optional(hash()),
+  /** Frozen pair retained only while a qualified candidate is rechecked. */
+  candidateRecheck: Type.Optional(Type.Literal(true)),
   /** The integration head a pending base refresh rebases the candidate onto. */
   refreshBaseOid: Type.Optional(oid()),
   /**
@@ -2058,6 +2060,16 @@ export const ProtocolEventSchema = Type.Union([
   }),
   strictObject({
     ...eventBase,
+    type: Type.Literal("candidate_recheck_intent"),
+    ...effectIntent,
+    baseOid: oid(),
+    headOid: oid(),
+    treeOid: oid(),
+    branchRef: identifier(),
+    worktreePath: text(),
+  }),
+  strictObject({
+    ...eventBase,
     type: Type.Literal("candidate_observed"),
     ...observedEffect,
     headOid: oid(),
@@ -2411,7 +2423,12 @@ export const RuntimeEffectSchema = Type.Union([
     ...runtimeEffectBase,
     kind: Type.Literal("candidate_collect"),
     unitId: identifier(),
-    params: strictObject({ branchRef: identifier(), worktreePath: text() }),
+    params: strictObject({
+      branchRef: identifier(),
+      worktreePath: text(),
+      expectedHeadOid: Type.Optional(oid()),
+      expectedTreeOid: Type.Optional(oid()),
+    }),
   }),
   strictObject({
     ...runtimeEffectBase,

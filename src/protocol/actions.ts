@@ -273,7 +273,7 @@ const observationsForEffect: Readonly<Record<EffectKind, readonly string[]>> = {
   worktree_create: ["worktree_observed"],
   dispatch: ["dispatch_observed"],
   worker_collect: ["worker_collected"],
-  candidate_collect: ["candidate_observed"],
+  candidate_collect: ["candidate_observed", "candidate_refused"],
   candidate_refresh: ["refresh_observed", "refresh_failed"],
   verify: ["verification_observed", "verification_failed"],
   review_dispatch: ["reviewer_observed"],
@@ -457,6 +457,7 @@ function lifecycleActions(
     case "candidate_intent":
       return [
         unitAction(unit, "candidate_observed", "record", "candidate_collect"),
+        unitAction(unit, "candidate_refused", "record", "candidate_collect"),
       ];
     case "candidate_committed":
       return [
@@ -475,6 +476,17 @@ function lifecycleActions(
         : [];
     case "qualified":
       return [
+        ...(state.qualificationOwnerUnitId === unit.id &&
+        state.currentReviewerUnitId === undefined
+          ? [
+              unitAction(
+                unit,
+                "candidate_recheck_intent",
+                "emit",
+                "candidate_collect",
+              ),
+            ]
+          : []),
         ...(state.qualificationOwnerUnitId === unit.id &&
         state.currentReviewerUnitId === undefined
           ? [

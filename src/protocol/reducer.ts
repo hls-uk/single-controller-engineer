@@ -5468,16 +5468,60 @@ function reduceInternal(
         "candidate_collect",
       );
       break;
+    case "candidate_recheck_intent": {
+      if (
+        unit.state !== "qualified" ||
+        state.qualificationOwnerUnitId !== unit.id ||
+        state.currentReviewerUnitId !== undefined ||
+        unit.baseOid !== event.baseOid ||
+        unit.candidateHead !== event.headOid ||
+        unit.candidateTree !== event.treeOid ||
+        unit.branchRef !== event.branchRef ||
+        unit.worktreePath !== event.worktreePath
+      )
+        return illegal(unit, event.type);
+      const {
+        candidateDiffHash: _diff,
+        verificationBaseOid: _verificationBase,
+        verificationHeadOid: _verificationHead,
+        verificationTree: _verificationTree,
+        verificationEvidenceHash: _verificationEvidence,
+        verificationCommands: _verificationCommands,
+        ...retained
+      } = withoutReviewBindings(unit);
+      result = intent(
+        state,
+        unit,
+        "candidate_intent",
+        event,
+        "candidate_collect",
+        {
+          qualificationOwnerUnitId: null,
+          qualificationQueue: state.qualificationQueue.filter(
+            (id) => id !== unit.id,
+          ),
+          units: replaceUnit(state, { ...retained, candidateRecheck: true }),
+        },
+      );
+      break;
+    }
     case "candidate_observed":
       if (unit.state !== "candidate_intent") return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "candidate_collect"))
+        return badObservation();
+      if (
+        unit.candidateRecheck === true &&
+        (unit.candidateHead !== event.headOid ||
+          unit.candidateTree !== event.treeOid)
+      )
         return badObservation();
       {
         // A newly observed candidate supersedes any review bound to an
         // earlier diff (a run persisted before sce-296.23 may still carry
         // one after a rejected review); only the current diff can be
         // reviewed.
-        const retained = withoutReviewBindings(unit);
+        const { candidateRecheck: _recheck, ...retained } =
+          withoutReviewBindings(unit);
         result = observe(
           state,
           unit,
@@ -5500,6 +5544,12 @@ function reduceInternal(
       if (unit.state !== "candidate_intent") return illegal(unit, event.type);
       if (!matchesIntended(state, event, unit.id, "candidate_collect"))
         return badObservation();
+      if (
+        unit.candidateRecheck === true &&
+        (unit.candidateHead !== event.headOid ||
+          unit.candidateTree !== event.treeOid)
+      )
+        return badObservation();
       // The collect act reached a clean pair and proved the diff too large to
       // review. That is a fact about the work, not an unresolved effect, so
       // the unit repairs with the measurement in hand instead of blocking with
@@ -5511,8 +5561,11 @@ function reduceInternal(
       // but its terminal ones (sce-dcx.21, as sce-296.19 for a refused
       // refresh).
       {
-        const { candidateDiffHash: _diff, ...retained } =
-          withoutReviewBindings(unit);
+        const {
+          candidateDiffHash: _diff,
+          candidateRecheck: _recheck,
+          ...retained
+        } = withoutReviewBindings(unit);
         result = observe(
           state,
           unit,
@@ -6341,6 +6394,7 @@ function effectKindForIntent(
     dispatch_intent: "dispatch",
     collect_intent: "worker_collect",
     candidate_intent: "candidate_collect",
+    candidate_recheck_intent: "candidate_collect",
     refresh_intent: "candidate_refresh",
     verification_intent: "verify",
     reviewer_dispatch_intent: "review_dispatch",
@@ -7595,6 +7649,20 @@ function runtimeEffectParams(
       return {
         branchRef: required(unit.branchRef, "branch ref", kind),
         worktreePath: required(unit.worktreePath, "worktree path", kind),
+        ...(unit.candidateRecheck === true
+          ? {
+              expectedHeadOid: required(
+                unit.candidateHead,
+                "recheck head",
+                kind,
+              ),
+              expectedTreeOid: required(
+                unit.candidateTree,
+                "recheck tree",
+                kind,
+              ),
+            }
+          : {}),
       };
     case "candidate_refresh":
       return {
@@ -10428,6 +10496,15 @@ function runInvariantErrorsWithClosedEvidence(
       unit.workerSessionId === unit.reviewerSessionId
     )
       errors.push(`unit ${id} reuses one session for worker and reviewer`);
+    if (
+      unit.candidateRecheck === true &&
+      (unit.state !== "candidate_intent" ||
+        unit.candidateHead === undefined ||
+        unit.candidateTree === undefined ||
+        unit.candidateDiffHash !== undefined ||
+        unit.verificationEvidenceHash !== undefined)
+    )
+      errors.push(`unit ${id} has invalid candidate recheck binding`);
     for (const [role, session] of [
       ["worker", unit.workerSessionId],
       ["reviewer", unit.reviewerSessionId],

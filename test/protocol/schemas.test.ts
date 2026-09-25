@@ -450,6 +450,30 @@ test("Git object observations reject abbreviated OIDs", () => {
   );
 });
 
+test("ownership paths admit dot directories but refuse traversal and platform aliases", () => {
+  const accepts = (path: string) => {
+    const initial = run();
+    const current = initial.units["unit-1"]!;
+    return validate(RepositoryRunEnvelopeSchema, {
+      schema: "sce.repository-run",
+      version: 1,
+      payload: {
+        ...initial,
+        units: {
+          ...initial.units,
+          "unit-1": {
+            ...current,
+            taskMetadata: { ...current.taskMetadata!, ownedPaths: [path] },
+          },
+        },
+      },
+    }).ok;
+  };
+  assert.equal(accepts(".github/workflows"), true);
+  for (const path of [".", "..", "../src", "src/../test", "/src", "src\\test"])
+    assert.equal(accepts(path), false, `must refuse ${path}`);
+});
+
 test("an oversize candidate refusal carries only a measurement past the bound", () => {
   const refusal = {
     eventId: "candidate-refused-1",

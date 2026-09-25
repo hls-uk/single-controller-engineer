@@ -57,6 +57,7 @@ export const commandNames = [
   "repair-request",
   "record-dispatch",
   "collect-candidate",
+  "recheck-candidate",
   "refresh-candidate",
   "qualify",
   "review-prepare",
@@ -282,6 +283,7 @@ const UnavailableCommandSchema = strictObject({
     Type.Literal("repair-request"),
     Type.Literal("record-dispatch"),
     Type.Literal("collect-candidate"),
+    Type.Literal("recheck-candidate"),
     Type.Literal("refresh-candidate"),
     Type.Literal("qualify"),
     Type.Literal("review-prepare"),
@@ -649,12 +651,17 @@ function requestSkeleton(
   action: ActionDescriptor,
 ): JsonObject {
   const unitId = action.unitId ?? null;
+  const unit =
+    action.unitId === undefined ? undefined : run.units[action.unitId];
   const bound: Readonly<Record<string, JsonValue | undefined>> = {
+    baseOid: unit?.baseOid,
+    branchRef: unit?.branchRef,
     effectId: outstandingEffectId(run, action),
     effectKind: action.effectKind,
     eventId: skeletonEventId(run, action.type),
     expectedRevision: run.revision,
     gateEntryId: action.gateEntryId,
+    headOid: unit?.candidateHead,
     idempotencyKey:
       action.mode === "emit" && action.effectKind !== undefined
         ? deriveIdempotencyKey(
@@ -666,7 +673,9 @@ function requestSkeleton(
           )
         : undefined,
     type: action.type,
+    treeOid: unit?.candidateTree,
     unitId,
+    worktreePath: unit?.worktreePath,
   };
   return {
     event: Object.fromEntries(
@@ -695,6 +704,7 @@ const commandEvent: Readonly<
     "reviewer_observed",
   ],
   "collect-candidate": ["collect_intent", "candidate_intent"],
+  "recheck-candidate": ["candidate_recheck_intent"],
   "refresh-candidate": ["refresh_intent"],
   qualify: ["verification_intent"],
   "review-prepare": ["reviewer_dispatch_intent", "review_collect_intent"],

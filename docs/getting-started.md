@@ -180,6 +180,12 @@ the loop this repository uses on itself:
    65,536 bytes, the reviewer packet's `candidateDiffByteCount` bound; a
    candidate that measures past it is refused with its measured size and
    repaired smaller, never reviewed.
+   If an already qualified candidate needs a same-base size recheck, use
+   `recheck-candidate` with the exact base/head/tree, branch and worktree from
+   the qualified unit. The old verification is discarded before the collector
+   reads Git. A measured oversize diff enters `repair_required`; a fitting
+   candidate returns to `candidate_committed` and must pass qualification and
+   fresh review again. A moved pair blocks the readback.
 4. Each frozen candidate gets a fresh adversarial frontier review bound to
    its exact base/head pair, then integrates serially. A reviewer reproduces
    the diff with the packet's `candidateDiffCommand` and pipes those bytes

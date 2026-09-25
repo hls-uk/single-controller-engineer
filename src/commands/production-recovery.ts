@@ -600,6 +600,12 @@ function candidateInput(
     unit === undefined ||
     unit.branchRef !== effect.params.branchRef ||
     unit.worktreePath !== effect.params.worktreePath ||
+    (unit.candidateRecheck === true &&
+      (effect.params.expectedHeadOid !== unit.candidateHead ||
+        effect.params.expectedTreeOid !== unit.candidateTree)) ||
+    (unit.candidateRecheck !== true &&
+      (effect.params.expectedHeadOid !== undefined ||
+        effect.params.expectedTreeOid !== undefined)) ||
     unit.taskMetadata === undefined ||
     unit.taskMetadata.unitId !== unit.id
   )
@@ -800,6 +806,15 @@ async function candidateObserved(
   const input = candidateInput(effect, run);
   if (input === undefined) return ambiguous();
   const result = await observeCandidate(git.runner, git.repository, input);
+  const observedPair =
+    result.oversize === undefined ? result.snapshot : result.oversize;
+  if (
+    effect.params.expectedHeadOid !== undefined &&
+    (observedPair === undefined ||
+      observedPair.head !== effect.params.expectedHeadOid ||
+      observedPair.tree !== effect.params.expectedTreeOid)
+  )
+    return ambiguous();
   // A measured oversize diff is the one refusal the collect act can name
   // exactly. The measurement has to land inside the event's own bounds to be
   // an observation at all; anything else stays ambiguous, as before.

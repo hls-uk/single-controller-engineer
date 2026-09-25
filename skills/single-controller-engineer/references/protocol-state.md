@@ -34,6 +34,16 @@ fast-forwarding its empty branch and worktree so the first packet binds the
 base the worker starts on. Read the event schemas through `sce --help` and the
 engine, not from this prose.
 
+An already `qualified` unit can use `recheck-candidate` with a
+`candidate_recheck_intent` bound to its exact base/head/tree and existing local
+branch/worktree. The intent discards the old diff and verification binding;
+the existing collector reads the same pair under the 65,536-byte bound. An
+oversize read settles as `candidate_refused` with its measured count and sends
+the unit to repair. A fitting read returns to `candidate_committed`, requiring
+fresh verification and review. A moved pair or active review/publish cannot
+reuse the old qualification. The command's request skeleton is available from
+`sce next`; submit it with the current expected revision and idempotency key.
+
 Do not infer completion from elapsed time, an empty queue, or a missing process.
 Preserve the candidate and durable evidence; resume only through the recorded
 idempotency key and authority boundary.

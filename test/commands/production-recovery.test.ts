@@ -2254,6 +2254,61 @@ test("a candidate diff past the packet bound reconciles to a typed refusal", asy
   );
 });
 
+test("qualified recheck replay binds the observed Git pair and retains oversize refusal", async () => {
+  const initial = candidateIntentRun();
+  const state = {
+    ...initial,
+    units: {
+      ...initial.units,
+      "unit-1": {
+        ...initial.units["unit-1"]!,
+        candidateRecheck: true as const,
+        candidateHead: OID_B,
+        candidateTree: OID_A,
+      },
+    },
+  };
+  const pending = state.effectJournal.at(-1)!;
+  const effect = {
+    effectId: pending.effectId,
+    idempotencyKey: pending.idempotencyKey,
+    kind: "candidate_collect" as const,
+    params: {
+      branchRef: "sce/unit-1",
+      worktreePath: "/task",
+      expectedHeadOid: OID_B,
+      expectedTreeOid: OID_A,
+    },
+    paramsHash: pending.paramsHash,
+    schemaVersion: 1 as const,
+    unitId: "unit-1",
+  };
+  const adapter = createProductionRecoveryEffectAdapter({
+    git: { repository, runner: candidateRunner("d".repeat(94_802)) },
+  });
+  const first = await adapter.reconcile(effect, state);
+  const replay = await adapter.reconcile(effect, state);
+  assert.deepEqual(
+    replay,
+    first,
+    "recovery replays the same read-only measurement",
+  );
+  assert.equal(first.status, "observed");
+  if (first.status !== "observed") return;
+  assert.equal(first.observation.type, "candidate_refused");
+  if (first.observation.type === "candidate_refused")
+    assert.equal(first.observation.measuredByteCount, 94_802);
+  const moved = await adapter.reconcile(
+    { ...effect, params: { ...effect.params, expectedHeadOid: OID_A } },
+    state,
+  );
+  assert.equal(
+    moved.status,
+    "ambiguous",
+    "a moved pair cannot settle recovery",
+  );
+});
+
 /** One unit prepared to `refresh_intent` before any dispatch (sce-296.18). */
 function preparedRefreshRun(): RepositoryRun {
   let state = localRun();

@@ -6823,6 +6823,169 @@ test("a refused refresh from approved discards the superseded candidate's review
   assert.deepEqual(runInvariantErrors(result.nextState), []);
 });
 
+test("a qualified candidate recheck discards verification and routes oversize to repair", () => {
+  const unitId = "unit-1";
+  let state = completeCandidate();
+  state = stepUnit(state, unitId, "verification_intent");
+  state = observeUnit(state, unitId, "verification_observed", "verify", {
+    baseOid: OID_A,
+    headOid: OID_B,
+    treeOid: OID_C,
+  });
+  assert.equal(state.units[unitId]?.state, "qualified");
+  const qualified = state;
+  assert.equal(
+    legalActions(state).some(
+      (action) => action.type === "candidate_recheck_intent",
+    ),
+    true,
+  );
+  const binding = {
+    baseOid: OID_A,
+    headOid: OID_B,
+    treeOid: OID_C,
+    branchRef: "sce/unit-1",
+    worktreePath: "/tmp/unit-1",
+  };
+  const reviewing = stepUnit(qualified, unitId, "reviewer_dispatch_intent");
+  assert.equal(
+    reduce(reviewing, event(reviewing, "candidate_recheck_intent", binding)).ok,
+    false,
+    "an active review cannot be rechecked",
+  );
+  for (const wrong of [
+    { ...binding, headOid: OID_C },
+    { ...binding, branchRef: "sce/moved" },
+    { ...binding, worktreePath: "/tmp/moved" },
+  ])
+    assert.equal(
+      reduce(state, event(state, "candidate_recheck_intent", wrong)).ok,
+      false,
+      "a recheck must bind the qualified unit and its exact checkout",
+    );
+  const stale = event(state, "candidate_recheck_intent", binding);
+  state = stepUnit(state, unitId, "candidate_recheck_intent", binding);
+  assert.equal(reduce(state, stale).ok, false, "stale revision is refused");
+  const pending = state.units[unitId]!;
+  assert.equal(pending.state, "candidate_intent");
+  assert.equal(pending.candidateRecheck, true);
+  assert.equal(pending.candidateDiffHash, undefined);
+  assert.equal(pending.verificationEvidenceHash, undefined);
+  assert.equal(pending.verificationCommands, undefined);
+  assert.equal(state.qualificationOwnerUnitId, undefined);
+  assert.deepEqual(state.qualificationQueue, []);
+  const entry = state.effectJournal.at(-1)!;
+  assert.deepEqual(rehydrateEffect(state, entry)?.params, {
+    branchRef: binding.branchRef,
+    worktreePath: binding.worktreePath,
+    expectedHeadOid: binding.headOid,
+    expectedTreeOid: binding.treeOid,
+  });
+  assert.deepEqual(runInvariantErrors(state), []);
+  const fitting = observeUnit(
+    state,
+    unitId,
+    "candidate_observed",
+    "candidate_collect",
+    { headOid: OID_B, treeOid: OID_C },
+  );
+  assert.equal(fitting.units[unitId]?.state, "candidate_committed");
+  assert.equal(fitting.units[unitId]?.verificationEvidenceHash, undefined);
+  assert.equal(fitting.units[unitId]?.candidateRecheck, undefined);
+  assert.equal(
+    legalActions(fitting).some(
+      (action) => action.type === "verification_intent",
+    ),
+    true,
+  );
+  const moved = reduce(
+    state,
+    event(state, "candidate_refused", {
+      effectId: entry.effectId,
+      effectKind: "candidate_collect",
+      observationHash: HASH,
+      reason: "diff_oversize",
+      maximumByteCount: CANDIDATE_DIFF_MAX_BYTES,
+      measuredByteCount: 94_802,
+      headOid: OID_C,
+      treeOid: OID_C,
+    }),
+  );
+  assert.equal(moved.ok, false, "a moved pair cannot settle the recheck");
+  state = observeUnit(state, unitId, "candidate_refused", "candidate_collect", {
+    reason: "diff_oversize",
+    maximumByteCount: CANDIDATE_DIFF_MAX_BYTES,
+    measuredByteCount: 94_802,
+    headOid: OID_B,
+    treeOid: OID_C,
+  });
+  assert.equal(state.units[unitId]?.state, "repair_required");
+  assert.equal(state.units[unitId]?.candidateRecheck, undefined);
+  assert.equal(
+    state.units[unitId]?.repairContext?.findings[0]?.id,
+    "candidate-diff-oversize",
+  );
+  assert.equal(
+    state.units[unitId]?.repairContext?.rationale.includes("94802"),
+    true,
+  );
+  assert.deepEqual(runInvariantErrors(state), []);
+  state = stepUnit(state, unitId, "repair_intent", {
+    judgment: {
+      schemaVersion: 1,
+      role: "controller",
+      kind: "repair_disposition",
+      unitId,
+      sessionId: "incarnation-1",
+      requestedModel: "frontier",
+      returnedModel: "frontier-1",
+      aggregateRevision: state.revision,
+      promptHash: HASH,
+      responseHash: HASH,
+      rationale: "reduce the candidate diff",
+      factOid: OID_B,
+      decision: "repair",
+      ...repairEvidence(state),
+    },
+  });
+  state = observeUnit(state, unitId, "repair_observed", "repair", {
+    sessionId: "worker-recheck-repair",
+    requestedModel: "workhorse",
+    returnedModel: "workhorse-1",
+    promptHash: HASH,
+  });
+  state = stepUnit(state, unitId, "collect_intent");
+  state = observeUnit(state, unitId, "worker_collected", "worker_collect", {
+    workerResult: {
+      status: "completed",
+      summary: "smaller",
+      residualRisks: [],
+    },
+  });
+  state = stepUnit(state, unitId, "candidate_intent");
+  state = observeUnit(
+    state,
+    unitId,
+    "candidate_observed",
+    "candidate_collect",
+    {
+      headOid: OID_C,
+      treeOid: OID_C,
+    },
+  );
+  assert.equal(state.units[unitId]?.state, "candidate_committed");
+  assert.equal(state.units[unitId]?.verificationEvidenceHash, undefined);
+  state = stepUnit(state, unitId, "verification_intent");
+  state = observeUnit(state, unitId, "verification_observed", "verify", {
+    baseOid: OID_A,
+    headOid: OID_C,
+    treeOid: OID_C,
+  });
+  assert.equal(state.units[unitId]?.state, "qualified");
+  assert.equal(state.units[unitId]?.candidateHead, OID_C);
+  assert.deepEqual(runInvariantErrors(state), []);
+});
+
 // sce-dcx.21: a candidate whose diff passes the packet bound used to leave the
 // collect effect unobserved, so the unit blocked with no stated cause.
 test("an oversize candidate diff repairs the unit with the exact measurement", () => {
