@@ -12,6 +12,13 @@ An earlier local bundle patch let a 94,802-byte candidate pass collection while 
 
 Add an explicit `recheck-candidate` command, admitted only for a qualified unit with no active reviewer. The intent binds the current controller and revision through the normal coordinator, plus the unit's frozen base/head/tree and physical branch/worktree. It durably discards the old diff, verification and review bindings before the existing candidate collector reads Git. The intended effect retains the frozen head/tree and refuses to settle on a moved pair. A measured oversize diff follows the existing typed `candidate_refused` path to repair; a fitting diff returns to `candidate_committed`, requiring fresh verification and review. The 65,536-byte contract stays fixed.
 
+The complete `git ls-files --cached -v -z` index read is separately bounded at
+1 MiB because it validates every tracked entry before clean status can be
+trusted. Its dedicated result schema and runner cap apply only to that exact
+allowlisted command. The general Git result and candidate diff bounds remain
+65,536 bytes. An index beyond 1 MiB, or any nonordinary flag anywhere in the
+complete output, refuses collection.
+
 Allow an initial dot in a repository-relative owned path so `.github/workflows` is admitted. Continue refusing `.` and `..` segments, traversal, absolute paths, backslashes and platform aliases.
 
 ## Rejected alternatives

@@ -53,17 +53,27 @@ const ProcessSignalSchema = Type.Union([
 ]);
 
 /** The only subprocess observation accepted from an injected Git runner. */
-export const GitResultSchema = strictObject({
-  exitCode: Type.Union([
-    Type.Integer({ minimum: 0, maximum: 255 }),
-    Type.Null(),
-  ]),
-  signal: ProcessSignalSchema,
-  stdout: Type.String({ minLength: 0, maxLength: 65536, maxUtf8Bytes: 65536 }),
-  invalidUtf8: Type.Optional(Type.Boolean()),
-  timedOut: Type.Optional(Type.Boolean()),
-  unavailable: Type.Optional(Type.Boolean()),
-});
+function gitResultSchema(maxOutputBytes: number) {
+  return strictObject({
+    exitCode: Type.Union([
+      Type.Integer({ minimum: 0, maximum: 255 }),
+      Type.Null(),
+    ]),
+    signal: ProcessSignalSchema,
+    stdout: Type.String({
+      minLength: 0,
+      maxLength: maxOutputBytes,
+      maxUtf8Bytes: maxOutputBytes,
+    }),
+    invalidUtf8: Type.Optional(Type.Boolean()),
+    timedOut: Type.Optional(Type.Boolean()),
+    unavailable: Type.Optional(Type.Boolean()),
+  });
+}
+
+export const GitResultSchema = gitResultSchema(65_536);
+/** Only the complete `ls-files --cached -v -z` index read uses this bound. */
+export const GitIndexResultSchema = gitResultSchema(1_048_576);
 export type GitResultWire = Static<typeof GitResultSchema>;
 
 export const GitRepositorySchema = strictObject({
@@ -115,6 +125,12 @@ export function isSchema<T>(schema: TSchema, value: unknown): value is T {
 
 export function parseGitResult(value: unknown): GitResultWire | undefined {
   return isSchema(GitResultSchema, value)
+    ? (value as GitResultWire)
+    : undefined;
+}
+
+export function parseGitIndexResult(value: unknown): GitResultWire | undefined {
+  return isSchema(GitIndexResultSchema, value)
     ? (value as GitResultWire)
     : undefined;
 }

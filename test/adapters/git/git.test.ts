@@ -19,6 +19,7 @@ import test from "node:test";
 import {
   DISCOVERY_DEPTH,
   type GitRepository,
+  GitIndexResultSchema,
   GitRepositorySchema,
   type GitResult,
   GitResultSchema,
@@ -1056,6 +1057,81 @@ test("real worktree candidate observation binds exact committed diff bytes", asy
     ).code,
     "GIT_FOREIGN_WORKTREE",
   );
+});
+
+test("a complete large index is accepted, including validation of its final flag", async (t) => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "sce-git-index-")));
+  const cwd = join(root, "repo");
+  t.after(() => rm(root, { force: true, recursive: true }));
+  await git(root, "init", cwd);
+  await git(cwd, "config", "user.email", "test@example.invalid");
+  await git(cwd, "config", "user.name", "SCE test");
+  await mkdir(join(cwd, "tracked"));
+  await Promise.all(
+    Array.from({ length: 700 }, (_, index) =>
+      writeFile(
+        join(
+          cwd,
+          "tracked",
+          `${index.toString().padStart(4, "0")}-${"x".repeat(100)}`,
+        ),
+        "base\n",
+      ),
+    ),
+  );
+  await writeFile(join(cwd, "zz-flag.txt"), "base\n");
+  await git(cwd, "add", "--all");
+  await git(cwd, "commit", "-m", "base");
+  await git(cwd, "branch", "-M", "main");
+  const base = (await git(cwd, "rev-parse", "HEAD")).trim();
+  await git(cwd, "branch", "sce/candidate", base);
+  const worktree = join(root, "candidate");
+  await git(cwd, "worktree", "add", worktree, "sce/candidate");
+  await writeFile(join(worktree, "candidate.txt"), "candidate\n");
+  await git(worktree, "add", "candidate.txt");
+  await git(worktree, "commit", "-m", "candidate");
+  const request = {
+    argv: ["ls-files", "--cached", "-v", "-z"],
+    cwd: worktree,
+  };
+  const index = await nodeGitRunner(request);
+  const indexBytes = Buffer.byteLength(index.stdout, "utf8");
+  assert.equal(index.exitCode, 0);
+  assert.equal(indexBytes > 65_536 && indexBytes < 1_048_576, true);
+  assert.equal(isGitSchema(GitResultSchema, index), false);
+  assert.equal(isGitSchema(GitIndexResultSchema, index), true);
+  const input = {
+    allowedPaths: ["candidate.txt"],
+    base,
+    branch: "sce/candidate",
+    worktreePath: worktree,
+  };
+  const repo = await actualRepository(cwd);
+  assert.equal(
+    (await observeCandidate(nodeGitRunner, repo, input)).state,
+    "observed",
+  );
+
+  await git(worktree, "update-index", "--skip-worktree", "zz-flag.txt");
+  const flagged = await nodeGitRunner(request);
+  assert.equal(flagged.exitCode, 0);
+  assert.equal(flagged.stdout.endsWith("S zz-flag.txt\u0000"), true);
+  assert.equal(
+    (await observeCandidate(nodeGitRunner, repo, input)).code,
+    "GIT_REFUSED",
+  );
+  await git(worktree, "update-index", "--no-skip-worktree", "zz-flag.txt");
+
+  const oversizedIndex = `H tracked/file\u0000`.repeat(75_000);
+  assert.equal(Buffer.byteLength(oversizedIndex, "utf8") > 1_048_576, true);
+  assert.equal(isGitSchema(GitIndexResultSchema, ok(oversizedIndex)), false);
+  const oversized = await observeCandidate(
+    async (read) =>
+      read.argv[0] === "ls-files" ? ok(oversizedIndex) : nodeGitRunner(read),
+    repo,
+    input,
+  );
+  assert.equal(oversized.code, "GIT_REFUSED");
 });
 
 // sce-dcx.21: a diff large enough to refuse is also large enough for the

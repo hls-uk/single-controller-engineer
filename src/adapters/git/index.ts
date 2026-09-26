@@ -16,10 +16,11 @@ import {
   normalizeGitRemote,
   parseGitRemoteConfigOutput,
 } from "../../preflight/index.js";
-import { parseGitResult } from "./schemas.js";
+import { parseGitIndexResult, parseGitResult } from "./schemas.js";
 
 export {
   GitEffectSchema,
+  GitIndexResultSchema,
   GitObjectFormatSchema,
   GitRepositorySchema,
   GitResultSchema,
@@ -187,7 +188,18 @@ function safeRelativeDirectory(value: string): boolean {
   return RELATIVE_DIRECTORY.test(value) && !value.endsWith("/");
 }
 const MAX_OUTPUT = 65_536;
+const MAX_INDEX_OUTPUT = 1_048_576;
 const activeHookPaths = new Set<string>();
+
+function isIndexRead(argv: readonly string[]): boolean {
+  return (
+    argv.length === 4 &&
+    argv[0] === "ls-files" &&
+    argv[1] === "--cached" &&
+    argv[2] === "-v" &&
+    argv[3] === "-z"
+  );
+}
 
 function exactOid(format: GitObjectFormat, value: string): boolean {
   return OID.test(value) && value.length === (format === "sha1" ? 40 : 64);
@@ -480,14 +492,14 @@ function effect(state: GitEffectState, code: GitEffect["code"]): GitEffect {
   return { code, state };
 }
 
-function commandOk(result: GitResult): boolean {
+function commandOk(result: GitResult, maxOutputBytes = MAX_OUTPUT): boolean {
   return (
     result.exitCode === 0 &&
     result.signal === null &&
     result.timedOut !== true &&
     result.unavailable !== true &&
     result.invalidUtf8 !== true &&
-    Buffer.byteLength(result.stdout, "utf8") <= MAX_OUTPUT
+    Buffer.byteLength(result.stdout, "utf8") <= maxOutputBytes
   );
 }
 
@@ -533,7 +545,11 @@ function nulPaths(value: string): string[] | undefined {
  */
 function ordinaryTrackedIndex(value: string): boolean {
   if (value.length === 0) return true;
-  if (!value.endsWith("\u0000") || value.length > MAX_OUTPUT) return false;
+  if (
+    !value.endsWith("\u0000") ||
+    Buffer.byteLength(value, "utf8") > MAX_INDEX_OUTPUT
+  )
+    return false;
   return value
     .slice(0, -1)
     .split("\u0000")
@@ -629,6 +645,27 @@ async function runAt(
   try {
     const observed = parseGitResult(
       await runner({ argv, cwd, ...(env === undefined ? {} : { env }) }),
+    ) as GitResult | undefined;
+    return (
+      observed ?? {
+        exitCode: null,
+        signal: null,
+        stdout: "",
+        unavailable: true,
+      }
+    );
+  } catch {
+    return { exitCode: null, signal: null, stdout: "", unavailable: true };
+  }
+}
+
+async function readTrackedIndex(
+  runner: GitRunner,
+  cwd: string,
+): Promise<GitResult> {
+  try {
+    const observed = parseGitIndexResult(
+      await runner({ argv: ["ls-files", "--cached", "-v", "-z"], cwd }),
     ) as GitResult | undefined;
     return (
       observed ?? {
@@ -806,13 +843,9 @@ async function verifyOrdinaryTrackedIndex(
   runner: GitRunner,
   path: string,
 ): Promise<GitEffect> {
-  const result = await runAt(runner, path, [
-    "ls-files",
-    "--cached",
-    "-v",
-    "-z",
-  ]);
-  return commandOk(result) && ordinaryTrackedIndex(result.stdout)
+  const result = await readTrackedIndex(runner, path);
+  return commandOk(result, MAX_INDEX_OUTPUT) &&
+    ordinaryTrackedIndex(result.stdout)
     ? effect("observed", "GIT_OK")
     : effect("refused", "GIT_REFUSED");
 }
@@ -2378,6 +2411,7 @@ export function allowedGitRequest(request: Parameters<GitRunner>[0]): boolean {
 export const nodeGitRunner: GitRunner = async ({ argv, cwd, env }) => {
   if (!allowedGitRequest({ argv, cwd, ...(env === undefined ? {} : { env }) }))
     return { exitCode: null, signal: null, stdout: "", unavailable: true };
+  const outputLimit = isIndexRead(argv) ? MAX_INDEX_OUTPUT : MAX_OUTPUT;
   return new Promise((done) => {
     const stdoutChunks: Buffer[] = [];
     let outputBytes = 0;
@@ -2410,7 +2444,7 @@ export const nodeGitRunner: GitRunner = async ({ argv, cwd, env }) => {
       if (outputExceeded) return;
       outputBytes += chunk.byteLength;
       if (isStdout) stdoutChunks.push(chunk);
-      if (outputBytes > MAX_OUTPUT) {
+      if (outputBytes > outputLimit) {
         outputExceeded = true;
         child.kill("SIGKILL");
       }
@@ -2444,7 +2478,7 @@ export const nodeGitRunner: GitRunner = async ({ argv, cwd, env }) => {
         invalidUtf8,
         signal,
         stdout,
-        ...(collected.byteLength > MAX_OUTPUT
+        ...(collected.byteLength > outputLimit
           ? { stdoutBytes: collected.byteLength }
           : {}),
         timedOut,
