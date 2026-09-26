@@ -23326,17 +23326,25 @@ var ProcessSignalSchema = Type.Union([
   Type.String({ minLength: 4, maxLength: 19, pattern: "^SIG[A-Z0-9]{1,16}$" }),
   Type.Null()
 ]);
-var GitResultSchema = strictObject4({
-  exitCode: Type.Union([
-    Type.Integer({ minimum: 0, maximum: 255 }),
-    Type.Null()
-  ]),
-  signal: ProcessSignalSchema,
-  stdout: Type.String({ minLength: 0, maxLength: 65536, maxUtf8Bytes: 65536 }),
-  invalidUtf8: Type.Optional(Type.Boolean()),
-  timedOut: Type.Optional(Type.Boolean()),
-  unavailable: Type.Optional(Type.Boolean())
-});
+function gitResultSchema(maxOutputBytes) {
+  return strictObject4({
+    exitCode: Type.Union([
+      Type.Integer({ minimum: 0, maximum: 255 }),
+      Type.Null()
+    ]),
+    signal: ProcessSignalSchema,
+    stdout: Type.String({
+      minLength: 0,
+      maxLength: maxOutputBytes,
+      maxUtf8Bytes: maxOutputBytes
+    }),
+    invalidUtf8: Type.Optional(Type.Boolean()),
+    timedOut: Type.Optional(Type.Boolean()),
+    unavailable: Type.Optional(Type.Boolean())
+  });
+}
+var GitResultSchema = gitResultSchema(65536);
+var GitIndexResultSchema = gitResultSchema(1048576);
 var GitRepositorySchema = strictObject4({
   commonDir: path(),
   cwd: path(),
@@ -23385,6 +23393,9 @@ function isSchema2(schema, value) {
 function parseGitResult(value) {
   return isSchema2(GitResultSchema, value) ? value : void 0;
 }
+function parseGitIndexResult(value) {
+  return isSchema2(GitIndexResultSchema, value) ? value : void 0;
+}
 
 // src/adapters/git/index.ts
 var COMMIT_IDENTITY_KEYS = [
@@ -23428,7 +23439,11 @@ function safeRelativeDirectory(value) {
   return RELATIVE_DIRECTORY.test(value) && !value.endsWith("/");
 }
 var MAX_OUTPUT = 65536;
+var MAX_INDEX_OUTPUT = 1048576;
 var activeHookPaths = /* @__PURE__ */ new Set();
+function isIndexRead(argv) {
+  return argv.length === 4 && argv[0] === "ls-files" && argv[1] === "--cached" && argv[2] === "-v" && argv[3] === "-z";
+}
 function exactOid(format, value) {
   return OID.test(value) && value.length === (format === "sha1" ? 40 : 64);
 }
@@ -23546,8 +23561,8 @@ function canonicalExistingOrLexical(value) {
 function effect(state, code) {
   return { code, state };
 }
-function commandOk(result2) {
-  return result2.exitCode === 0 && result2.signal === null && result2.timedOut !== true && result2.unavailable !== true && result2.invalidUtf8 !== true && Buffer.byteLength(result2.stdout, "utf8") <= MAX_OUTPUT;
+function commandOk(result2, maxOutputBytes = MAX_OUTPUT) {
+  return result2.exitCode === 0 && result2.signal === null && result2.timedOut !== true && result2.unavailable !== true && result2.invalidUtf8 !== true && Buffer.byteLength(result2.stdout, "utf8") <= maxOutputBytes;
 }
 function terminalFailure(result2) {
   if (result2.timedOut === true || result2.signal !== null)
@@ -23580,7 +23595,8 @@ function nulPaths(value) {
 }
 function ordinaryTrackedIndex(value) {
   if (value.length === 0) return true;
-  if (!value.endsWith("\0") || value.length > MAX_OUTPUT) return false;
+  if (!value.endsWith("\0") || Buffer.byteLength(value, "utf8") > MAX_INDEX_OUTPUT)
+    return false;
   return value.slice(0, -1).split("\0").every(
     (entry) => entry.startsWith("H ") && entry.length > 2 && safePath(entry.slice(2))
   );
@@ -23629,6 +23645,21 @@ async function runAt(runner, cwd, argv, env) {
   try {
     const observed2 = parseGitResult(
       await runner({ argv, cwd, ...env === void 0 ? {} : { env } })
+    );
+    return observed2 ?? {
+      exitCode: null,
+      signal: null,
+      stdout: "",
+      unavailable: true
+    };
+  } catch {
+    return { exitCode: null, signal: null, stdout: "", unavailable: true };
+  }
+}
+async function readTrackedIndex(runner, cwd) {
+  try {
+    const observed2 = parseGitIndexResult(
+      await runner({ argv: ["ls-files", "--cached", "-v", "-z"], cwd })
     );
     return observed2 ?? {
       exitCode: null,
@@ -23713,13 +23744,8 @@ async function verifyCleanWorktree(runner, repository, path2) {
   return status.stdout.length === 0 ? effect("observed", "GIT_OK") : effect("refused", "GIT_DIRTY");
 }
 async function verifyOrdinaryTrackedIndex(runner, path2) {
-  const result2 = await runAt(runner, path2, [
-    "ls-files",
-    "--cached",
-    "-v",
-    "-z"
-  ]);
-  return commandOk(result2) && ordinaryTrackedIndex(result2.stdout) ? effect("observed", "GIT_OK") : effect("refused", "GIT_REFUSED");
+  const result2 = await readTrackedIndex(runner, path2);
+  return commandOk(result2, MAX_INDEX_OUTPUT) && ordinaryTrackedIndex(result2.stdout) ? effect("observed", "GIT_OK") : effect("refused", "GIT_REFUSED");
 }
 async function candidateDiffEnvironment(runner, repository, worktreePath) {
   if (existsSync(
@@ -24672,6 +24698,7 @@ function allowedGitRequest(request2) {
 var nodeGitRunner = async ({ argv, cwd, env }) => {
   if (!allowedGitRequest({ argv, cwd, ...env === void 0 ? {} : { env } }))
     return { exitCode: null, signal: null, stdout: "", unavailable: true };
+  const outputLimit = isIndexRead(argv) ? MAX_INDEX_OUTPUT : MAX_OUTPUT;
   return new Promise((done) => {
     const stdoutChunks = [];
     let outputBytes = 0;
@@ -24701,7 +24728,7 @@ var nodeGitRunner = async ({ argv, cwd, env }) => {
       if (outputExceeded) return;
       outputBytes += chunk.byteLength;
       if (isStdout) stdoutChunks.push(chunk);
-      if (outputBytes > MAX_OUTPUT) {
+      if (outputBytes > outputLimit) {
         outputExceeded = true;
         child.kill("SIGKILL");
       }
@@ -24730,7 +24757,7 @@ var nodeGitRunner = async ({ argv, cwd, env }) => {
         invalidUtf8,
         signal,
         stdout,
-        ...collected.byteLength > MAX_OUTPUT ? { stdoutBytes: collected.byteLength } : {},
+        ...collected.byteLength > outputLimit ? { stdoutBytes: collected.byteLength } : {},
         timedOut,
         unavailable: unavailable6
       });
