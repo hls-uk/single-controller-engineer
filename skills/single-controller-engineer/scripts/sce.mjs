@@ -11079,6 +11079,21 @@ var ProtocolEventSchema = Type.Union([
     waveId: identifier()
   }),
   strictObject({
+    ...eventBase,
+    type: Type.Literal("repair_scope_extended"),
+    baseOid: oid(),
+    headOid: oid(),
+    treeOid: oid(),
+    branchRef: identifier(),
+    worktreePath: text(),
+    repairContextHash: hash(),
+    ownedPaths: Type.Array(ownedPath(), {
+      minItems: 1,
+      maxItems: 128,
+      uniqueItems: true
+    })
+  }),
+  strictObject({
     ...controllerEventBase,
     type: Type.Literal("controller_acquire_intent"),
     ...effectIntent,
@@ -13105,6 +13120,63 @@ function withoutReviewBindings(unit) {
     ...retained
   } = unit;
   return retained;
+}
+function repairScopeExtensionEligible(state, unit) {
+  return state.state === "active" && state.controller.state === "acquired" && state.wave.unitIds.length === 1 && state.wave.unitIds[0] === unit.id && unit.state === "repair_required" && unit.taskMetadata !== void 0 && unit.repairContext !== void 0 && unit.candidateHead !== void 0 && unit.candidateTree !== void 0 && unit.repairContext.baseOid === unit.baseOid && unit.repairContext.headOid === unit.candidateHead && unit.repairContext.treeOid === unit.candidateTree && unit.branchRef !== void 0 && unit.worktreePath !== void 0 && state.activeModifyingUnitIds.length === 0 && state.currentReviewerUnitId === void 0 && state.qualificationOwnerUnitId === void 0 && state.integrationOwnerUnitId === void 0 && state.qualificationQueue.length === 0 && state.integrationQueue.length === 0 && state.effectJournal.every((entry) => entry.status === "observed");
+}
+function reduceRepairScopeExtension(state, event) {
+  const unit = state.units[event.unitId];
+  if (unit === void 0 || !repairScopeExtensionEligible(state, unit))
+    return reject(
+      "illegal_transition",
+      "repair scope requires one drained repair-required unit"
+    );
+  const metadata = unit.taskMetadata;
+  const context = unit.repairContext;
+  if (event.baseOid !== unit.baseOid || event.headOid !== unit.candidateHead || event.treeOid !== unit.candidateTree || event.branchRef !== unit.branchRef || event.worktreePath !== unit.worktreePath || event.repairContextHash !== deriveRepairContextHash(context) || context.baseOid !== unit.baseOid || context.headOid !== unit.candidateHead || context.treeOid !== unit.candidateTree)
+    return reject(
+      "illegal_transition",
+      "repair scope is not bound to current candidate and repair evidence"
+    );
+  const oldPaths = new Set(metadata.ownedPaths);
+  const newPaths = new Set(event.ownedPaths);
+  if (newPaths.size <= oldPaths.size || [...oldPaths].some((path2) => !newPaths.has(path2)))
+    return reject(
+      "illegal_transition",
+      "repair scope must add owned paths without removing any"
+    );
+  const updatedMetadata = canonicalTaskMetadata({
+    ...metadata,
+    ownedPaths: event.ownedPaths
+  });
+  if (!metadataFitsEnvelope([updatedMetadata]))
+    return reject(
+      "illegal_transition",
+      "repair scope exceeds durable metadata envelope"
+    );
+  const {
+    workerPacket: _workerPacket,
+    workerPromptHash: _workerPromptHash,
+    verificationBaseOid: _verificationBase,
+    verificationHeadOid: _verificationHead,
+    verificationTree: _verificationTree,
+    verificationEvidenceHash: _verificationEvidence,
+    verificationCommands: _verificationCommands,
+    ...retained
+  } = withoutReviewBindings(unit);
+  const nextUnit = {
+    ...retained,
+    revision: unit.revision + 1,
+    taskMetadata: updatedMetadata
+  };
+  return commit(
+    {
+      ...state,
+      units: replaceUnit(state, nextUnit)
+    },
+    event,
+    []
+  );
 }
 function canonicalTaskMetadata(task) {
   return {
@@ -15590,6 +15662,8 @@ function reduceInternal(stateInput, eventInput, reconcilingBlockedObservation = 
       "idempotency key is not deterministic for this run, revision, unit, and effect"
     );
   if (event.type === "wave_planned") return reduceWavePlan(state, event);
+  if (event.type === "repair_scope_extended")
+    return reduceRepairScopeExtension(state, event);
   if (event.type === "harness_configured")
     return reduceHarnessConfiguration(state, event);
   if (event.type === "controller_acquire_intent" || event.type === "controller_acquired" || event.type === "controller_release_intent" || event.type === "controller_released")
@@ -22019,7 +22093,16 @@ function lifecycleActions(state, unit) {
         )
       ];
     case "repair_required":
-      return repairIsEligible(state, unit) ? [unitAction(unit, "repair_intent", "emit", "repair")] : [];
+      return [
+        ...repairScopeExtensionEligible(state, unit) ? [
+          {
+            type: "repair_scope_extended",
+            mode: "emit",
+            unitId: unit.id
+          }
+        ] : [],
+        ...repairIsEligible(state, unit) ? [unitAction(unit, "repair_intent", "emit", "repair")] : []
+      ];
     case "repair_intent":
       return [unitAction(unit, "repair_observed", "record", "repair")];
     case "failure_intent":
@@ -28326,6 +28409,7 @@ var commandNames = [
   "acquire-controller",
   "next",
   "plan-wave",
+  "extend-repair-scope",
   "configure-harness",
   "prepare-wave",
   "dispatch-request",
@@ -28519,6 +28603,7 @@ var UnavailableCommandSchema = strictObject5({
   command: Type.Union([
     Type.Literal("acquire-controller"),
     Type.Literal("plan-wave"),
+    Type.Literal("extend-repair-scope"),
     Type.Literal("configure-harness"),
     Type.Literal("prepare-wave"),
     Type.Literal("dispatch-request"),
@@ -28767,7 +28852,7 @@ function requestSkeleton(run2, action) {
   const unitId = action.unitId ?? null;
   const unit = action.unitId === void 0 ? void 0 : run2.units[action.unitId];
   const bound = {
-    baseOid: action.type === "candidate_recheck_intent" ? unit?.baseOid : void 0,
+    baseOid: action.type === "candidate_recheck_intent" || action.type === "repair_scope_extended" ? unit?.baseOid : void 0,
     branchRef: unit?.branchRef,
     effectId: outstandingEffectId(run2, action),
     effectKind: action.effectKind,
@@ -28775,6 +28860,7 @@ function requestSkeleton(run2, action) {
     expectedRevision: run2.revision,
     gateEntryId: action.gateEntryId,
     headOid: unit?.candidateHead,
+    repairContextHash: action.type === "repair_scope_extended" && unit?.repairContext !== void 0 ? deriveRepairContextHash(unit.repairContext) : void 0,
     idempotencyKey: action.mode === "emit" && action.effectKind !== void 0 ? deriveIdempotencyKey(
       run2,
       run2.revision,
@@ -28784,6 +28870,7 @@ function requestSkeleton(run2, action) {
     ) : void 0,
     type: action.type,
     treeOid: unit?.candidateTree,
+    ownedPaths: void 0,
     unitId,
     worktreePath: unit?.worktreePath
   };
@@ -28801,6 +28888,7 @@ function requestSkeleton(run2, action) {
 var commandEvent = {
   "acquire-controller": ["controller_acquire_intent"],
   "plan-wave": ["wave_planned"],
+  "extend-repair-scope": ["repair_scope_extended"],
   "configure-harness": ["harness_configured"],
   "prepare-wave": ["reservation_intent", "branch_intent", "worktree_intent"],
   "dispatch-request": ["dispatch_intent"],
