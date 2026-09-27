@@ -28,6 +28,7 @@ import { sha256 } from "../protocol/evidence.js";
 import {
   deriveCandidateDiffHash,
   deriveIdempotencyKey,
+  deriveRepairContextHash,
   runInvariantErrors,
 } from "../protocol/reducer.js";
 import {
@@ -51,6 +52,7 @@ export const commandNames = [
   "acquire-controller",
   "next",
   "plan-wave",
+  "extend-repair-scope",
   "configure-harness",
   "prepare-wave",
   "dispatch-request",
@@ -277,6 +279,7 @@ const UnavailableCommandSchema = strictObject({
   command: Type.Union([
     Type.Literal("acquire-controller"),
     Type.Literal("plan-wave"),
+    Type.Literal("extend-repair-scope"),
     Type.Literal("configure-harness"),
     Type.Literal("prepare-wave"),
     Type.Literal("dispatch-request"),
@@ -655,7 +658,10 @@ function requestSkeleton(
     action.unitId === undefined ? undefined : run.units[action.unitId];
   const bound: Readonly<Record<string, JsonValue | undefined>> = {
     baseOid:
-      action.type === "candidate_recheck_intent" ? unit?.baseOid : undefined,
+      action.type === "candidate_recheck_intent" ||
+      action.type === "repair_scope_extended"
+        ? unit?.baseOid
+        : undefined,
     branchRef: unit?.branchRef,
     effectId: outstandingEffectId(run, action),
     effectKind: action.effectKind,
@@ -663,6 +669,11 @@ function requestSkeleton(
     expectedRevision: run.revision,
     gateEntryId: action.gateEntryId,
     headOid: unit?.candidateHead,
+    repairContextHash:
+      action.type === "repair_scope_extended" &&
+      unit?.repairContext !== undefined
+        ? deriveRepairContextHash(unit.repairContext)
+        : undefined,
     idempotencyKey:
       action.mode === "emit" && action.effectKind !== undefined
         ? deriveIdempotencyKey(
@@ -675,6 +686,7 @@ function requestSkeleton(
         : undefined,
     type: action.type,
     treeOid: unit?.candidateTree,
+    ownedPaths: undefined,
     unitId,
     worktreePath: unit?.worktreePath,
   };
@@ -695,6 +707,7 @@ const commandEvent: Readonly<
 > = {
   "acquire-controller": ["controller_acquire_intent"],
   "plan-wave": ["wave_planned"],
+  "extend-repair-scope": ["repair_scope_extended"],
   "configure-harness": ["harness_configured"],
   "prepare-wave": ["reservation_intent", "branch_intent", "worktree_intent"],
   "dispatch-request": ["dispatch_intent"],

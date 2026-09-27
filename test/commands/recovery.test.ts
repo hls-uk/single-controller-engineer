@@ -33,8 +33,10 @@ import { legalActions } from "../../src/protocol/actions.js";
 import { makeSlotTransitionIntent } from "../../src/adapters/beads-embedded/index.js";
 import {
   deriveIdempotencyKey,
+  deriveRepairContextHash,
   rehydrateEffect,
   reduce,
+  runInvariantErrors,
 } from "../../src/protocol/reducer.js";
 import type { ProtocolEffect } from "../../src/protocol/reducer.js";
 import type {
@@ -1139,6 +1141,100 @@ test("next leaves a refresh target base for the controller to supply", async () 
     (entry) => entry.event.type === "candidate_recheck_intent",
   );
   assert.equal(recheck?.event.baseOid, qualified.units["unit-1"]?.baseOid);
+});
+
+test("public repair scope command persists its new metadata and refuses stale replay", async () => {
+  const qualified = softwareReleaseIntentRun(true);
+  const unit = qualified.units["unit-1"]!;
+  const context = {
+    baseOid: unit.baseOid,
+    headOid: unit.candidateHead!,
+    treeOid: unit.candidateTree!,
+    responseHash: HASH,
+    rationale: "repair needs a second owned path",
+    findings: [
+      {
+        id: "scope-gap",
+        severity: "blocking" as const,
+        detail: "second path is required",
+      },
+    ],
+  };
+  const { qualificationOwnerUnitId: _qualificationOwner, ...withoutOwner } =
+    qualified;
+  const repairable: RepositoryRun = {
+    ...withoutOwner,
+    qualificationQueue: [],
+    units: {
+      ...qualified.units,
+      "unit-1": { ...unit, state: "repair_required", repairContext: context },
+    },
+  };
+  assert.deepEqual(runInvariantErrors(repairable), []);
+  const requestSkeleton = skeletons(await nextSummary(repairable)).find(
+    (entry) => entry.event.type === "repair_scope_extended",
+  )?.event;
+  assert.ok(requestSkeleton);
+  assert.equal(requestSkeleton.baseOid, unit.baseOid);
+  assert.equal(requestSkeleton.headOid, unit.candidateHead);
+  assert.equal(requestSkeleton.treeOid, unit.candidateTree);
+  assert.equal(
+    requestSkeleton.repairContextHash,
+    deriveRepairContextHash(context),
+  );
+  assert.equal(requestSkeleton.ownedPaths, "<ownedPaths>");
+  const store = new MemoryStore();
+  store.current = readback(repairable);
+  const runner = createRecoveryCommandRunner(
+    createRunner({
+      adapter: {
+        async execute() {
+          throw new Error("scope change has no external effect");
+        },
+        async reconcile() {
+          throw new Error("scope change has no unresolved effect");
+        },
+      },
+      acquireOperationLock: async () => ({
+        status: "acquired",
+        lock: { release: async () => ({ status: "released" as const }) },
+      }),
+      nonce: "nonce-repair-scope",
+      preOwnership: store,
+      proveTopology: async () => ({ commonDir: "/repo/.git", holder, scope }),
+      store,
+    }),
+  );
+  const eventRequest = {
+    ...requestSkeleton,
+    ownedPaths: ["src", "apps/runtime"],
+  } as ProtocolEvent;
+  const command = {
+    command: "extend-repair-scope" as const,
+    options: {
+      json: true,
+      expectedRevision: repairable.revision,
+      request: { event: eventRequest },
+    },
+    schema: "sce.command.request" as const,
+    version: 1 as const,
+  };
+  assert.equal((await runner(command)).status, "ok");
+  assert.equal(store.casCalls, 1);
+  const persisted = store.current?.root.run;
+  assert.equal(persisted?.revision, repairable.revision + 1);
+  assert.deepEqual(persisted?.units["unit-1"]?.taskMetadata?.ownedPaths, [
+    "apps/runtime",
+    "src",
+  ]);
+  assert.equal(persisted?.units["unit-1"]?.workerPacket, undefined);
+  assert.equal(persisted?.units["unit-1"]?.verificationEvidenceHash, undefined);
+  assert.deepEqual(
+    persisted === undefined ? [] : runInvariantErrors(persisted),
+    [],
+  );
+  assert.equal((await runner(command)).status, "blocked");
+  assert.equal(store.casCalls, 1);
 });
 
 test("a moved recheck read persists blocked and exact recovery settles the same effect", async () => {

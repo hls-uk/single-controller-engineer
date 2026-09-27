@@ -8,6 +8,7 @@ import {
 import {
   compareProtocolText,
   refreshIsFastForward,
+  repairScopeExtensionEligible,
   runInvariantErrors,
 } from "./reducer.js";
 import { canEnterTerminalIntent } from "./guards.js";
@@ -567,9 +568,20 @@ function lifecycleActions(
         ),
       ];
     case "repair_required":
-      return repairIsEligible(state, unit)
-        ? [unitAction(unit, "repair_intent", "emit", "repair")]
-        : [];
+      return [
+        ...(repairScopeExtensionEligible(state, unit)
+          ? [
+              {
+                type: "repair_scope_extended",
+                mode: "emit" as const,
+                unitId: unit.id,
+              },
+            ]
+          : []),
+        ...(repairIsEligible(state, unit)
+          ? [unitAction(unit, "repair_intent", "emit", "repair")]
+          : []),
+      ];
     case "repair_intent":
       return [unitAction(unit, "repair_observed", "record", "repair")];
     case "failure_intent":

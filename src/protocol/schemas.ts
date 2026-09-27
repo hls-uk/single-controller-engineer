@@ -1769,6 +1769,21 @@ export const ProtocolEventSchema = Type.Union([
     waveId: identifier(),
   }),
   strictObject({
+    ...eventBase,
+    type: Type.Literal("repair_scope_extended"),
+    baseOid: oid(),
+    headOid: oid(),
+    treeOid: oid(),
+    branchRef: identifier(),
+    worktreePath: text(),
+    repairContextHash: hash(),
+    ownedPaths: Type.Array(ownedPath(), {
+      minItems: 1,
+      maxItems: 128,
+      uniqueItems: true,
+    }),
+  }),
+  strictObject({
     ...controllerEventBase,
     type: Type.Literal("controller_acquire_intent"),
     ...effectIntent,

@@ -59,3 +59,4 @@ may recommend decisions, but the controller records the accepted disposition.
 | [DEC-20260924-020](2026-09-24-020-envelope-admission-under-repair-pressure.md) | Accepted | A run that spends its envelope is refused by name before the act; the guarantee stays 61 units at full repair pressure | `sce-ul2.8` |
 | [DEC-20260925-021](2026-09-25-021-rejected-publication-recovery.md) | Accepted | Reject full branch refs and recover a rejected publication through an exact, attested transition while preserving the local branch binding | `sce-4b5`, `sce-4b5.1` |
 | [DEC-20260925-022](2026-09-25-022-qualified-candidate-recheck.md) | Accepted | Recheck a qualified candidate on its frozen pair under the unchanged diff bound and admit valid dot-directory ownership | `sce-noo` |
+| [DEC-20260927-023](2026-09-27-023-repair-scope-extension.md) | Accepted | Extend a singleton repair unit's owned paths through an exact guarded transition | `sce-ywl` |

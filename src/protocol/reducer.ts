@@ -1565,6 +1565,107 @@ function withoutReviewBindings(unit: Unit) {
   return retained;
 }
 
+/** An in-place repair scope change can only occur after the wave has drained. */
+export function repairScopeExtensionEligible(
+  state: RepositoryRun,
+  unit: Unit,
+): boolean {
+  return (
+    state.state === "active" &&
+    state.controller.state === "acquired" &&
+    state.wave.unitIds.length === 1 &&
+    state.wave.unitIds[0] === unit.id &&
+    unit.state === "repair_required" &&
+    unit.taskMetadata !== undefined &&
+    unit.repairContext !== undefined &&
+    unit.candidateHead !== undefined &&
+    unit.candidateTree !== undefined &&
+    unit.repairContext.baseOid === unit.baseOid &&
+    unit.repairContext.headOid === unit.candidateHead &&
+    unit.repairContext.treeOid === unit.candidateTree &&
+    unit.branchRef !== undefined &&
+    unit.worktreePath !== undefined &&
+    state.activeModifyingUnitIds.length === 0 &&
+    state.currentReviewerUnitId === undefined &&
+    state.qualificationOwnerUnitId === undefined &&
+    state.integrationOwnerUnitId === undefined &&
+    state.qualificationQueue.length === 0 &&
+    state.integrationQueue.length === 0 &&
+    state.effectJournal.every((entry) => entry.status === "observed")
+  );
+}
+
+function reduceRepairScopeExtension(
+  state: RepositoryRun,
+  event: Extract<ProtocolEvent, { type: "repair_scope_extended" }>,
+): Reduction {
+  const unit = state.units[event.unitId];
+  if (unit === undefined || !repairScopeExtensionEligible(state, unit))
+    return reject(
+      "illegal_transition",
+      "repair scope requires one drained repair-required unit",
+    );
+  const metadata = unit.taskMetadata!;
+  const context = unit.repairContext!;
+  if (
+    event.baseOid !== unit.baseOid ||
+    event.headOid !== unit.candidateHead ||
+    event.treeOid !== unit.candidateTree ||
+    event.branchRef !== unit.branchRef ||
+    event.worktreePath !== unit.worktreePath ||
+    event.repairContextHash !== deriveRepairContextHash(context) ||
+    context.baseOid !== unit.baseOid ||
+    context.headOid !== unit.candidateHead ||
+    context.treeOid !== unit.candidateTree
+  )
+    return reject(
+      "illegal_transition",
+      "repair scope is not bound to current candidate and repair evidence",
+    );
+  const oldPaths = new Set(metadata.ownedPaths);
+  const newPaths = new Set(event.ownedPaths);
+  if (
+    newPaths.size <= oldPaths.size ||
+    [...oldPaths].some((path) => !newPaths.has(path))
+  )
+    return reject(
+      "illegal_transition",
+      "repair scope must add owned paths without removing any",
+    );
+  const updatedMetadata = canonicalTaskMetadata({
+    ...metadata,
+    ownedPaths: event.ownedPaths,
+  });
+  if (!metadataFitsEnvelope([updatedMetadata]))
+    return reject(
+      "illegal_transition",
+      "repair scope exceeds durable metadata envelope",
+    );
+  const {
+    workerPacket: _workerPacket,
+    workerPromptHash: _workerPromptHash,
+    verificationBaseOid: _verificationBase,
+    verificationHeadOid: _verificationHead,
+    verificationTree: _verificationTree,
+    verificationEvidenceHash: _verificationEvidence,
+    verificationCommands: _verificationCommands,
+    ...retained
+  } = withoutReviewBindings(unit);
+  const nextUnit: Unit = {
+    ...retained,
+    revision: unit.revision + 1,
+    taskMetadata: updatedMetadata,
+  };
+  return commit(
+    {
+      ...state,
+      units: replaceUnit(state, nextUnit),
+    },
+    event,
+    [],
+  );
+}
+
 /** The exact at-rest form of a task; a planned unit stores nothing else. */
 export function canonicalTaskMetadata(
   task: WaveTaskMetadata,
@@ -5148,6 +5249,8 @@ function reduceInternal(
       "idempotency key is not deterministic for this run, revision, unit, and effect",
     );
   if (event.type === "wave_planned") return reduceWavePlan(state, event);
+  if (event.type === "repair_scope_extended")
+    return reduceRepairScopeExtension(state, event);
   if (event.type === "harness_configured")
     return reduceHarnessConfiguration(state, event);
 

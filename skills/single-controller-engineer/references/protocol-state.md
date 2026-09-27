@@ -44,6 +44,18 @@ fresh verification and review. A moved pair or active review/publish cannot
 reuse the old qualification. The command's request skeleton is available from
 `sce next`; submit it with the current expected revision and idempotency key.
 
+When a retained blocking repair finding requires additional files, use
+`sce next` to obtain the `repair_scope_extended` request skeleton and submit
+it through `extend-repair-scope`. Supply the full owned path list, including
+every existing path and at least one valid addition. The engine admits this
+only for a drained singleton `repair_required` unit under the acquired
+controller, with the exact revision, candidate base/head/tree, checkout, and
+repair-context hash. It preserves the candidate and findings while removing
+the old worker packet and stale qualification/review bindings. Generate a new
+worker packet against the expanded paths, then follow the ordinary repair,
+full candidate collection, unchanged mandatory verification, and fresh review
+flow. The candidate diff limit remains 65,536 bytes.
+
 Do not infer completion from elapsed time, an empty queue, or a missing process.
 Preserve the candidate and durable evidence; resume only through the recorded
 idempotency key and authority boundary.

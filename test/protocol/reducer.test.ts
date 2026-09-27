@@ -9,6 +9,7 @@ import {
 } from "../../src/fencing/index.js";
 import {
   compareProtocolText,
+  canonicalCandidateDiffCommand,
   deriveCandidateDiffHash,
   deriveClosedUnitEvidenceCommitment,
   deriveGateEntryId,
@@ -20,6 +21,7 @@ import {
   deriveProvenanceCarryExportId,
   deriveRepairJudgmentPromptHash,
   deriveRepairJudgmentResponseHash,
+  deriveRepairContextHash,
   deriveSessionFingerprint,
   deriveSessionLineageRoot,
   hasUsedSession,
@@ -6821,6 +6823,330 @@ test("a refused refresh from approved discards the superseded candidate's review
   if (!result.ok) return;
   assert.equal(result.nextState.units[unitId]?.state, "repair_intent");
   assert.deepEqual(runInvariantErrors(result.nextState), []);
+});
+
+function repairScopeFixture(): RepositoryRun {
+  let state = completeCandidate();
+  state = step(state, "verification_intent");
+  return observeUnit(state, "unit-1", "verification_failed", "verify", {
+    baseOid: OID_A,
+    headOid: OID_B,
+    treeOid: OID_C,
+  });
+}
+
+function repairScopeEvent(
+  state: RepositoryRun,
+  ownedPaths = ["src", "apps/runtime"],
+): ProtocolEvent {
+  const unit = state.units["unit-1"]!;
+  return event(state, "repair_scope_extended", {
+    baseOid: unit.baseOid,
+    headOid: unit.candidateHead,
+    treeOid: unit.candidateTree,
+    branchRef: unit.branchRef,
+    worktreePath: unit.worktreePath,
+    repairContextHash: deriveRepairContextHash(unit.repairContext!),
+    ownedPaths,
+  });
+}
+
+test("repair scope adds paths on the retained candidate and forces a fresh packet", () => {
+  const state = repairScopeFixture();
+  const before = state.units["unit-1"]!;
+  assert.equal(
+    legalActions(state).some(
+      (action) => action.type === "repair_scope_extended",
+    ),
+    true,
+  );
+  const input = repairScopeEvent(state);
+  const result = reduce(state, input);
+  assert.equal(result.ok, true, result.ok ? "" : result.reason);
+  if (!result.ok) return;
+  const after = result.nextState.units["unit-1"]!;
+  assert.equal(after.state, "repair_required");
+  assert.deepEqual(after.taskMetadata?.ownedPaths, ["apps/runtime", "src"]);
+  assert.deepEqual(
+    after.taskMetadata?.mandatoryVerification,
+    before.taskMetadata?.mandatoryVerification,
+  );
+  assert.deepEqual(
+    after.taskMetadata?.acceptanceIds,
+    before.taskMetadata?.acceptanceIds,
+  );
+  assert.deepEqual(
+    after.taskMetadata?.dependencies,
+    before.taskMetadata?.dependencies,
+  );
+  assert.deepEqual(
+    after.taskMetadata?.reservations,
+    before.taskMetadata?.reservations,
+  );
+  assert.equal(after.taskMetadata?.risk, before.taskMetadata?.risk);
+  assert.equal(after.branchRef, before.branchRef);
+  assert.equal(after.worktreePath, before.worktreePath);
+  assert.equal(after.candidateHead, before.candidateHead);
+  assert.equal(after.candidateTree, before.candidateTree);
+  assert.equal(after.candidateDiffHash, before.candidateDiffHash);
+  assert.deepEqual(after.repairContext, before.repairContext);
+  assert.equal(after.workerSessionId, before.workerSessionId);
+  assert.equal(after.workerPacket, undefined);
+  assert.equal(after.workerPromptHash, undefined);
+  assert.equal(after.verificationEvidenceHash, undefined);
+  assert.equal(result.nextState.usedSessionCount, state.usedSessionCount);
+  assert.equal(result.nextState.sessionLineageRoot, state.sessionLineageRoot);
+  assert.deepEqual(runInvariantErrors(result.nextState), []);
+  assert.equal(reduce(result.nextState, input).ok, false, "replay is stale");
+});
+
+test("repair scope refuses stale evidence, no-op, removal, ambiguity, and active owners", () => {
+  const state = repairScopeFixture();
+  const request = repairScopeEvent(state);
+  for (const fields of [
+    { headOid: OID_C },
+    { treeOid: OID_B },
+    { repairContextHash: HASH },
+    { branchRef: "sce/moved" },
+    { worktreePath: "/tmp/moved" },
+    { ownedPaths: ["src"] },
+    { ownedPaths: ["apps/runtime"] },
+    { ownedPaths: ["src", "../escaped"] },
+    { ownedPaths: ["src", "src"] },
+  ]) {
+    const refused = reduce(state, { ...request, ...fields } as ProtocolEvent);
+    assert.equal(refused.ok, false, JSON.stringify(fields));
+  }
+  const variants: RepositoryRun[] = [
+    { ...state, activeModifyingUnitIds: ["unit-1"] },
+    { ...state, currentReviewerUnitId: "unit-1" },
+    { ...state, qualificationOwnerUnitId: "unit-1" },
+    { ...state, integrationOwnerUnitId: "unit-1" },
+    { ...state, qualificationQueue: ["unit-1"] },
+    { ...state, integrationQueue: ["unit-1"] },
+    { ...state, wave: { ...state.wave, unitIds: [] } },
+    { ...state, state: "blocked" },
+    {
+      ...state,
+      units: {
+        ...state.units,
+        "unit-1": { ...state.units["unit-1"]!, state: "failed" },
+      },
+    },
+  ];
+  for (const variant of variants) {
+    assert.equal(reduce(variant, repairScopeEvent(variant)).ok, false);
+    assert.equal(
+      legalActions(variant).some(
+        (action) => action.type === "repair_scope_extended",
+      ),
+      false,
+    );
+  }
+  const pending = {
+    ...state,
+    effectJournal: state.effectJournal.map((entry, index) =>
+      index === 0 ? { ...entry, status: "ambiguous" as const } : entry,
+    ),
+  };
+  assert.equal(reduce(pending, repairScopeEvent(pending)).ok, false);
+  assert.equal(
+    legalActions(pending).some(
+      (action) => action.type === "repair_scope_extended",
+    ),
+    false,
+  );
+});
+
+test("review changes extend repair scope and require fresh repair, qualification, and review", () => {
+  let state = completeCandidate();
+  state = step(state, "verification_intent");
+  state = observeUnit(state, "unit-1", "verification_observed", "verify", {
+    baseOid: OID_A,
+    headOid: OID_B,
+    treeOid: OID_C,
+  });
+  state = step(state, "reviewer_dispatch_intent");
+  state = observeUnit(state, "unit-1", "reviewer_observed", "review_dispatch", {
+    promptHash: HASH,
+    requestedModel: "frontier",
+    returnedModel: "frontier-1",
+    sessionId: "reviewer-old",
+  });
+  state = step(state, "review_collect_intent");
+  state = observeUnit(state, "unit-1", "review_collected", "review_collect", {
+    judgment: {
+      aggregateRevision: state.revision,
+      baseOid: OID_A,
+      decision: "request_changes",
+      findings: [
+        {
+          id: "finding-scope",
+          severity: "blocking",
+          detail: "include app runtime",
+        },
+      ],
+      headOid: OID_B,
+      kind: "review_verdict",
+      promptHash: HASH,
+      rationale: "required path was outside ownership",
+      requestedModel: "frontier",
+      responseHash: HASH,
+      returnedModel: "frontier-1",
+      role: "reviewer",
+      schemaVersion: 1,
+      sessionId: "reviewer-old",
+      treeOid: OID_C,
+      unitId: "unit-1",
+    },
+  });
+  const oldPacket = state.units["unit-1"]!.workerPacket!;
+  const oldContext = state.units["unit-1"]!.repairContext;
+  state = transition(state, repairScopeEvent(state), reduce);
+  assert.deepEqual(state.units["unit-1"]!.repairContext, oldContext);
+  const judgment = {
+    schemaVersion: 1,
+    role: "controller" as const,
+    kind: "repair_disposition" as const,
+    unitId: "unit-1",
+    sessionId: "incarnation-1",
+    requestedModel: "frontier",
+    returnedModel: "frontier-1",
+    aggregateRevision: state.revision,
+    promptHash: HASH,
+    responseHash: HASH,
+    rationale: "repair expanded scope",
+    factOid: OID_B,
+    decision: "repair" as const,
+    ...repairEvidence(state),
+  };
+  const stalePacketEvent = event(state, "repair_intent", { judgment });
+  assert.equal(
+    reduce(state, {
+      ...stalePacketEvent,
+      packet: oldPacket,
+      promptHash: oldPacket.hash,
+    } as ProtocolEvent).ok,
+    false,
+  );
+  const newWorkerPacketValue = {
+    acceptance: ["acceptance-1"],
+    baseOid: OID_A,
+    mandatoryVerification: ["npm test"],
+    ownedPaths: ["apps/runtime", "src"],
+    role: "worker",
+    schema: "sce.harness-packet",
+    unitId: "unit-1",
+    version: 1,
+  };
+  const newWorkerPayload = canonicalJson(newWorkerPacketValue);
+  const newWorkerPacket = {
+    hash: sha256(`sce.harness-packet/v1\n${newWorkerPayload}`),
+    payload: newWorkerPayload,
+    schema: "sce.harness-packet" as const,
+    version: 1 as const,
+  };
+  state = transition(
+    state,
+    {
+      ...stalePacketEvent,
+      packet: newWorkerPacket,
+      promptHash: newWorkerPacket.hash,
+    } as ProtocolEvent,
+    reduce,
+  );
+  state = observeUnit(state, "unit-1", "repair_observed", "repair", {
+    sessionId: "worker-fresh",
+    requestedModel: "workhorse",
+    returnedModel: "workhorse-1",
+  });
+  state = step(state, "collect_intent");
+  state = observeUnit(state, "unit-1", "worker_collected", "worker_collect", {
+    workerResult: {
+      status: "completed",
+      summary: "updated runtime",
+      residualRisks: [],
+    },
+  });
+  state = step(state, "candidate_intent");
+  state = observeUnit(
+    state,
+    "unit-1",
+    "candidate_observed",
+    "candidate_collect",
+    {
+      headOid: OID_C,
+      treeOid: OID_C,
+    },
+  );
+  assert.equal(state.units["unit-1"]?.verificationEvidenceHash, undefined);
+  state = step(state, "verification_intent");
+  state = observeUnit(state, "unit-1", "verification_observed", "verify", {
+    baseOid: OID_A,
+    headOid: OID_C,
+    treeOid: OID_C,
+  });
+  const reviewerPacketValue = {
+    acceptance: ["acceptance-1"],
+    baseOid: OID_A,
+    candidateDiffByteCount: new TextEncoder().encode(CANDIDATE_DIFF).byteLength,
+    candidateDiffCommand: [...canonicalCandidateDiffCommand(OID_A, OID_C)],
+    candidateDiffHash: deriveCandidateDiffHash(CANDIDATE_DIFF),
+    candidateDiffStat: { deletions: 0, fileCount: 1, insertions: 1 },
+    headOid: OID_C,
+    mandatoryVerification: ["npm test"],
+    ownedPaths: ["apps/runtime", "src"],
+    role: "reviewer",
+    schema: "sce.harness-packet",
+    unitId: "unit-1",
+    version: 2,
+    worktreePath: "/tmp/unit-1",
+  };
+  const reviewerPayload = canonicalJson(reviewerPacketValue);
+  const reviewerPacket = {
+    hash: sha256(`sce.harness-packet/v2\n${reviewerPayload}`),
+    payload: reviewerPayload,
+    schema: "sce.harness-packet" as const,
+    version: 2 as const,
+  };
+  const reviewerIntent = event(state, "reviewer_dispatch_intent");
+  state = transition(
+    state,
+    {
+      ...reviewerIntent,
+      packet: reviewerPacket,
+      promptHash: reviewerPacket.hash,
+    } as ProtocolEvent,
+    reduce,
+  );
+  state = observeUnit(state, "unit-1", "reviewer_observed", "review_dispatch", {
+    sessionId: "reviewer-fresh",
+    requestedModel: "frontier",
+    returnedModel: "frontier-1",
+  });
+  state = step(state, "review_collect_intent");
+  state = observeUnit(state, "unit-1", "review_collected", "review_collect", {
+    judgment: {
+      aggregateRevision: state.revision,
+      baseOid: OID_A,
+      decision: "approve",
+      findings: [],
+      headOid: OID_C,
+      kind: "review_verdict",
+      promptHash: HASH,
+      rationale: "reviewed full repaired diff",
+      requestedModel: "frontier",
+      responseHash: HASH,
+      returnedModel: "frontier-1",
+      role: "reviewer",
+      schemaVersion: 1,
+      sessionId: "reviewer-fresh",
+      treeOid: OID_C,
+      unitId: "unit-1",
+    },
+  });
+  assert.equal(state.units["unit-1"]?.state, "approved");
+  assert.deepEqual(runInvariantErrors(state), []);
 });
 
 test("a qualified candidate recheck discards verification and routes oversize to repair", () => {
